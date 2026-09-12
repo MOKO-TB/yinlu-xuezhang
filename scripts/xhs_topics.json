@@ -1,0 +1,19 @@
+{
+ "site": "小红书",
+ "host": "www.xiaohongshu.com",
+ "output_kb": "kb/xhs-notes.json",
+ "out_dir": "crawled/www.xiaohongshu.com/school-qa",
+ "max_notes_per_keyword": 4,
+ "keywords": [
+  {"keyword": "广应科肇庆校区", "topic": "广应科肇庆校区"},
+  {"keyword": "广州应用科技学院", "topic": "广应科肇庆校区"},
+  {"keyword": "肇庆美食探店", "topic": "校园周边生活"},
+  {"keyword": "肇庆美食推荐", "topic": "校园周边生活"},
+  {"keyword": "肇庆周边游攻略", "topic": "校园周边生活"},
+  {"keyword": "肇庆景点打卡", "topic": "校园周边生活"},
+  {"keyword": "肇庆鼎湖山", "topic": "校园周边生活"},
+  {"keyword": "大学生学习计划", "topic": "学风与学习方法"},
+  {"keyword": "大学考证攻略", "topic": "证书与等级考试"},
+  {"keyword": "大一新生建议", "topic": "学长学姐经验"}
+ ]
+}

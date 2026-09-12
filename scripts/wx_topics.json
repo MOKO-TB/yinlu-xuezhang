@@ -1,0 +1,18 @@
+{
+ "site": "微信公众号(经搜狗微信搜索)",
+ "host": "weixin.sogou.com",
+ "output_kb": "kb/wx-articles.json",
+ "out_dir": "crawled/weixin.sogou.com/school-qa",
+ "max_articles_per_keyword": 3,
+ "keywords": [
+  {"keyword": "广州应用科技学院 肇庆校区 校园指南", "topic": "广应科肇庆校区"},
+  {"keyword": "广应科 肇庆校区 新生", "topic": "广应科肇庆校区"},
+  {"keyword": "广州应用科技学院 食堂 宿舍", "topic": "广应科肇庆校区"},
+  {"keyword": "广应科 肇庆校区 公交 出行", "topic": "广应科肇庆校区"},
+  {"keyword": "肇庆 美食街 小吃推荐", "topic": "校园周边生活"},
+  {"keyword": "肇庆 七星岩 攻略", "topic": "校园周边生活"},
+  {"keyword": "肇庆 鼎湖山 攻略", "topic": "校园周边生活"},
+  {"keyword": "大学生 学习计划 方法", "topic": "学风与学习方法"},
+  {"keyword": "大学生 考证 清单", "topic": "证书与等级考试"}
+ ]
+}
