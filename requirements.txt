@@ -1,0 +1,8 @@
+openai>=1.50
+rich>=13.0
+prompt_toolkit>=3.0
+pywebview>=5.0
+pystray>=0.19
+pillow>=10.0
+pytest>=8.0
+crawl4ai>=0.7
