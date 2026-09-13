@@ -89,12 +89,12 @@ class GuiUI:
     def error(self, text: str) -> None:
         self.push("error", text=text)
 
-    def confirm_tool(self, tool: Tool, args: dict) -> str:
-        """弹确认框并等待用户选择;由 Bridge 注入实现。"""
+    def confirm_tool(self, tool: Tool, args: dict, reason: str = "") -> str:
+        """弹确认框并等待用户选择;由 Bridge 注入实现。reason=为什么要做这一步。"""
         if self.confirm_handler is None:
             self.push("error", text="确认通道未就绪,已自动拒绝")
             return "no"
-        return self.confirm_handler(tool, args)
+        return self.confirm_handler(tool, args, reason)
 
     @staticmethod
     def _arg_summary(tool: Tool, args: dict) -> str:

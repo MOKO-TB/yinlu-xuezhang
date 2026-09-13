@@ -140,7 +140,11 @@ def main() -> None:
         # func 在 GUI 线程启动后于独立线程执行:用来补开 WebView2 的原生右键菜单
         webview.start(_enable_native_context_menu, debug=False)
     finally:
-        agent.close()      # 关掉 MCP 子进程,不留孤儿
+        # 关掉所有会话与 MCP 子进程,不留孤儿(多会话后台任务也一并停)
+        try:
+            bridge.close()
+        except Exception:
+            agent.close()
 
 
 if __name__ == "__main__":

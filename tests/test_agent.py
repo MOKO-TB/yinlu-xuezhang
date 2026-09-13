@@ -24,6 +24,7 @@ class FakeUI:
     def __init__(self, confirm_choice="yes"):
         self.confirm_choice = confirm_choice
         self.confirmed = []
+        self.reasons = []          # 每次确认时传给界面的"为什么要做这一步"
         self.tool_results = []
         self.hard_rejected = []
         self.interrupted = False
@@ -37,8 +38,9 @@ class FakeUI:
 
     def finish_stream(self): pass
 
-    def confirm_tool(self, tool, args):
+    def confirm_tool(self, tool, args, reason=""):
         self.confirmed.append((tool.name, dict(args)))
+        self.reasons.append(reason)
         return self.confirm_choice
 
     def tool_start(self, tool, args): pass
@@ -215,3 +217,37 @@ def test_undo_skips_readonly_and_bash(config, ctx, tmp_path):
     agent = make_agent(config, ctx, llm, FakeUI())
     agent.run_turn("执行命令")
     assert "没有可撤销" in agent.undo()  # bash 改动不进快照栈
+
+
+def test_confirm_carries_model_reason(config, ctx, tmp_path):
+    """工具自己填的 reason 会传给界面当"为什么要做这一步",且不落到工具参数里。"""
+    llm = FakeLLM([
+        AssistantTurn(text="我先看一眼目录。", tool_calls=[ToolCall(
+            id="c1", name="bash",
+            arguments=json.dumps({"command": "ls -la",
+                                  "reason": "确认工作区里有哪些文件"}))]),
+        AssistantTurn(text="done"),
+    ])
+    ui = FakeUI()
+    agent = make_agent(config, ctx, llm, ui)
+    agent.run_turn("看看目录")
+
+    assert ui.reasons == ["确认工作区里有哪些文件"]
+    # reason 不是 shell 参数:handler 只应收到 command
+    assert "reason" not in ui.confirmed[0][1]
+
+
+def test_confirm_falls_back_to_narration(config, ctx):
+    """模型没填 reason 时,用同一轮里它写的说明文字兜底。"""
+    llm = FakeLLM([
+        AssistantTurn(text="我先确认一下当前状态。\n\n这条命令只列出目录,不会改动文件。",
+                      tool_calls=[ToolCall(id="c1", name="bash",
+                                           arguments=json.dumps({"command": "ls"}))]),
+        AssistantTurn(text="done"),
+    ])
+    ui = FakeUI()
+    agent = make_agent(config, ctx, llm, ui)
+    agent.run_turn("看看")
+
+    # 界面拿到的是整段说明;取"最后一段作为原因"由 explain/界面层负责
+    assert ui.reasons == ["我先确认一下当前状态。\n\n这条命令只列出目录,不会改动文件。"]

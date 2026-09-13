@@ -1,5 +1,6 @@
 """GUI 桥接层测试:假 webview 捕获事件 + 假 LLM 驱动完整回合。"""
 import json
+import os
 import time
 
 from minicode.attachments import save_attachment, save_attachments
@@ -43,6 +44,24 @@ class FakeLLMScripted(FakeLLM):
 
     def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None):
         for chunk in self.chunks:
+            if on_text:
+                on_text(chunk)
+        return AssistantTurn(text="".join(self.chunks))
+
+
+class SlowLLM(FakeLLM):
+    """分片慢速输出:每片之间 sleep,让"任务进行中"这个状态稳定存在一会儿。
+
+    用 FakeLLMScripted 做"进行中"的断言会踩竞态:它瞬间跑完,任务可能已经结束。
+    """
+
+    def __init__(self, chunks, delay=0.05):
+        self.chunks = chunks
+        self.delay = delay
+
+    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None):
+        for chunk in self.chunks:
+            time.sleep(self.delay)
             if on_text:
                 on_text(chunk)
         return AssistantTurn(text="".join(self.chunks))
@@ -107,15 +126,16 @@ def test_stop_interrupts_stream(config, tmp_path):
     llm = FakeLLMScripted(["a", "b", "c", "d", "e"])
     bridge, window, _ = make(config, tmp_path, llm)
 
-    ui = bridge.ui
-    original_on_text = ui.on_text_delta
+    # 停止标志在「会话运行器」的 UI 适配器上(每个会话一份)
+    runner = bridge._current
+    original_on_text = runner.ui.on_text_delta
 
     def on_text_with_stop(delta):
         if delta == "c":        # 收到第 3 片时请求停止
             bridge.stop_task()
         original_on_text(delta)
 
-    ui.on_text_delta = on_text_with_stop
+    runner.ui.on_text_delta = on_text_with_stop
 
     bridge.send_task("长回复")
     assert wait_until(lambda: not bridge._busy)
@@ -294,9 +314,9 @@ def test_get_suggestions_reflects_history(config, tmp_path):
     fresh = bridge.get_suggestions()["suggestions"]
     assert fresh[0] == "最近学校有什么活动"        # 无历史 → 默认顺序
 
-    session.add_user("校园卡丢了怎么办")
+    session.add_user("宿舍空调坏了")
     after = bridge.get_suggestions()["suggestions"]
-    assert after[0] == "校园卡补办费用再确认一下"   # 聊过后 → 追问话术置顶
+    assert after[0] == "宿舍水电维修流程是什么"   # 聊过后 → 追问话术置顶
     assert after != fresh
 
 
@@ -386,3 +406,81 @@ def test_set_sandbox_toggles_and_persists(config, tmp_path):
     assert bridge.config.sandbox["enabled"] is False
     assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["sandbox"]["enabled"] is False
     assert bridge.set_sandbox(True)["ok"]
+
+
+# ---------------------------------------------------------------- 校园地图
+
+def test_get_info_ships_campus_map(config, tmp_path):
+    bridge, _window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    cmap = bridge.get_info()["campus_map"]
+    assert len(cmap["items"]) == 36
+    assert cmap["base_map"].endswith("map.jpg")
+    assert cmap["size"] == {"width": 2559, "height": 1279}   # 坐标空间要和底图一致
+    assert cmap["caveats"] and cmap["not_buildings"]
+    assert "how_to_resolve" not in cmap      # 解析规则在后端,不下发
+
+
+def test_confirm_request_carries_why(config, tmp_path):
+    """确认框要能说清"为什么做这一步":模型填的 reason 直达前端。"""
+    llm = FakeLLM([AssistantTurn(
+        text="我先看一下知识库里有哪些文件。",
+        tool_calls=[ToolCall(id="c1", name="bash", arguments=json.dumps(
+            {"command": "ls kb/", "reason": "确认知识库文件清单"}))]),
+        AssistantTurn(text="ok")])
+    bridge, window, _ = make(config, tmp_path, llm)
+
+    bridge.send_task("看看知识库")
+    assert wait_until(lambda: any(e["type"] == "confirm_request" for e in window.events))
+    ev = window.of_type("confirm_request")[0]
+    assert ev["why"] == "确认知识库文件清单"
+    assert "列出目录" in ev["digest"]
+    assert ev["risks"]
+    bridge.confirm_reply("no")
+    assert wait_until(lambda: not bridge._busy)
+
+
+# ------------------------------------------------- 任务进行中也能新建/切换
+
+def test_new_task_keeps_previous_run_in_background(config, tmp_path):
+    """任务进行中点"新建任务":开一个新会话,原任务转后台继续跑完(v0.8.13 起的行为)。"""
+    llm = SlowLLM(list("abcdefghijklmnop"), delay=0.2)
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("长任务")
+    assert wait_until(lambda: bridge._busy and session.log_path is not None)
+    assert wait_until(lambda: window.of_type("text_delta"))   # 确实在流式输出中
+
+    running = bridge._current
+    r = bridge.new_task()
+    assert r["ok"] and r["session"] != running.key
+
+    # 新会话是干净的;原会话既没被清空,也还在后台跑
+    assert len(bridge.session.messages) == 1                  # 只有 system
+    assert bridge._busy is False                              # 当前会话空闲
+    assert running.busy is True                               # 原任务继续
+    assert window.of_type("cleared")[-1]["session"] == r["session"]
+
+    assert wait_until(lambda: not running.busy)               # 后台自己跑完
+    assert any(m["role"] == "assistant" for m in session.messages)
+
+
+def test_resume_running_session_attaches_without_interrupt(config, tmp_path):
+    """切回一个正在后台跑的会话:直接接上,而不是打断它。"""
+    llm = SlowLLM(list("abcdefghijklmnop"), delay=0.2)
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("长任务")
+    assert wait_until(lambda: bridge._busy and session.log_path is not None)
+    assert wait_until(lambda: window.of_type("text_delta"))
+
+    running = bridge._current
+    bridge.new_task()                       # 切到新会话,原任务转后台
+    assert not bridge._busy
+
+    bridge.refresh_sessions()
+    target = next(i for i, e in enumerate(window.of_type("sessions")[-1]["items"], start=1)
+                  if e.get("running"))
+    assert bridge.resume_session(target)["ok"]
+    assert bridge._current is running       # 接上的就是后台那个运行器
+    assert bridge._busy                     # 仍在跑,没被打断
+    assert not any(e["type"] == "info" and "已中断" in (e.get("text") or "")
+                   for e in window.events)
+    assert wait_until(lambda: not bridge._busy)

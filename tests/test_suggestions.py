@@ -14,9 +14,9 @@ def test_no_history_returns_defaults():
 
 
 def test_asked_topic_rises_with_followup():
-    out = build_suggestions(["校园卡丢了怎么办"])
-    # 聊过校园卡 → 该主题换成追问话术并排第一
-    assert out[0] == "校园卡补办费用再确认一下"
+    out = build_suggestions(["宿舍空调坏了"])
+    # 聊过宿舍 → 该主题换成追问话术并排第一
+    assert out[0] == "宿舍水电维修流程是什么"
     # 未聊过的默认主题仍会补位,且总数不变
     assert "考研择校与复习规划" in out
     assert len(out) == MAX_SUGGESTIONS

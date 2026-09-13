@@ -6,7 +6,9 @@ def test_registry_contents():
     names = [t.name for t in tools]
     assert names == ["read_file", "write_file", "edit_file", "bash", "glob",
                      "grep", "web_crawl", "use_skill", "plan",
-                     "search_knowledge", "memory"]
+                     "search_knowledge", "library_search", "memory",
+                     "map_find_place", "map_show_list", "map_highlight_building",
+                     "map_drop_pin", "map_clear"]
     assert len(set(names)) == len(names)
 
 
@@ -22,8 +24,15 @@ def test_read_only_flags():
         "web_crawl": False,
         "use_skill": True,
         "search_knowledge": True,
+        "library_search": True,      # 离线书目库查询,只读
         "plan": False,
         "memory": False,
+        # 地图工具只改界面显示、不动文件:标只读,免得每次定位都弹确认框
+        "map_find_place": True,
+        "map_show_list": True,
+        "map_highlight_building": True,
+        "map_drop_pin": True,
+        "map_clear": True,
     }
 
 

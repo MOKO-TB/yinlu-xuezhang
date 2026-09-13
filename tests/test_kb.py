@@ -71,10 +71,13 @@ def test_format_results_includes_url_and_credibility(tmp_path):
     assert "可信度" in text
 
 
-def test_format_results_warns_on_non_a(tmp_path):
+def test_format_results_uses_reply_tone_on_non_a(tmp_path):
     entries = load_kb([_make_kb(tmp_path)])
     text = format_results([next(e for e in entries if e.id == "K001")])
-    assert "未经核实" in text
+    # 非 A 条目改用 reply-tone 话术指引(亲测+来源 / 暂无实测记录),不再用"未经核实"免责句
+    assert "reply-tone" in text
+    assert "亲测有效" in text
+    assert "未经核实" not in text
 
 
 def test_kb_stats(tmp_path):

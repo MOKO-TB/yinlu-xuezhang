@@ -24,6 +24,7 @@ from minicode.ui import TerminalUI
 def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                  agent: Agent) -> bool:
     """处理斜杠命令;返回 True 表示要退出程序。"""
+    workspace = agent.ctx.workspace      # /plan /skills /kb /memory 等都要用
     parts = cmd.split()
     name = parts[0].lower()
     arg = parts[1] if len(parts) > 1 else ""
@@ -56,7 +57,18 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
             ui.info(state.describe())
     elif name == "/memory":
         from minicode.memory import list_entries
-        ui.info(list_entries(workspace, ""))
+        ui.info(list_entries(workspace, "", arg or "project"))
+    elif name == "/remember":
+        from minicode.memory import save_entry
+        text = " ".join(parts[1:]).strip()
+        ui.info(save_entry(workspace, "user", text, "user") if text
+                else "用法: /remember 要记住的偏好或事实(存到用户级记忆)")
+    elif name == "/dream":
+        from minicode.memory import dream, dream_all
+        scope = (arg or "project").strip().lower()
+        llm = getattr(agent.ctx, "llm", None)
+        ui.info(dream_all(workspace, llm) if scope in ("all", "both", "全部")
+                else dream(workspace, scope, llm))
     elif name == "/plan":
         from minicode.planning import PLAN_REL
         p = workspace / PLAN_REL
@@ -107,12 +119,13 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
         agent.compact_now()
     else:
             ui.error(f"未知命令 {name}。可用: /help /clear /model /history "
-                     f"/resume /undo /compact /sandbox /exit")
+                     f"/resume /undo /compact /sandbox /memory /remember /dream /exit")
     return False
 
 
 SLASH_NAMES = {"/help", "/clear", "/model", "/history", "/resume",
-               "/undo", "/compact", "/sandbox", "/exit", "/quit"}
+               "/undo", "/compact", "/sandbox", "/memory", "/remember",
+               "/dream", "/skills", "/kb", "/plan", "/exit", "/quit"}
 # Git Bash(MSYS)会把 "/cmd" 形式的参数转成 Git 安装目录下的路径,
 # 如 "D:/git/Git/history" 或 "C:/Program Files/Git/history"
 _MSYSED_COMMAND = re.compile(r"(?i)^[A-Z]:[\\/].*git[\\/]([^\\/]+)$")

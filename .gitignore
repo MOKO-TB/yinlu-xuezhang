@@ -6,7 +6,7 @@ sessions/
 .pytest_cache/
 build/
 dist/
-screen.png
+screen*.png
 .automation/
 
 # 本地临时校验目录与抓取原始缓存

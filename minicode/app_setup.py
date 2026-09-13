@@ -9,6 +9,7 @@ from pathlib import Path
 from minicode.agent import Agent
 from minicode.config import Config
 from minicode.kb import kb_dirs, kb_prompt_section
+from minicode.library import library_prompt_section
 from minicode.mcp import connect_servers, parse_servers
 from minicode.memory import memory_prompt_section
 from minicode.llm import LLMClient
@@ -31,6 +32,7 @@ def build_system_prompt(workspace: Path) -> str:
     skills = load_skills(skill_dirs(workspace))
     return (prompt + skills_prompt_section(skills)
             + kb_prompt_section(kb_dirs(workspace))
+            + library_prompt_section(workspace)
             + memory_prompt_section(workspace))
 
 
@@ -48,20 +50,31 @@ def _mcp_log(ui):
     return log
 
 
-def create_agent(config: Config, workspace: Path, ui,
-                 llm=None, sessions_dir: Path | None = None) -> tuple[Agent, Session]:
-    session = Session(system_prompt=build_system_prompt(workspace),
-                      log_dir=sessions_dir or SESSIONS_DIR)
-    llm = llm or LLMClient(config)
+mcp_log = _mcp_log      # 公开别名(gui_bridge 复用同一套日志行为)
+
+
+def build_runner_agent(config: Config, workspace: Path, ui, llm,
+                       sessions_dir: Path | None = None,
+                       mcp_tools: list | None = None,
+                       sandbox=None) -> tuple[Agent, Session]:
+    """造一个"会话运行器"(独立 Agent + Session),供后台并发任务使用。
+
+    LLM 客户端、MCP 工具、沙箱状态都是**外部传入共享**的:
+    - MCP 连接只建一次,新会话不该重复拉起子进程;
+    - 沙箱是全局策略,所有会话看到同一份边界;
+    - ui 则是**每个会话一个适配器**(把事件打上会话标记),所以走参数传。
+    """
     ctx = ToolContext(workspace=workspace, config=config)
-    # 沙箱:工具层(路径围栏)与权限门(确认流程)共享同一份状态
-    ctx.sandbox = SandboxState(policy_from_raw(config.sandbox), workspace)
+    ctx.sandbox = sandbox if sandbox is not None else \
+        SandboxState(policy_from_raw(config.sandbox), workspace)
+    ctx.ui = ui      # 工具可把图形指令推给界面(校园地图 map_* 工具用)
+    ctx.llm = llm    # 记忆整理(memory action=dream)用它做一次性归纳
     registry = build_default_registry()
-    # MCP 服务器:连不上的只在日志里提示,不阻塞应用启动
-    mcp = connect_servers(parse_servers(config.mcp_servers), log=_mcp_log(ui))
-    registry.extend(mcp.build_tools())
+    registry.extend(mcp_tools or [])
     # 子代理(task 工具):闭包持有 LLM/UI/配置,主循环可派发独立子任务
     registry.append(build_task_tool(ctx, llm, ui, config, registry))
+    session = Session(system_prompt=build_system_prompt(workspace),
+                      log_dir=sessions_dir or SESSIONS_DIR)
     agent = Agent(
         llm=llm,
         registry=registry,
@@ -70,5 +83,17 @@ def create_agent(config: Config, workspace: Path, ui,
         ui=ui,
         ctx=ctx,
     )
+    return agent, session
+
+
+def create_agent(config: Config, workspace: Path, ui,
+                 llm=None, sessions_dir: Path | None = None) -> tuple[Agent, Session]:
+    llm = llm or LLMClient(config)
+    # MCP 服务器:连不上的只在日志里提示,不阻塞应用启动
+    mcp = connect_servers(parse_servers(config.mcp_servers), log=_mcp_log(ui))
+    sandbox = SandboxState(policy_from_raw(config.sandbox), workspace)
+    agent, session = build_runner_agent(
+        config, workspace, ui, llm, sessions_dir=sessions_dir,
+        mcp_tools=mcp.build_tools(), sandbox=sandbox)
     agent.mcp = mcp          # 退出时 close_all(),别留下孤儿进程
     return agent, session

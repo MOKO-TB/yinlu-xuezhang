@@ -36,6 +36,7 @@ class Agent:
         self.max_steps = max_steps
         self._tool_map = {t.name: t for t in registry}
         self._undo_stack: list[dict] = []
+        self._narration = ""       # 本轮模型写的说明文字:权限确认框里当"为什么要做"的兜底
         self.mcp = None            # app_setup 注入:McpManager,退出时关停
 
     def close(self) -> None:
@@ -72,6 +73,7 @@ class Agent:
 
             self.ui.finish_stream()
             self.session.add_assistant(turn)
+            self._narration = str(turn.text or "")   # 供本步工具确认框解释"为什么要做"
 
             if not turn.tool_calls:
                 return
@@ -129,13 +131,20 @@ class Agent:
         if not isinstance(args, dict):
             return "错误: 工具参数必须是 JSON 对象。"
 
+        # reason 是给用户看的"这一步为什么做",不是工具参数:声明了才摘掉,避免
+        # 误吃 MCP 工具自己同名的参数。
+        reason = ""
+        props = (tool.parameters or {}).get("properties") or {}
+        if "reason" in props:
+            reason = str(args.pop("reason", "") or "")
+
         decision = self.gate.check(tool, args)
         if decision == REJECT:
             self.ui.tool_rejected_hard(tool, args)
             return ("错误: 该操作被安全策略硬拒绝(可能造成不可恢复的破坏),"
                     "已阻止执行,请勿重试。")
         if decision == ASK:
-            choice = self.ui.confirm_tool(tool, args)
+            choice = self.ui.confirm_tool(tool, args, reason or self._narration)
             if choice == "always":
                 self.gate.approve_for_turn(tool.name)
             elif choice != "yes":

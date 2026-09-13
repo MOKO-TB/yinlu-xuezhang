@@ -1,7 +1,7 @@
 """内置工具注册表。"""
 from __future__ import annotations
 
-from minicode import kb, memory, planning, skills
+from minicode import campus, kb, library, memory, planning, skills
 from minicode.tools import crawl, fs, search, shell
 from minicode.tools.base import Tool
 
@@ -31,6 +31,8 @@ def build_default_registry() -> list[Tool]:
                 "properties": {
                     "path": {"type": "string", "description": "相对工作区的文件路径"},
                     "content": {"type": "string", "description": "完整的文件内容"},
+                    "reason": {"type": "string",
+                               "description": "用一句中文向用户说明这次写文件要达成什么目的(显示在权限确认框里),如:新建地图数据结构文件"},
                 },
                 "required": ["path", "content"],
             },
@@ -46,6 +48,8 @@ def build_default_registry() -> list[Tool]:
                     "old_string": {"type": "string", "description": "要被替换的原文(建议包含前后各几行上下文以保证唯一)"},
                     "new_string": {"type": "string", "description": "替换后的文本"},
                     "replace_all": {"type": "boolean", "description": "所有匹配处全部替换,默认 false"},
+                    "reason": {"type": "string",
+                               "description": "用一句中文向用户说明这次改动要达成什么目的(显示在权限确认框里),如:修掉切换会话时的多余弹窗"},
                 },
                 "required": ["path", "old_string", "new_string"],
             },
@@ -59,6 +63,8 @@ def build_default_registry() -> list[Tool]:
                 "properties": {
                     "command": {"type": "string", "description": "要执行的命令"},
                     "timeout": {"type": "integer", "description": "超时秒数,默认 60,最大 300"},
+                    "reason": {"type": "string",
+                               "description": "用一句中文向用户说明这条命令要达成的目的(显示在权限确认框里),如:列出知识库里 8 月以来的新条目"},
                 },
                 "required": ["command"],
             },
@@ -176,27 +182,157 @@ def build_default_registry() -> list[Tool]:
             read_only=True,
         ),
         Tool(
-            name="memory",
+            name="library_search",
             description=(
-                "长期记忆管理(跨会话,存工作区 memory/MEMORY.md)。"
-                "action=save:用户提到偏好/项目约定/纠正/参考资料时记下来;"
-                "action=list:按类别列出;action=search:按关键词检索;"
-                "action=forget:让用户要求忘记某条记忆时删除。"
+                "查询本校图书馆馆藏(本地离线全量书目库,133 万条,毫秒级返回)。"
+                "用户问「图书馆有没有某本书 / 这本书在哪 / 索书号是多少 / 某作者有哪些书 / "
+                "某个主题有什么书」时必须用它,不要再去访问图书馆网站让用户等。"
+                "返回书名、作者、出版社、出版年、ISBN、索书号、中图法分类号、馆藏册数、"
+                "在架数、馆藏地(书库/阅览室)、简介。"
+                "kind=paper 只看纸本(有馆藏位置),kind=ebook 只看电子书,默认 all。"
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["save", "list", "search", "forget"],
-                               "description": "save=记住;list=列出;search=检索;forget=忘记"},
+                    "query": {"type": "string",
+                              "description": "查询词:书名 / 作者 / ISBN / 中图法分类号(如 I247.5)"},
+                    "top_k": {"type": "integer", "description": "返回条数,默认 8,上限 30"},
+                    "kind": {"type": "string", "enum": ["all", "paper", "ebook"],
+                             "description": "all=全部(默认);paper=纸本(有馆藏地);ebook=电子书"},
+                },
+                "required": ["query"],
+            },
+            handler=library.library_search,
+            read_only=True,
+        ),
+        Tool(
+            name="memory",
+            description=(
+                "长期记忆管理(跨会话)。项目级存工作区 memory/MEMORY.md,"
+                "用户级(跨项目通用)存用户目录,用 scope=user 区分。"
+                "action=save:用户提到偏好/项目约定/纠正/参考资料时记下来;"
+                "action=list:按类别列出;action=search:按关键词检索;"
+                "action=forget:让用户要求忘记某条记忆时删除;"
+                "action=dream:整理去重(合并同类、删掉被后续推翻的,覆盖前自动备份)——"
+                "用户说「整理记忆/记忆太多了」或发现条目明显重复时用它。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["save", "list", "search", "forget", "dream"],
+                               "description": "save=记住;list=列出;search=检索;"
+                                              "forget=忘记;dream=整理去重"},
                     "category": {"type": "string",
                                  "enum": ["user", "feedback", "project", "reference"],
                                  "description": "save/list 用:用户偏好/反馈纠正/项目约定/参考资料"},
                     "content": {"type": "string", "description": "save 用:要记住的内容(一句话)"},
                     "query": {"type": "string", "description": "search/forget 用:关键词或部分内容"},
+                    "scope": {"type": "string", "enum": ["project", "user", "all"],
+                              "description": "作用域:project=只在本项目生效(默认);"
+                                             "user=跨项目通用(个人偏好/沟通习惯);"
+                                             "dream 时传 all 表示两级都整理"},
                 },
                 "required": ["action"],
             },
             handler=memory.memory,
             read_only=False,
+        ),
+        # ---------------- 校园地图(map_*)----------------
+        # 数据是线下交付包(手绘地图 + 36 张单栋标注图)的索引:是「位置图」,
+        # 没有路网拓扑,所以只有"在哪、旁边是什么",没有"怎么走、几分钟"。
+        # 这几个工具只影响界面上的地图显示,不碰工作区文件,因此标 read_only=True:
+        # 否则"框一栋楼"也会弹权限确认框,用户每次问地点都要点两次允许。
+        Tool(
+            name="map_find_place",
+            description=(
+                "按用户的口语说法在地图上定位一处地点:命中就把该建筑框出来并显示它的单栋标注图。"
+                "用户问「XX 在哪 / 怎么走 / 带我去 XX / XX 远不远」时用它——这是回答位置类问题的第一步。"
+                "支持学生俗称(旧图=图书馆、综合馆=体育综合馆、E栋、s5)。"
+                "注意:「A栋~E栋」在地图上是两栋楼(学思苑X 与 集贤苑X座),工具会返回 ambiguous,"
+                "此时必须把候选摆给用户确认,不要自己挑一个。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "用户说的地点,如 图书馆 / E栋 / S5 / 正校门"},
+                    "color": {"type": "string", "enum": list(campus.COLORS),
+                              "description": "标注框颜色,默认 orange"},
+                },
+                "required": ["query"],
+            },
+            handler=campus.map_find_place,
+            read_only=True,
+        ),
+        Tool(
+            name="map_show_list",
+            description=(
+                "列出地图上已标注的全部地点,并在地图面板打开列表。"
+                "回答「学校有哪些楼 / 有哪些食堂 / 宿舍都有哪几栋」这类问题,或需要确认准确名称时用它。"
+                "可按 category(学生宿舍/教学楼/公共建筑/体育场馆/食堂/校门/行政办公)或 query 关键词筛选。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string",
+                                 "description": "按类别筛选,如 学生宿舍 / 教学楼 / 食堂"},
+                    "query": {"type": "string", "description": "按名称关键词筛选,如 学思苑"},
+                },
+            },
+            handler=campus.map_show_list,
+            read_only=True,
+        ),
+        Tool(
+            name="map_highlight_building",
+            description=(
+                "一次在地图上框出多处地点,适合批量请求(如「标出所有食堂」「学思苑都有哪几栋」)。"
+                "单个地点、或用户用俗称提问时请优先用 map_find_place(它会处理歧义并出图)。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "names": {"type": "array", "items": {"type": "string"},
+                              "description": "要框出的地点名,如 [\"桃园饭堂\",\"桃蹊饭堂\"]"},
+                    "color": {"type": "string", "enum": list(campus.COLORS),
+                              "description": "标注框颜色,默认 orange"},
+                },
+                "required": ["names"],
+            },
+            handler=campus.map_highlight_building,
+            read_only=True,
+        ),
+        Tool(
+            name="map_drop_pin",
+            description=(
+                "在地图上钉一个图钉:给地点名(用索引里的中心点)或直接给底图坐标。"
+                "适合标集合点、活动地点、约见位置这类「就这一个点」的场景。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "地点名(优先用这个,如 图书馆);也可改传 x/y"},
+                    "x": {"type": "number", "description": "底图 x 坐标(0-2559),仅在不用 name 时传"},
+                    "y": {"type": "number", "description": "底图 y 坐标(0-1279),仅在不用 name 时传"},
+                    "label": {"type": "string", "description": "图钉上的文字,默认用地点名"},
+                    "color": {"type": "string", "enum": list(campus.COLORS),
+                              "description": "图钉颜色,默认 red"},
+                    "note": {"type": "string", "description": "可选:图钉下方的补充说明"},
+                },
+            },
+            handler=campus.map_drop_pin,
+            read_only=True,
+        ),
+        Tool(
+            name="map_clear",
+            description="清除地图上已有的标记。开始讲一个新地点前,若地图上还留着上一次的标记,先用它清一下。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "scope": {"type": "string", "enum": ["all", "highlight", "pin", "list"],
+                              "description": "清除范围,默认 all(全部)"},
+                },
+            },
+            handler=campus.map_clear,
+            read_only=True,
         ),
     ]

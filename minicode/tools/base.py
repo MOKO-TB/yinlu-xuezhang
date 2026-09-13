@@ -18,11 +18,13 @@ class PathBlocked(Exception):
 
 @dataclass
 class ToolContext:
-    """工具运行时上下文:工作区根目录 + 全局配置 + 沙箱状态。"""
+    """工具运行时上下文:工作区根目录 + 全局配置 + 沙箱状态 + 界面通道。"""
 
     workspace: Path
     config: Config
     sandbox: Any | None = None   # minicode.sandbox.SandboxState,由 app_setup 注入
+    ui: Any | None = None        # GuiUI/TerminalUI:工具可把图形指令推给界面(如校园地图)
+    llm: Any | None = None       # LLMClient:记忆整理(dream)等内部工具需要一次性补全
 
 
 Handler = Callable[..., str]  # 签名: handler(ctx, **kwargs) -> str

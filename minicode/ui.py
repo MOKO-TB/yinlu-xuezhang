@@ -20,7 +20,8 @@ from minicode.config import Config
 from minicode.tools.base import Tool
 
 SLASH_COMMANDS = ["/help", "/clear", "/model", "/history", "/resume",
-                  "/undo", "/compact", "/sandbox", "/skills", "/kb", "/plan", "/exit"]
+                  "/undo", "/compact", "/sandbox", "/memory", "/remember",
+                  "/dream", "/skills", "/kb", "/plan", "/exit"]
 
 REFRESH_INTERVAL = 0.12     # 流式 Markdown 刷新节流
 DIFF_MAX_LINES = 40
@@ -126,15 +127,17 @@ class TerminalUI:
 
     # ------------------------------------------------------------ 权限确认
 
-    def confirm_tool(self, tool: Tool, args: dict) -> str:
-        """返回 'yes' | 'no' | 'always'。
+    def confirm_tool(self, tool: Tool, args: dict, reason: str = "") -> str:
+        """返回 'yes' | 'no' | 'always'。reason=模型说明的"这一步为什么做"。
 
         非交互场景(stdin 关闭、管道输入、Ctrl+C)一律按"拒绝"处理并说明原因,
         不能让确认框把整个进程带崩。
         """
+        from minicode.explain import permission_why
+        why = permission_why(tool.name, args, reason)
         self.console.print()
         self.console.print(Panel(
-            self._permission_detail(tool, args),
+            self._permission_detail(tool, args, why),
             title=f"[yellow]⚠ 权限确认 · {tool.name}[/yellow]",
             border_style="yellow",
         ))
@@ -155,7 +158,30 @@ class TerminalUI:
                 return "no"
             self.console.print("[dim]请输入 y、n 或 a[/dim]")
 
-    def _permission_detail(self, tool: Tool, args: dict) -> Text:
+    def _permission_detail(self, tool: Tool, args: dict,
+                           why: dict | None = None) -> Text:
+        header = self._why_header(why)
+        return header + self._tool_detail(tool, args)
+
+    @staticmethod
+    def _why_header(why: dict | None) -> Text:
+        """确认框顶部的"为什么要做 / 会影响什么":先给判断依据,再给原始命令。"""
+        if not why:
+            return Text()
+        head = Text()
+        head.append("为什么要做这一步:", style="bold yellow")
+        head.append(f"{why.get('why', '')}\n")
+        if why.get("digest"):
+            head.append("这一步会做什么:", style="bold yellow")
+            head.append(f"{why['digest']}\n")
+        risks = why.get("risks") or []
+        if risks:
+            head.append("影响:", style="bold yellow")
+            head.append(";".join(risks) + "\n")
+        head.append("────── 原始内容 ──────\n", style="dim")
+        return head
+
+    def _tool_detail(self, tool: Tool, args: dict) -> Text:
         if tool.name == "bash":
             return Text(f"$ {args.get('command', '')}")
 
@@ -220,6 +246,9 @@ class TerminalUI:
             "  /undo         撤销最近一次文件改动(可连续;bash 改动不在跟踪范围)\n"
             "  /compact      立即压缩上下文(平时到达阈值会自动压缩)\n"
             "  /sandbox [on|off] 查看/临时切换沙箱(持久化改 config.json)\n"
+            "  /memory [user] 查看长期记忆(默认本项目;user=用户级)\n"
+            "  /remember <内容> 记一条用户级偏好(跨项目)\n"
+            "  /dream [project|user|all] 整理记忆:去重合并(自动备份)\n"
             "  /skills       查看可用技能(SKILL.md)\n"
             "  /exit         退出(或 Ctrl+D)\n"
             "\n[bold]说明[/bold]\n"

@@ -91,6 +91,26 @@ class LLMClient:
                 time.sleep(2 ** attempt)
         raise RuntimeError("unreachable")
 
+    def complete(self, system: str, user: str,
+                 max_tokens: int | None = None) -> str:
+        """一次性(非流式)补全:给记忆整理这类内部工具用,不涉及工具调用。
+
+        与 stream_chat 分开是有意为之——它不注册工具、不流式回调,
+        失败直接抛异常由调用方兜底,避免把内部整理逻辑和主循环缠在一起。
+        """
+        kwargs: dict = {
+            "model": self.config.model,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+        }
+        if max_tokens:
+            kwargs["max_tokens"] = max_tokens
+        resp = self._client.chat.completions.create(**kwargs)
+        choices = getattr(resp, "choices", None) or []
+        if not choices:
+            return ""
+        return getattr(choices[0].message, "content", "") or ""
+
     def _create_stream(self, kwargs: dict):
         try:
             return self._client.chat.completions.create(**kwargs)

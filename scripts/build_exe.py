@@ -17,6 +17,27 @@ sys.path.insert(0, str(ROOT))
 from minicode import __version__  # noqa: E402
 
 
+def _ensure_collected(dist: Path) -> None:
+    """兜住 PyInstaller 6.22 冷构建的收集竞态。
+
+    实测:带 `--clean` 的**首次**构建里,CLI 那个 EXE 已经生成在 build/gcode/ 下,
+    但 COLLECT 阶段却报 "Ignoring non-existent resource ... 引路学长-CLI.exe",
+    结果 dist/引路学长/ 只有 _internal、两个 exe 都不在(--clean 冷缓存下的顺序问题,
+    第二次不带 --clean 就正常)。这里发现缺失就自己补拷,免得包出来是残的。
+    """
+    work = ROOT / "build" / "gcode"
+    for name in ("引路学长.exe", "引路学长-CLI.exe"):
+        target = dist / name
+        if target.exists():
+            continue
+        src = work / name
+        if src.exists():
+            shutil.copy2(src, target)
+            print(f"[修复] COLLECT 漏收 {name},已从 build/gcode 补拷")
+        else:
+            raise AssertionError(f"构建产物缺失: {name}(build/gcode 里也没有)")
+
+
 def main() -> None:
     subprocess.run(
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
@@ -24,6 +45,7 @@ def main() -> None:
         cwd=ROOT, check=True,
     )
     dist = ROOT / "dist" / "引路学长"
+    _ensure_collected(dist)
     assert (dist / "引路学长.exe").exists(), "构建产物缺失(GUI 版)"
     assert (dist / "引路学长-CLI.exe").exists(), "构建产物缺失(CLI 版)"
     onefile = ROOT / "dist" / "引路学长-单文件版.exe"

@@ -9,22 +9,28 @@ from __future__ import annotations
 import difflib
 import json
 import threading
+import time
 from pathlib import Path
 
 from minicode import APP_NAME, __version__
-from minicode.app_setup import create_agent
+from minicode.app_setup import build_runner_agent, mcp_log
 from minicode.attachments import (
     Attachment, build_content, display_text, is_image, mime_for,
     preview_data_url, save_attachments,
 )
+from minicode.campus import frontend_payload as campus_map_data
 from minicode.compaction import estimate_tokens
 from minicode.config import CONFIG_PATH, API_KEY_PLACEHOLDERS, save_config
 from minicode.gui_ui import GuiUI
 from minicode.kb import kb_dirs, kb_stats as kb_stats_fn
-from minicode.memory import load_entries as mem_load, memory_path as mem_path
+from minicode.mcp import connect_servers, parse_servers
+from minicode.memory import (
+    dream, dream_all, global_memory_path, load_from as mem_load_file,
+    memory_path as mem_path,
+)
 from minicode.llm import LLMClient
 from minicode.paths import SESSIONS_DIR
-from minicode.sandbox import classify_path, policy_to_raw
+from minicode.sandbox import SandboxState, classify_path, policy_from_raw, policy_to_raw
 from minicode.session import Session, list_sessions
 from minicode.skills import load_skills, skill_dirs
 from minicode.suggestions import build_suggestions, collect_user_texts
@@ -56,6 +62,9 @@ class PublicApi:
 
     def set_sandbox(self, enabled: bool) -> dict:
         return self._b.set_sandbox(enabled)
+
+    def consolidate_memory(self, scope: str = "all") -> dict:
+        return self._b.consolidate_memory(scope)
 
     def edit_resend(self, ordinal: int, new_text: str, expect: str = "") -> dict:
         return self._b.edit_resend(ordinal, new_text, expect)
@@ -103,22 +112,130 @@ class PublicApi:
         return self._b.set_provider(provider_id)
 
 
-class Bridge:
-    """暴露给前端 JS 的 API(window.pywebview.api.<method>)。"""
+class SessionGuiUI(GuiUI):
+    """把某个会话的事件打上 session 标记,再转发给真正的窗口 UI。
 
-    def __init__(self, config, workspace: Path, ui: GuiUI, agent, session: Session,
-                 sessions_dir: Path = SESSIONS_DIR, config_path: Path = CONFIG_PATH):
+    每个会话一个实例:停止标志、确认通道都属于它自己,
+    这样一个会话在后台跑时,不会和当前会话的状态串味。
+    """
+
+    def __init__(self, base: GuiUI, session_key: str):
+        super().__init__()
+        self._base = base
+        self.session_key = session_key
+
+    def attach(self, window) -> None:      # 适配器不直接持有窗口
+        pass
+
+    def push(self, type_: str, **payload) -> None:
+        payload["session"] = self.session_key
+        self._base.push(type_, **payload)
+
+
+class SessionRunner:
+    """一个会话的运行时:独立 Agent + Session + 事件适配器。"""
+
+    def __init__(self, key: str, agent, session, ui: SessionGuiUI):
+        self.key = key
+        self.agent = agent
+        self.session = session
+        self.ui = ui
+        self.busy = False
+        self.thread: threading.Thread | None = None
+
+    @property
+    def log_path(self):
+        return self.session.log_path
+
+
+class Bridge:
+    """暴露给前端 JS 的 API(window.pywebview.api.<method>)。
+
+支持多个会话同时运行:每个会话一个 SessionRunner,事件带 session 键,
+新建任务不再打断正在跑的任务(它转后台继续)。"""
+
+    def __init__(self, config, workspace: Path, ui: GuiUI,
+                 sessions_dir: Path = SESSIONS_DIR, config_path: Path = CONFIG_PATH,
+                 llm=None, mcp_tools=None, sandbox=None):
         self.config = config
         self.workspace = workspace
         self.ui = ui
-        self.agent = agent
-        self.session = session
         self.sessions_dir = sessions_dir
         self.config_path = config_path
-        self._busy = False
+        self._shared_llm = llm
+        self._mcp_tools = list(mcp_tools or [])
+        self._sandbox = sandbox
+        self._mcp = None                     # create_app 注入,退出时统一关停
+        self._runners: dict[str, SessionRunner] = {}
+        self._seq = 0
+        self._current: SessionRunner | None = None
         self._confirm_event = threading.Event()
         self._confirm_choice = "no"
         ui.confirm_handler = self.confirm_tool
+        self.open_session()                  # 第一个会话
+
+    # ------------------------------------------------------------ 会话运行器
+
+    def open_session(self, load_path: Path | None = None) -> SessionRunner:
+        """新建一个会话运行器(可顺带从留档恢复),并切为当前会话。
+
+        LLM/MCP/沙箱都是共享的,只有 Agent/Session/UI 适配器是新的 ——
+        所以多开一个会话很便宜,也不会重复拉起 MCP 子进程。
+        """
+        self._seq += 1
+        ui = SessionGuiUI(self.ui, f"s{self._seq}")
+        ui.confirm_handler = self.confirm_tool
+        agent, session = build_runner_agent(
+            self.config, self.workspace, ui, self._shared_llm,
+            sessions_dir=self.sessions_dir, mcp_tools=self._mcp_tools,
+            sandbox=self._sandbox)
+        agent.mcp = self._mcp
+        if load_path is not None:
+            session.load_from(Path(load_path))
+        runner = SessionRunner(ui.session_key, agent, session, ui)
+        self._runners[runner.key] = runner
+        self._current = runner
+        return runner
+
+    def _runner_for_log(self, path: Path | None) -> SessionRunner | None:
+        if path is None:
+            return None
+        for r in self._runners.values():
+            if r.log_path == Path(path):
+                return r
+        return None
+
+    def switch_to(self, runner: SessionRunner) -> None:
+        self._current = runner
+
+    @property
+    def agent(self):
+        return self._current.agent
+
+    @property
+    def session(self):
+        return self._current.session
+
+    @property
+    def _busy(self) -> bool:
+        return bool(self._current and self._current.busy)
+
+    def running_sessions(self) -> list[SessionRunner]:
+        return [r for r in self._runners.values() if r.busy]
+
+    def close(self) -> None:
+        """关停所有会话的 MCP 子进程(退出时调用)。"""
+        for r in list(self._runners.values()):
+            try:
+                r.ui.request_stop()
+            except Exception:
+                pass
+        if self._mcp is not None:
+            try:
+                self._mcp.close_all()
+            except Exception:
+                pass
+            self._mcp = None
 
     def public_api(self) -> "PublicApi":
         """传给 pywebview js_api 的门面对象。"""
@@ -147,10 +264,12 @@ class Bridge:
             "active_provider": self.config.provider.id if self.config.provider else "",
             "skills": [{"name": s.name, "description": s.description} for s in skills],
             "kb_count": sum(s["count"] for s in kb_stats),
-            "memory_count": len(mem_load(mem_path(self.workspace))),
+            "memory_count": len(mem_load_file(mem_path(self.workspace))),
+            "memory_user_count": len(mem_load_file(global_memory_path())),
             "mcp_servers": self._mcp_summary(),
             "sandbox": self._sandbox_info(),
             "vision": bool(self.config.vision),
+            "campus_map": campus_map_data(),
         }
 
     def _mcp_summary(self) -> list[dict]:
@@ -220,11 +339,14 @@ class Bridge:
             return {"ok": False, "msg": "任务为空"}
         if text.startswith("/"):
             return {"ok": False, "msg": "GUI 里不需要斜杠命令,直接描述任务"}
-        if self._busy:
-            return {"ok": False, "msg": "有任务正在进行中"}
+        runner = self._current
+        if runner.busy:
+            return {"ok": False, "msg": "当前会话有任务正在进行中"}
         content = build_content(text, atts, bool(self.config.vision)) if atts else None
-        threading.Thread(target=self._run_task, args=(text, content), daemon=True).start()
-        return {"ok": True}
+        runner.thread = threading.Thread(target=self._run_task,
+                                         args=(runner, text, content), daemon=True)
+        runner.thread.start()
+        return {"ok": True, "session": runner.key}
 
     # ------------------------------------------------------------ 附件
 
@@ -306,6 +428,30 @@ class Bridge:
             "description": state.describe(),
         }
 
+    # ------------------------------------------------------------ 长期记忆
+
+    def consolidate_memory(self, scope: str = "all") -> dict:
+        """整理长期记忆(去重/归并);scope: project / user / all。"""
+        llm = getattr(self.agent.ctx, "llm", None)
+        sc = (scope or "all").strip().lower()
+        if sc in ("all", "both", "全部", "两级"):
+            msg = dream_all(self.workspace, llm)
+        else:
+            msg = dream(self.workspace, sc, llm)
+        self.ui.push("info", text=msg)
+        return {"ok": True, "msg": msg, **self._memory_counts()}
+
+    def _memory_counts(self) -> dict:
+        """两级记忆条数。
+
+        注意用 load_from(文件路径):load_entries 收的是「工作区」,
+        再传文件路径进去会二次拼接 memory/MEMORY.md,永远读到空表。
+        """
+        return {
+            "project": len(mem_load_file(mem_path(self.workspace))),
+            "user": len(mem_load_file(global_memory_path())),
+        }
+
     def edit_resend(self, ordinal: int, new_text: str, expect: str = "") -> dict:
         """编辑重发:截断到第 ordinal 条用户消息(含),校验原文一致后以新文本重发。
 
@@ -342,7 +488,8 @@ class Bridge:
         return {"suggestions": build_suggestions(texts)}
 
     def stop_task(self) -> dict:
-        self.ui.request_stop()
+        """只停当前会话的任务;别的会话在后台继续跑。"""
+        self._current.ui.request_stop()
         return {"ok": True}
 
     def confirm_reply(self, choice: str) -> dict:
@@ -357,10 +504,20 @@ class Bridge:
         return {"ok": True, "msg": msg}
 
     def new_task(self) -> dict:
-        self.session.clear()
-        self.ui.push("cleared")
+        """新建任务:直接开一个新会话,原会话(如果正在跑)转后台继续。
+
+        每个会话有自己的 Agent/Session,所以不需要停下谁 —— 这正是
+        "后台也能进行任务"的实现方式。
+        """
+        runner = self.open_session()
+        self.ui.push("cleared", session=runner.key)
         self._push_sessions()
-        return {"ok": True}
+        if self.running_sessions():
+            others = len([r for r in self.running_sessions() if r.key != runner.key])
+            if others:
+                self.ui.push("info", session=runner.key,
+                             text=f"{others} 个任务在后台继续运行(点左侧会话可切回去看)")
+        return {"ok": True, "session": runner.key}
 
     def compact_now(self) -> dict:
         self.agent.compact_now()
@@ -378,21 +535,25 @@ class Bridge:
         return {"ok": True}
 
     def delete_session(self, index: int) -> dict:
-        """删除一条历史会话留档;删的是当前会话时,重置为全新会话。"""
-        if self._busy:
-            return {"ok": False, "msg": "有任务正在进行中"}
+        """删除一条历史会话留档;若该会话正在后台跑,先停掉它。"""
         summaries = list_sessions(self.sessions_dir)
         if not 1 <= int(index) <= len(summaries):
             return {"ok": False, "msg": "会话不存在"}
         chosen = summaries[int(index) - 1]
-        is_current = chosen.path == self.session.log_path
+        live = self._runner_for_log(chosen.path)
+        if live is not None:
+            live.ui.request_stop()
+            deadline = time.monotonic() + 8.0
+            while time.monotonic() < deadline and live.busy:
+                time.sleep(0.05)
+            self._runners.pop(live.key, None)
         try:
             chosen.path.unlink()
         except OSError as e:
             return {"ok": False, "msg": f"删除失败: {e}"}
-        if is_current:
-            self.session.fresh_start()
-            self.ui.push("cleared")
+        if live is not None and (self._current is live or self._current is None):
+            fresh = self.open_session()          # 删的是当前会话:换一个空的
+            self.ui.push("cleared", session=fresh.key)
         self._push_sessions()
         self.ui.push("info", text="已删除该会话记录")
         return {"ok": True}
@@ -407,38 +568,52 @@ class Bridge:
         return {"ok": True}
 
     def resume_session(self, index: int) -> dict:
-        if self._busy:
-            return {"ok": False, "msg": "有任务正在进行中"}
+        """切换到某个会话:它正在后台跑就直接接上,否则从留档恢复。
+
+        以前这里会先打断当前任务,现在切换就是纯粹"换视角"。
+        """
         summaries = list_sessions(self.sessions_dir)
         if not 1 <= int(index) <= len(summaries):
             return {"ok": False, "msg": "会话不存在"}
         chosen = summaries[int(index) - 1]
-        n = self.session.load_from(chosen.path)
-        self.ui.push("cleared")
-        self.ui.push("resumed", messages=self._history_for_frontend())
-        self.ui.push("info", text=f"已恢复 {n} 条消息(来自 {chosen.path.name})")
+        live = self._runner_for_log(chosen.path)
+        if live is not None:
+            self.switch_to(live)                 # 后台任务:接上它当前的内存上下文
+            key, n = live.key, max(0, len(live.session.messages) - 1)
+        else:
+            runner = self.open_session(load_path=chosen.path)
+            key, n = runner.key, max(0, len(runner.session.messages) - 1)
+        self.ui.push("cleared", session=key)
+        self.ui.push("resumed", session=key, messages=self._history_for_frontend())
+        self.ui.push("info", session=key,
+                     text=f"已恢复 {n} 条消息(来自 {chosen.path.name})")
         self._push_sessions()
-        return {"ok": True}
+        return {"ok": True, "session": key}
 
     # ------------------------------------------------------------ 内部
 
-    def _run_task(self, text: str, content=None) -> None:
-        self._busy = True
-        self.ui.push("busy", value=True)
+    def _run_task(self, runner: SessionRunner, text: str, content=None) -> None:
+        """在后台线程里跑一个回合(每个会话一个线程,互不干扰)。"""
+        runner.busy = True
+        runner.ui.push("busy", value=True)
+        self._push_sessions()          # 立刻让侧栏标上"运行中"的转圈
         try:
-            self.agent.run_turn(text, content)
+            runner.agent.run_turn(text, content)
         except Exception as e:  # 引擎之外的意外错误也要让前端知道
-            self.ui.push("error", text=f"内部错误: {type(e).__name__}: {e}")
+            runner.ui.push("error", text=f"内部错误: {type(e).__name__}: {e}")
         finally:
-            self._busy = False
-            self.ui.push("busy", value=False)
+            runner.busy = False
+            runner.ui.push("busy", value=False)
             self._push_sessions()
 
     def _push_sessions(self) -> None:
+        running_paths = {str(r.log_path) for r in self.running_sessions() if r.log_path}
+        cur_path = self.session.log_path
         items = [
             {"index": i, "time": s.time, "n_messages": s.n_messages,
              "last_user_text": s.last_user_text,
-             "current": s.path == self.session.log_path}
+             "current": s.path == cur_path,
+             "running": str(s.path) in running_paths}
             for i, s in enumerate(list_sessions(self.sessions_dir), start=1)
         ]
         self.ui.push("sessions", items=items[:12])
@@ -461,11 +636,15 @@ class Bridge:
         return out
 
     # 确认握手:Agent 线程阻塞在此,前端点按钮后返回
-    def confirm_tool(self, tool: Tool, args: dict) -> str:
+    def confirm_tool(self, tool: Tool, args: dict, reason: str = "") -> str:
+        from minicode.explain import permission_why
+        why = permission_why(tool.name, args, reason)
         self._confirm_event.clear()
         self._confirm_choice = "no"
         self.ui.push("confirm_request", tool=tool.name,
-                     detail=self._permission_detail_text(tool, args))
+                     detail=self._permission_detail_text(tool, args),
+                     why=why.get("why", ""), digest=why.get("digest", ""),
+                     risks=why.get("risks", []))
         self._confirm_event.wait()
         return self._confirm_choice
 
@@ -504,11 +683,20 @@ class Bridge:
 
 def create_app(config, workspace: Path, llm=None, ui: GuiUI | None = None,
                sessions_dir: Path | None = None, config_path: Path | None = None):
-    """组装 GUI 形态的完整应用;llm/sessions_dir/config_path 仅供测试注入。"""
+    """组装 GUI 形态的完整应用;llm/sessions_dir/config_path 仅供测试注入。
+
+    MCP 客户端、LLM、沙箱在这里建**一次**,由所有会话共享 ——
+    新建会话只多一个 Agent/Session,不会重复拉起 MCP 子进程。
+    """
     ui = ui or GuiUI()
-    agent, session = create_agent(config, workspace, ui, llm=llm,
-                                  sessions_dir=sessions_dir)
-    bridge = Bridge(config, workspace, ui, agent, session,
+    llm = llm or LLMClient(config)
+    mcp = connect_servers(parse_servers(config.mcp_servers), log=mcp_log(ui))
+    sandbox = SandboxState(policy_from_raw(config.sandbox), workspace)
+    bridge = Bridge(config, workspace, ui,
                     sessions_dir=sessions_dir or SESSIONS_DIR,
-                    config_path=config_path or CONFIG_PATH)
-    return bridge, ui, agent, session
+                    config_path=config_path or CONFIG_PATH,
+                    llm=llm, mcp_tools=mcp.build_tools(), sandbox=sandbox)
+    bridge._mcp = mcp
+    for runner in bridge._runners.values():
+        runner.agent.mcp = mcp          # 退出时 bridge.close() 统一关停
+    return bridge, ui, bridge.agent, bridge.session

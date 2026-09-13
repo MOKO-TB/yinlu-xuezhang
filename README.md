@@ -4,7 +4,8 @@
 
 ## 功能
 
-- **桌面 GUI**:暖橙手账风,深色/浅色一键切换;会话列表、Markdown 流式对话、工具调用卡片、思考流可折叠;**划词即弹「复制选区」**,消息右键有原生菜单(撤销/剪切/复制/粘贴/全选),Ctrl+C/V/X/A 正常可用
+- **桌面 GUI**:暮色玻璃风(全屏校园黄昏航拍做背景,侧栏/顶栏/气泡/工具卡都是磨砂玻璃层),深色/浅色一键切换;会话列表、Markdown 流式对话;**思考与工具调用收成一条可折叠的「工作过程」**(最终回复开始时自动收起,点标题行展开回看);**划词即弹「复制选区」**,消息右键有原生菜单(撤销/剪切/复制/粘贴/全选),Ctrl+C/V/X/A 正常可用
+- **后台任务**:新建任务 / 切换会话都**不会打断**正在跑的任务——每个会话有自己的运行器(独立 Agent 与会话上下文),旧任务转后台继续跑完;侧栏对应会话显示转圈与「运行中」,点它即可切回去看实时进度(模型、MCP 连接、沙箱策略在会话间共享,多开一个会话不会重复起进程)
 - **内置校园模型,开箱即用**:固定使用广州应用科技学院内网模型服务(`qwen3.8-27b`),不需要填 API Key,界面也不提供模型切换入口(顶栏模型标识只展示)
 - **沙箱边界**:工作区内的路径直接放行、工作区外逐次确认、`~/.yinluxs` `~/.ssh` 等敏感目录永远拒之门外;还能禁网命令、加自定义禁配规则、卡命令超时;GUI 顶栏一键开关(详见「沙箱」一节)
 - **附件上传**:聊天框 📎 选文件/图片,自动复制进工作区 `uploads/` 并把路径注入消息;图片按长边 1536 / 1MB 自动压缩,`vision: true` 时以 base64 直接发给视觉模型
@@ -15,7 +16,9 @@
 - **`/undo` 回滚**(CLI):写前快照,可连续撤销
 - **上下文自动压缩**:token 估算接近窗口上限时,把早期对话折叠成摘要(按完整轮切分)
 - **会话持久化**:每轮写入 `sessions/*.jsonl`;GUI 侧栏一键恢复,CLI `/resume`
-- **9 个内置工具**:`read_file` / `write_file` / `edit_file` / `bash` / `glob` / `grep` / `use_skill` / `search_knowledge` / `web_crawl`
+- **校园地图(肇庆校区,手绘版)**:用线下交付的手绘地图 + 36 张单栋标注图做"位置图"——问「图书馆在哪」「E栋怎么走」,agent 会把该建筑在手绘地图上框出来、并给出它的单栋标注图(整图 + 一个红框),面板支持滚轮缩放/拖动平移/点框看大图;也能**不用问模型自己找**:面板里有搜索框(支持 E栋、s5 这类俗称与「食堂」这类类别词,命中多处会全列出来让你挑)、图例上的类别徽章一点即筛(只看食堂/只看宿舍)、邻近建筑可点跳转、一键复制位置说明;首页首位的「🗺 打开校园地图」按钮点开即是地图并自动聚焦搜索框。**A栋~E栋在地图上是两栋楼(学思苑X / 集贤苑X座),工具会返回歧义并把候选都摆出来,绝不自作主张挑一个**。这份数据没有路网,所以只答"在哪、旁边是什么",不编路线与步行时间。数据是 `frontend/campus-index.json`(交付包索引副本),底图与建筑图由 `scripts/build_campus_assets.py` 从交付 PNG 生成
+- **权限确认解释"为什么"**:确认框顶部给出「这一步为什么要做 / 这一步会做什么 / 影响」——目的优先取模型填的 `reason`,没填就用同一轮它写的说明文字,再不行按命令形态做启发式解读(如"用 Python 读取并解析数据文件(一条命令里含多个步骤)"),并标出影响面(只读 / 会写文件 / 会联网 / 删除不可恢复 / bash 改动不在撤销范围)
+- **17 个内置工具**:`read_file` / `write_file` / `edit_file` / `bash` / `glob` / `grep` / `web_crawl` / `use_skill` / `plan` / `search_knowledge` / `library_search` / `memory` + 地图 `map_find_place` / `map_show_list` / `map_highlight_building` / `map_drop_pin` / `map_clear`
 - **网页抓取**:`web_crawl` 抓网页/整站为 markdown(同域 BFS 跟链、限页限速),入库前自动去掉每页重复的导航/页脚;可选 to_kb 一键写入本地知识库 `kb/crawl-<域名>.json`,用 `kb_category`/`kb_tags` 打主题标签(检索时标签权重×2),由 search_knowledge 带来源网址检索。源码环境用 crawl4ai(真浏览器,能渲染 JS);**打包版自动切到内置轻量抓取器(httpx + BeautifulSoup)**,不带浏览器内核(否则 79MB 的包会涨到约 500MB),静态站点效果一致,需要 JS 的页面会明确提示
 - **校园主题语料库**:`scripts/crawl_school_topics.py` 按"用户会问什么"分主题爬官网(奖助学金 / 入党党建 / 团学推优 / 学科竞赛 / 证书与等级考试 / 考研升学 / 转专业与专业选择 / 选课与学分 / 教务考试 / 就业与考公考编 / 榜样风采 / 心理与情绪 / 学风与学习方法 / 招生专升本 / 校园活动与文体 / 宿舍与生活服务 / 社团与学生组织 / 军训与国防教育 / 校园新闻动态 / 学生故事与风采 / 学生事务办理 / 校园讲座与专题 / 视频与图文校园 / 服务大厅与办事入口,共 24 个),关键词过滤 + 翻页 + 发布日期提取 + 去导航,产出 `kb/school-gzasc.json`(每条都带原文链接与发布日期;视频页与图文指引页也建条目,正文里给出观看/查看链接),换学校只改 `scripts/school_topics.json`,不用改代码
 - **OpenAI 兼容内核**:底层走 OpenAI 协议(流式 + 工具调用),所以默认的校园模型之外,任何 OpenAI 兼容服务(DeepSeek / Kimi / Qwen / 智谱)都能在源码层接;本地服务(127.0.0.1)与校园内网(10.x)自动绕过系统代理
@@ -99,6 +102,38 @@ GUI 顶栏的「🛡 沙箱开/关」可随时切换(写回 config.json);CLI 用
   带透明的 PNG 保持 PNG,GIF 保留动画;单文件上限 20MiB、解码后不超过 4000 万像素;
 - `config.json` 里 `vision: true`(且模型确实支持看图)时,图片会以 base64 data URL
   随消息直接发给模型;否则只给路径并在消息里注明「当前模型不支持看图」。
+
+## 长期记忆
+
+跨会话记住四类事实:**用户偏好**(user)/**反馈纠正**(feedback)/**项目约定**(project)/
+**参考资料**(reference)。分两级作用域:
+
+| 作用域 | 存放位置 | 适用 |
+|---|---|---|
+| 项目级(默认) | 工作区 `memory/MEMORY.md` | 只跟这个项目有关:技术选型、目录约定、踩过的坑 |
+| 用户级(`scope=user`) | `~/.yinluxs/memory/MEMORY.md` | 跨项目通用:个人偏好、沟通习惯、常用环境 |
+
+两个文件都是**一条一行、人工可直接编辑**的 Markdown:
+
+```markdown
+- [2026-09-13][user] 喜欢先给结论再给理由
+- [2026-09-13][project] 打包前必须先关掉运行中的实例
+```
+
+模型通过 `memory` 工具增删查(`save` / `list` / `search` / `forget`),系统提示词会自动
+注入两级记忆(合计截断 4000 字,用户级在前)。
+
+**整理去重(Dream `action=dream`)** —— 对齐星瑶 Y-Code 的 `/dream` 思路,分两步:
+
+1. **确定性去重**:同类别内按中文 2-gram 相似度聚类(整体相似 ≥0.75,或短的一条被
+   覆盖 ≥0.85 视为同一条),合并时保留信息最全的正文 + 较新的日期,完全重复直接丢弃;
+2. **模型归纳**(有 LLM 时):让模型合并同义、删掉被后续条目推翻的,每条压成一句话,
+   输出严格 JSON;解析失败或返回空就退回第 1 步的结果,绝不把记忆整理没了。
+
+覆盖前会把原文件备份到同目录 `history/MEMORY-<时间>.md`,所以整理永远可回溯。
+
+入口:GUI 顶栏「🧠 记忆」(点击整理两级)、CLI `/dream [project|user|all]`、
+模型在用户说「整理记忆」时自行调用 `memory action=dream`。
 
 ## MCP 服务器
 
@@ -188,6 +223,8 @@ minicode/
 ├── suggestions.py  # 首页建议 chips:按聊天记录给校园主题打分
 ├── kb.py           # 本地知识库:异构 JSON 加载 + 2-gram 检索 + 来源网址输出
 ├── compaction.py   # token 估算 + 按完整轮切分的上下文压缩
+├── campus.py       # 校园地图:建筑索引加载 + 地名解析(四态)+ map_* 工具
+├── explain.py      # 权限确认框的"为什么要做这一步":命令人话解读 + 影响面提示
 ├── permission.py   # 权限门 + 灾难命令黑名单
 ├── session.py      # 消息历史 + JSONL 留档 + 会话恢复
 ├── paths.py        # 源码/打包双形态路径解析
@@ -198,11 +235,14 @@ minicode/
 └── tools/          # base(Tool 定义与路径安全)+ fs / shell / search / crawl / registry
 main.py             # CLI 入口与 REPL
 gui_main.py         # GUI 入口(pywebview 窗口)
-frontend/           # 免构建单页前端(暖橙手账风,深浅双色)
+frontend/           # 免构建单页前端(暮色玻璃风,深浅双色;img/campus_dusk.jpg 为背景图)
+frontend/map.js     # 校园地图面板:手绘底图 + 标注框/图钉/列表 + 标注图裁切窗与灯箱(零依赖)
+frontend/campus-index.json # 交付包索引副本(36 处建筑 + 203 条别名 + 20 条歧义 + 10 处非建筑)
+frontend/img/campus/      # map.jpg(手绘底图原图) + 1280/NN.webp(36 张单栋标注图,约 3.8MB)
 skills/             # 内置技能(git-commit / python-testing / code-review / school-qa)
 kb/                 # 本地知识库 JSON(notices / knowledge / school-gzasc,带来源网址与可信度)
 packaging/gcode.spec  # PyInstaller 双 exe 配置
-scripts/            # 打包与端到端验证脚本 + 校园主题爬虫(crawl_school_topics.py)
+scripts/            # 打包与端到端验证脚本 + 校园主题爬虫 + build_campus_assets.py(生成本地地图资源)
 ```
 
 ## 校园主题语料库
@@ -301,10 +341,10 @@ python scripts/e2e_frozen.py       # 对 exe 做端到端验证
 
 - [x] MCP 客户端(stdio,配置即用,连不上不阻塞启动)
 - [x] 长期记忆(用户偏好/项目约定,`memory/MEMORY.md`)
+- [x] 长期记忆整理:去重 / Dream 式归并,用户级全局记忆(`~/.yinluxs/memory/`)
 - [ ] 子代理(`task` 工具):explore / implement / test 分工,**并行派发**(当前串行)
 - [ ] 计划模式:复杂任务先建计划,再按 `depends_on` 依赖图执行
 - [ ] MCP 增强:HTTP/SSE 传输、AI 自助配置服务器(星瑶的 `mcp_add_server` 一类)
-- [ ] 长期记忆整理:去重 / Dream 式归并,用户级全局记忆
 
 ## License
 
