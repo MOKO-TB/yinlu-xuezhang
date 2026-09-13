@@ -124,3 +124,4 @@ cd /d/game/mini-code
 2. 跑 `pytest -q` 确认基线(应为全绿;若并行会话在改,先跑全量再动手)。
 3. 改代码前**重读要编辑的文件**——本仓库有多个会话并行开发(web_crawl、school-qa、koubei-extract 技能与校园语料爬虫均为并行会话所加),编辑前用当前实际内容做锚点,改完跑全量测试。
 4. 相关文档:产品侧 `D:\game\yinlu-xuezhang\PLAN.md`(v2.0 冻结)与 `AGENT-PLAN.md`(用本 Agent 开发该项目的计划);产品知识库 JSON 数据源在 `D:\yy\yinlu-master\yinlu-master\`(已拷贝到本仓库 kb/)。
+5. 远端两个:`origin` = GitHub `MOKO-TB/yinlu-xuezhang`(**私有**,2026-09-13 从 `MOKO-TB/momo` 改名而来),`gitee` = `gitee.com/inkzero/momo`(**公开**)。注意 `branch.main.remote` 指向 gitee,所以 `git push` 不带参数推的是 gitee,推 GitHub 要显式写 `git push origin main`。

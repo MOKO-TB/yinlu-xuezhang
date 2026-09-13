@@ -28,7 +28,7 @@
 ## 快速开始(源码运行)
 
 ```bash
-cd mini-code
+cd yinlu-xuezhang
 py -3.12 -m venv .venv                     # Python 3.10+
 .venv\Scripts\activate
 pip install -r requirements.txt

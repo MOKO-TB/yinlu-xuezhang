@@ -14,7 +14,7 @@
 命令行方式(**依赖在项目的 `.venv` 里,必须用它的解释器**;`py -3.12` 走的是系统解释器,没有 openai 等依赖):
 
 ```bash
-cd mini-code
+cd yinlu-xuezhang
 ./.venv/Scripts/python.exe web_main.py      # Git Bash(注意不是 .venv\Scripts\activate,那是 cmd 语法)
 .venv\Scripts\activate && python web_main.py  # cmd / PowerShell
 python web_main.py --open                   # 顺带开本机浏览器
