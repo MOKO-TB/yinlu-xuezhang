@@ -29,7 +29,7 @@ from minicode.memory import (
     memory_path as mem_path,
 )
 from minicode.llm import LLMClient
-from minicode.paths import SESSIONS_DIR
+from minicode.paths import SESSIONS_DIR, resource_path
 from minicode.sandbox import SandboxState, classify_path, policy_from_raw, policy_to_raw
 from minicode.session import Session, list_sessions
 from minicode.skills import load_skills, skill_dirs
@@ -50,6 +50,7 @@ class PublicApi:
 
     def __init__(self, bridge: "Bridge"):
         self._b = bridge
+        self.workspace = bridge.workspace
 
     def get_info(self) -> dict:
         return self._b.get_info()
@@ -99,6 +100,9 @@ class PublicApi:
     def delete_session(self, index: int) -> dict:
         return self._b.delete_session(index)
 
+    def get_asset(self, rel_path: str) -> dict:
+        return self._b.get_asset(rel_path)
+
     def open_url(self, url: str) -> dict:
         return self._b.open_url(url)
 
@@ -110,6 +114,14 @@ class PublicApi:
 
     def set_provider(self, provider_id: str) -> dict:
         return self._b.set_provider(provider_id)
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except Exception:
+        return False
 
 
 class SessionGuiUI(GuiUI):
@@ -566,6 +578,37 @@ class Bridge:
         import webbrowser
         webbrowser.open(url)
         return {"ok": True}
+
+    def get_asset(self, rel_path: str) -> dict:
+        """把工作区 skills/ 下的图片等静态资产转成 data URL,供聊天里的图片显示
+        (技能正文引用的是相对技能目录的路径,前端直接 src 解析不到)。"""
+        import base64 as b64mod
+        import mimetypes
+        rel = (rel_path or "").replace("\\", "/").strip().lstrip("/")
+        if not rel or ".." in rel.split("/"):
+            return {"ok": False, "msg": "非法路径"}
+        # 搜索范围:工作区根、工作区各技能目录、打包内置资源(_MEIPASS/skills)
+        rskills = resource_path("skills")
+        candidates = [self.workspace / rel, rskills / rel]
+        skills_root = self.workspace / "skills"
+        if skills_root.is_dir():
+            for skill_dir in sorted(skills_root.iterdir()):
+                if skill_dir.is_dir():
+                    candidates.append(skill_dir / rel)
+        allowed_roots = [self.workspace.resolve(), Path(rskills).resolve()]
+        for cand in candidates:
+            try:
+                resolved = cand.resolve()
+            except Exception:
+                continue
+            if not any(_within(resolved, root) for root in allowed_roots):
+                continue
+            if resolved.is_file() and resolved.stat().st_size <= 8 * 1024 * 1024:
+                mime = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
+                data_url = ("data:" + mime + ";base64,"
+                            + b64mod.b64encode(resolved.read_bytes()).decode())
+                return {"ok": True, "data_url": data_url}
+        return {"ok": False, "msg": "未找到该图片文件"}
 
     def resume_session(self, index: int) -> dict:
         """切换到某个会话:它正在后台跑就直接接上,否则从留档恢复。

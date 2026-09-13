@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 config.json
 sessions/
+web-sessions/
+web-usage.log
 .pytest_cache/
 build/
 dist/

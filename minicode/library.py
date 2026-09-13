@@ -172,6 +172,15 @@ def search(workspace: Path | None, query: str, top_k: int = DEFAULT_TOP_K,
             except sqlite3.Error:
                 pass
 
+    # 4) 多词是 AND 语义:调用方常把「书名+作者」或臆造词拼在一起,AND 后必然 0 命中。
+    #    查不到时按词序逐个退回单关键词再试,避免把"组合词不存在"误判成"库里没有这本书"。
+    if not rows and " " in query:
+        for tok in query.split():
+            sub = search(workspace, tok, top_k=top_k, kind=kind)
+            if sub:
+                return sub
+        return []
+
     seen, out = set(), []
     for r in rows:
         rid = r["record_id"]
@@ -218,6 +227,38 @@ def _fmt(entry: dict, idx: int) -> str:
     return "\n".join(lines)
 
 
+def _floor_hint(workspace: Path | None, hits: list[dict]) -> str:
+    """把命中书目涉及的中图法大类映射成楼层,顺带答掉「在几楼」。
+
+    用户问「有没有X、在哪」时,原来要 library_search + library_guide 两次工具调用
+    (两轮模型往返)。这里直接把楼层并进检索结果,一次就够。数据包缺失时静默跳过。
+    """
+    try:
+        from minicode.library_guide import load_facts
+        facts = load_facts(workspace)
+    except Exception:                                             # noqa: BLE001
+        return ""
+    if not facts:
+        return ""
+    table = {r.get("code"): r for r in (facts.get("class_floor_map") or [])}
+    codes: list[str] = []
+    for h in hits:
+        cn = str(h.get("class_no") or "").strip()
+        code = cn[:1].upper()
+        if code in table and code not in codes:
+            codes.append(code)
+    if not codes:
+        return ""
+    parts = []
+    for code in codes[:4]:
+        row = table[code]
+        floors = "、".join(f for f, _ in (row.get("floors") or [])[:2]) or "—"
+        locs = ";".join(l["name"].split("-", 1)[-1].strip()
+                        for l in (row.get("locations") or [])[:2])
+        parts.append(f"{code}({row.get('name', '')})→{floors}" + (f" {locs}" if locs else ""))
+    return "\n\n楼层提示(中图法大类→楼层,可直接作答,不必再查):" + " / ".join(parts)
+
+
 def library_search(ctx, query: str, top_k: int = DEFAULT_TOP_K,
                    kind: str = "all") -> str:
     """工具处理器:检索本地馆藏书目库。"""
@@ -238,7 +279,8 @@ def library_search(ctx, query: str, top_k: int = DEFAULT_TOP_K,
     header = (f"本地馆藏书目库命中 {len(hits)} 条(数据源:图书馆 OPAC,已离线化):\n")
     tail = ("\n\n引用时给出书名、作者、索书号与馆藏地,并说明「据图书馆 OPAC 馆藏数据」。"
             "馆藏为 0 册的是电子书(无纸本馆藏位置)。")
-    return header + "\n\n".join(_fmt(h, i) for i, h in enumerate(hits, 1)) + tail
+    return (header + "\n\n".join(_fmt(h, i) for i, h in enumerate(hits, 1))
+            + _floor_hint(ctx.workspace, hits) + tail)
 
 
 def catalog_stats(workspace: Path | None = None) -> dict | None:
@@ -271,6 +313,13 @@ def library_prompt_section(workspace: Path | None = None) -> str:
         "索书号、中图法分类号、馆藏册数与馆藏地(书库/阅览室)。\n"
         "回答时给出书名+作者+索书号+馆藏地,并说明「据图书馆 OPAC 馆藏数据」;"
         "kind 参数可筛 paper(纸本,有馆藏位置)/ ebook(电子书)/ all(默认)。\n"
+        "**检索纪律(直接决定用户等待时间)**:\n"
+        "- 一次 library_search 的结果通常就够答,拿到结果**立刻作答**,不要用同义词、\n"
+        "  近义书名、拆词反复重查;确实没命中,最多再试一次作者名或 ISBN 就停。\n"
+        "- 查询词只用用户**真实提到**的书名/作者/主题,不要自己臆造书名再去找\n"
+        "  (查不到并不代表馆里没有,只代表库里没有这个书名);中文书名不要翻译成外文重试。\n"
+        "- 结果里的「楼层提示」已经把中图法大类映射成楼层,据此回答即可,不必再调\n"
+        "  library_guide(那是一次多余的模型往返)。\n"
         "需要成批书目清单(整类导出、按类浏览)时,数据文件在 "
         "crawled/mfindgzyykj.libsp.cn/opac-catalog/ 下的 CSV。\n"
     )

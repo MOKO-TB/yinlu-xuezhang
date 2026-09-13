@@ -160,3 +160,43 @@ def test_like_escape(tmp_path):
     """% 与 _ 不该被当成通配符。"""
     _make_db(tmp_path)
     assert library.search(tmp_path, "%") == []
+
+
+def test_multiword_falls_back_to_first_token(tmp_path):
+    """多词 AND 查不到时按词序退回单关键词:别把"组合词不存在"当成"库里没有"。"""
+    _make_db(tmp_path)
+    assert library.search(tmp_path, "死神尽头 查无此词") == []   # 每个词都不存在
+    hits = library.search(tmp_path, "活着 死神尽头")            # AND 查不到 → 退回"活着"
+    assert hits and hits[0]["title"] == "活着"
+    hits = library.search(tmp_path, "死神尽头 活着")            # 首词不存在 → 退回第二个词
+    assert hits and hits[0]["title"] == "活着"
+
+
+def _isolate_guide(monkeypatch, tmp_path):
+    """把导览数据包的回退路径也指到空目录,免得开发态真实数据包混进断言。"""
+    from minicode import library_guide
+    empty = tmp_path / "no-app-data"
+    empty.mkdir(exist_ok=True)
+    monkeypatch.setattr(library_guide, "app_path", lambda *a: empty.joinpath(*a))
+    monkeypatch.setattr(library_guide, "resource_path", lambda *a: empty.joinpath(*a))
+
+
+def test_floor_hint_appended_when_pack_present(tmp_path, monkeypatch):
+    """有导览数据包时,检索结果直接带上楼层,省掉第二次工具调用。"""
+    _isolate_guide(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    d = tmp_path / "skills" / "library-guide" / "data"
+    d.mkdir(parents=True)
+    (d / "library-facts.json").write_text(
+        '{"class_floor_map":[{"code":"I","name":"文学",'
+        '"floors":[["二楼",9394]],'
+        '"locations":[{"name":"广应科图书馆-201 文学新书区","items":9378}]}]}',
+        encoding="utf-8")
+    out = library.library_search(_ctx(tmp_path), "活着")
+    assert "楼层提示" in out and "二楼" in out and "201 文学新书区" in out
+
+
+def test_floor_hint_absent_without_pack(tmp_path, monkeypatch):
+    _isolate_guide(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    assert "楼层提示" not in library.library_search(_ctx(tmp_path), "活着")

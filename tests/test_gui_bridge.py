@@ -484,3 +484,16 @@ def test_resume_running_session_attaches_without_interrupt(config, tmp_path):
     assert not any(e["type"] == "info" and "已中断" in (e.get("text") or "")
                    for e in window.events)
     assert wait_until(lambda: not bridge._busy)
+
+
+def test_get_asset_serves_skill_images(config, tmp_path):
+    asset_dir = tmp_path / "skills" / "bike-parking-guide" / "assets"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "map.jpg").write_bytes(b"\xff\xd8\xff\xe0fake-jpeg")
+    bridge, _, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+
+    r = bridge.get_asset("assets/map.jpg")
+    assert r["ok"] and r["data_url"].startswith("data:image/jpeg;base64,")
+    # 防目录穿越
+    assert not bridge.get_asset("../../secret.txt")["ok"]
+    assert not bridge.get_asset("assets/missing.jpg")["ok"]

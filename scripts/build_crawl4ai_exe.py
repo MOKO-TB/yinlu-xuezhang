@@ -24,6 +24,32 @@ sys.path.insert(0, str(ROOT))
 from minicode import __version__  # noqa: E402
 
 BROWSER_SRC = Path(os.path.expandvars(r"%LOCALAPPDATA%")) / "ms-playwright"
+LIB_DB_SRC = ROOT / "crawled" / "mfindgzyykj.libsp.cn" / "library.db"
+
+
+def bundle_library_db(dist: Path) -> None:
+    """把离线馆藏库(1.3 GB)拷进便携目录,让安装包/zip 自带图书馆查询能力。
+
+    源库是 WAL 模式,必须用 SQLite 在线备份(直接拷 .db 会丢 -wal 数据、
+    复制出来是空表)。构建机没有库时只警告不失败。
+    """
+    if not LIB_DB_SRC.is_file():
+        print(f"!! 未找到馆藏库 {LIB_DB_SRC},跳过内置(包内图书馆查询将不可用)")
+        return
+    import sqlite3
+    dst_dir = dist / "crawled" / "mfindgzyykj.libsp.cn"
+    dst = dst_dir / "library.db"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    if dst.is_file() and dst.stat().st_size > 0:
+        print(f"馆藏库已存在,跳过: {dst}")
+        return
+    src = sqlite3.connect(f"file:{LIB_DB_SRC}?mode=ro", uri=True)
+    out = sqlite3.connect(dst)
+    with out:
+        src.backup(out)
+    out.close()
+    src.close()
+    print(f"已内置馆藏库 {dst} ({dst.stat().st_size/1e9:.2f} GB)")
 
 
 def _browser_dirs() -> list[Path]:
@@ -65,6 +91,9 @@ def main() -> None:
     (dist / "config.json").unlink(missing_ok=True)
     shutil.copy(ROOT / "config.example.json", dist / "config.example.json")
     (dist / "使用说明.txt").write_text(_readme(), encoding="utf-8")
+
+    # 内置离线馆藏库:必须在打 zip/安装包之前,否则分发出去不带图书馆数据
+    bundle_library_db(dist)
 
     zip_base = str(ROOT / "dist" / f"引路学长-{__version__}-crawl4ai-win64")
     shutil.make_archive(zip_base, "zip", root_dir=ROOT / "dist",

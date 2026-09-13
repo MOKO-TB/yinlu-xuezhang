@@ -23,6 +23,8 @@
 - **校园主题语料库**:`scripts/crawl_school_topics.py` 按"用户会问什么"分主题爬官网(奖助学金 / 入党党建 / 团学推优 / 学科竞赛 / 证书与等级考试 / 考研升学 / 转专业与专业选择 / 选课与学分 / 教务考试 / 就业与考公考编 / 榜样风采 / 心理与情绪 / 学风与学习方法 / 招生专升本 / 校园活动与文体 / 宿舍与生活服务 / 社团与学生组织 / 军训与国防教育 / 校园新闻动态 / 学生故事与风采 / 学生事务办理 / 校园讲座与专题 / 视频与图文校园 / 服务大厅与办事入口,共 24 个),关键词过滤 + 翻页 + 发布日期提取 + 去导航,产出 `kb/school-gzasc.json`(每条都带原文链接与发布日期;视频页与图文指引页也建条目,正文里给出观看/查看链接),换学校只改 `scripts/school_topics.json`,不用改代码
 - **OpenAI 兼容内核**:底层走 OpenAI 协议(流式 + 工具调用),所以默认的校园模型之外,任何 OpenAI 兼容服务(DeepSeek / Kimi / Qwen / 智谱)都能在源码层接;本地服务(127.0.0.1)与校园内网(10.x)自动绕过系统代理
 
+- **网页版(校园助手)**:一条命令把同一套前端搬到浏览器(`python web_main.py`)——同学打开网址就能用,只读白名单(校园知识库/图书馆/校园地图),每访客独立会话与留档、限流与并发上限、同源校验(详见「网页版」一节)
+
 ## 快速开始(源码运行)
 
 ```bash
@@ -60,6 +62,27 @@ echo "列出 TODO" | python main.py   # 管道输入
 ```
 
 CLI 命令:`/help` `/clear` `/model`(供应商列表)`/history` `/resume [<n>]` `/undo` `/compact` `/skills` `/kb`(知识库统计)`/exit`;`Ctrl+C` 中断当前回合。
+
+## 网页版(校园助手)
+
+同学打开网址就能用,不用装任何东西。**只读问答**:校园知识库 / 图书馆馆藏 / 校园地图 / 技能说明,没有文件与命令能力。
+
+```bash
+python web_main.py                  # 默认监听 0.0.0.0:8480,同学从校园网访问
+python web_main.py --open            # 顺带用本机浏览器打开
+python web_main.py --host 127.0.0.1  # 只给自己用
+python main.py --web                 # 等价入口
+```
+
+- **同一套前端**:`frontend/index.html` 一行不改 —— 桥接 shim `frontend/bridge-web.js` 在服务时注入,把 `pywebview.api` 换成 `POST /api/<方法>`,把引擎事件用 SSE(`GET /api/events`)送到页面。
+- **引擎零改动**:`agent.py` / `llm.py` / `tools/*` / `sandbox.py` / `session.py` 全部原样复用;新增的只有 `web_ui.py`(队列推送)、`web_profile.py`(白名单与门面)、`web_server.py`(HTTP/SSE)。
+- **只读白名单**:`web_profile.PUBLIC_TOOLS` 显式列举(frozenset),**不用 `Tool.read_only` 过滤** —— 那个标志的语义是"执行前不需要确认",不是"读不到敏感数据"(`read_file`/`grep` 都是 `read_only=True`,而工作区里就有含内置 Key 的 `config.local.json`)。
+- **多访客隔离**:每个浏览器一个 cookie 身份,各自的会话、Agent、事件队列与留档目录(`web-sessions/<id>/`),互相看不到对方的对话。
+- **滥用控制**:每访客 12 次/分钟、全局同时 3 个回合(超了回"前面还有 N 位同学")、每日 2000 次上限;发问与来源 IP 记在 `web-usage.log`。
+- **跨站防护**:校验 `Origin`/`Referer` 与 `Host` 同源 —— 否则你浏览器里任意网站都能朝这台服务器发请求。
+- **部署注意**:服务必须跑在**能访问校园内网模型端点**的机器上(公网云主机连不通 `10.x`);监听非本机地址时,同网段任何人都能用本服务并消耗学校模型额度。只读白名单下没有 shell,但请勿把非只读版本开到公网。
+
+更完整的设计与安全取舍见 `D:\game\agent网页版-实施方案.md`;开发时看效果可用 `py -3.12 _tmp_dev_check/serve_web_e2e.py --port 8481`(带一个本地假模型,不连校园网)。
 
 ## 技能(SKILL.md)
 
@@ -316,6 +339,7 @@ python scripts/e2e_frozen_crawl.py      # 打包后验证:联网爬取 → 自�
 python scripts/e2e_frozen_mcp.py        # 打包后验证:MCP 服务器连上 → 调工具 → 结果回填模型
 python scripts/e2e_frozen_mcp.py --exe dist/引路学长-crawl4ai/引路学长-CLI.exe
 python scripts/e2e_frozen_sandbox.py    # 打包后验证:工作区外访问触发确认且拒绝后不泄露内容
+python scripts/e2e_web.py               # 网页版:静态/shim/越权拒绝/跨站拦截/SSE 回合全链路
 ```
 
 ## 打包发布

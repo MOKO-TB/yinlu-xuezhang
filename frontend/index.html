@@ -166,7 +166,9 @@ try {
   .chat-wrap{ position:relative; flex:1; min-height:0; overflow:hidden;
               display:flex; flex-direction:column; }
   #chat{ flex:1; min-height:0; overflow-y:auto; padding:20px 24px;
-         scroll-behavior:smooth; overscroll-behavior:contain; }
+         scroll-behavior:smooth; overscroll-behavior:contain;
+         background:rgba(253,250,245,.55); }   /* 磨砂半透:让校园黄昏照透出来;消息气泡自带实底保证可读 */
+  html.dark #chat{ background:rgba(10,16,23,.5); }
   #scrollBtn{ position:absolute; right:26px; bottom:18px; width:42px; height:42px;
               border-radius:50%; background:var(--primary); color:#fff; border:none;
               cursor:pointer; font-size:17px; font-weight:900; display:none;
@@ -209,6 +211,9 @@ try {
                                   background:var(--primary-light); transform:translateY(-2px); }
   /* 地图入口 chip:比建议 chip 更实一点,让人一眼看到 */
   #chat .placeholder .chip-map{ border-color:var(--primary); color:var(--primary-text);
+                                background:var(--primary-light); font-weight:800; }
+  /* 图书馆入口 chip:固定功能模块,点一下直接进图书馆导览 */
+  #chat .placeholder .chip-lib{ border-color:var(--primary); color:var(--primary-text);
                                 background:var(--primary-light); font-weight:800; }
   /* 深色下背景照片较暗,chips 加亮描边与更实的底,避免融进山体暗部 */
   html.dark #chat .placeholder .chip{ background:rgba(16,26,36,.72);
@@ -257,6 +262,9 @@ try {
                   padding:4px 14px; font-size:12px; font-weight:800; color:var(--primary-text);
                   cursor:pointer; }
   .selbar button:hover{ background:var(--primary); color:#fff; }
+  .img-miss{ display:inline-flex; align-items:center; gap:6px; color:var(--text-3);
+             font-size:12.5px; border:1.5px dashed var(--line); border-radius:var(--r-s);
+             padding:4px 10px; margin:2px 0; }
   /* 悬停操作栏:复制 / 编辑重发
      常驻占位 + visibility 切换 —— 用 display:none 会在悬停时撑开高度,
      拖选文字的过程中内容会跳动,选不准。 */
@@ -269,9 +277,18 @@ try {
   .acts button:hover{ border-color:var(--primary); color:var(--primary-text); }
   .reasoning{ display:none; }
 
+  /* 可读性:消息相关表面一律实底(覆盖半透明),深浅两套都给足对比 */
+  .msg.assistant .body{ background:#fdfaf5; }
+  html.dark .msg.assistant .body{ background:#0d141c; }
+  .trace{ background:#fcfaf6; }
+  html.dark .trace{ background:#0c141d; }
+  .toolcard{ background:#fcfaf6; }
+  html.dark .toolcard{ background:#0c141d; }
+
   /* 工作过程区:思考 + 工具调用收在一起,点标题行整体折叠 */
   .trace{ border:1.5px dashed var(--line); border-radius:var(--r-m); margin-bottom:8px;
-          background:var(--paper); }
+          background:rgba(252,250,246,.96); }
+  html.dark .trace{ background:rgba(12,20,29,.94); }
   .trace .tr-head{ display:flex; align-items:center; gap:6px; padding:6px 12px; cursor:pointer;
                    font-size:12px; font-weight:700; color:var(--text-3); user-select:none; }
   .trace .tr-head:hover{ color:var(--text-2); background:var(--primary-light); }
@@ -424,7 +441,9 @@ try {
               background:var(--glass-strong); border-left:1px solid var(--line-soft);
               box-shadow:var(--shadow); z-index:45; display:flex; flex-direction:column;
               backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
-  .map-panel.open{ transform:none; }
+  .map-panel.open{ transform:none; visibility:visible; }
+  .map-panel:not(.open){ visibility:hidden;   /* 关掉就彻底不占视线,聊天区恢复原样 */
+                         transition:transform .26s ease, visibility 0s linear .26s; }
   .map-head{ display:flex; align-items:center; gap:8px; padding:12px 14px;
              border-bottom:1px solid var(--line-soft); }
   .map-head .map-titles{ flex:1; min-width:0; }
@@ -763,17 +782,27 @@ function renderHome() {
   const chips = homeSuggestions.map(t => `<button class="chip">${esc(t)}</button>`).join("");
   // 地图入口放在首位:不用先学会怎么问,点一下就能自己找楼
   const mapChip = `<button class="chip chip-map" title="打开手绘校园地图,可以搜楼名/俗称,或按类别看">🗺 打开校园地图</button>`;
+  // 图书馆固定功能模块入口:点一下直接进图书馆导览(查书/找书/借还流程)
+  const libChip = `<button class="chip chip-lib" title="图书馆导览:查馆藏、按索书号找楼层书库、借还流程,带新生走一遍">📚 图书馆导览</button>`;
   chat.innerHTML = `<div class="placeholder">
     <div class="hero">
       <div class="greet"><b>${esc(timeGreeting())}</b>，同学！</div>
       <div class="sub">我是引路学长，你的校园 AI 助手 —— 学习、考试、活动、校园生活，都可以问我。</div>
     </div>
-    <div class="chips"><span>试试这些：</span>${mapChip}${chips}</div>
+    <div class="chips"><span>试试这些：</span>${mapChip}${libChip}${chips}</div>
     <div class="tip">小提示：找楼可以直接问我「图书馆在哪」，也可以点上面的地图自己搜（支持 E栋、s5 这类俗称）；聊天里用鼠标选中文字会出现「复制选区」按钮；思考过程与工具卡片在最终回复给出后会自动收起，点击可重新展开。</div>
   </div>`;
   chat.querySelectorAll(".chip").forEach(el => el.addEventListener("click", () => {
     if (el.classList.contains("chip-map")) {
       if (window.CampusMap) window.CampusMap.toggle(true);   // 打开面板并聚焦搜索框
+      return;
+    }
+    if (el.classList.contains("chip-lib")) {
+      // 固定模块:填好首轮任务直接发,用户不用想怎么问
+      const input = $("input");
+      input.value = "图书馆导览:带我走一遍从查书到借书的流程,顺便说说馆里有哪些自习空间";
+      input.dispatchEvent(new Event("input"));
+      send();
       return;
     }
     const input = $("input");
@@ -1025,14 +1054,39 @@ function foldTrace(c) {
 /* 正文/收尾时把聊天区里所有还展开的过程区收起。
    注意:工具调用所在的那条消息和正文所在的那条往往不是同一个 wrap,
    所以按 DOM 折最稳。 */
-function foldAllTraces() {
-  chat.querySelectorAll(".trace.open").forEach(foldTraceEl);
+function foldAllTraces(force) {
+  chat.querySelectorAll(".trace.open").forEach(el => {
+    if (force) el.dataset.touched = "";   // 回合结束:不管是否被手动点开过,一律收起
+    foldTraceEl(el);
+  });
+  // 空思考体(有些厂商只给空的 reasoning)整条隐藏,不留空白条
+  chat.querySelectorAll(".trace .think").forEach(t => {
+    const b = t.querySelector(".th-body");
+    if (!b || !b.textContent.trim()) t.hidden = true;
+  });
 }
 function bumpTools(c, n) {
   if (!c) return;
   c.toolCount += n;
   c.trace.dataset.tools = String(c.toolCount);
   if (!c.trace.dataset.done) c.trSum.textContent = traceSummary(c, false);
+}
+
+function fixImages(root) {
+  // 技能/知识库引用的本地图片(src 为相对路径)经后端转 data URL;失败给占位提示
+  if (!window.pywebview || !pywebview.api || !pywebview.api.get_asset) return;
+  root.querySelectorAll("img").forEach(img => {
+    const src = img.getAttribute("src") || "";
+    if (!src || src.startsWith("data:") || /^https?:/i.test(src) || img.dataset.fixing) return;
+    img.dataset.fixing = "1";
+    pywebview.api.get_asset(src).then(r => {
+      if (r && r.ok && r.data_url) { img.src = r.data_url; return; }
+      const tip = document.createElement("span");
+      tip.className = "img-miss";
+      tip.textContent = "🖼️ " + (img.alt || "图片未能加载");
+      img.replaceWith(tip);
+    }).catch(() => {});
+  });
 }
 
 function renderAssistant(force) {
@@ -1048,7 +1102,7 @@ function renderAssistant(force) {
   c.wrap.dataset.raw = c.text;
   c.body.hidden = !hasText;                 // 没有正文就不显示空框
   c.wrap.classList.toggle("trace-only", !hasText);
-  if (hasText) c.body.innerHTML = renderMd(c.text);
+  if (hasText) { c.body.innerHTML = renderMd(c.text); fixImages(c.body); }
   toBottom();
 }
 
@@ -1116,6 +1170,7 @@ window.__gcodeEvent = function (e) {
         foldTrace(cur);
         foldAllTraces();
         renderAssistant(true);
+        fixImages(cur.body || chat);
         if (!cur.text.trim()) {          // 纯工具调用/空回复:不给复制按钮
           const acts = cur.wrap.querySelector(".acts");
           if (acts) acts.remove();
@@ -1184,6 +1239,8 @@ window.__gcodeEvent = function (e) {
       if (e.session) currentSessionKey = e.session;
       clearAttachments();
       renderHistory(e.messages || []);
+      requestAnimationFrame(() => toBottom());
+      setTimeout(() => toBottom(), 80);      // 异步布局后再补一次,确保看到最新回答
       break;
     case "sessions":
       renderSessions(e.items || []);
@@ -1220,6 +1277,8 @@ function renderHistory(messages) {
       c.wrap.dataset.raw = m.text;       // 复制只复制正文,不含"调用工具"行
       c.body.innerHTML = renderMd(m.text) +
         (m.tools ? `<p class="toolline">&gt; 调用工具: ${esc(m.tools)}</p>` : "");
+      c.body.hidden = !m.text.trim();    // 历史里也要按有无正文显示/隐藏
+      c.wrap.classList.toggle("trace-only", !m.text.trim());
       if (!m.text.trim()) {              // 系统/工具类消息不提供复制
         const acts = c.wrap.querySelector(".acts");
         if (acts) acts.remove();
@@ -1231,6 +1290,7 @@ function renderHistory(messages) {
     }
   }
   nearBottom = true; toBottom();
+  fixImages(chat);
 }
 
 function renderSessions(items) {

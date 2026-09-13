@@ -176,6 +176,13 @@ def main() -> None:
     import time
 
     _fix_console_encoding()
+
+    # --web:切到网页版(校园助手形态),其余参数原样转交
+    if "--web" in sys.argv:
+        from web_main import main as web_main_entry
+        web_main_entry([a for a in sys.argv[1:] if a != "--web"])
+        return
+
     config = load_config()
     workspace = Path.cwd().resolve()
     ui = TerminalUI(config, workspace)

@@ -1,7 +1,7 @@
 """内置工具注册表。"""
 from __future__ import annotations
 
-from minicode import campus, kb, library, memory, planning, skills
+from minicode import campus, kb, library, library_guide, memory, planning, skills
 from minicode.tools import crawl, fs, search, shell
 from minicode.tools.base import Tool
 
@@ -188,7 +188,9 @@ def build_default_registry() -> list[Tool]:
                 "用户问「图书馆有没有某本书 / 这本书在哪 / 索书号是多少 / 某作者有哪些书 / "
                 "某个主题有什么书」时必须用它,不要再去访问图书馆网站让用户等。"
                 "返回书名、作者、出版社、出版年、ISBN、索书号、中图法分类号、馆藏册数、"
-                "在架数、馆藏地(书库/阅览室)、简介。"
+                "在架数、馆藏地(书库/阅览室)、简介,并附「楼层提示」(中图法大类→楼层),"
+                "可直接据此回答在哪一层,不必再调 library_guide。"
+                "一次结果通常就够答:不要用同义词反复重查,最多补一次作者名/ISBN。"
                 "kind=paper 只看纸本(有馆藏位置),kind=ebook 只看电子书,默认 all。"
             ),
             parameters={
@@ -203,6 +205,31 @@ def build_default_registry() -> list[Tool]:
                 "required": ["query"],
             },
             handler=library.library_search,
+            read_only=True,
+        ),
+        Tool(
+            name="library_guide",
+            description=(
+                "图书馆导览模块(新生入馆教学,数据随技能打包,不依赖本地书目库)。"
+                "讲「图书馆怎么用」:中图法大类→楼层/书库分布、馆舍空间与设施、"
+                "入馆借还流程与官方入口、馆藏规模统计。"
+                "用户问「XX 类的书在几楼 / 这个索书号在哪 / 图书馆几层有什么 / "
+                "第一次怎么借书」时用它;查**具体某本书**用 library_search。"
+                "开馆时间、可借册数/借期、座位预约没有官方来源,会如实提示以官方为准。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string",
+                              "enum": ["all", "floor", "space", "flow", "stats", "unverified"],
+                              "description": "all=概览+完整楼层表(默认);floor=按中图法大类查楼层书库;"
+                                             "space=馆舍空间;flow=入馆借还流程;stats=馆藏统计;"
+                                             "unverified=列出没有官方来源的待核实项"},
+                    "query": {"type": "string",
+                              "description": "topic=floor 时用:中图法大类字母或类名,如 I / 文学 / TP312"},
+                },
+            },
+            handler=library_guide.guide,
             read_only=True,
         ),
         Tool(

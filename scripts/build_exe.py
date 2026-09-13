@@ -38,6 +38,34 @@ def _ensure_collected(dist: Path) -> None:
             raise AssertionError(f"构建产物缺失: {name}(build/gcode 里也没有)")
 
 
+LIB_DB_SRC = ROOT / "crawled" / "mfindgzyykj.libsp.cn" / "library.db"
+
+
+def bundle_library_db(dist: Path) -> None:
+    """把离线馆藏库(1.3 GB)拷进便携目录,让安装包/zip 自带图书馆查询能力。
+
+    源库是 WAL 模式,必须用 SQLite 在线备份(直接拷 .db 会丢 -wal 数据、
+    复制出来是空表)。构建机没有库时只警告不失败。
+    """
+    if not LIB_DB_SRC.is_file():
+        print(f"!! 未找到馆藏库 {LIB_DB_SRC},跳过内置(包内图书馆查询将不可用)")
+        return
+    import sqlite3
+    dst_dir = dist / "crawled" / "mfindgzyykj.libsp.cn"
+    dst = dst_dir / "library.db"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    if dst.is_file() and dst.stat().st_size > 0:
+        print(f"馆藏库已存在,跳过: {dst}")
+        return
+    src = sqlite3.connect(f"file:{LIB_DB_SRC}?mode=ro", uri=True)
+    out = sqlite3.connect(dst)
+    with out:
+        src.backup(out)
+    out.close()
+    src.close()
+    print(f"已内置馆藏库 {dst} ({dst.stat().st_size/1e9:.2f} GB)")
+
+
 def main() -> None:
     subprocess.run(
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
@@ -50,6 +78,9 @@ def main() -> None:
     assert (dist / "引路学长-CLI.exe").exists(), "构建产物缺失(CLI 版)"
     onefile = ROOT / "dist" / "引路学长-单文件版.exe"
     assert onefile.exists(), "构建产物缺失(单文件版)"
+
+    # 内置离线馆藏库:必须在打安装包/zip 之前,否则分发出去不带图书馆数据
+    bundle_library_db(dist)
 
     # Inno Setup 编译安装包(已安装于当前用户目录或 Program Files)
     iscc = next((p for p in [
