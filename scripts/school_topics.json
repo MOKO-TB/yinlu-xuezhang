@@ -1,0 +1,1411 @@
+{
+ "site": "广州应用科技学院",
+ "host": "www.gzasc.edu.cn",
+ "title_suffix_cut": [
+  "-广州应用科技学院",
+  "-广州大学松田学院",
+  "_广州应用科技学院",
+  "-招生网",
+  "-学生处",
+  "-教务处",
+  "-党建网",
+  "-学院团委",
+  "-创新创业学院",
+  "-学生工作部"
+ ],
+ "cut_markers": [
+  "上一条",
+  "友情链接",
+  "版权所有",
+  "返回顶部",
+  "学校首页"
+ ],
+ "output_kb": "kb/school-gzasc.json",
+ "out_dir": "crawled/www.gzasc.edu.cn/school-qa",
+ "max_articles_per_topic": 14,
+ "delay": 0.6,
+ "content_limit": 4000,
+ "topics": [
+  {
+   "id": "奖助学金",
+   "tags": [
+    "奖学金",
+    "助学金",
+    "助学贷款",
+    "勤工助学",
+    "家庭经济困难认定",
+    "评优评先",
+    "国家励志奖学金",
+    "国家奖学金"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/tzgg.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/jlzz.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/gzzd.htm",
+     "pages": 2
+    }
+   ],
+   "include": [
+    "奖学金",
+    "助学金",
+    "资助",
+    "助学贷款",
+    "贷款",
+    "勤工",
+    "困难",
+    "评优",
+    "评先",
+    "奖励",
+    "学费",
+    "认定"
+   ],
+   "exclude": [
+    "退役军人",
+    "宪法",
+    "征兵",
+    "入伍",
+    "兵役",
+    "辅导员",
+    "学生证",
+    "先进工作者"
+   ]
+  },
+  {
+   "id": "入党党建",
+   "tags": [
+    "入党",
+    "党课",
+    "入党积极分子",
+    "发展党员",
+    "党员",
+    "党组织关系转接"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/djw/djzl/dwtz.htm",
+     "pages": 4
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/djw/jcdj/fzdy.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/djw/jcdj/dyjy.htm",
+     "pages": 2
+    }
+   ],
+   "include": [
+    "入党",
+    "党课",
+    "发展党员",
+    "积极分子",
+    "党员",
+    "组织关系",
+    "党校",
+    "推优",
+    "两优一先",
+    "党组织"
+   ],
+   "exclude": [
+    "第一议题",
+    "换届",
+    "思政课",
+    "讲坛",
+    "党史",
+    "支部书记",
+    "院长",
+    "述职",
+    "评议考核",
+    "选拔",
+    "评星定级",
+    "研究课题",
+    "示范创建",
+    "回社区",
+    "党员大会",
+    "战斗堡垒",
+    "创优"
+   ]
+  },
+  {
+   "id": "团学推优",
+   "tags": [
+    "团委",
+    "推优",
+    "优秀学生社团",
+    "志愿服务",
+    "西部计划",
+    "青马工程",
+    "团组织关系转接",
+    "三下乡"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/tw/tzgg/gztz.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/tw/tzgg/txgg.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/tw/txdt/txzx.htm",
+     "pages": 2
+    }
+   ],
+   "exclude": [
+    "专项资金"
+   ]
+  },
+  {
+   "id": "学科竞赛",
+   "tags": [
+    "学科竞赛",
+    "挑战杯",
+    "大学生创新训练计划",
+    "创新创业",
+    "获奖",
+    "竞赛报名",
+    "众创杯",
+    "攀登计划",
+    "比赛",
+    "大赛",
+    "赛事",
+    "报名",
+    "参赛",
+    "拿奖",
+    "省赛",
+    "国赛"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/tw/tzgg/txgg.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/cxcy/cyfh/cyzc.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/cxcy/tzgg/zytz.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/sjjx/xkjs.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/yxcz.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jsj",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/dqx",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jgxy",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/wyx",
+     "pages": 1
+    }
+   ],
+   "include": [
+    "竞赛",
+    "挑战杯",
+    "创新",
+    "创业",
+    "大创",
+    "训练计划",
+    "获奖",
+    "作品",
+    "攀登计划",
+    "技能",
+    "大赛",
+    "大奖",
+    "一等奖",
+    "斩获"
+   ],
+   "exclude": [
+    "校地合作",
+    "指导委员会",
+    "中期检查",
+    "鼎新",
+    "双百行动",
+    "国务院",
+    "印发",
+    "政策措施",
+    "指导意见",
+    "专项资金",
+    "项目申报",
+    "广东省人民政府",
+    "广东省教育厅",
+    "实施意见",
+    "若干意见",
+    "改革"
+   ]
+  },
+  {
+   "id": "证书与等级考试",
+   "tags": [
+    "考证",
+    "英语四六级",
+    "计算机等级考试",
+    "普通话",
+    "教师资格证",
+    "职业技能证书",
+    "华为认证",
+    "学业证书"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/sjjx/zyjn.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/xjxw/xwgl.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/xwdt/tzgg.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jsj",
+     "pages": 1
+    }
+   ],
+   "include": [
+    "证书",
+    "认证",
+    "四级",
+    "六级",
+    "计算机等级",
+    "普通话",
+    "教师资格",
+    "技能",
+    "职业资格",
+    "考证",
+    "考试",
+    "考生",
+    "报名"
+   ],
+   "exclude": [
+    "申报",
+    "立项",
+    "结项",
+    "公示",
+    "退学",
+    "转学",
+    "评审结果"
+   ],
+   "max_articles": 10
+  },
+  {
+   "id": "考研升学",
+   "tags": [
+    "考研",
+    "升学",
+    "上岸",
+    "研究生",
+    "保研",
+    "专升本",
+    "留学",
+    "深造"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/news/xxyw.htm",
+     "list_pages": [
+      "https://www.gzasc.edu.cn/news/xxyw/120.htm",
+      "https://www.gzasc.edu.cn/news/xxyw/119.htm",
+      "https://www.gzasc.edu.cn/news/xxyw/118.htm"
+     ]
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/xsgs/zxsgs.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/gjjyxy/",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jsj",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jgxy",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/wyx",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/dqx",
+     "pages": 1
+    }
+   ],
+   "include": [
+    "考研",
+    "升学",
+    "上岸",
+    "研究生",
+    "保研",
+    "保荐",
+    "硕士",
+    "深造",
+    "留学",
+    "出境",
+    "录取通知书"
+   ],
+   "exclude": [
+    "教师",
+    "诵写讲",
+    "参赛",
+    "商务英语",
+    "艺术节",
+    "绿色通道",
+    "报到",
+    "小红书"
+   ],
+   "articles": [
+    "https://www.gzasc.edu.cn/news/info/1003/50690.htm",
+    "https://www.gzasc.edu.cn/zs/info/1381/4371.htm"
+   ]
+  },
+  {
+   "id": "转专业与专业选择",
+   "tags": [
+    "转专业",
+    "专业选择",
+    "专业介绍",
+    "培养方案",
+    "创新班",
+    "辅修",
+    "双学位",
+    "专业分流"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/jsj",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/wyx",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jgxy",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/dqx",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/wcxy",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/fzx",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/yscm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/stx",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/znzzxy",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/jxyj/zyjs.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/jxyj/pyfa.htm",
+     "pages": 1
+    }
+   ],
+   "include": [
+    "专业介绍",
+    "专业",
+    "培养方案",
+    "创新班",
+    "学院简介",
+    "方向",
+    "解读",
+    "介绍"
+   ],
+   "exclude": [
+    "教师",
+    "师资",
+    "招聘",
+    "党校",
+    "工会",
+    "述职",
+    "评估",
+    "磨课",
+    "受邀",
+    "大会",
+    "论坛",
+    "研讨会",
+    "班主任"
+   ],
+   "articles": [
+    "https://www.gzasc.edu.cn/zs/info/1271/5631.htm"
+   ],
+   "max_articles": 12
+  },
+  {
+   "id": "选课与学分",
+   "tags": [
+    "选课",
+    "选修课",
+    "学分",
+    "重修",
+    "成绩考核",
+    "第二课堂",
+    "培养方案",
+    "毕业资格"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/jxyx/jxgl.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/jxyx/ksgl.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/sjjx/zyjn.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/xjxw/cjgl.htm",
+     "pages": 2
+    }
+   ],
+   "include": [],
+   "exclude": [
+    "教师",
+    "工作量",
+    "师资",
+    "课程编码",
+    "教学资料归档",
+    "课程目标达成度",
+    "申报",
+    "立项",
+    "公示",
+    "评审结果",
+    "试卷保密",
+    "值班",
+    "教学大纲"
+   ],
+   "max_articles": 12
+  },
+  {
+   "id": "教务考试",
+   "tags": [
+    "教务",
+    "考试",
+    "四六级",
+    "计算机等级考试",
+    "学籍",
+    "学位",
+    "成绩",
+    "第二课堂",
+    "培养方案"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/xwdt/tzgg.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/xjxw/xjyd.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/xjxw/cjgl.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/jxyx/ksgl.htm",
+     "pages": 2
+    }
+   ],
+   "include": [
+    "考试",
+    "四六级",
+    "计算机等级",
+    "学籍",
+    "学位",
+    "成绩",
+    "转专业",
+    "课程",
+    "书院",
+    "毕业",
+    "重修",
+    "选课",
+    "考生",
+    "第二课堂"
+   ],
+   "exclude": [
+    "申报",
+    "立项",
+    "结项",
+    "访问学者",
+    "骨干",
+    "教学成果奖",
+    "专业建设点",
+    "推荐对象",
+    "评审结果"
+   ]
+  },
+  {
+   "id": "就业与考公考编",
+   "tags": [
+    "就业",
+    "招聘",
+    "实习",
+    "职业规划",
+    "公务员",
+    "事业单位",
+    "考编",
+    "选调",
+    "三支一扶",
+    "西部计划",
+    "基层就业"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/tw/tzgg/gztz.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/cxcy/xwdt.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/cxcy/tzgg/zytz.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jsj",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jgxy",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/wyx",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/dqx",
+     "pages": 1
+    }
+   ],
+   "include": [
+    "就业",
+    "招聘",
+    "实习",
+    "职业规划",
+    "公务员",
+    "事业单位",
+    "考编",
+    "选调",
+    "三支一扶",
+    "西部计划",
+    "乡村振兴",
+    "简历",
+    "面试",
+    "企业实践",
+    "双选",
+    "宣讲",
+    "求职",
+    "基层就业"
+   ],
+   "exclude": [
+    "挑战杯",
+    "创业计划",
+    "创新训练",
+    "大创",
+    "众创杯",
+    "攀登计划",
+    "党日",
+    "团日",
+    "雷锋",
+    "敬老",
+    "三下乡",
+    "招生"
+   ],
+   "max_articles": 12
+  },
+  {
+   "id": "榜样风采",
+   "tags": [
+    "优秀学生",
+    "榜样",
+    "先进典型",
+    "表彰",
+    "评优",
+    "奖学金获得者",
+    "学长学姐",
+    "风采"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/news/xsgs/zxsgs.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/xsgs/xygs.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/yxcz.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jsj",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/wyx",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jgxy",
+     "pages": 1
+    }
+   ],
+   "include": [
+    "优秀学生",
+    "榜样的力量",
+    "标兵",
+    "三好",
+    "优秀毕业生",
+    "国奖",
+    "自强",
+    "学子",
+    "先进个人",
+    "优秀社团",
+    "两红两优",
+    "学生代表",
+    "奖学金",
+    "故事",
+    "风采",
+    "获奖"
+   ],
+   "exclude": [
+    "教师",
+    "师德",
+    "校长",
+    "书记",
+    "访问学者",
+    "骨干",
+    "教学案例",
+    "师资",
+    "社团建设优秀成果",
+    "热搜",
+    "视频",
+    "军训",
+    "想家"
+   ],
+   "articles": [
+    "https://gzasc.edu.cn/stx/info/1556/5369.htm",
+    "https://www.gzasc.edu.cn/wyx/info/1656/8569.htm"
+   ]
+  },
+  {
+   "id": "心理与情绪",
+   "tags": [
+    "心理健康",
+    "情绪",
+    "压力",
+    "心理辅导",
+    "危机干预",
+    "适应"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/sxjy.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/djw/szgz/xljk.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/xwdt.htm",
+     "pages": 2
+    }
+   ],
+   "include": [
+    "心理",
+    "情绪",
+    "压力",
+    "健康",
+    "辅导",
+    "危机",
+    "疏导",
+    "适应",
+    "关爱",
+    "谈心",
+    "测评"
+   ],
+   "exclude": [
+    "教师",
+    "辅导员队伍建设"
+   ],
+   "max_articles": 8
+  },
+  {
+   "id": "学风与学习方法",
+   "tags": [
+    "学风",
+    "学习方法",
+    "技能提升",
+    "讲座",
+    "备考",
+    "经验分享",
+    "自习",
+    "成长"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/jsj",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/wyx",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jgxy",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/dqx",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/jwc/xwdt/jxdt.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/xwdt.htm",
+     "pages": 2
+    }
+   ],
+   "include": [
+    "学风",
+    "学习方法",
+    "技能提升",
+    "备考",
+    "持证",
+    "自习",
+    "读书",
+    "经验分享",
+    "学霸",
+    "笔记",
+    "学习标兵"
+   ],
+   "exclude": [
+    "教师",
+    "管理人员",
+    "师资",
+    "党史",
+    "实验室",
+    "实训室",
+    "评估",
+    "会议",
+    "大赛",
+    "访问学者",
+    "骨干"
+   ],
+   "max_articles": 10
+  },
+  {
+   "id": "招生专升本",
+   "tags": [
+    "招生",
+    "专升本",
+    "招生计划",
+    "专业",
+    "录取",
+    "退役士兵"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/zs/zsdt.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/zs/zszc.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/zs/ptzsb.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/zs/ptgk.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/zs/rxzn.htm",
+     "pages": 1
+    }
+   ],
+   "articles": [
+    "http://www.gzasc.edu.cn/zs/info/1491/4501.htm",
+    "http://www.gzasc.edu.cn/zs/info/1481/4581.htm",
+    "http://www.gzasc.edu.cn/zs/info/1491/4511.htm",
+    "http://www.gzasc.edu.cn/zs/info/1491/4531.htm"
+   ],
+   "include": [
+    "招生",
+    "专升本",
+    "专插本",
+    "录取",
+    "分数线",
+    "计划",
+    "简章",
+    "志愿",
+    "缴费",
+    "入学",
+    "章程"
+   ]
+  },
+  {
+   "id": "校园活动与文体",
+   "tags": [
+    "校园活动",
+    "晚会",
+    "运动会",
+    "文化节",
+    "艺术节",
+    "科技节",
+    "社团活动",
+    "演出",
+    "嘉年华",
+    "文体活动",
+    "校园赛事",
+    "活动",
+    "音乐节",
+    "文艺",
+    "比赛"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/tw/dtgc/dtgc.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/tw/txdt/txzx.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/tw/txdt/xwdt.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/zhxw.htm",
+     "pages": 1,
+     "list_pages": [
+      "https://www.gzasc.edu.cn/news/zhxw/180.htm",
+      "https://www.gzasc.edu.cn/news/zhxw/179.htm"
+     ]
+    }
+   ],
+   "include": [
+    "活动",
+    "晚会",
+    "运动会",
+    "文化节",
+    "艺术节",
+    "科技节",
+    "嘉年华",
+    "演出",
+    "开幕",
+    "闭幕",
+    "举办",
+    "比赛",
+    "赛事",
+    "文艺",
+    "体育",
+    "游园",
+    "汇演",
+    "庆典"
+   ],
+   "exclude": [
+    "教师",
+    "师资",
+    "招聘",
+    "招标",
+    "采购",
+    "讲座预告汇总"
+   ],
+   "max_articles": 12
+  },
+  {
+   "id": "宿舍与生活服务",
+   "tags": [
+    "宿舍",
+    "公寓",
+    "住宿",
+    "食堂",
+    "餐饮",
+    "校园卡",
+    "一卡通",
+    "报修",
+    "快递",
+    "医疗",
+    "热水",
+    "水电",
+    "生活服务",
+    "后勤",
+    "医保",
+    "安全",
+    "生活",
+    "舍友",
+    "寝室"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/tzgg.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/xwdt.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/gzzd.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/xfjs.htm",
+     "pages": 2
+    }
+   ],
+   "include": [
+    "宿舍",
+    "公寓",
+    "住宿",
+    "食堂",
+    "餐饮",
+    "膳食",
+    "校园卡",
+    "一卡通",
+    "报修",
+    "维修",
+    "快递",
+    "医疗",
+    "医务",
+    "热水",
+    "水电",
+    "生活服务",
+    "后勤",
+    "服务大厅",
+    "宿舍文化"
+   ],
+   "exclude": [
+    "教师",
+    "师资",
+    "招标",
+    "采购",
+    "退役军人"
+   ],
+   "max_articles": 12
+  },
+  {
+   "id": "社团与学生组织",
+   "tags": [
+    "社团",
+    "学生会",
+    "学生组织",
+    "招新",
+    "社团嘉年华",
+    "团学组织",
+    "学生干部",
+    "换届",
+    "加入社团"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/tw/bfst/stzs.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/tw/bfst/stjnh.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/tw/zlxz/bslc.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/tw/zlxz/sqbg.htm",
+     "pages": 2
+    }
+   ],
+   "include": [
+    "社团",
+    "协会",
+    "学生会",
+    "招新",
+    "嘉年华",
+    "组织",
+    "换届",
+    "纳新",
+    "学生干部"
+   ],
+   "exclude": [
+    "教师",
+    "招标",
+    "采购"
+   ],
+   "max_articles": 10
+  },
+  {
+   "id": "军训与国防教育",
+   "tags": [
+    "军训",
+    "国防教育",
+    "征兵",
+    "入伍",
+    "军事理论",
+    "新生军训",
+    "大学生应征",
+    "国防",
+    "新兵",
+    "参军"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/gfjy.htm",
+     "pages": 3
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/tzgg.htm",
+     "pages": 2
+    }
+   ],
+   "include": [
+    "军训",
+    "国防",
+    "征兵",
+    "入伍",
+    "军事",
+    "应征",
+    "役前"
+   ],
+   "exclude": [
+    "教师",
+    "招聘",
+    "招标"
+   ],
+   "max_articles": 10
+  },
+  {
+   "id": "校园新闻动态",
+   "tags": [
+    "校园新闻",
+    "学校要闻",
+    "综合新闻",
+    "院系动态",
+    "媒体报道",
+    "最新动态",
+    "学校通知",
+    "新闻",
+    "动态",
+    "最近",
+    "最新",
+    "学校大事"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/news/xxyw.htm",
+     "pages": 1,
+     "list_pages": [
+      "https://www.gzasc.edu.cn/news/xxyw/120.htm",
+      "https://www.gzasc.edu.cn/news/xxyw/119.htm"
+     ]
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/zhxw.htm",
+     "pages": 1,
+     "list_pages": [
+      "https://www.gzasc.edu.cn/news/zhxw/180.htm",
+      "https://www.gzasc.edu.cn/news/zhxw/179.htm"
+     ]
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/yxcz.htm",
+     "pages": 1,
+     "list_pages": [
+      "https://www.gzasc.edu.cn/news/yxcz/47.htm",
+      "https://www.gzasc.edu.cn/news/yxcz/46.htm"
+     ]
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/tzgg.htm",
+     "pages": 1,
+     "list_pages": [
+      "https://www.gzasc.edu.cn/news/tzgg/8.htm",
+      "https://www.gzasc.edu.cn/news/tzgg/7.htm"
+     ]
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/mtgyk.htm",
+     "pages": 1,
+     "list_pages": [
+      "https://www.gzasc.edu.cn/news/mtgyk/52.htm",
+      "https://www.gzasc.edu.cn/news/mtgyk/51.htm"
+     ]
+    }
+   ],
+   "include": [],
+   "exclude": [
+    "教师",
+    "师德",
+    "师资",
+    "招聘",
+    "招标",
+    "采购",
+    "干部任",
+    "任职公示",
+    "考察对象"
+   ],
+   "max_articles": 16
+  },
+  {
+   "id": "学生故事与风采",
+   "tags": [
+    "学生故事",
+    "在校生故事",
+    "校友故事",
+    "优秀学生",
+    "榜样",
+    "风采",
+    "成长故事",
+    "学长学姐",
+    "学长",
+    "经验分享",
+    "杰出校友"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/news/xsgs/zxsgs.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/xsgs/xygs.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/tw/yxfc/fczs.htm",
+     "pages": 2
+    }
+   ],
+   "include": [],
+   "exclude": [
+    "教师",
+    "师资",
+    "招聘",
+    "师德"
+   ],
+   "max_articles": 12
+  },
+  {
+   "id": "学生事务办理",
+   "tags": [
+    "办事流程",
+    "证明",
+    "申请表格",
+    "请假",
+    "补办",
+    "学生事务",
+    "联系方式",
+    "办理指南"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/tw/zlxz/bslc.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/tw/zlxz/sqbg.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/tw/zlxz/gzzd.htm",
+     "pages": 2
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/bmgk/lxfs.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/bmgk/kszn.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/xsc/gzzd.htm",
+     "pages": 2
+    }
+   ],
+   "include": [
+    "流程",
+    "办理",
+    "申请",
+    "证明",
+    "请假",
+    "补办",
+    "联系方式",
+    "职能",
+    "指南",
+    "说明",
+    "办法",
+    "规定"
+   ],
+   "exclude": [
+    "教师",
+    "招标",
+    "采购",
+    "师资"
+   ],
+   "max_articles": 10
+  },
+  {
+   "id": "校园讲座与专题",
+   "tags": [
+    "百越大讲堂",
+    "校长下午茶",
+    "鼎新大讲堂",
+    "青年干部成长营",
+    "讲座",
+    "专题活动",
+    "校庆"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/news/zttj/bydjt.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/zttj/dxdjt.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/zttj/xzxwc.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/zttj/qngbczy.htm",
+     "pages": 1
+    }
+   ],
+   "include": [],
+   "exclude": [
+    "教师",
+    "招聘"
+   ],
+   "max_articles": 10
+  },
+  {
+   "id": "视频与图文校园",
+   "tags": [
+    "视频",
+    "校园风光",
+    "图说校园",
+    "校园生活",
+    "图片故事",
+    "宣传片",
+    "照片",
+    "纪录片",
+    "航拍"
+   ],
+   "seeds": [
+    {
+     "url": "https://www.gzasc.edu.cn/news/spjj.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/tsxy/xyfj.htm",
+     "pages": 1
+    },
+    {
+     "url": "https://www.gzasc.edu.cn/news/tsxy/xysh.htm",
+     "pages": 1
+    }
+   ],
+   "include": [],
+   "exclude": [
+    "教师",
+    "招聘"
+   ],
+   "max_articles": 10
+  },
+  {
+   "id": "服务大厅与办事入口",
+   "tags": [
+    "一站式服务大厅",
+    "宿舍",
+    "热水充值",
+    "报修",
+    "校园服务",
+    "办事指南",
+    "部门电话",
+    "一卡通",
+    "校园网",
+    "图书馆借还",
+    "学生服务",
+    "学生宿舍热水充值",
+    "报修小程序",
+    "校园服务公众号",
+    "办事",
+    "服务",
+    "入口",
+    "系统",
+    "教务系统",
+    "图书馆",
+    "热水",
+    "公众号",
+    "电话"
+   ],
+   "articles": [
+    "https://www.gzasc.edu.cn/xysh/yzsfwdt.htm",
+    "https://www.gzasc.edu.cn/info/1134/1481.htm",
+    "https://www.gzasc.edu.cn/info/1134/1482.htm",
+    "https://www.gzasc.edu.cn/info/1134/2694.htm",
+    "https://www.gzasc.edu.cn/gywm/lxwm.htm",
+    "https://www.gzasc.edu.cn/gywm/xxjj.htm"
+   ],
+   "max_articles": 10
+  }
+ ]
+}

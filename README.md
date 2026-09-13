@@ -4,8 +4,10 @@
 
 ## 功能
 
-- **桌面 GUI**:暖橙手账风,深色/浅色一键切换;会话列表、Markdown 流式对话、工具调用卡片、思考流
-- **多供应商 API Key**:内置智谱 GLM / DeepSeek 模板,界面里「🔑 密钥」增删改查供应商、一键切换;也可直接编辑 `config.json`(providers 数组,兼容旧扁平格式)
+- **桌面 GUI**:暖橙手账风,深色/浅色一键切换;会话列表、Markdown 流式对话、工具调用卡片、思考流可折叠;**划词即弹「复制选区」**,消息右键有原生菜单(撤销/剪切/复制/粘贴/全选),Ctrl+C/V/X/A 正常可用
+- **内置校园模型,开箱即用**:固定使用广州应用科技学院内网模型服务(`qwen3.8-27b`),不需要填 API Key,界面也不提供模型切换入口(顶栏模型标识只展示)
+- **沙箱边界**:工作区内的路径直接放行、工作区外逐次确认、`~/.yinluxs` `~/.ssh` 等敏感目录永远拒之门外;还能禁网命令、加自定义禁配规则、卡命令超时;GUI 顶栏一键开关(详见「沙箱」一节)
+- **附件上传**:聊天框 📎 选文件/图片,自动复制进工作区 `uploads/` 并把路径注入消息;图片按长边 1536 / 1MB 自动压缩,`vision: true` 时以 base64 直接发给视觉模型
 - **本地知识库检索**:`kb/` 目录放 JSON 资料库(校园通知、经验库等,自带 credibility 可信度分级与来源网址),`search_knowledge` 工具按 中文 2-gram 打分检索(标题×3+标签×2+正文×1),回答引用时输出来源网址供用户核实,非 A 级数据强制标注"未经核实"
 - **SKILL.md 技能系统**:`skills/` 目录放技能(带 name/description 的 SKILL.md),自动注入系统提示词,模型用 `use_skill` 工具按需读取全文;内置 git-commit / python-testing / code-review 三个示例
 - **权限确认**:写文件(带预览)、编辑(带 diff)、执行命令先弹窗确认,可选"本轮总是允许"或切"自动放行"
@@ -14,8 +16,9 @@
 - **上下文自动压缩**:token 估算接近窗口上限时,把早期对话折叠成摘要(按完整轮切分)
 - **会话持久化**:每轮写入 `sessions/*.jsonl`;GUI 侧栏一键恢复,CLI `/resume`
 - **9 个内置工具**:`read_file` / `write_file` / `edit_file` / `bash` / `glob` / `grep` / `use_skill` / `search_knowledge` / `web_crawl`
-- **网页抓取**:`web_crawl` 基于 crawl4ai 把网页/整站抓成 markdown(同域 BFS 跟链、限页限速),可选 to_kb 一键写入本地知识库 `kb/crawl-<域名>.json`,由 search_knowledge 带来源网址检索
-- **OpenAI 兼容多模型**:DeepSeek / Kimi / Qwen / 智谱通吃;本地服务(127.0.0.1)自动绕过系统代理
+- **网页抓取**:`web_crawl` 抓网页/整站为 markdown(同域 BFS 跟链、限页限速),入库前自动去掉每页重复的导航/页脚;可选 to_kb 一键写入本地知识库 `kb/crawl-<域名>.json`,用 `kb_category`/`kb_tags` 打主题标签(检索时标签权重×2),由 search_knowledge 带来源网址检索。源码环境用 crawl4ai(真浏览器,能渲染 JS);**打包版自动切到内置轻量抓取器(httpx + BeautifulSoup)**,不带浏览器内核(否则 79MB 的包会涨到约 500MB),静态站点效果一致,需要 JS 的页面会明确提示
+- **校园主题语料库**:`scripts/crawl_school_topics.py` 按"用户会问什么"分主题爬官网(奖助学金 / 入党党建 / 团学推优 / 学科竞赛 / 证书与等级考试 / 考研升学 / 转专业与专业选择 / 选课与学分 / 教务考试 / 就业与考公考编 / 榜样风采 / 心理与情绪 / 学风与学习方法 / 招生专升本 / 校园活动与文体 / 宿舍与生活服务 / 社团与学生组织 / 军训与国防教育 / 校园新闻动态 / 学生故事与风采 / 学生事务办理 / 校园讲座与专题 / 视频与图文校园 / 服务大厅与办事入口,共 24 个),关键词过滤 + 翻页 + 发布日期提取 + 去导航,产出 `kb/school-gzasc.json`(每条都带原文链接与发布日期;视频页与图文指引页也建条目,正文里给出观看/查看链接),换学校只改 `scripts/school_topics.json`,不用改代码
+- **OpenAI 兼容内核**:底层走 OpenAI 协议(流式 + 工具调用),所以默认的校园模型之外,任何 OpenAI 兼容服务(DeepSeek / Kimi / Qwen / 智谱)都能在源码层接;本地服务(127.0.0.1)与校园内网(10.x)自动绕过系统代理
 
 ## 快速开始(源码运行)
 
@@ -26,13 +29,16 @@ py -3.12 -m venv .venv                     # Python 3.10+
 pip install -r requirements.txt
 crawl4ai-setup                            # web_crawl 首次使用前执行,下载浏览器内核
 
-copy config.example.json config.json       # 填入 api_key(或在 GUI 里点「🔑 密钥」)
+copy config.example.json config.json       # 一般不用改:默认就用内置校园模型
 
 python gui_main.py                         # 图形界面
 python main.py                             # 终端 REPL
 ```
 
-### 常见模型的 base_url
+### 常见模型的 base_url(仅源码层自定义时参考)
+
+> 校内分发版固定用内置校园模型,下面这些只在你要自己改造源码、替换默认模型时才用得上
+> (`config.json` 里的其他供应商配置会被保留但不会激活)。
 
 | 供应商 | base_url | model 示例 |
 |---|---|---|
@@ -66,18 +72,107 @@ description: 生成符合规范的 git 提交信息
 
 系统提示词会列出可用技能,模型接到相关任务时自动用 `use_skill` 读取全文后再行动。CLI 用 `/skills` 查看已装技能。
 
+## 沙箱
+
+Agent 能碰到什么,由三层边界决定:
+
+| 边界 | 行为 |
+|---|---|
+| 敏感路径(`~/.yinluxs`、`~/.ssh`、`~/.aws`、`~/.gnupg` …) | **永远拒绝**,任何权限模式、任何用户授权都不能越过 |
+| 工作区内路径 | 直接放行 |
+| 工作区外路径 | 默认**逐次确认**;用户放行后本回合内有效;`allow_outside_workspace: true` 则直接放行 |
+
+命令侧:灾难命令照旧硬拒绝(`rm -rf /`、`format c:`、fork 炸弹…);沙箱还支持
+`allow_network: false` 禁掉 curl/wget/ssh 等联网命令、`deny_patterns` 加自定义正则
+(如 `git push`)、`timeout_seconds` 收紧命令执行超时上限。
+
+GUI 顶栏的「🛡 沙箱开/关」可随时切换(写回 config.json);CLI 用 `/sandbox [on|off]` 查看或临时切换。
+注意:**沙箱边界优先于权限模式**——`accept_all` 也不能让 Agent 在没有确认的情况下访问工作区外。
+
+## 附件(文件 / 图片)
+
+聊天框左侧 📎 打开系统文件选择框,可以多选:
+
+- 文件先复制进工作区 `uploads/`(重名自动加 `-1`/`-2`),消息里注入相对路径清单,
+  模型用 `read_file` / `bash` 等工具自行处理 —— PDF 这类二进制不会被硬塞进上下文;
+- 图片另做压缩:长边超过 1536 等比缩小,JPEG/WebP 逐级降质量到 1MB 以内,
+  带透明的 PNG 保持 PNG,GIF 保留动画;单文件上限 20MiB、解码后不超过 4000 万像素;
+- `config.json` 里 `vision: true`(且模型确实支持看图)时,图片会以 base64 data URL
+  随消息直接发给模型;否则只给路径并在消息里注明「当前模型不支持看图」。
+
+## MCP 服务器
+
+支持接入任意[MCP](https://modelcontextprotocol.io)服务器(stdio 传输),外部工具会以
+`mcp_<服务器>_<工具>` 的名字挂进工具集,和内置工具一样被模型调用。
+
+在 `config.json` 里配置(完整示例见 `config.example.json`):
+
+```json
+"mcp_servers": [
+  {
+    "id": "filesystem",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/data"],
+    "enabled": true,
+    "read_only": false,
+    "description": "文件系统"
+  }
+]
+```
+
+| 字段 | 说明 | 默认 |
+|---|---|---|
+| `id` | 服务器标识,用于拼工具名(会规范化成字母数字下划线) | 必填 |
+| `command` / `args` | 启动命令,支持 `npx` / `uvx` / `python` 等 | 必填 |
+| `env` | 追加的环境变量(值支持 `%VAR%` / `$VAR` 展开) | 空 |
+| `enabled` | 关掉可保留配置不启动 | `true` |
+| `read_only` | 标记为只读 → 免确认直接执行;默认**需要用户确认** | `false` |
+| `start_timeout` / `call_timeout` | 握手 / 调用超时(秒) | 10 / 60 |
+| `description` | 显示名与工具描述前缀 | 空 |
+
+行为约定:
+
+- **连不上不崩应用**:命令不存在、握手超时、协议错误都只在日志里提示并跳过该服务器;
+- **进程级长连接 + 退出回收**:窗口关闭 / CLI 退出时统一终止子进程,不留孤儿;
+- 工具自带 JSON Schema,权限门按 `read_only` 决定免确认还是逐个确认;
+- 侧栏底部会显示 `MCP 服务器名(工具数)`。
+
 ## 配置项(config.json)
 
 | 字段 | 说明 | 默认 |
 |---|---|---|
-| `providers` | 供应商数组:`{id, name, base_url, api_key, model}` | 智谱 + DeepSeek 模板 |
-| `active_provider` | 当前使用的供应商 id | 第一个 |
+| `providers` | 供应商数组:`{id, name, base_url, api_key, model}`(**保留字段**:校内分发版固定用内置校园模型) | 内置校园模型 |
+| `active_provider` | 同上,不参与切换;启动时一律指向内置校园模型 | `gzasc` |
 | `permission_mode` | `confirm` 变更逐次确认;`accept_all` 自动放行 | `confirm` |
 | `shell` | `auto` 自动选 Git Bash→cmd;可指定 `bash` / `cmd` / `powershell` | `auto` |
 | `max_output_chars` | 工具输出回填给模型前的截断长度 | `20000` |
 | `request_timeout_seconds` | 单次 LLM 请求超时 | `300` |
 | `context_window` | 模型上下文窗口(token),用于压缩触发判断 | `131072` |
 | `compact_at_ratio` | 估算 token 达窗口该比例时自动压缩 | `0.7` |
+| `mcp_servers` | MCP 服务器数组(见上一节) | `[]` |
+| `vision` | 当前模型是否支持看图:开启后上传的图片以 base64 随消息发送 | `false` |
+| `sandbox` | 沙箱策略:`enabled` / `allow_outside_workspace` / `allow_network` / `timeout_seconds` / `deny_patterns` | 见「沙箱」一节 |
+
+> **模型固定**:面向校内分发的版本只使用内置的广州应用科技学院模型
+> (`gzasc` / `qwen3.8-27b`,内网 `10.223.24.16:8080`),界面不提供切换入口。
+> `config.json` 里若残留其他供应商配置会被保留(不删用户数据),但不会被激活;
+> 顶栏模型标识是纯展示,不可点选。
+>
+> **内置模型的 Key 不随仓库分发**(本仓库公开):放在本地未跟踪的
+> `config.local.json` 的 `builtin_api_key` 字段,或用环境变量
+> `YINLUXS_BUILTIN_API_KEY` 临时覆盖。两者都没有时应用照常启动,只是内置模型
+> 不可用;打包脚本会把 `config.local.json` 一并打进 exe,所以发给用户的包仍是开箱即用。
+>
+> ```json
+> {"builtin_api_key": "sk-在这里填入内网模型的 Key"}
+> ```
+>
+> 离线测试/调试可以用环境变量把当前端点临时指到别处(**不写回 config.json,
+> 普通用户无需设置**),冻结版 e2e 脚本就是靠它把 exe 指到本地假 LLM:
+>
+> ```bash
+> YINLUXS_LLM_BASE_URL=http://127.0.0.1:8000/v1 YINLUXS_LLM_MODEL=fake 引路学长-CLI.exe "任务"
+> ```
 
 ## 项目结构
 
@@ -87,6 +182,10 @@ minicode/
 ├── app_setup.py    # CLI/GUI 共享装配:system prompt(含技能注入)+ Agent 构建
 ├── llm.py          # OpenAI 兼容流式调用 + 工具调用增量聚合 + 重试 + 本地代理绕行
 ├── skills.py       # SKILL.md 技能加载 + use_skill 工具处理器
+├── mcp.py          # MCP 客户端:stdio JSON-RPC / 工具发现 / 调用 / 进程回收
+├── sandbox.py      # 沙箱策略:路径分级(工作区/外部/敏感)+ 命令管控 + 超时
+├── attachments.py  # 附件:落盘去重 / 图片压缩 / 多模态消息构造
+├── suggestions.py  # 首页建议 chips:按聊天记录给校园主题打分
 ├── kb.py           # 本地知识库:异构 JSON 加载 + 2-gram 检索 + 来源网址输出
 ├── compaction.py   # token 估算 + 按完整轮切分的上下文压缩
 ├── permission.py   # 权限门 + 灾难命令黑名单
@@ -100,18 +199,83 @@ minicode/
 main.py             # CLI 入口与 REPL
 gui_main.py         # GUI 入口(pywebview 窗口)
 frontend/           # 免构建单页前端(暖橙手账风,深浅双色)
-skills/             # 内置技能(git-commit / python-testing / code-review)
-kb/                 # 本地知识库 JSON(notices / knowledge,带来源网址与可信度)
+skills/             # 内置技能(git-commit / python-testing / code-review / school-qa)
+kb/                 # 本地知识库 JSON(notices / knowledge / school-gzasc,带来源网址与可信度)
 packaging/gcode.spec  # PyInstaller 双 exe 配置
-scripts/            # 打包与端到端验证脚本
+scripts/            # 打包与端到端验证脚本 + 校园主题爬虫(crawl_school_topics.py)
+```
+
+## 校园主题语料库
+
+```bash
+python scripts/crawl_school_topics.py --dry-run            # 只看会抓哪些链接
+python scripts/crawl_school_topics.py --only 奖助学金       # 只刷新一个主题
+python scripts/crawl_school_topics.py                      # 全量刷新(24 个主题,约 8 分钟)
+python scripts/crawl_school_topics.py --prune              # 清理已入库、但被 exclude 关键词排除的条目(离线)
+```
+爬取结果:正文归档到 `crawled/www.gzasc.edu.cn/school-qa/`(文件名带主题前缀,附
+`index.json` 清单),知识库条目写入 `kb/school-gzasc.json`(按 url 合并,重爬只更新
+不丢旧数据)。学生问校园问题时,`search_knowledge` 会直接命中这些带原文链接的条目;
+问细节时可加大 `snippet_chars` 一次取回更多原文。
+
+栏目按"学生会问什么"划分:奖助学金 / 入党党建 / 团学推优 / 学科竞赛 / 证书与等级考试 /
+考研升学 / 转专业与专业选择 / 选课与学分 / 教务考试 / 就业与考公考编 / 榜样风采 /
+心理与情绪 / 学风与学习方法 / 招生专升本 / 校园活动与文体 / 宿舍与生活服务 /
+社团与学生组织 / 军训与国防教育 / 校园新闻动态 / 学生故事与风采 / 学生事务办理 /
+校园讲座与专题 / 视频与图文校园 / 服务大厅与办事入口。
+
+正文不在文字里的页面也建成条目,保证链接能送到学生手上:
+
+| 页面类型 | 抓到的文字 | 条目正文 |
+|---|---|---|
+| 正文全在视频播放器 | 0 字 | 标题 + 发布日期 + `观看地址:` 原页链接 |
+| 二维码/图文操作指引(热水充值、报修、校园服务公众号) | 0 字 | 标题 + 发布日期 + `查看地址:` 原页链接 |
+| 只有附件的管理办法/培养方案 | 附件名 | 标题 + 发布日期 + 附件名清单 + 原页链接 |
+| 失效链接(官网把 404 也渲染成 200) | 提示文字 | 不入库(靠标题识别拦掉) |
+
+## 两个便携版(轻量版 / 完整版)
+
+打包版联网抓取有两个引擎:轻量版不带 crawl4ai,走内置抓取器(httpx + BeautifulSoup);
+完整版把 crawl4ai 与浏览器内核一起打进去,能抓需要 JS 渲染的页面。运行时自动选择,
+降级时会在工具输出里说明原因。
+
+```bash
+python scripts/build_exe.py            # 轻量版:文件夹 + zip + 单文件版 + 安装包
+python scripts/build_crawl4ai_exe.py   # 完整版:文件夹 + zip + 安装包(需本机有浏览器内核)
+```
+
+| | 轻量版 | 完整版 |
+| --- | --- | --- |
+| 产物 | `引路学长-<版本>-win64.zip`(便携)<br>`引路学长-<版本>-setup.exe`(安装包)<br>`引路学长-单文件版.exe` | `引路学长-<版本>-crawl4ai-win64.zip`(便携)<br>`引路学长-<版本>-crawl4ai-setup.exe`(安装包) |
+| 抓取引擎 | 内置抓取器(无浏览器) | crawl4ai(真浏览器,可渲染 JS) |
+| 解压后体积 / zip | 约 110MB / 76MB | 约 660MB / 281MB |
+| 浏览器内核 | 无 | `ms-playwright/chromium_headless_shell-*`(272MB,放在 exe 同级,不塞进 exe) |
+| 适用 | 日常分发、静态站点抓取 | 需要抓 JS 页面时 |
+
+两个安装包用不同的 `AppId`,可以**同时装在一台电脑上互不覆盖**(完整版装到
+`%LOCALAPPDATA%\Programs\引路学长-完整版`);便携版则是把整个文件夹拷走就能用,
+配置与会话都在 exe 同目录。
+
+完整版的浏览器内核目录可以单独拷进轻量版目录(与 exe 同级),即把轻量版升级成完整版;
+反过来删掉 `ms-playwright/` 就会自动降级,不会报错。
+
+验收(两版都可以用同一个脚本验,断言期望的引擎):
+
+```bash
+python scripts/e2e_frozen_crawl.py
+python scripts/e2e_frozen_crawl.py --exe dist/引路学长-crawl4ai/引路学长-CLI.exe --expect-engine crawl4ai
 ```
 
 ## 测试
 
 ```bash
-python -m pytest                        # 93 个单元测试,不依赖网络
+python -m pytest                        # 单元测试,不依赖网络
 python scripts/e2e_fake_server.py       # CLI 端到端冒烟(假服务器,不花 token)
 python scripts/e2e_frozen.py            # 打包后验证:CLI 全链路 + GUI 启动
+python scripts/e2e_frozen_crawl.py      # 打包后验证:联网爬取 → 自动入库 → 下次提问命中
+python scripts/e2e_frozen_mcp.py        # 打包后验证:MCP 服务器连上 → 调工具 → 结果回填模型
+python scripts/e2e_frozen_mcp.py --exe dist/引路学长-crawl4ai/引路学长-CLI.exe
+python scripts/e2e_frozen_sandbox.py    # 打包后验证:工作区外访问触发确认且拒绝后不泄露内容
 ```
 
 ## 打包发布
@@ -122,18 +286,25 @@ python scripts/build_exe.py        # 构建 dist/引路学长/ 并生成 引路�
 python scripts/e2e_frozen.py       # 对 exe 做端到端验证
 ```
 
-产物为 onedir 绿色便携包,双 exe:
-- **引路学长.exe** —— 图形界面版(无控制台窗口)
-- **引路学长-CLI.exe** —— 终端版
+产物三件套(dist/ 下):
+- **引路学长-<版本>-setup.exe** —— Windows 安装包(推荐分享):中文向导、
+  仅当前用户安装(无需管理员)、自动创建桌面/开始菜单快捷方式、带卸载器
+- **引路学长-单文件版.exe** —— 免安装单文件,双击直接用(启动稍慢)
+- **引路学长-0.x-win64.zip** —— 绿色便携 zip,解压即用
+
+安装包内置全部三种 exe 形态对应的 GUI 版;`config.json` 首次启动生成在安装目录;
+用户数据(config/sessions/memory)卸载时保留。
 
 `config.json` 在 exe 旁自动生成;图标、system_prompt、前端页面、内置技能已打包。
 
 ## 路线图(下一阶段)
 
-- [ ] 子代理(`task` 工具):explore / implement / test 分工,并行派发
-- [ ] 计划模式:复杂任务先建计划再按依赖图执行
-- [ ] MCP 客户端
-- [ ] 长期记忆(用户偏好/项目约定)
+- [x] MCP 客户端(stdio,配置即用,连不上不阻塞启动)
+- [x] 长期记忆(用户偏好/项目约定,`memory/MEMORY.md`)
+- [ ] 子代理(`task` 工具):explore / implement / test 分工,**并行派发**(当前串行)
+- [ ] 计划模式:复杂任务先建计划,再按 `depends_on` 依赖图执行
+- [ ] MCP 增强:HTTP/SSE 传输、AI 自助配置服务器(星瑶的 `mcp_add_server` 一类)
+- [ ] 长期记忆整理:去重 / Dream 式归并,用户级全局记忆
 
 ## License
 

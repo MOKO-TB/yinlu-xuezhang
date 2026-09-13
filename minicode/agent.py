@@ -14,30 +14,46 @@ from minicode.compaction import compact, estimate_tokens
 from minicode.llm import LLMClient, ToolCall
 from minicode.permission import ALLOW, ASK, REJECT, PermissionGate
 from minicode.session import Session
-from minicode.tools.base import PathOutsideWorkspace, Tool, ToolContext, resolve_in_workspace
+from minicode.tools.base import (
+    PathBlocked, PathOutsideWorkspace, Tool, ToolContext, resolve_path,
+)
 from minicode.ui import TerminalUI
 
-MAX_STEPS = 40  # 单回合最多工具调用轮数,防止死循环
+MAX_STEPS = 40  # 单回合默认工具调用轮数上限
 SNAPSHOT_TOOLS = ("write_file", "edit_file")  # bash 的改动无法安全跟踪,不在回滚范围
 
 
 class Agent:
     def __init__(self, llm: LLMClient, registry: list[Tool], session: Session,
-                 gate: PermissionGate, ui: TerminalUI, ctx: ToolContext):
+                 gate: PermissionGate, ui: TerminalUI, ctx: ToolContext,
+                 max_steps: int = MAX_STEPS):
         self.llm = llm
         self.registry = registry
         self.session = session
         self.gate = gate
         self.ui = ui
         self.ctx = ctx
+        self.max_steps = max_steps
         self._tool_map = {t.name: t for t in registry}
         self._undo_stack: list[dict] = []
+        self.mcp = None            # app_setup 注入:McpManager,退出时关停
 
-    def run_turn(self, user_input: str) -> None:
+    def close(self) -> None:
+        """释放外部资源(当前是 MCP 子进程);重复调用安全。"""
+        mcp = getattr(self, "mcp", None)
+        if mcp is not None:
+            try:
+                mcp.close_all()
+            except Exception:
+                pass
+            self.mcp = None
+
+    def run_turn(self, user_input: str, content=None) -> None:
+        """跑一个回合。content 可选:带附件时的多模态消息体(list[dict])。"""
         self.gate.new_turn()
-        self.session.add_user(user_input)
+        self.session.add_user(user_input, content)
 
-        for _ in range(MAX_STEPS):
+        for _ in range(self.max_steps):
             self._maybe_compact()
             try:
                 turn = self.llm.stream_chat(
@@ -64,7 +80,7 @@ class Agent:
                 result = self._execute(call)
                 self.session.add_tool_result(call.id, call.name, result)
         else:
-            self.ui.max_steps_reached(MAX_STEPS)
+            self.ui.max_steps_reached(self.max_steps)
 
     # ------------------------------------------------------------ 回滚
 
@@ -124,6 +140,8 @@ class Agent:
                 self.gate.approve_for_turn(tool.name)
             elif choice != "yes":
                 return "用户拒绝了本次工具调用。请停止重试,询问用户希望如何处理。"
+            # 用户放行后记住工作区外路径(本回合内有效)
+            self.gate.approve_outside(tool, args)
 
         self._snapshot_before_mutation(tool, args)
         self.ui.tool_start(tool, args)
@@ -141,8 +159,8 @@ class Agent:
             return
         raw = str(args.get("path", ""))
         try:
-            p = resolve_in_workspace(self.ctx, raw)
-        except PathOutsideWorkspace:
+            p = resolve_path(self.ctx, raw, for_write=True)
+        except (PathOutsideWorkspace, PathBlocked):
             return
         try:
             data = p.read_bytes() if p.exists() else None

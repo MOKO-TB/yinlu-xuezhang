@@ -21,6 +21,13 @@ datas = [
     (os.path.join(ROOT, "skills"), "skills"),
     (os.path.join(ROOT, "kb"), "kb"),
 ]
+
+# 内置校园模型的 Key 不放进仓库(公开仓库):打包时从本地未跟踪的
+# config.local.json 注入,运行时由 minicode.config._builtin_api_key() 从
+# _MEIPASS 读出。构建机缺这个文件也能出包,只是内置模型不可用。
+_local_secrets = os.path.join(ROOT, "config.local.json")
+if os.path.exists(_local_secrets):
+    datas.append((_local_secrets, "."))
 binaries = []
 hiddenimports = []
 
@@ -28,7 +35,7 @@ hiddenimports = []
 # DLL 在 Library/bin 下,PyInstaller 不会自动收集,这里显式补齐
 for _name in ("libexpat.dll", "liblzma.dll", "libbz2.dll",
               "libcrypto-3-x64.dll", "libssl-3-x64.dll", "zlib.dll",
-              "ffi.dll"):
+              "ffi.dll", "sqlite3.dll"):
     for _dir in (os.path.join(sys.base_prefix, "Library", "bin"), sys.base_prefix):
         _p = os.path.join(_dir, _name)
         if os.path.exists(_p):
@@ -38,7 +45,7 @@ for _name in ("libexpat.dll", "liblzma.dll", "libbz2.dll",
 # openai/httpx2 等依赖有大量动态导入,整包收集最稳妥
 for pkg in ("openai", "httpx2", "pydantic", "pydantic_core",
             "anyio", "certifi", "rich", "prompt_toolkit", "webview",
-            "clr_loader", "pythonnet", "pystray", "PIL"):
+            "clr_loader", "pythonnet"):
     try:
         d, b, h = collect_all(pkg)
         datas += d
@@ -47,13 +54,25 @@ for pkg in ("openai", "httpx2", "pydantic", "pydantic_core",
     except Exception:
         pass  # 环境里缺哪个就跳过哪个
 
+# 内置轻量抓取器(打包版联网爬取的引擎):bs4 解析 HTML、httpx 取页面。
+# 它们在函数内部 import,PyInstaller 静态分析能发现,这里再显式声明一次更稳。
+# 不要把 crawl4ai/patchright/playwright 加回来:浏览器内核 270MB+、驱动 100MB,
+# 便携包放不下(会把 79MB 的 zip 撑到 500MB),抓取改用内置轻量抓取器。
+hiddenimports += ["bs4", "soupsieve", "httpx", "httpcore", "h11"]
+
 common = dict(
     pathex=[ROOT],
     binaries=binaries,
     datas=datas,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["pytest", "tkinter", "setuptools", "pip", "nltk"],
+    # crawl4ai 也在排除之列:crawl.py 里留着"优先用 crawl4ai"的 import,
+    # 不排除的话 PyInstaller 会把 crawl4ai 的模块收进包(约 4MB),但它的运行依赖
+    # (numpy)与浏览器驱动(patchright)都被排除了,import 必然失败 —— 收进去纯属死代码,
+    # 还会让人误以为打包版能用 crawl4ai。冻结版实际走 crawl.py 的内置轻量抓取器。
+    excludes=["pytest", "tkinter", "setuptools", "pip", "nltk",
+                   "crawl4ai", "patchright", "scipy", "numpy", "tokenizers",
+                   "pandas", "matplotlib", "playwright"],
     noarchive=False,
 )
 
@@ -88,4 +107,19 @@ coll = COLLECT(
     strip=False,
     upx=False,
     name="引路学长",
+)
+
+# ---- 单文件版(onefile):免解压,双击直接打开;启动稍慢(需解压到临时目录) ----
+a_one = Analysis([os.path.join(ROOT, "gui_main.py")], **common)
+pyz_one = PYZ(a_one.pure)
+exe_one = EXE(
+    pyz_one,
+    a_one.scripts,
+    a_one.binaries,
+    a_one.datas,
+    [],
+    name="引路学长-单文件版",
+    debug=False, strip=False, upx=False,
+    console=False,
+    icon=ICON,
 )

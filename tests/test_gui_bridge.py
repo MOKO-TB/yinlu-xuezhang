@@ -2,6 +2,7 @@
 import json
 import time
 
+from minicode.attachments import save_attachment, save_attachments
 from minicode.gui_bridge import create_app
 from minicode.llm import AssistantTurn, ToolCall
 
@@ -147,7 +148,9 @@ def test_get_info_has_skills_and_providers(config, tmp_path):
     assert isinstance(info["skills"], list)
 
 
-def test_provider_management(config, tmp_path):
+def test_provider_management(config, tmp_path, monkeypatch):
+    monkeypatch.setattr("minicode.config.CREDENTIALS_PATH",
+                        tmp_path / "credentials.json")
     bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
 
     providers = [
@@ -248,3 +251,138 @@ def test_open_url_uses_system_browser(config, tmp_path, monkeypatch):
     assert opened == ["https://example.com/a"]
     assert not bridge.open_url("file:///C:/x")["ok"]
     assert not bridge.open_url("javascript:alert(1)")["ok"]
+
+
+def test_edit_resend_truncates_and_resends(config, tmp_path):
+    llm = FakeLLM([AssistantTurn(text="第一次回答"),
+                   AssistantTurn(text="重发后的回答")])
+    bridge, window, session = make(config, tmp_path, llm)
+
+    bridge.send_task("原始问题")
+    assert wait_until(lambda: not bridge._busy)
+    assert session.messages[-1]["content"] == "第一次回答"
+
+    r = bridge.edit_resend(1, "改过的问题", "原始问题")
+    assert r["ok"]
+    assert wait_until(lambda: not bridge._busy)
+    # 只剩:system + 新 user + 新 assistant(旧的两条被截断重发)
+    roles = [m.get("role") for m in session.messages]
+    assert roles == ["system", "user", "assistant"]
+    assert session.messages[1]["content"] == "改过的问题"
+    assert session.messages[2]["content"] == "重发后的回答"
+
+
+def test_edit_resend_guard_mismatches(config, tmp_path):
+    llm = FakeLLM([AssistantTurn(text="a"), AssistantTurn(text="b")])
+    bridge, _, session = make(config, tmp_path, llm)
+    bridge.send_task("问题一")
+    assert wait_until(lambda: not bridge._busy)
+    bridge.send_task("问题二")
+    assert wait_until(lambda: not bridge._busy)
+
+    assert not bridge.edit_resend(0, "x")["ok"]              # 序号非法
+    assert not bridge.edit_resend(9, "x")["ok"]              # 超出条数
+    assert not bridge.edit_resend(1, "x", "对不上的原文")["ok"]  # expect 不匹配
+    assert not bridge.edit_resend(1, "/斜杠")["ok"]           # 非法命令
+    # 校验失败不截断:两条用户消息仍在
+    users = [m for m in session.messages if m.get("role") == "user"]
+    assert [u["content"] for u in users] == ["问题一", "问题二"]
+
+
+def test_get_suggestions_reflects_history(config, tmp_path):
+    bridge, _, session = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    fresh = bridge.get_suggestions()["suggestions"]
+    assert fresh[0] == "最近学校有什么活动"        # 无历史 → 默认顺序
+
+    session.add_user("校园卡丢了怎么办")
+    after = bridge.get_suggestions()["suggestions"]
+    assert after[0] == "校园卡补办费用再确认一下"   # 聊过后 → 追问话术置顶
+    assert after != fresh
+
+
+def test_send_task_with_attachments_builds_note(config, tmp_path):
+    """附件随消息进入会话上下文:落盘路径写进 user 消息,模型能看到清单。"""
+    from PIL import Image
+    src = tmp_path / "成绩单.png"
+    Image.new("RGBA", (40, 30), (10, 200, 10, 255)).save(src)
+
+    bridge, _, session = make(config, tmp_path, FakeLLM([AssistantTurn(text="看过")]))
+    bridge.workspace = tmp_path
+    atts, errors = save_attachments(tmp_path, [str(src)])
+    assert not errors
+
+    assert bridge.send_task("帮我看看这张成绩单", json.dumps([a.to_dict() for a in atts]))["ok"]
+    assert wait_until(lambda: not bridge._busy)
+
+    user_msg = next(m for m in session.messages if m.get("role") == "user")
+    assert "[附件]" in user_msg["content"]
+    assert "uploads/成绩单.png" in user_msg["content"]
+    assert "帮我看看这张成绩单" in user_msg["content"]
+
+
+def test_send_task_with_vision_sends_content_parts(config, tmp_path):
+    from PIL import Image
+    src = tmp_path / "a.png"
+    Image.new("RGB", (30, 30), (1, 2, 3)).save(src)
+
+    config.vision = True
+    bridge, _, session = make(config, tmp_path, FakeLLM([AssistantTurn(text="ok")]))
+    atts = [save_attachment(tmp_path, src)]
+
+    assert bridge.send_task("看图", json.dumps([a.to_dict() for a in atts]))["ok"]
+    assert wait_until(lambda: not bridge._busy)
+
+    content = next(m for m in session.messages if m.get("role") == "user")["content"]
+    assert isinstance(content, list)
+    assert content[0]["type"] == "text"
+    assert any(p.get("type") == "image_url" for p in content)
+
+
+def test_send_task_ignores_attachments_outside_workspace(config, tmp_path):
+    bridge, _, session = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    outside = tmp_path.parent / "secret.txt"
+    outside.write_text("d", encoding="utf-8")
+
+    assert bridge.send_task("读它", json.dumps([{"path": "../secret.txt"}]))["ok"]
+    assert wait_until(lambda: not bridge._busy)
+    content = next(m for m in session.messages if m.get("role") == "user")["content"]
+    assert "[附件]" not in content                       # 越界附件被丢弃
+
+
+def test_pick_attachments_saves_into_workspace(config, tmp_path):
+    from PIL import Image
+    src = tmp_path / "photo.png"
+    Image.new("RGB", (20, 20), (9, 9, 9)).save(src)
+
+    bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+
+    class FakeWebviewWindow:
+        def create_file_dialog(self, *a, **kw):
+            return [str(src)]
+
+    bridge.ui.attach(FakeWebviewWindow())
+    r = bridge.pick_attachments()
+    assert r["ok"] and len(r["items"]) == 1
+    item = r["items"][0]
+    assert item["path"].startswith("uploads/") and item["kind"] == "image"
+    assert (tmp_path / item["path"]).exists()
+    assert item["preview"].startswith("data:image/")
+
+
+def test_pick_attachments_without_window(config, tmp_path):
+    bridge, _, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    bridge.ui.window = None
+    assert not bridge.pick_attachments()["ok"]
+
+
+def test_set_sandbox_toggles_and_persists(config, tmp_path):
+    bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    info = bridge.get_info()["sandbox"]
+    assert info["available"] and info["enabled"]
+
+    r = bridge.set_sandbox(False)
+    assert r["ok"] and r["sandbox"]["enabled"] is False
+    assert bridge.agent.ctx.sandbox.policy.enabled is False
+    assert bridge.config.sandbox["enabled"] is False
+    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["sandbox"]["enabled"] is False
+    assert bridge.set_sandbox(True)["ok"]

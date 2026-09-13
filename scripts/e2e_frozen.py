@@ -36,14 +36,18 @@ def main() -> None:
     app_dir = gui_exe.parent
     config_path = app_dir / "config.json"
     config_path.write_text(json.dumps({
-        "base_url": f"http://127.0.0.1:{port}/v1",
-        "api_key": "test-key-frozen",
-        "model": "fake-model",
         "permission_mode": "accept_all",
     }, ensure_ascii=False), encoding="utf-8")
 
     workspace = Path(tempfile.mkdtemp(prefix="gcode-frozen-"))
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    # 模型固定为内置校园模型,测试用环境变量把端点临时指到本地假服务器
+    env = {
+        **os.environ,
+        "PYTHONIOENCODING": "utf-8",
+        "YINLUXS_LLM_BASE_URL": f"http://127.0.0.1:{port}/v1",
+        "YINLUXS_LLM_API_KEY": "test-key-frozen",
+        "YINLUXS_LLM_MODEL": "fake-model",
+    }
     try:
         # ---- CLI exe:全链路 ----
         proc = subprocess.run(

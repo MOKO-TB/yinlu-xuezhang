@@ -5,7 +5,8 @@ def test_registry_contents():
     tools = build_default_registry()
     names = [t.name for t in tools]
     assert names == ["read_file", "write_file", "edit_file", "bash", "glob",
-                     "grep", "web_crawl", "use_skill", "search_knowledge"]
+                     "grep", "web_crawl", "use_skill", "plan",
+                     "search_knowledge", "memory"]
     assert len(set(names)) == len(names)
 
 
@@ -21,6 +22,8 @@ def test_read_only_flags():
         "web_crawl": False,
         "use_skill": True,
         "search_knowledge": True,
+        "plan": False,
+        "memory": False,
     }
 
 

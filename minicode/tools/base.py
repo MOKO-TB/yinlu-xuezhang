@@ -12,12 +12,17 @@ class PathOutsideWorkspace(Exception):
     """工具试图访问工作区之外的路径。"""
 
 
+class PathBlocked(Exception):
+    """工具试图访问敏感路径(凭据/密钥目录),任何模式下都禁止。"""
+
+
 @dataclass
 class ToolContext:
-    """工具运行时上下文:工作区根目录 + 全局配置。"""
+    """工具运行时上下文:工作区根目录 + 全局配置 + 沙箱状态。"""
 
     workspace: Path
     config: Config
+    sandbox: Any | None = None   # minicode.sandbox.SandboxState,由 app_setup 注入
 
 
 Handler = Callable[..., str]  # 签名: handler(ctx, **kwargs) -> str
@@ -53,5 +58,33 @@ def resolve_in_workspace(ctx: ToolContext, raw_path: str) -> Path:
     except ValueError:
         raise PathOutsideWorkspace(
             f"路径超出工作区范围: {raw_path}(工作区: {ctx.workspace})。请使用相对工作区的路径。"
+        )
+    return p
+
+
+def resolve_path(ctx: ToolContext, raw_path: str, *, for_write: bool = False) -> Path:
+    """沙箱感知的路径解析:工作区内放行、工作区外看授权、敏感路径一律拒绝。
+
+    没装沙箱(ctx.sandbox 为空)时退化为旧的硬围栏,保证既有调用行为不变。
+    """
+    state = getattr(ctx, "sandbox", None)
+    if state is None:
+        return resolve_in_workspace(ctx, raw_path)
+    raw = (raw_path or "").strip() or "."
+
+    if for_write:
+        from minicode.sandbox import BLOCKED, classify_for_write as classify
+    else:
+        from minicode.sandbox import BLOCKED, classify_path as classify
+    kind, p = classify(state.workspace, raw)
+    if kind == BLOCKED:
+        raise PathBlocked(
+            f"路径属于敏感目录(凭据/密钥),始终禁止访问: {raw_path}"
+        )
+    if kind != "inside" and not state.path_allowed(p):
+        raise PathOutsideWorkspace(
+            f"路径超出工作区范围: {raw_path}(工作区: {state.workspace})。"
+            "访问工作区外需要用户在确认框里放行本次操作,"
+            "或在 config.json 打开 sandbox.allow_outside_workspace。"
         )
     return p

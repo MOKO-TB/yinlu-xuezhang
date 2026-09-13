@@ -21,5 +21,23 @@
   "max_output_chars": 20000,
   "request_timeout_seconds": 300,
   "context_window": 131072,
-  "compact_at_ratio": 0.7
+  "compact_at_ratio": 0.7,
+  "vision": false,
+  "sandbox": {
+    "enabled": true,
+    "allow_outside_workspace": false,
+    "allow_network": true,
+    "timeout_seconds": 60,
+    "deny_patterns": []
+  },
+  "mcp_servers": [
+    {
+      "id": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/data"],
+      "enabled": false,
+      "read_only": false,
+      "description": "示例:文件系统 MCP 服务器(需 Node.js;enabled 改 true 即启用)"
+    }
+  ]
 }

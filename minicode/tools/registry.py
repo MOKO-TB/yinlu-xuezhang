@@ -1,7 +1,7 @@
 """内置工具注册表。"""
 from __future__ import annotations
 
-from minicode import kb, skills
+from minicode import kb, memory, planning, skills
 from minicode.tools import crawl, fs, search, shell
 from minicode.tools.base import Tool
 
@@ -109,6 +109,9 @@ def build_default_registry() -> list[Tool]:
                     "out_dir": {"type": "string", "description": "输出目录(相对工作区),默认 crawled"},
                     "to_kb": {"type": "boolean", "description": "同时写入本地知识库 kb/crawl-<域名>.json,默认 false"},
                     "kb_source": {"type": "string", "description": "知识库条目的来源名称,默认用域名"},
+                    "kb_category": {"type": "string", "description": "知识库条目的主题分类,如:奖助学金 / 入党 / 考研升学 / 学科竞赛(检索时标签权重×2),默认空"},
+                    "kb_tags": {"type": "array", "items": {"type": "string"},
+                                "description": "知识库条目的附加标签,如 [\"奖学金\",\"国家励志奖学金\"]"},
                     "delay": {"type": "number", "description": "两次请求间隔秒数(礼貌抓取),默认 1"},
                 },
                 "required": ["url"],
@@ -129,18 +132,71 @@ def build_default_registry() -> list[Tool]:
             read_only=True,
         ),
         Tool(
+            name="plan",
+            description=(
+                "复杂任务的计划管理(保存在工作区 plans/plan.md)。"
+                "action=write:列 2-8 步计划,然后展示给用户等待确认再执行;"
+                "action=update:每完成一步标记 status=done(可附 note);"
+                "action=read:查看当前计划。接到多文件/多阶段的复杂任务时应先建计划。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["write", "read", "update"],
+                               "description": "write=新建/覆盖计划;read=查看;update=更新某步状态"},
+                    "goal": {"type": "string", "description": "action=write 时:计划目标(一句话)"},
+                    "steps": {"type": "array", "description": "action=write 时:2-8 步,每步 {title, detail?},每步一个可独立验证的动作",
+                              "items": {"type": "object", "properties": {
+                                  "title": {"type": "string"},
+                                  "detail": {"type": "string"}}}},
+                    "step": {"type": "integer", "description": "action=update 时:步骤编号"},
+                    "status": {"type": "string", "enum": ["done", "pending"],
+                               "description": "action=update 时:新状态,默认 done"},
+                    "note": {"type": "string", "description": "action=update 时:可选备注"},
+                },
+                "required": ["action"],
+            },
+            handler=planning.plan,
+        ),
+        Tool(
             name="search_knowledge",
-            description="检索本地知识库(校园通知、奖助学金、竞赛、证书、考研就业、心理调适等资料),返回带来源网址与可信度的条目。回答相关问题时必须先用本工具,引用时给出网址供用户核实。",
+            description="检索本地知识库(校园通知、奖助学金、竞赛、证书、考研就业、心理调适等资料),返回带来源网址与可信度的条目。回答相关问题时必须先用本工具,引用时给出网址供用户核实。用户问细节时把 snippet_chars 调大,直接基于原文回答,避免再去爬官网让用户等。",
             parameters={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "查询词,如:国家励志奖学金 / 蓝桥杯 / 考研择校"},
                     "top_k": {"type": "integer", "description": "返回条数,默认 3"},
                     "category": {"type": "string", "description": "按分类过滤,如:奖助学金 / 学科竞赛 / 考研"},
+                    "snippet_chars": {"type": "integer",
+                                      "description": "每条返回的正文长度,默认 160(速览);问评定条件/流程/时间等细节时用 600-1200"},
                 },
                 "required": ["query"],
             },
             handler=kb.search_knowledge,
             read_only=True,
+        ),
+        Tool(
+            name="memory",
+            description=(
+                "长期记忆管理(跨会话,存工作区 memory/MEMORY.md)。"
+                "action=save:用户提到偏好/项目约定/纠正/参考资料时记下来;"
+                "action=list:按类别列出;action=search:按关键词检索;"
+                "action=forget:让用户要求忘记某条记忆时删除。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["save", "list", "search", "forget"],
+                               "description": "save=记住;list=列出;search=检索;forget=忘记"},
+                    "category": {"type": "string",
+                                 "enum": ["user", "feedback", "project", "reference"],
+                                 "description": "save/list 用:用户偏好/反馈纠正/项目约定/参考资料"},
+                    "content": {"type": "string", "description": "save 用:要记住的内容(一句话)"},
+                    "query": {"type": "string", "description": "search/forget 用:关键词或部分内容"},
+                },
+                "required": ["action"],
+            },
+            handler=memory.memory,
+            read_only=False,
         ),
     ]

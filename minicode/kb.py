@@ -16,6 +16,7 @@ from pathlib import Path
 from minicode.paths import app_path
 
 SNIPPET_LIMIT = 160
+SNIPPET_MAX = 1200
 MAX_CONTENT_LIMIT = 1500
 KB_RESULT_LIMIT = 5
 
@@ -143,7 +144,8 @@ def search(entries: list[KbEntry], query: str,
     return [e for _, e in scored[:max(1, min(int(top_k), KB_RESULT_LIMIT))]]
 
 
-def format_results(results: list[KbEntry]) -> str:
+def format_results(results: list[KbEntry],
+                   snippet_chars: int = SNIPPET_LIMIT) -> str:
     if not results:
         return "知识库中没有匹配的内容。"
     blocks = []
@@ -161,7 +163,7 @@ def format_results(results: list[KbEntry]) -> str:
         if meta:
             lines.append("    " + " · ".join(meta))
         if e.content:
-            snippet = e.content[:SNIPPET_LIMIT] + ("…" if len(e.content) > SNIPPET_LIMIT else "")
+            snippet = e.content[:snippet_chars] + ("…" if len(e.content) > snippet_chars else "")
             lines.append(f"    摘要: {snippet}")
         if e.url:
             lines.append(f"    来源网址: {e.url}")
@@ -174,18 +176,34 @@ def format_results(results: list[KbEntry]) -> str:
     return header + "\n\n".join(blocks)
 
 
+def _int_arg(value, default: int, low: int, high: int) -> int:
+    """工具参数容错:模型可能传字符串或超范围数值。"""
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        num = default
+    return max(low, min(num, high))
+
+
 def search_knowledge(ctx, query: str, top_k: int = 3,
-                     category: str | None = None) -> str:
-    """工具处理器:检索本地知识库。"""
+                     category: str | None = None,
+                     snippet_chars: int = SNIPPET_LIMIT) -> str:
+    """工具处理器:检索本地知识库。
+
+    snippet_chars 是每条返回的正文长度(默认 160 字的速览摘要)。用户问细节
+    (评定条件、办理流程、时间安排、分数线等)时调大,一次就能拿到原文要点,
+    不必再去爬官网等结果。
+    """
     query = (query or "").strip()
     if not query:
         return "错误: 查询词不能为空。"
     entries = load_kb(kb_dirs(ctx.workspace))
     if not entries:
         return "错误: 知识库为空(kb/ 目录下没有可用的 JSON 数据)。"
+    snippet_chars = _int_arg(snippet_chars, SNIPPET_LIMIT, SNIPPET_LIMIT, SNIPPET_MAX)
     results = search(entries, query, top_k=top_k, category=category)
-    out = format_results(results)
-    return out[:MAX_CONTENT_LIMIT]
+    out = format_results(results, snippet_chars=snippet_chars)
+    return out[:max(MAX_CONTENT_LIMIT, snippet_chars * len(results) + 800)]
 
 
 def kb_stats(dirs: list[Path]) -> list[dict]:
@@ -216,5 +234,17 @@ def kb_prompt_section(dirs: list[Path]) -> str:
         f"用户问到校园通知、奖学金/助学金、竞赛、证书、考研、就业、心理调适等话题时,"
         f"先调用 search_knowledge 工具检索,基于检索结果回答;\n"
         f"引用时必须给出条目标题与来源网址(url),让用户可以核实原文;\n"
-        f"可信度不是 A 的条目(演示/待核实数据)必须明确告知用户该条未经核实。\n"
+        f"问申请条件、办理流程、时间安排等细节时,把 snippet_chars 调大(600~1200)"
+        f"一次取回原文要点,不要为了细节再去爬官网让用户等;\n"
+        f"官网抓取的条目带 publish_at(发布日期),引用时一并说明是哪一年的通知;\n"
+        f"问学校自己的事(最近活动、宿舍与生活服务、社团、比赛竞赛、军训、学生故事、\n"
+        f"办事入口等)时,用 category 参数把检索限定到对应栏目(如 category=\"校园活动与文体\"\n"
+        f"\"宿舍与生活服务\" \"学科竞赛\" \"社团与学生组织\" \"军训与国防教育\"\n"
+        f"\"学生故事与风采\" \"校园新闻动态\" \"视频与图文校园\" \"服务大厅与办事入口\"),\n"
+        f"命中率比直接拿口语问句搜更高;条目正文里带 `观看地址:`/`查看地址:` 一行的\n"
+        f"是官网视频页或图文/二维码指引页,回答时把该链接单独一行列出,方便用户点开观看;\n"
+        f"可信度不是 A 的条目必须明确告知用户该条未经核实;来源为「哔哩哔哩」的视频"
+        f"条目(带 观看地址: 一行)是经验类视频推荐,回答时要把视频链接单独一行列出"
+        f"方便用户点击观看,并注明是 UP 主个人经验仅供参考;来源为「微信公众号」的"
+        f"文章条目同理,把原文链接单独一行列出(正文已全文入库,链接仅供查看原文)。\n"
     )

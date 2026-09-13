@@ -49,8 +49,10 @@ class Session:
         self.messages = list(system)
         self._log_path = None   # 下一条消息会创建新的留档文件
 
-    def add_user(self, text: str) -> None:
-        self._append({"role": "user", "content": text})
+    def add_user(self, text: str, content=None) -> None:
+        """content 可选:多模态消息体(list[dict]);不传则用纯文本 text。"""
+        self._append({"role": "user",
+                      "content": content if content is not None else text})
 
     def add_assistant(self, turn: AssistantTurn) -> None:
         msg: dict = {"role": "assistant", "content": turn.text if turn.text else None}

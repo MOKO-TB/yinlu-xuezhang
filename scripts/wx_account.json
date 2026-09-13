@@ -1,0 +1,47 @@
+{
+ "site": "微信公众号(定向:广州应用科技学院)",
+ "host": "weixin.sogou.com",
+ "output_kb": "kb/wx-gzasc.json",
+ "out_dir": "crawled/weixin.sogou.com/gzasc-account",
+ "target_accounts": [
+  {"name": "广州应用科技学院", "credibility": "A"},
+  {"name": "广应科在线", "credibility": "B"},
+  {"name": "寻遍广应科", "credibility": "B"}
+ ],
+ "school_biz": "MzAwNDIxMjI3MQ==",
+ "max_pages_per_query": 5,
+ "max_articles": 160,
+ "max_bfs_pages": 400,
+ "query_delay": 2.5,
+ "baidu_delay": 9.0,
+ "resolve_missing_via_baidu": true,
+ "relevance_keywords": [
+  "肇庆", "大旺", "四会", "鼎湖", "北岭", "星湖"
+ ],
+ "queries": [
+  {"keyword": "广州应用科技学院 肇庆校区", "topic": "肇庆校区"},
+  {"keyword": "广应科 肇庆校区", "topic": "肇庆校区"},
+  {"keyword": "广州应用科技学院肇庆校区 新生", "topic": "新生入学"},
+  {"keyword": "广应科肇庆校区 报到", "topic": "新生入学"},
+  {"keyword": "广州应用科技学院 肇庆校区 入学指南", "topic": "新生入学"},
+  {"keyword": "广应科 肇庆校区 军训", "topic": "新生入学"},
+  {"keyword": "广州应用科技学院 肇庆校区 开学典礼", "topic": "校园活动"},
+  {"keyword": "广州应用科技学院 肇庆校区 食堂 美食", "topic": "校园生活"},
+  {"keyword": "广州应用科技学院 肇庆校区 宿舍", "topic": "校园生活"},
+  {"keyword": "广州应用科技学院 肇庆校区 图书馆", "topic": "校区设施"},
+  {"keyword": "广州应用科技学院 肇庆校区 公交专线 交通", "topic": "交通出行"},
+  {"keyword": "广州应用科技学院 肇庆校区 出行 高铁", "topic": "交通出行"},
+  {"keyword": "广州应用科技学院 肇庆校区 建设 项目", "topic": "校区设施"},
+  {"keyword": "广州应用科技学院 肇庆校区 落成 揭牌", "topic": "校区设施"},
+  {"keyword": "广州应用科技学院 肇庆 大旺", "topic": "校区设施"},
+  {"keyword": "广州应用科技学院 鼎湖", "topic": "校区设施"},
+  {"keyword": "广州应用科技学院 肇庆校区 运动会", "topic": "校园活动"},
+  {"keyword": "广州应用科技学院 肇庆校区 晚会 活动", "topic": "校园活动"},
+  {"keyword": "广州应用科技学院 肇庆校区 社团", "topic": "校园活动"},
+  {"keyword": "广州应用科技学院 肇庆校区 毕业典礼", "topic": "校园活动"},
+  {"keyword": "广州应用科技学院 招生 肇庆校区", "topic": "招生录取"},
+  {"keyword": "广州应用科技学院 专升本 肇庆", "topic": "招生录取"},
+  {"keyword": "广州应用科技学院 肇庆校区 就业 招聘", "topic": "学业就业"},
+  {"keyword": "广应科 肇庆 周边 美食 攻略", "topic": "周边生活"}
+ ]
+}

@@ -89,6 +89,15 @@ def test_prompt_section_mentions_urls(tmp_path):
     assert kb_prompt_section([tmp_path / "nope"]) == ""
 
 
+def test_prompt_section_teaches_category_filter_and_media_links(tmp_path):
+    """口语提问(“学校有什么比赛”)命中率低,得告诉模型用 category 锁官网栏目;
+    视频页/图文指引页的链接靠正文里的 观看地址/查看地址 行区分。"""
+    text = kb_prompt_section([_make_kb(tmp_path)])
+    assert "category" in text
+    assert "宿舍与生活服务" in text and "学科竞赛" in text
+    assert "观看地址" in text and "查看地址" in text
+
+
 def test_tool_handler_end_to_end(ctx, tmp_path, monkeypatch):
     _make_kb(tmp_path)
     monkeypatch.setattr(kbmod, "kb_dirs", lambda ws: [tmp_path / "kb"])
@@ -100,3 +109,20 @@ def test_tool_handler_end_to_end(ctx, tmp_path, monkeypatch):
 def test_tool_handler_empty_kb(ctx, tmp_path, monkeypatch):
     monkeypatch.setattr(kbmod, "kb_dirs", lambda ws: [tmp_path / "empty"])
     assert "知识库为空" in kbmod.search_knowledge(ctx, "奖学金")
+
+
+def test_snippet_chars_returns_more_detail(ctx, tmp_path, monkeypatch):
+    """问细节时可调大 snippet_chars,一次拿到更多原文,不必再去爬官网。"""
+    d = tmp_path / "kb"
+    d.mkdir()
+    body = "评审条件:" + "家庭经济困难且成绩优良。" * 60
+    (d / "crawl-x.json").write_text(json.dumps(
+        [{"id": "C1", "title": "国家励志奖学金评审通知", "content": body,
+          "url": "https://x.edu.cn/n1", "credibility": "A", "tags": ["奖助学金"]}],
+        ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(kbmod, "kb_dirs", lambda ws: [d])
+    short = kbmod.search_knowledge(ctx, "国家励志奖学金")
+    long = kbmod.search_knowledge(ctx, "国家励志奖学金", snippet_chars=800)
+    assert len(long) > len(short)
+    assert long.count("家庭经济困难") > short.count("家庭经济困难")
+    assert "https://x.edu.cn/n1" in long          # 长摘要同样带来源网址

@@ -1,10 +1,10 @@
-"""引路学长 GUI 入口:pywebview 窗口 + 共享核心引擎 + 系统托盘。
+"""引路学长 GUI 入口:pywebview 窗口 + 共享核心引擎。
 
 用法: python gui_main.py
+点 X 直接退出应用(无系统托盘、不留后台进程)。
 """
-from __future__ import annotations
-
-import threading
+import os
+import time
 
 import webview
 
@@ -14,47 +14,103 @@ from minicode.gui_bridge import create_app
 from minicode.paths import app_path, resource_path
 
 
-def _start_tray(window) -> object | None:
-    """系统托盘:右下角图标,菜单 = 显示主窗口 / 退出;失败不阻塞应用。"""
+def _webview2_controls(window):
+    """列出可能挂着 CoreWebView2 的控件对象(不同 pywebview 版本位置不同)。
+
+    实测 pywebview 5.x:window.native(BrowserForm).webview(WebView2);
+    旧版在 window.native.browser(EdgeChrome).webview。
+    """
     try:
-        import pystray
-        from PIL import Image
+        native = getattr(window, "native", None)
+    except Exception:      # 属性本身抛异常(COM 未就绪)也当没有
+        return
+    browser = getattr(native, "browser", None)
+    for obj in (getattr(native, "webview", None),
+                getattr(browser, "webview", None),
+                getattr(native, "web_view", None)):
+        if obj is not None:
+            yield obj
 
-        image = Image.open(resource_path("assets", "gcode.ico"))
 
-        def on_show(icon, item):
-            try:
-                window.show()
-                window.restore()
-            except Exception:
-                pass
+def apply_context_menu_settings(window) -> bool:
+    """给 WebView2 打开原生右键菜单与编辑快捷键,返回是否设置成功。
 
-        def on_quit(icon, item):
-            icon.stop()
-            window.destroy()
+    pywebview 只在 debug 模式开这两项(见 platforms/edgechromium.py):
+      - AreDefaultContextMenusEnabled:关掉后右键没有任何菜单;
+      - AreBrowserAcceleratorKeysEnabled:关掉后 Ctrl+C/V/X/A 全都不响应。
+    正式版要的是"能复制粘贴",所以窗口就绪后自己把开关打开。
 
-        icon = pystray.Icon(
-            "yinlu-xuezhang", image, APP_NAME,
-            pystray.Menu(
-                pystray.MenuItem("显示主窗口", on_show, default=True),
-                pystray.MenuItem("退出", on_quit),
-            ),
-        )
+    注意:CoreWebView2 属性**只能在 UI 线程访问**(后台线程读它会抛
+    "can only be accessed from the UI thread"),所以这里用控件的
+    Invoke 把设置动作切回 UI 线程执行。
+    """
+    for view in _webview2_controls(window):
+        state = {"ok": False}
+
+        def _apply():
+            core = getattr(view, "CoreWebView2", None)
+            if core is None:
+                return
+            settings = core.Settings
+            settings.AreDefaultContextMenusEnabled = True     # 右键:剪切/复制/粘贴/全选
+            settings.AreBrowserAcceleratorKeysEnabled = True  # Ctrl+C / Ctrl+V / Ctrl+A
+            state["ok"] = True
+
         try:
-            icon.run_detached()      # Windows 支持分离运行
-            icon.visible = True
+            invoke = getattr(view, "Invoke", None)
+            if callable(invoke):
+                try:
+                    from System import Action
+                    invoke(Action(_apply))      # 切到 UI 线程执行
+                except Exception:
+                    invoke(_apply)              # 无 CLR 环境/可自动转换时直接传
+            else:                               # 非 WinForms 后端:直接试
+                _apply()
         except Exception:
-            threading.Thread(target=icon.run, daemon=True).start()
-        return icon
+            continue
+        if state["ok"]:
+            return True
+    return False
+
+
+def _log_warning(text: str) -> None:
+    try:
+        with open(app_path("gui_warnings.log"), "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}\n")
     except Exception:
-        return None
+        pass
+
+
+def _enable_native_context_menu() -> None:
+    """在 GUI 线程启动后轮询窗口,把右键菜单/快捷键开关打开(最多等 10 秒)。
+
+    成功后再复查一次:pywebview 自己的 on_webview_ready 回调与本函数存在极小的
+    竞态窗口,晚 1.5 秒重设一遍(幂等)最稳妥。
+    """
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            windows = getattr(webview, "windows", None) or []
+            if windows and apply_context_menu_settings(windows[0]):
+                time.sleep(1.5)
+                try:
+                    apply_context_menu_settings(windows[0])
+                except Exception:
+                    pass
+                if os.environ.get("YINLUXS_CTX_DEBUG"):
+                    _log_warning("原生右键菜单与编辑快捷键已开启(验证标记)")
+                return
+        except Exception as e:      # 平台差异/属性变更都不该影响正常使用
+            _log_warning(f"打开原生右键菜单失败: {type(e).__name__}: {e}")
+            return
+        time.sleep(0.25)
+    _log_warning("等待 WebView2 就绪超时,原生右键菜单未开启(不影响其他功能)")
 
 
 def main() -> None:
     config = ensure_config()  # 未配置也照常开窗,界面内给出警示
     workspace = app_path()  # 双击启动时 cwd 即 exe 目录
-    bridge, ui, _agent, _session = create_app(config, workspace)
-
+    bridge, ui, agent, _session = create_app(config, workspace)
     # 前端是打包内置资源(_MEIPASS);缺失时在窗口内给出明确错误而不是 404
     frontend = resource_path("frontend", "index.html")
     api = bridge.public_api()  # 门面:只暴露方法,防自动化客户端遍历内部对象
@@ -80,11 +136,11 @@ def main() -> None:
         )
     ui.attach(window)
 
-    tray = _start_tray(window)
-    if tray is not None:
-        window.events.closed += tray.stop  # 关窗时同步收起托盘图标
-
-    webview.start(debug=False)
+    try:
+        # func 在 GUI 线程启动后于独立线程执行:用来补开 WebView2 的原生右键菜单
+        webview.start(_enable_native_context_menu, debug=False)
+    finally:
+        agent.close()      # 关掉 MCP 子进程,不留孤儿
 
 
 if __name__ == "__main__":

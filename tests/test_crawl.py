@@ -1,6 +1,7 @@
 """web_crawl 工具单测:注入假 crawler,不依赖网络与 crawl4ai。"""
 import asyncio
 import json
+import sys
 
 from minicode.tools import crawl
 
@@ -12,9 +13,11 @@ class FakeMD:
 
 
 class FakeResult:
-    def __init__(self, url, title="", md="", links=None, success=True, error=""):
+    def __init__(self, url, title="", md="", links=None, success=True, error="",
+                 metadata=None):
         self.url = url
         self.title = title
+        self.metadata = metadata or {}
         self.markdown = FakeMD(md)
         self.links = links or {}
         self.success = success
@@ -125,10 +128,97 @@ def test_out_dir_outside_workspace_rejected(ctx):
 
 def test_write_kb_entries(ctx):
     pages = [{"url": A, "title": "首页", "file": "001-index.md", "content": "x" * 3000}]
-    path = crawl._write_kb(ctx.workspace, "www.gzasc.edu.cn", pages, "广州应用科技学院官网")
+    path, written, skipped = crawl._write_kb(
+        ctx.workspace, "www.gzasc.edu.cn", pages, "广州应用科技学院官网",
+        category="奖助学金", extra_tags=["奖学金", "奖学金"])     # 重复标签自动去重
     data = json.loads(path.read_text(encoding="utf-8"))
+    assert (written, skipped) == (1, 0)
     assert path.name == "crawl-www.gzasc.edu.cn.json"
     assert data[0]["credibility"] == "A"
     assert data[0]["source"] == "广州应用科技学院官网"
     assert data[0]["url"] == A
+    assert data[0]["tags"][:3] == ["奖助学金", "奖学金", "官网抓取"]
     assert len(data[0]["content"]) == crawl.KB_CONTENT_LIMIT
+
+
+def test_write_kb_skips_nav_only_page(ctx):
+    """纯导航页(正文太短)只归档不入库,避免污染检索结果。"""
+    pages = [
+        {"url": A, "title": "招生就业", "file": "f", "content": "* [招生](https://x/zs.htm)"},
+        {"url": B, "title": "奖学金通知", "file": "f", "content": "评审条件:" + "详" * 300},
+    ]
+    path, written, skipped = crawl._write_kb(ctx.workspace, "h.cn", pages, "")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert (written, skipped) == (1, 1)
+    assert [e["url"] for e in data] == [B]
+
+
+def test_page_title_uses_metadata_then_heading(ctx):
+    """crawl4ai 0.9 起标题在 metadata 里;没有标题时退回正文首个 # 标题。"""
+    r_meta = FakeResult(A, metadata={"title": "广州应用科技学院"})
+    assert crawl._page_title(r_meta, "# 其他", A) == "广州应用科技学院"
+    r_none = FakeResult(A)
+    assert crawl._page_title(r_none, "# 奖学金评审通知\n正文", A) == "奖学金评审通知"
+    assert crawl._page_title(r_none, "无标题正文", A) == A
+
+
+def test_extract_body_drops_nav_and_cuts_at_title():
+    md = """[![logo](https://x/logo.png)](https://x/index.htm)
+  * ### [首页](https://x/index.htm)
+  * ### [通知公告](https://x/tzgg.htm)
+#  通知公告
+当前位置: [首页](https://x/index.htm) > 正文
+# 关于做好2026年国家励志奖学金评审工作的通知
+发布日期：2026-09-10
+各二级学院：
+**一、申请范围**
+在校家庭经济困难、品学兼优二年级及以上学生。
+上一条：没有了！
+版权所有 © 广州应用科技学院"""
+    body = crawl.extract_body(md, "关于做好2026年国家励志奖学金评审工作的通知-学生处")
+    assert body.startswith("# 关于做好2026年国家励志奖学金评审工作的通知")
+    assert "申请范围" in body
+    assert "版权所有" not in body and "首页" not in body
+
+
+def test_html_to_markdown_keeps_text_and_links():
+    """内置轻量抓取器(打包版引擎)的 HTML→markdown。"""
+    html = """<html><head><title>奖学金通知-学生处</title>
+    <style>.a{color:red}</style><script>var x=1;</script></head>
+    <body><nav><a href="/index.htm">首页</a></nav>
+    <h1>关于做好奖学金评审工作的通知</h1>
+    <p>申请条件：<a href="/f/1.pdf">附件1</a>与成绩单。</p>
+    <ul><li>平均分80分以上</li><li>单科不低于67分</li></ul>
+    <table><tr><td>学院</td><td>名额</td></tr></table></body></html>"""
+    title, md, links = crawl.html_to_markdown(html, "https://x.edu.cn/xsc/info/1.htm")
+    assert title == "奖学金通知-学生处"
+    assert "# 关于做好奖学金评审工作的通知" in md
+    assert "平均分80分以上" in md and "单科不低于67分" in md
+    assert "[附件1](https://x.edu.cn/f/1.pdf)" in md
+    assert "| 学院 | 名额 |" in md
+    assert "color:red" not in md and "var x=1" not in md
+    assert "首页" not in md                              # 导航整块丢掉
+    hrefs = [link["href"] for link in links]
+    assert "https://x.edu.cn/index.htm" in hrefs        # 相对链接已转绝对
+
+
+def test_engine_falls_back_to_native_without_crawl4ai(monkeypatch):
+    """打包版没有 crawl4ai,应自动切到内置抓取器而不是报错。"""
+    monkeypatch.setitem(sys.modules, "crawl4ai", None)   # 触发 ImportError
+    engine, factory, run_cfg = crawl._engine()
+    assert engine == "native" and run_cfg is None
+    assert isinstance(factory(), crawl.NativeCrawler)
+
+
+def test_write_kb_merges_by_url(ctx):
+    """定向补爬新栏目时保留旧条目;重爬同一 url 就地更新,不产生重复。"""
+    crawl._write_kb(ctx.workspace, "h.cn", [{"url": "https://h.cn/a", "title": "A页",
+                                             "file": "f", "content": "旧" * 300}], "")
+    crawl._write_kb(ctx.workspace, "h.cn", [
+        {"url": "https://h.cn/a", "title": "A页新版", "file": "f", "content": "新" * 300},
+        {"url": "https://h.cn/b", "title": "B页", "file": "f", "content": "补" * 300},
+    ], "")
+    data = json.loads((ctx.workspace / "kb" / "crawl-h.cn.json").read_text(encoding="utf-8"))
+    assert len(data) == 2                                    # a 更新 + b 新增,不重复
+    a = next(e for e in data if e["url"] == "https://h.cn/a")
+    assert a["title"] == "A页新版" and a["content"] == "新" * 300

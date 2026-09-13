@@ -55,6 +55,9 @@ def _decode(data: bytes) -> str:
 def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
     """在工作区目录执行一条 shell 命令,返回退出码与输出。"""
     timeout = min(max(1, int(timeout)), MAX_TIMEOUT)
+    state = getattr(ctx, "sandbox", None)
+    if state is not None:                      # 沙箱收紧执行超时上限
+        timeout = state.policy.command_timeout(timeout)
     argv = resolve_shell_argv(ctx.config.shell)
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}

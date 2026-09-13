@@ -36,20 +36,41 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
         ui.info("会话已清空。")
     elif name == "/model":
         from minicode.config import API_KEY_PLACEHOLDERS
-        lines = ["[bold]供应商[/bold](切换请编辑 config.json 的 active_provider)"]
-        for p in config.providers:
-            active = p.id == (config.provider.id if config.provider else "")
-            mark = "[cyan]●[/cyan] " if active else "○ "
-            key = "[green]已配置[/green]" if p.api_key.strip() not in API_KEY_PLACEHOLDERS else "[red]未配置 key[/red]"
-            lines.append(f"  {mark}{p.name}({p.id}) · {p.model} · {key} · {p.base_url}")
+        p = config.provider
+        lines = ["当前模型(校内分发版固定使用,界面不提供切换)"]
+        if p:
+            key = "已配置" if p.api_key.strip() not in API_KEY_PLACEHOLDERS else "未配置 key"
+            lines.append(f"  ● {p.name}({p.id}) · {p.model} · {key} · {p.base_url}")
+        others = [q for q in config.providers if p is None or q.id != p.id]
+        if others:
+            lines.append(f"  (config.json 里另有 {len(others)} 个供应商配置,保留但不激活)")
         ui.info("\n".join(lines))
+    elif name == "/sandbox":
+        state = getattr(agent.ctx, "sandbox", None)
+        if state is None:
+            ui.info("沙箱未启用(工具只允许访问工作区内路径)。")
+        else:
+            if arg.lower() in ("on", "off"):
+                state.policy.enabled = arg.lower() == "on"
+                ui.info("已切换(仅本次运行生效;要持久化请改 config.json 的 sandbox 段)。")
+            ui.info(state.describe())
+    elif name == "/memory":
+        from minicode.memory import list_entries
+        ui.info(list_entries(workspace, ""))
+    elif name == "/plan":
+        from minicode.planning import PLAN_REL
+        p = workspace / PLAN_REL
+        if p.exists():
+            ui.info(p.read_text(encoding="utf-8"))
+        else:
+            ui.info("当前没有计划文件(工作区 plans/plan.md)。")
     elif name == "/skills":
         from minicode.skills import load_skills, skill_dirs
         skills = load_skills(skill_dirs(workspace))
         if not skills:
             ui.info("还没有安装技能。把技能文件夹(含 SKILL.md)放进程序目录的 skills/ 即可。")
         else:
-            ui.info("[bold]可用技能[/bold]\n" + "\n".join(
+            ui.info("可用技能\n" + "\n".join(
                 f"  • {s.name} —— {s.description or '(无描述)'}" for s in skills))
     elif name == "/kb":
         from minicode.kb import kb_stats, kb_dirs
@@ -58,7 +79,7 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
             ui.info("知识库为空。把 JSON 数据文件放进程序目录的 kb/ 即可(notices/knowledge 格式)。")
         else:
             total = sum(s["count"] for s in stats)
-            ui.info("[bold]本地知识库[/bold] 共 "
+            ui.info("本地知识库 共 "
                     + f"{total} 条\n" + "\n".join(
                         f"  • {s['file']}: {s['count']} 条" for s in stats)
                     + "\n  提问相关话题时,Agent 会用 search_knowledge 检索并给出来源网址。")
@@ -85,13 +106,13 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
     elif name == "/compact":
         agent.compact_now()
     else:
-        ui.error(f"未知命令 {name}。可用: /help /clear /model /history "
-                 f"/resume /undo /compact /exit")
+            ui.error(f"未知命令 {name}。可用: /help /clear /model /history "
+                     f"/resume /undo /compact /sandbox /exit")
     return False
 
 
 SLASH_NAMES = {"/help", "/clear", "/model", "/history", "/resume",
-               "/undo", "/compact", "/exit", "/quit"}
+               "/undo", "/compact", "/sandbox", "/exit", "/quit"}
 # Git Bash(MSYS)会把 "/cmd" 形式的参数转成 Git 安装目录下的路径,
 # 如 "D:/git/Git/history" 或 "C:/Program Files/Git/history"
 _MSYSED_COMMAND = re.compile(r"(?i)^[A-Z]:[\\/].*git[\\/]([^\\/]+)$")
@@ -119,10 +140,29 @@ def run_once(agent: Agent, ui: TerminalUI, task: str) -> None:
     agent.run_turn(task)
 
 
+def _fix_console_encoding() -> None:
+    """Windows 控制台默认代码页是 GBK,rich 的 legacy 渲染器按当前代码页编码,
+    碰到非 GBK 字符(✓/🚫 等)会抛 UnicodeEncodeError 把整轮对话打断 —— 打包版
+    CLI 实测如此。把输出代码页切到 UTF-8,并给标准流加 replace 兜底。"""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+    except Exception:
+        pass
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+
+
 def main() -> None:
     import platform
     import time
 
+    _fix_console_encoding()
     config = load_config()
     workspace = Path.cwd().resolve()
     ui = TerminalUI(config, workspace)
@@ -130,6 +170,13 @@ def main() -> None:
 
     agent, session = create_agent(config, workspace, ui)
 
+    try:
+        _repl(config, workspace, ui, agent, session)
+    finally:
+        agent.close()      # 关掉 MCP 子进程,不留孤儿
+
+
+def _repl(config, workspace, ui, agent, session) -> None:
     # 一次性模式:命令行参数或管道输入(斜杠命令同样支持)
     task = unmanagle_slash_command(sys.argv[1:]) if len(sys.argv) > 1 else None
     if task is None and not sys.stdin.isatty():

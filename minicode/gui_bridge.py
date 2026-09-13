@@ -13,14 +13,21 @@ from pathlib import Path
 
 from minicode import APP_NAME, __version__
 from minicode.app_setup import create_agent
+from minicode.attachments import (
+    Attachment, build_content, display_text, is_image, mime_for,
+    preview_data_url, save_attachments,
+)
 from minicode.compaction import estimate_tokens
 from minicode.config import CONFIG_PATH, API_KEY_PLACEHOLDERS, save_config
 from minicode.gui_ui import GuiUI
 from minicode.kb import kb_dirs, kb_stats as kb_stats_fn
+from minicode.memory import load_entries as mem_load, memory_path as mem_path
 from minicode.llm import LLMClient
 from minicode.paths import SESSIONS_DIR
+from minicode.sandbox import classify_path, policy_to_raw
 from minicode.session import Session, list_sessions
 from minicode.skills import load_skills, skill_dirs
+from minicode.suggestions import build_suggestions, collect_user_texts
 from minicode.tools.base import Tool
 
 PREVIEW_LINES = 15
@@ -41,8 +48,20 @@ class PublicApi:
     def get_info(self) -> dict:
         return self._b.get_info()
 
-    def send_task(self, text: str) -> dict:
-        return self._b.send_task(text)
+    def send_task(self, text: str, attachments: str = "[]") -> dict:
+        return self._b.send_task(text, attachments)
+
+    def pick_attachments(self) -> dict:
+        return self._b.pick_attachments()
+
+    def set_sandbox(self, enabled: bool) -> dict:
+        return self._b.set_sandbox(enabled)
+
+    def edit_resend(self, ordinal: int, new_text: str, expect: str = "") -> dict:
+        return self._b.edit_resend(ordinal, new_text, expect)
+
+    def get_suggestions(self) -> dict:
+        return self._b.get_suggestions()
 
     def stop_task(self) -> dict:
         return self._b.stop_task()
@@ -128,7 +147,15 @@ class Bridge:
             "active_provider": self.config.provider.id if self.config.provider else "",
             "skills": [{"name": s.name, "description": s.description} for s in skills],
             "kb_count": sum(s["count"] for s in kb_stats),
+            "memory_count": len(mem_load(mem_path(self.workspace))),
+            "mcp_servers": self._mcp_summary(),
+            "sandbox": self._sandbox_info(),
+            "vision": bool(self.config.vision),
         }
+
+    def _mcp_summary(self) -> list[dict]:
+        mcp = getattr(self.agent, "mcp", None)
+        return mcp.tools_summary() if mcp is not None else []
 
     def get_providers(self) -> dict:
         """API Key 管理弹窗用:返回完整配置(本机单用户应用,key 不脱敏)。"""
@@ -186,16 +213,133 @@ class Bridge:
         self.agent.llm = LLMClient(self.config)
         self.ui.push("info", text=f"当前模型: {self.config.model} @ {self.config.base_url}")
 
-    def send_task(self, text: str) -> dict:
+    def send_task(self, text: str, attachments: str = "[]") -> dict:
         text = (text or "").strip()
-        if not text:
+        atts = self._parse_attachments(attachments)
+        if not text and not atts:
             return {"ok": False, "msg": "任务为空"}
         if text.startswith("/"):
             return {"ok": False, "msg": "GUI 里不需要斜杠命令,直接描述任务"}
         if self._busy:
             return {"ok": False, "msg": "有任务正在进行中"}
-        threading.Thread(target=self._run_task, args=(text,), daemon=True).start()
+        content = build_content(text, atts, bool(self.config.vision)) if atts else None
+        threading.Thread(target=self._run_task, args=(text, content), daemon=True).start()
         return {"ok": True}
+
+    # ------------------------------------------------------------ 附件
+
+    def pick_attachments(self) -> dict:
+        """弹系统文件选择框,把选中的文件复制进工作区 uploads/。"""
+        window = getattr(self.ui, "window", None)
+        if window is None:
+            return {"ok": False, "msg": "窗口未就绪,无法打开文件选择框"}
+        try:
+            import webview
+            picked = window.create_file_dialog(
+                webview.OPEN_DIALOG, allow_multiple=True,
+                file_types=("所有文件 (*.*)",
+                            "图片 (*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp)"))
+        except Exception as e:
+            return {"ok": False, "msg": f"打开文件选择框失败: {type(e).__name__}: {e}"}
+        if not picked:
+            return {"ok": True, "items": []}
+        atts, errors = save_attachments(self.workspace, [str(p) for p in picked])
+        return {"ok": True, "items": [self._attachment_item(a) for a in atts],
+                "errors": errors}
+
+    def _attachment_item(self, att: Attachment) -> dict:
+        item = att.to_dict()
+        if att.kind == "image":
+            item["preview"] = preview_data_url(self.workspace / att.path)
+        return item
+
+    def _parse_attachments(self, raw) -> list[Attachment]:
+        """解析前端传来的附件清单;只接受工作区内真实存在的文件(防越界读取)。"""
+        try:
+            items = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(items, list):
+            return []
+        out: list[Attachment] = []
+        for item in items:
+            rel = item.get("path") if isinstance(item, dict) else item
+            rel = str(rel or "").strip()
+            if not rel:
+                continue
+            kind, p = classify_path(self.workspace, rel)
+            if kind != "inside" or not p.is_file():
+                continue
+            out.append(Attachment(
+                name=p.name,
+                path=p.relative_to(self.workspace).as_posix(),
+                size=p.stat().st_size,
+                kind="image" if is_image(p) else "file",
+                mime=mime_for(p),
+                local=str(p),
+            ))
+        return out
+
+    # ------------------------------------------------------------ 沙箱
+
+    def set_sandbox(self, enabled: bool) -> dict:
+        """开关沙箱(运行期立即生效,并写回 config.json)。"""
+        state = getattr(self.agent.ctx, "sandbox", None)
+        if state is None:
+            return {"ok": False, "msg": "沙箱未启用"}
+        state.policy.enabled = bool(enabled)
+        self.config.sandbox = policy_to_raw(state.policy)
+        save_config(self.config_path, self.config)
+        self.ui.push("info", text=f"沙箱已{'开启' if enabled else '关闭'} · {state.describe()}")
+        return {"ok": True, "sandbox": self._sandbox_info()}
+
+    def _sandbox_info(self) -> dict:
+        state = getattr(self.agent.ctx, "sandbox", None)
+        if state is None:
+            return {"available": False, "enabled": False, "description": "未启用"}
+        return {
+            "available": True,
+            "enabled": state.policy.enabled,
+            "allow_outside_workspace": state.policy.allow_outside_workspace,
+            "allow_network": state.policy.allow_network,
+            "timeout_seconds": state.policy.timeout_seconds,
+            "description": state.describe(),
+        }
+
+    def edit_resend(self, ordinal: int, new_text: str, expect: str = "") -> dict:
+        """编辑重发:截断到第 ordinal 条用户消息(含),校验原文一致后以新文本重发。
+
+        expect 传前端记录的原消息文本,防止上下文压缩/变更后序号错位截断到别的消息。
+        """
+        if self._busy:
+            return {"ok": False, "msg": "有任务正在进行中"}
+        new_text = (new_text or "").strip()
+        if not new_text or new_text.startswith("/"):
+            return {"ok": False, "msg": "任务为空或非法"}
+        idx, content = self._find_user_message(int(ordinal))
+        if idx < 0:
+            return {"ok": False, "msg": "该消息已不在当前上下文(可能已被压缩),无法编辑重发"}
+        if expect and content != expect:
+            return {"ok": False, "msg": "消息内容已变化,请刷新后重试"}
+        self.session.replace_messages(self.session.messages[:idx])
+        return self.send_task(new_text)
+
+    def _find_user_message(self, ordinal: int) -> tuple[int, str]:
+        """返回第 ordinal(1 起)条用户消息的 (原始下标, 内容);找不到返回 (-1, "")。"""
+        if ordinal < 1:
+            return -1, ""
+        count = 0
+        for i, m in enumerate(self.session.messages):
+            if m.get("role") == "user":
+                count += 1
+                if count == ordinal:
+                    return i, display_text(m.get("content"))
+        return -1, ""
+
+    def get_suggestions(self) -> dict:
+        """首页建议 chips:根据近期聊天记录动态生成。"""
+        texts = collect_user_texts(self.sessions_dir, self.session.messages)
+        return {"suggestions": build_suggestions(texts)}
 
     def stop_task(self) -> dict:
         self.ui.request_stop()
@@ -278,11 +422,11 @@ class Bridge:
 
     # ------------------------------------------------------------ 内部
 
-    def _run_task(self, text: str) -> None:
+    def _run_task(self, text: str, content=None) -> None:
         self._busy = True
         self.ui.push("busy", value=True)
         try:
-            self.agent.run_turn(text)
+            self.agent.run_turn(text, content)
         except Exception as e:  # 引擎之外的意外错误也要让前端知道
             self.ui.push("error", text=f"内部错误: {type(e).__name__}: {e}")
         finally:
@@ -313,7 +457,7 @@ class Bridge:
                 out.append({"role": "assistant", "text": str(content or ""),
                             "tools": names})
             else:
-                out.append({"role": role, "text": str(content or "")})
+                out.append({"role": role, "text": display_text(content)})
         return out
 
     # 确认握手:Agent 线程阻塞在此,前端点按钮后返回

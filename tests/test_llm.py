@@ -13,7 +13,8 @@ def test_client_constructs():
 
 
 def test_loopback_bypasses_proxy():
-    # 本地服务必须直连,不能交给系统代理
+    # 本地/内网服务必须直连,不能交给系统代理
     assert _make_http_client("http://127.0.0.1:1234/v1", 30) is not None
     assert _make_http_client("http://localhost:1234/v1", 30) is not None
+    assert _make_http_client("http://10.223.24.16:8080/v1", 30) is not None
     assert _make_http_client("https://api.deepseek.com/v1", 30) is None

@@ -20,7 +20,7 @@ from minicode.config import Config
 from minicode.tools.base import Tool
 
 SLASH_COMMANDS = ["/help", "/clear", "/model", "/history", "/resume",
-                  "/undo", "/compact", "/skills", "/exit"]
+                  "/undo", "/compact", "/sandbox", "/skills", "/kb", "/plan", "/exit"]
 
 REFRESH_INTERVAL = 0.12     # 流式 Markdown 刷新节流
 DIFF_MAX_LINES = 40
@@ -127,7 +127,11 @@ class TerminalUI:
     # ------------------------------------------------------------ 权限确认
 
     def confirm_tool(self, tool: Tool, args: dict) -> str:
-        """返回 'yes' | 'no' | 'always'。"""
+        """返回 'yes' | 'no' | 'always'。
+
+        非交互场景(stdin 关闭、管道输入、Ctrl+C)一律按"拒绝"处理并说明原因,
+        不能让确认框把整个进程带崩。
+        """
         self.console.print()
         self.console.print(Panel(
             self._permission_detail(tool, args),
@@ -135,10 +139,14 @@ class TerminalUI:
             border_style="yellow",
         ))
         while True:
-            ans = self.console.input(
-                "[yellow]允许执行?[/yellow] [bold](y)是[/bold] / [bold](n)否[/bold] "
-                "/ [bold](a)本轮总是允许[/bold]: "
-            ).strip().lower()
+            try:
+                ans = self.console.input(
+                    "[yellow]允许执行?[/yellow] [bold](y)是[/bold] / [bold](n)否[/bold] "
+                    "/ [bold](a)本轮总是允许[/bold]: "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                self.console.print("[dim]没有可用的交互输入,已按拒绝处理。[/dim]")
+                return "no"
             if ans in ("y", "yes"):
                 return "yes"
             if ans in ("a", "always"):
@@ -206,11 +214,12 @@ class TerminalUI:
             "[bold]命令[/bold]\n"
             "  /help         显示本帮助\n"
             "  /clear        清空当前会话上下文\n"
-            "  /model        查看模型与供应商列表\n"
+            "  /model        查看当前使用的模型(固定,不支持切换)\n"
             "  /history      查看上下文消息数与 token 估算\n"
             "  /resume [<n>] 查看/恢复历史会话\n"
             "  /undo         撤销最近一次文件改动(可连续;bash 改动不在跟踪范围)\n"
             "  /compact      立即压缩上下文(平时到达阈值会自动压缩)\n"
+            "  /sandbox [on|off] 查看/临时切换沙箱(持久化改 config.json)\n"
             "  /skills       查看可用技能(SKILL.md)\n"
             "  /exit         退出(或 Ctrl+D)\n"
             "\n[bold]说明[/bold]\n"

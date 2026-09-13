@@ -1,0 +1,15 @@
+{
+ "site": "抖音",
+ "host": "www.douyin.com",
+ "output_kb": "kb/douyin-videos.json",
+ "out_dir": "crawled/www.douyin.com/school-qa-videos",
+ "max_videos_per_keyword": 5,
+ "keywords": [
+  {"keyword": "大学生学习计划", "topic": "学风与学习方法"},
+  {"keyword": "大学生考证攻略", "topic": "证书与等级考试"},
+  {"keyword": "大学生常见问题", "topic": "学长学姐经验"},
+  {"keyword": "肇庆美食探店", "topic": "校园周边生活"},
+  {"keyword": "广应科", "topic": "校园周边生活"},
+  {"keyword": "肇庆周边游", "topic": "校园周边生活"}
+ ]
+}

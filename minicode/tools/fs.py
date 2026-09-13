@@ -3,11 +3,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from minicode.tools.base import PathOutsideWorkspace, ToolContext, resolve_in_workspace
+from minicode.tools.base import (
+    PathBlocked, PathOutsideWorkspace, ToolContext, resolve_path,
+)
 
 READ_LINE_LIMIT = 2000  # 默认单次最多读取行数
 LINE_CHAR_LIMIT = 2000  # 单行超长截断
 BINARY_SNIFF_BYTES = 8192
+
+_PATH_ERRORS = (PathOutsideWorkspace, PathBlocked)
 
 
 def _decode(data: bytes) -> str:
@@ -34,8 +38,8 @@ def _format_lines(lines: list[str], start: int) -> str:
 def read_file(ctx: ToolContext, path: str, offset: int = 1, limit: int | None = None) -> str:
     """读取文本文件,返回带行号的内容。"""
     try:
-        p = resolve_in_workspace(ctx, path)
-    except PathOutsideWorkspace as e:
+        p = resolve_path(ctx, path)
+    except _PATH_ERRORS as e:
         return f"错误: {e}"
     if not p.exists():
         return f"错误: 文件不存在: {path}"
@@ -61,8 +65,8 @@ def read_file(ctx: ToolContext, path: str, offset: int = 1, limit: int | None = 
 def write_file(ctx: ToolContext, path: str, content: str) -> str:
     """写入(创建或覆盖)一个文本文件。"""
     try:
-        p = resolve_in_workspace(ctx, path)
-    except PathOutsideWorkspace as e:
+        p = resolve_path(ctx, path, for_write=True)
+    except _PATH_ERRORS as e:
         return f"错误: {e}"
     action = "覆盖" if p.exists() else "创建"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -75,8 +79,8 @@ def edit_file(ctx: ToolContext, path: str, old_string: str, new_string: str,
               replace_all: bool = False) -> str:
     """精确字符串替换编辑。old_string 必须在文件中唯一,除非 replace_all。"""
     try:
-        p = resolve_in_workspace(ctx, path)
-    except PathOutsideWorkspace as e:
+        p = resolve_path(ctx, path, for_write=True)
+    except _PATH_ERRORS as e:
         return f"错误: {e}"
     if not p.exists():
         return f"错误: 文件不存在: {path}。先用 read_file 查看内容。"

@@ -1,6 +1,7 @@
 """LLM 调用层:OpenAI 兼容协议,流式输出 + 工具调用增量聚合。"""
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -16,11 +17,23 @@ RETRYABLE_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError,
                     InternalServerError)
 
 
+def _is_direct_host(host: str) -> bool:
+    """本地回环与私网地址(10/172.16-31/192.168)直连,不走系统代理。"""
+    host = (host or "").lower()
+    if host in ("localhost", "::1") or host.startswith("127."):
+        return True
+    m = re.match(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$", host)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        return (a == 10
+                or (a == 172 and 16 <= b <= 31)
+                or (a == 192 and b == 168))
+    return False
+
+
 def _make_http_client(base_url: str, timeout_seconds: int):
-    """本地回环地址必须直连:系统代理(Clash 等)会拦截并返回 502。"""
-    host = (urlparse(base_url).hostname or "").lower()
-    loopback = host in ("localhost", "::1") or host.startswith("127.")
-    if not loopback:
+    """本地/内网地址必须直连:系统代理(Clash 等)会拦截并返回 502。"""
+    if not _is_direct_host(urlparse(base_url).hostname or ""):
         return None
     try:
         import httpx2 as httpx

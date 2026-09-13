@@ -1,19 +1,31 @@
-"""web_crawl 工具:基于 crawl4ai 抓取网页/整站为 markdown,可选写入本地知识库。
+"""web_crawl 工具:抓取网页/整站为 markdown,可选写入本地知识库。
 
 从起始 url 出发做同域 BFS 跟链(max_pages/max_depth 限流,页间 delay 限速,
 跳过 pdf/图片等二进制链接),输出到 crawled/<域名>/ 下:每页一个带 frontmatter
 的 .md,附 index.json。to_kb=True 时额外生成 kb/crawl-<域名>.json,条目格式与
-kb.py 一致(credibility=A,附来源 url 供核实),可被 search_knowledge 直接检索。
-crawl4ai 未安装时返回安装指引,不影响其他工具与单元测试(测试注入假 crawler)。
+kb.py 一致(credibility=A,附来源 url 供核实),可被 search_knowledge 直接检索;
+kb_category/kb_tags 给条目打主题标签(检索时标签权重×2),校园站点定向补爬用。
+
+两个引擎,优先用 crawl4ai:
+- crawl4ai(带真浏览器,能渲染 JS):源码环境直接用;打包版要求 exe 同级目录有
+  ms-playwright/(浏览器内核,便携包里约 272MB,不塞进 exe 以免单文件版每次启动
+  解压)。运行时会把 PLAYWRIGHT_BROWSERS_PATH 指过去。
+- 内置轻量抓取器(httpx + BeautifulSoup,不启动浏览器):crawl4ai 不可用、或
+  打包版没带浏览器内核时自动降级。静态站点(学校站群这类)效果与 crawl4ai 一致,
+  需要 JS 渲染的站点会抓不到内容,此时会明确提示。
+两个引擎的正文都经 strip_boilerplate + 标题截断,保证入库内容不带整站导航。
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+from minicode.paths import APP_DIR, FROZEN
 from minicode.tools.base import (PathOutsideWorkspace, ToolContext,
                                  resolve_in_workspace)
 
@@ -21,7 +33,14 @@ SKIP_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
                    ".zip", ".rar", ".7z", ".jpg", ".jpeg", ".png", ".gif",
                    ".mp3", ".mp4", ".avi", ".exe", ".apk"}
 KB_CONTENT_LIMIT = 2000      # 单条知识库内容截断,防 kb/*.json 膨胀
+KB_MIN_CONTENT = 200         # 正文有效字数下限,低于此值视为纯导航页,不入库
 SUMMARY_TITLES_LIMIT = 20
+_ENGINE_NOTE = ""            # 降级到内置抓取器的原因(由 _engine() 写入)
+
+# 站群 CMS 的页脚起始标记:正文之后的"上一条/版权所有/联系方式"都从这里切掉
+DEFAULT_CUT_MARKERS = ("上一条", "下一条", "友情链接", "版权所有", "返回顶部")
+USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 
 
 def _md_text(markdown_obj) -> str:
@@ -35,6 +54,85 @@ def _md_text(markdown_obj) -> str:
     if raw:
         return str(raw)
     return str(markdown_obj)
+
+
+def _page_title(result, content: str, url: str) -> str:
+    """页面标题:crawl4ai 0.9+ 放在 metadata['title'](旧版是 result.title),再退回正文首个标题。
+
+    站内页大量没有 <title>,所以要保留从 markdown 首个 # 标题兜底的分支。
+    """
+    meta = getattr(result, "metadata", None)
+    title = ""
+    if isinstance(meta, dict):
+        title = str(meta.get("title") or "").strip()
+    if not title:
+        title = str(getattr(result, "title", "") or "").strip()
+    if not title or title == url:
+        m = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
+        if m:
+            title = m.group(1).strip()[:80]
+    return title or url
+
+
+def _plain_text_len(md: str) -> int:
+    """正文有效字数:去掉图片/链接语法与空白,用于识别"只剩导航链接"的空页。"""
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", md or "")
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"[*#>`~\-\s]+", "", text)
+    return len(text)
+
+
+_MD_ATOM = r"(?:!?\[(?:[^\[\]]|\[[^\]]*\])*\]\([^)]*\))"
+_LINK_ONLY_LINE = re.compile(rf"^\s*(?:[*\-+]\s*)?{_MD_ATOM}(?:\s*{_MD_ATOM})*$")
+_LIST_HEADING_LINK = re.compile(r"^\s*[*\-+]\s*#+\s*\[")
+_EMPTY_ITEM_LINE = re.compile(r"^[\s\-*+•\u200b\u3000]*$")
+
+
+def strip_boilerplate(md: str, cut_markers=()) -> str:
+    """去掉网站每页重复的导航/页脚,只留正文。
+
+    校园站点(尤其站群 CMS)的导航在每页都一样,不清理的话知识库摘要开头全是
+    链接,检索和回答都会被带偏。做法是三条通用规则 + 站点的页脚起始标记:
+      1. 丢掉"整行只有链接/图片"的行(导航菜单、面包屑链接、附件图标行);
+      2. 丢掉 "* ### [栏目](...)" 这类导航标题行;
+      3. 丢掉空列表项/零宽字符行(只有图片的菜单项会退化成 "-");
+      4. 从 cut_markers 里任意标记所在行开始截断(如"上一条""版权所有")。
+    """
+    lines = []
+    for raw in (md or "").splitlines():
+        line = raw.rstrip()
+        if _LIST_HEADING_LINK.match(line) or _LINK_ONLY_LINE.match(line):
+            continue
+        if _EMPTY_ITEM_LINE.match(line):
+            continue
+        lines.append(line)
+    text = "\n".join(lines)
+    for marker in cut_markers or ():
+        if not marker:
+            continue
+        m = re.search(rf"^{re.escape(marker)}", text, re.MULTILINE)
+        if m and m.start() > 0:
+            text = text[:m.start()]
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def extract_body(markdown: str, title: str,
+                 cut_markers=DEFAULT_CUT_MARKERS) -> str:
+    """整页 markdown → 正文:先去导航/页脚,再从文章标题所在行截断。
+
+    标题通常来自 <title>(常带"-学校-栏目"后缀),而正文里的 h1 是干净标题,
+    所以两个方向都做一次包含判断;找不到匹配标题就不截断,保持原样。
+    """
+    text = strip_boilerplate(markdown, cut_markers)
+    needle = re.sub(r"\s+", "", title or "")
+    if len(needle) >= 6:
+        for i, line in enumerate(text.splitlines()):
+            if not line.startswith("#"):
+                continue
+            candidate = re.sub(r"[\s#]+", "", line)
+            if len(candidate) >= 6 and (candidate in needle or needle in candidate):
+                return "\n".join(text.splitlines()[i:]).strip()
+    return text
 
 
 def _slug(text: str, fallback: str) -> str:
@@ -51,6 +149,191 @@ def _crawlable(url: str, host: str, match: str) -> bool:
     if match and match not in url:
         return False
     return True
+
+
+# ------------------------------------------------------- 内置轻量抓取器(无浏览器)
+
+def _inline_md(tag, base_url: str) -> str:
+    """把标签内的文字渲染成一行 markdown(链接保留成 [文字](绝对地址))。"""
+    from bs4 import Comment, NavigableString, Tag
+    out: list[str] = []
+    for child in tag.children:
+        if isinstance(child, Comment):          # HTML 注释不是正文(站群模板里很多)
+            continue
+        if isinstance(child, NavigableString):
+            out.append(re.sub(r"\s+", " ", str(child)))
+        elif isinstance(child, Tag):
+            if child.name in ("script", "style", "img", "svg", "noscript"):
+                continue
+            if child.name == "a" and child.get("href"):
+                text = _inline_md(child, base_url) or child.get("href", "")
+                out.append(f"[{text}]({urljoin(base_url, child['href'].strip())})")
+            else:
+                out.append(_inline_md(child, base_url))
+    return "".join(out).strip()
+
+
+# form 不能跳过:博达站群把新闻正文整段包在 <form name="_newscontent_fromname"> 里,
+# 跳掉 form 等于把正文丢了(实测正文只剩 51 字的残渣)。控件本身没有正文,单独跳过。
+_SKIP_TAGS = ("script", "style", "noscript", "svg", "iframe", "img",
+              "nav", "header", "footer", "aside",
+              "input", "select", "textarea", "button", "option")
+_INLINE_BLOCKS = ("p", "blockquote", "pre", "dd", "dt", "figcaption")
+
+
+def _node_md(node, base_url: str, out: list[str]) -> None:
+    """递归把块级元素转成 markdown 行(标题/列表/表格/段落)。"""
+    from bs4 import Comment, NavigableString, Tag
+    for child in node.children:
+        if isinstance(child, Comment):
+            continue
+        if isinstance(child, NavigableString):
+            text = re.sub(r"\s+", " ", str(child)).strip()
+            if text:
+                out.append(text)
+            continue
+        if not isinstance(child, Tag):
+            continue
+        name = child.name
+        if name in _SKIP_TAGS:
+            continue
+        if name in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            out.append(f"\n{'#' * int(name[1])} {_inline_md(child, base_url)}\n")
+        elif name == "li":
+            out.append(f"\n- {_inline_md(child, base_url)}")
+        elif name == "tr":
+            cells = [_inline_md(cell, base_url)
+                     for cell in child.find_all(["td", "th"], recursive=False)]
+            if any(cells):
+                out.append("\n| " + " | ".join(cells) + " |")
+        elif name in _INLINE_BLOCKS:
+            # 这些块本身就是一段文字,整体按行内规则渲染,避免丢掉段内链接
+            text = _inline_md(child, base_url)
+            out.append(f"\n{text}\n" if text else "\n")
+        elif name in ("div", "section", "article", "main", "table", "ul", "ol",
+                      "form", "tbody", "thead", "dl", "br", "hr", "td", "th"):
+            out.append("\n")
+            _node_md(child, base_url, out)
+            out.append("\n")
+        else:
+            _node_md(child, base_url, out)
+
+
+def html_to_markdown(html: str, base_url: str) -> tuple[str, str, list[dict]]:
+    """HTML → (标题, markdown 正文, 站内链接列表)。只用 html.parser,不依赖 lxml。"""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html or "", "html.parser")
+    title = ""
+    if soup.title:
+        title = re.sub(r"\s+", " ", soup.title.get_text(" ", strip=True)).strip()
+    links: list[dict] = []
+    seen: set[str] = set()
+    for a in soup.find_all("a", href=True):
+        href = urljoin(base_url, a["href"].strip()).split("#", 1)[0]
+        if not href.startswith(("http://", "https://")) or href in seen:
+            continue
+        seen.add(href)
+        links.append({"href": href,
+                      "text": re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip()})
+    out: list[str] = []
+    _node_md(soup.body or soup, base_url, out)
+    md = re.sub(r"[ \t]+\n", "\n", "".join(out))
+    return title, re.sub(r"\n{3,}", "\n\n", md).strip(), links
+
+
+class _NativeResult:
+    """对齐 crawl4ai 结果对象的最小接口(success/title/metadata/markdown/links)。"""
+
+    def __init__(self, url: str, *, success: bool, title: str = "", markdown: str = "",
+                 links=None, error: str = ""):
+        self.url = url
+        self.success = success
+        self.title = title
+        self.metadata = {"title": title} if title else {}
+        self.markdown = markdown
+        self.links = links or {"internal": [], "external": []}
+        self.error_message = error
+
+
+class NativeCrawler:
+    """crawl4ai 不可用时的抓取器:httpx 取 HTML + BeautifulSoup 转 markdown。
+
+    接口刻意与 crawl4ai 的 AsyncWebCrawler 一致(async with + arun),这样 BFS、
+    落盘、入库逻辑两个引擎共用一份。需要 JS 渲染的页面这里拿不到内容。
+    """
+
+    def __init__(self, timeout: float = 25.0):
+        self.timeout = timeout
+        self._client = None
+
+    async def __aenter__(self):
+        import httpx
+        self._client = httpx.AsyncClient(
+            follow_redirects=True, timeout=self.timeout,
+            headers={"User-Agent": USER_AGENT,
+                     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"})
+        return self
+
+    async def __aexit__(self, *exc):
+        if self._client is not None:
+            await self._client.aclose()
+        return False
+
+    async def arun(self, url: str, config=None):
+        try:
+            resp = await self._client.get(url)
+        except Exception as e:                      # 网络/超时:交给 BFS 记录失败
+            return _NativeResult(url, success=False,
+                                 error=f"{type(e).__name__}: {e}"[:200])
+        ctype = (resp.headers.get("content-type") or "").lower()
+        if resp.status_code >= 400:
+            return _NativeResult(url, success=False,
+                                 error=f"HTTP {resp.status_code}")
+        if "html" not in ctype and "xml" not in ctype:
+            return _NativeResult(url, success=False, error=f"非 HTML 内容({ctype[:40]})")
+        final = str(resp.url)
+        title, md, links = html_to_markdown(resp.text, final)
+        return _NativeResult(final, success=True, title=title, markdown=md,
+                             links={"internal": links, "external": []})
+
+
+def _frozen_browser_dir() -> Path | None:
+    """打包版把浏览器内核放在 exe 同级的 ms-playwright/(不塞进 exe:单文件版每次
+    启动都要解压 270MB,太慢)。没有这个目录就退回内置轻量抓取器。"""
+    if not FROZEN:
+        return None
+    candidate = Path(APP_DIR) / "ms-playwright"
+    if candidate.is_dir() and any(candidate.glob("chromium*")):
+        return candidate
+    return None
+
+
+def _engine():
+    """选引擎:优先 crawl4ai(真浏览器,能渲染 JS),否则用内置轻量抓取器。
+
+    打包版能不能用 crawl4ai 取决于 exe 旁有没有 ms-playwright/(浏览器内核);
+    没有就自动降级,不会报错。降级原因写进 _ENGINE_NOTE,输出摘要会带上 ——
+    否则"完整版为什么没用浏览器"只能靠猜。
+    """
+    global _ENGINE_NOTE
+    _ENGINE_NOTE = ""
+    if FROZEN:
+        browser_dir = _frozen_browser_dir()
+        if browser_dir is None:
+            _ENGINE_NOTE = f"未见浏览器内核 {Path(APP_DIR) / 'ms-playwright'}"
+            return "native", (lambda: NativeCrawler()), None
+        os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(browser_dir))
+    try:
+        from crawl4ai import (AsyncWebCrawler, BrowserConfig, CacheMode,
+                              CrawlerRunConfig)
+    except ImportError as e:
+        _ENGINE_NOTE = f"crawl4ai 导入失败: {type(e).__name__}: {e}"
+        return "native", (lambda: NativeCrawler()), None
+
+    browser_cfg = BrowserConfig(headless=True)
+    run_cfg = CrawlerRunConfig(cache_mode=CacheMode.BYPASS, page_timeout=30000,
+                               verbose=False)
+    return "crawl4ai", (lambda: AsyncWebCrawler(config=browser_cfg)), run_cfg
 
 
 async def _crawl_site(start_url: str, *, max_pages: int, max_depth: int,
@@ -78,8 +361,9 @@ async def _crawl_site(start_url: str, *, max_pages: int, max_depth: int,
                 failed.append({"url": url,
                                "error": (getattr(result, "error_message", "") or "抓取失败")[:200]})
                 continue
-            title = (getattr(result, "title", "") or url).strip()
             content = _md_text(getattr(result, "markdown", None))
+            title = _page_title(result, content, url)
+            content = extract_body(content, title)      # 去掉整站导航/页脚再落盘入库
             fname = f"{len(pages) + 1:03d}-{_slug(urlparse(url).path, 'index')}.md"
             stamp = time.strftime("%Y-%m-%d %H:%M")
             (site_dir / fname).write_text(
@@ -101,27 +385,64 @@ async def _crawl_site(start_url: str, *, max_pages: int, max_depth: int,
     return pages, failed
 
 
-def _write_kb(workspace, host: str, pages: list[dict], kb_source: str):
-    """把抓取结果写成知识库条目(格式与 kb.py 的 KbEntry 对齐)。"""
+def _write_kb(workspace, host: str, pages: list[dict], kb_source: str,
+              category: str = "", extra_tags=(), content_limit: int = KB_CONTENT_LIMIT,
+              min_content: int = KB_MIN_CONTENT, filename: str = ""):
+    """把抓取结果合并进知识库(格式与 kb.py 的 KbEntry 对齐)。返回 (路径, 写入数, 跳过数)。
+
+    按 url 去重合并而不是整文件覆盖:定向补爬新栏目时保留之前爬过的条目,
+    同一 url 重爬则就地更新标题与正文(增量更新,永不丢旧数据)。
+    正文过短(纯导航/列表页)的页面只留在 crawled/ 归档,不污染知识库检索。
+    """
+    import hashlib
     kb_dir = workspace / "kb"
     kb_dir.mkdir(exist_ok=True)
-    path = kb_dir / f"crawl-{host}.json"
-    entries = [{
-        "id": f"crawl-{host}-{i:03d}",
-        "title": p["title"],
-        "content": p["content"][:KB_CONTENT_LIMIT],
-        "url": p["url"],
-        "source": kb_source or host,
-        "tags": ["官网抓取", host],
-        "credibility": "A",
-    } for i, p in enumerate(pages, start=1)]
-    path.write_text(json.dumps(entries, ensure_ascii=False, indent=1), encoding="utf-8")
-    return path
+    path = kb_dir / (filename or f"crawl-{host}.json")
+    existing: list[dict] = []
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                existing = [e for e in data if isinstance(e, dict)]
+        except (OSError, json.JSONDecodeError):
+            existing = []
+    tags = list(dict.fromkeys(
+        [t.strip() for t in [category, *extra_tags, "官网抓取", host] if t and t.strip()]))
+    by_url = {e.get("url"): e for e in existing if e.get("url")}
+    written = skipped = 0
+    for p in pages:
+        if not p.get("keep") and _plain_text_len(p["content"]) < min_content:
+            skipped += 1
+            continue
+        entry = {
+            "id": f"crawl-{host}-{hashlib.md5(p['url'].encode()).hexdigest()[:8]}",
+            "title": p["title"],
+            "content": p["content"][:content_limit],
+            "url": p["url"],
+            "source": kb_source or host,
+            "tags": tags,
+            "credibility": "A",
+        }
+        if p.get("publish_at"):
+            entry["publish_at"] = p["publish_at"]
+        old = by_url.get(p["url"])
+        if old is not None:               # 重爬:更新内容,标签取并集(同页可属多个主题)
+            tags_merged = list(dict.fromkeys(list(old.get("tags") or []) + entry["tags"]))
+            old.update({k: v for k, v in entry.items() if k != "id"})
+            old["tags"] = tags_merged
+            written += 1
+            continue
+        by_url[p["url"]] = entry
+        existing.append(entry)
+        written += 1
+    path.write_text(json.dumps(existing, ensure_ascii=False, indent=1), encoding="utf-8")
+    return path, written, skipped
 
 
 def crawl_web(ctx: ToolContext, url: str, max_pages: int = 10, max_depth: int = 1,
               out_dir: str = "crawled", match: str = "", to_kb: bool = False,
-              kb_source: str = "", delay: float = 1.0) -> str:
+              kb_source: str = "", kb_category: str = "", kb_tags=None,
+              delay: float = 1.0) -> str:
     """工具处理器:抓取 url 起的同域页面,落盘并返回摘要。"""
     url = (url or "").strip()
     parsed = urlparse(url)
@@ -136,25 +457,19 @@ def crawl_web(ctx: ToolContext, url: str, max_pages: int = 10, max_depth: int = 
     except PathOutsideWorkspace as e:
         return f"错误: {e}"
     try:
-        from crawl4ai import (AsyncWebCrawler, BrowserConfig, CacheMode,
-                              CrawlerRunConfig)
-    except ImportError:
-        return ("错误: 依赖 crawl4ai 未安装。请在项目环境执行:\n"
-                "  pip install -U crawl4ai\n"
-                "  crawl4ai-setup   # 首次需下载浏览器内核")
-    browser_cfg = BrowserConfig(headless=True)
-    run_cfg = CrawlerRunConfig(cache_mode=CacheMode.BYPASS, page_timeout=30000,
-                               verbose=False)
-
-    def factory():
-        return AsyncWebCrawler(config=browser_cfg)
+        engine, factory, run_cfg = _engine()
+    except Exception as e:                                  # 引擎初始化异常
+        return f"错误: 抓取引擎初始化失败({type(e).__name__}: {e})。"
 
     try:
         pages, failed = asyncio.run(_crawl_site(
             url, max_pages=max_pages, max_depth=max_depth, match=match.strip(),
             delay=delay, site_dir=site_dir, factory=factory, run_cfg=run_cfg))
     except Exception as e:
-        return f"错误: 抓取过程异常({type(e).__name__}: {e}),未完成。"
+        hint = ("\n提示: 打包版用内置轻量抓取器(不启动浏览器),需要 JS 渲染的站点"
+                "可能失败;可在源码环境(装了 crawl4ai)重试。"
+                if engine == "native" else "")
+        return f"错误: 抓取过程异常({type(e).__name__}: {e}),未完成。{hint}"
 
     index = {"site": url, "crawled_at": time.strftime("%Y-%m-%d %H:%M"),
              "pages": [{"url": p["url"], "title": p["title"], "file": p["file"]}
@@ -165,10 +480,25 @@ def crawl_web(ctx: ToolContext, url: str, max_pages: int = 10, max_depth: int = 
 
     lines = [f"爬取完成: 成功 {len(pages)} 页,失败 {len(failed)} 页。"
              f"输出目录 {out_dir.strip('/')}/{host}/(含 index.json 与每页 .md)。"]
+    if engine == "native":
+        lines.append("引擎: 内置轻量抓取器(未启用浏览器;需要 JS 渲染的站点抓不到)。"
+                     + (f"原因: {_ENGINE_NOTE[:160]}" if _ENGINE_NOTE else ""))
     if to_kb and pages:
-        kb_path = _write_kb(ctx.workspace, host, pages, kb_source.strip())
-        lines.append(f"已写入知识库 kb/{kb_path.name}({len(pages)} 条,credibility=A),"
-                     f"可用 search_knowledge 检索。")
+        extra = kb_tags if isinstance(kb_tags, (list, tuple)) else \
+            re.split(r"[,、\s]+", str(kb_tags or ""))
+        kb_path, written, skipped = _write_kb(
+            ctx.workspace, host, pages, kb_source.strip(),
+            category=kb_category.strip(), extra_tags=extra)
+        lines.append(f"已写入知识库 kb/{kb_path.name}(新增/更新 {written} 条,"
+                     f"credibility=A),可用 search_knowledge 检索。")
+        if skipped:
+            lines.append(f"另有 {skipped} 页正文过短(纯导航/列表页),只归档未入库。")
+        if not written:
+            lines.append("提示: 没有可入库的正文,可能是目标站点需要 JS 渲染(打包版"
+                         "抓不到),或该页内容确实过短。")
+    elif pages:
+        lines.append("提示: 这次没有入库(to_kb=false)。要让用户下次问同类问题直接命中,"
+                     "请带 to_kb=true 重爬,并给出 kb_category/kb_tags。")
     shown = pages[:SUMMARY_TITLES_LIMIT]
     lines.append("页面清单:")
     lines += [f"{i}. {p['title']}({p['file']},{len(p['content'])} 字)"
