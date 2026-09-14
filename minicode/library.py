@@ -28,6 +28,25 @@ MAX_TOP_K = 30
 _CACHE: dict[str, tuple[float, sqlite3.Connection]] = {}
 
 
+class CatalogUnavailable(RuntimeError):
+    """馆藏库找得到、但读不出来(损坏/被截断/被占用),或者本来就是空的。
+
+    以前 `_fts_rows` / `_like_rows` 用 `except sqlite3.Error: return []` 兜掉,
+    于是一个坏库会伪装成「没有这本书」,模型照着回用户「按这个书名没检索到」——
+    用户报障「图书馆查询显示没有这一本书」里就有这一路(库文件在,查询全落空)。
+    现在显式抛出,handler 会答「检索数据这次没加载起来」,而不是替图书馆下结论。
+    """
+
+
+def _note_error(errors: list[str] | None, exc: BaseException) -> None:
+    """把底层 sqlite 错误攒起来(去重),交给上层决定怎么表述。"""
+    if errors is None:
+        return
+    msg = f"{type(exc).__name__}: {exc}"
+    if msg not in errors:
+        errors.append(msg)
+
+
 def db_candidates(workspace: Path | None = None) -> list[Path]:
     """库文件位置:工作区优先,其次 exe 旁 / 只读资源目录(兼容打包形态)。"""
     out: list[Path] = []
@@ -185,7 +204,7 @@ def _variants(query: str) -> list[str]:
 
 
 def _fts_rows(c: sqlite3.Connection, variant: str, top_k: int,
-              kind: str) -> list[sqlite3.Row]:
+              kind: str, errors: list[str] | None = None) -> list[sqlite3.Row]:
     """精确书名 + FTS5 trigram(仅 ≥3 字,毫秒级)。"""
     kc = _kind_clause(kind)
     rows: list[sqlite3.Row] = []
@@ -194,8 +213,8 @@ def _fts_rows(c: sqlite3.Connection, variant: str, top_k: int,
         rows += c.execute(
             SEL + "WHERE (b.title=? OR b.title=?)" + kc + " LIMIT 5",
             (variant, variant + ".")).fetchall()
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as exc:
+        _note_error(errors, exc)
     # 2) FTS5;?1=MATCH ?2..?4=排序 ?5=limit
     if len(variant) >= 3:
         expr = _fts_expr(variant)
@@ -205,13 +224,13 @@ def _fts_rows(c: sqlite3.Connection, variant: str, top_k: int,
                     SEL + "JOIN books_fts f ON f.rowid=b.record_id "
                     "WHERE (books_fts MATCH ?1)" + kc + _rank_sql(2),
                     tuple([expr] + _rank_vals(variant) + [top_k])).fetchall()
-            except sqlite3.Error:
-                pass
+            except sqlite3.Error as exc:
+                _note_error(errors, exc)
     return rows
 
 
 def _like_rows(c: sqlite3.Connection, variant: str, top_k: int,
-               kind: str) -> list[sqlite3.Row]:
+               kind: str, errors: list[str] | None = None) -> list[sqlite3.Row]:
     """LIKE 兜底(书名/作者/出版社/分类号/索书号)。
 
     注意:前导通配符用不上索引,1.3 M 行是全表扫(约 1.5 s),因此一次检索
@@ -226,7 +245,8 @@ def _like_rows(c: sqlite3.Connection, variant: str, top_k: int,
             "OR b.publisher LIKE ?1 ESCAPE '\\' OR b.class_no LIKE ?1 ESCAPE '\\' "
             "OR b.call_no LIKE ?1 ESCAPE '\\')" + _kind_clause(kind) + _rank_sql(2),
             tuple([like] + _rank_vals(variant) + [top_k])).fetchall()
-    except sqlite3.Error:
+    except sqlite3.Error as exc:
+        _note_error(errors, exc)
         return []
 
 
@@ -244,23 +264,33 @@ def search(workspace: Path | None, query: str, top_k: int = DEFAULT_TOP_K,
     query = (query or "").strip()
     if not query:
         return []
-    c = conn(path)
+    try:
+        c = conn(path)
+    except (sqlite3.Error, OSError) as exc:
+        _note_error(None, exc)
+        raise CatalogUnavailable(
+            f"打开 {path.name} 失败({type(exc).__name__}: {exc})") from exc
     variants = _variants(query)
+    errors: list[str] = []
 
     rows: list[sqlite3.Row] = []
     for v in variants:
         if len(v) < 3:
             # 1-2 字 FTS5 trigram 建不出索引,这个变体只能走 LIKE
-            rows = _like_rows(c, v, top_k, kind)
+            rows = _like_rows(c, v, top_k, kind, errors)
         else:
-            rows = _fts_rows(c, v, top_k, kind)
+            rows = _fts_rows(c, v, top_k, kind, errors)
             if rows and len(rows) < top_k:
-                rows += _like_rows(c, v, top_k, kind)   # 命中不足时补足(与旧行为一致)
+                rows += _like_rows(c, v, top_k, kind, errors)   # 命中不足时补足(与旧行为一致)
         if rows:
             break
 
     if not rows and variants and len(variants[-1]) >= 3:
-        rows = _like_rows(c, variants[-1], top_k, kind)   # 全落空:对最宽的变体扫一次
+        rows = _like_rows(c, variants[-1], top_k, kind, errors)   # 全落空:对最宽的变体扫一次
+
+    if not rows and errors:
+        # 库在,但查不了:这是环境问题,不能回给用户“没有这本书”
+        raise CatalogUnavailable(errors[0])
 
     seen, out = set(), []
     for r in rows:
@@ -353,15 +383,37 @@ def library_search(ctx, query: str, top_k: int = DEFAULT_TOP_K,
     if db_path(ctx.workspace) is None:
         return ("错误: 本地馆藏书目库不存在。请先运行 "
                 "crawled/mfindgzyykj.libsp.cn/ 下的抓取脚本生成 library.db。")
-    hits = search(ctx.workspace, query, top_k=top_k, kind=kind)
+    try:
+        hits = search(ctx.workspace, query, top_k=top_k, kind=kind)
+    except CatalogUnavailable as exc:
+        p = db_path(ctx.workspace)
+        size = "尺寸未知"
+        try:
+            size = f"{p.stat().st_size / 1e9:.2f} GB"
+        except OSError:
+            pass
+        return (
+            f"错误: 本地馆藏书目库读不出来({exc})。\n"
+            f"库文件: {p}({size};完整版应为 1.31 GB / 133 万条书目)。\n"
+            "⚠ 这是**检索数据没加载起来**,不是“馆里没有这本书”。\n"
+            "请告诉用户「图书馆检索数据这次没读出来,请稍后重试或到检索台查」,\n"
+            "**不要**说成“图书馆没有这本书”;同时把上面这行错误原文附给用户/开发者。")
     if not hits:
+        total = catalog_total(ctx.workspace)
+        if total == 0:
+            return ("错误: 本地馆藏书目库是空的(0 条书目),检索不可用。\n"
+                    "库文件存在但没有数据——多半是拷贝/安装时只拿到一个空壳。\n"
+                    "请告诉用户「图书馆检索数据没加载起来」,不要说成“图书馆没有这本书”。")
         variants = _variants(query)
         tried = " / ".join(f"「{v}」" for v in variants[1:4]) or "—"
         return (
             f"本地馆藏书目库没有匹配「{query}」的记录。"
             f"(已自动放宽重试:{tried})\n"
+            f"本次对照的是 {db_path(ctx.workspace)}(库内共 {total} 条书目)。\n"
             "⚠ 这只说明**库里没有这种书名写法**,不等于馆里没有这本书。\n"
-            "请先用**更短的书名关键词**(2-6 字,去掉《》、“（第N版）”这类\n"
+            "若上面这个总条数是 0 或明显偏小,说明库没装好——那就别说“没检索到”,\n"
+            "直接告诉用户检索数据没加载起来。\n"
+            "否则请先用**更短的书名关键词**(2-6 字,去掉《》、“（第N版）”这类\n"
             "书名号与版次标注)或作者名/ISBN/中图法分类号再查一次。\n"
             "若仍无结果,向用户如实说「按这个书名没检索到」,并建议改用\n"
             "关键词重试或到图书馆检索台查;不要直接说成“图书馆没有这本书”。")
@@ -370,6 +422,18 @@ def library_search(ctx, query: str, top_k: int = DEFAULT_TOP_K,
             "馆藏为 0 册的是电子书(无纸本馆藏位置)。")
     return (header + "\n\n".join(_fmt(h, i) for i, h in enumerate(hits, 1))
             + _floor_hint(ctx.workspace, hits) + tail)
+
+
+def catalog_total(workspace: Path | None = None) -> int | None:
+    """库内书目总数;库不在或读不出来返回 None(给“到底加载了没有”做判据)。"""
+    path = db_path(workspace)
+    if path is None:
+        return None
+    try:
+        row = conn(path).execute("SELECT COUNT(*) FROM books").fetchone()
+    except (sqlite3.Error, OSError):
+        return None
+    return int(row[0]) if row else None
 
 
 def catalog_stats(workspace: Path | None = None) -> dict | None:
@@ -390,7 +454,19 @@ def catalog_stats(workspace: Path | None = None) -> dict | None:
 
 def library_prompt_section(workspace: Path | None = None) -> str:
     st = catalog_stats(workspace)
-    if not st:
+    if not st or not st.get("total"):
+        # 库文件在、但读不出来或是空壳:必须让模型知道,否则它会把「检索不可用」
+        # 说成「图书馆没有这本书」(用户报障就是这么来的)。
+        if db_path(workspace) is not None:
+            return (
+                "\n# 本地馆藏书目库(异常)\n"
+                f"馆藏库文件在({db_path(workspace)}),但**读不出来或里面没有数据**"
+                "(0 条书目)。\n"
+                "此时禁止回答“馆里没有这本书 / 没检索到”;一律告诉用户"
+                "「图书馆检索数据这次没加载起来,请稍后重试或到图书馆检索台查」。\n"
+                "同时把这行异常告知用户/开发者(检查库文件是否完整:完整版约 "
+                "1.31 GB、133 万条书目)。\n"
+            )
         return ""
     return (
         "\n# 本地馆藏书目库\n"

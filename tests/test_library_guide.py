@@ -140,6 +140,8 @@ def test_prompt_section_mentions_tool(tmp_path, monkeypatch):
     _make_facts(tmp_path)
     sec = library_guide.library_guide_prompt_section(tmp_path)
     assert "library_guide" in sec and "1,331,774" in sec
+    # 包内条数是抓取快照,必须声明以 library_search 实时结果为准
+    assert "快照" in sec and "以 library_search 的实时结果为准" in sec
 
 
 def test_tool_registered_and_read_only():

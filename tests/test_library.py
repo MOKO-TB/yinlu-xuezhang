@@ -2,6 +2,8 @@
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from minicode import library
 from minicode.tools.base import ToolContext
 
@@ -150,6 +152,15 @@ def test_prompt_section_silent_without_db(tmp_path, monkeypatch):
     assert library.library_prompt_section(tmp_path) == ""
 
 
+def test_prompt_section_warns_when_db_unreadable(tmp_path, monkeypatch):
+    """库在但读不出来:要在系统提示词里明确警告,别让模型说“没这本书”。"""
+    _isolate(monkeypatch, tmp_path)
+    _broken_db(tmp_path, b"SQLite format 3\x00" + b"\x00" * 4096)
+    sec = library.library_prompt_section(tmp_path)
+    assert "异常" in sec
+    assert "没加载起来" in sec
+
+
 def test_prompt_section_reports_counts(tmp_path):
     _make_db(tmp_path)
     sec = library.library_prompt_section(tmp_path)
@@ -286,3 +297,67 @@ def test_floor_hint_absent_without_pack(tmp_path, monkeypatch):
     _isolate_guide(monkeypatch, tmp_path)
     _make_db(tmp_path)
     assert "楼层提示" not in library.library_search(_ctx(tmp_path), "活着")
+
+
+# ---------------------------------------- 库坏了 / 库是空的 ≠ 馆里没这本书
+# 用户报障「图书馆查询显示没有这一本书」里还有一路:库文件在(所以不会报「库
+# 不存在」),但读不出来——安装/拷贝只拿到空壳、文件被截断、或被别的进程占用。
+# 这种情况以前被 `except sqlite3.Error: return []` 吞成「没有命中」,于是模型回
+# 用户「按这个书名没检索到」。下面锁住新行为:显式报「读不出来」,不说「没有」。
+
+
+def _broken_db(tmp_path: Path, payload: bytes) -> Path:
+    p = tmp_path / "crawled" / library.DOMAIN / library.DB_NAME
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(payload)
+    return p
+
+
+def test_zero_byte_db_is_not_reported_as_absent(tmp_path, monkeypatch):
+    """0 字节空壳库:db_path 找得到,sqlite 当空库打开 → 查表就报错。"""
+    _isolate(monkeypatch, tmp_path)
+    _broken_db(tmp_path, b"")
+    out = library.library_search(_ctx(tmp_path), "三体")
+    assert "没有匹配" not in out
+    assert "读不出来" in out or "空的" in out
+
+
+def test_truncated_db_is_not_reported_as_absent(tmp_path, monkeypatch):
+    """截断的库文件:同样不能说成「馆里没有这本书」。"""
+    _isolate(monkeypatch, tmp_path)
+    _broken_db(tmp_path, b"SQLite format 3\x00" + b"\x00" * 4096)
+    out = library.library_search(_ctx(tmp_path), "三体")
+    assert "没有匹配" not in out
+    assert "读不出来" in out
+    assert "不是“馆里没有这本书”" in out
+
+
+def test_search_raises_catalog_unavailable(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    _broken_db(tmp_path, b"SQLite format 3\x00" + b"\x00" * 4096)
+    with pytest.raises(library.CatalogUnavailable):
+        library.search(tmp_path, "三体")
+
+
+def test_empty_but_valid_db_is_not_reported_as_absent(tmp_path, monkeypatch):
+    """表建好了但 0 条书目:库没装好,不是「馆里没有」。"""
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    p = tmp_path / "crawled" / library.DOMAIN / library.DB_NAME
+    c = sqlite3.connect(p)
+    c.execute("DELETE FROM books")
+    c.execute("DELETE FROM items")
+    c.commit()
+    c.close()
+    assert library.catalog_total(tmp_path) == 0
+    out = library.library_search(_ctx(tmp_path), "三体")
+    assert "没有匹配" not in out
+    assert "空的" in out
+
+
+def test_miss_message_shows_catalog_total(tmp_path):
+    """真没命中时也要报「库内共 N 条」:库没装好一眼就能看出来。"""
+    _make_db(tmp_path)
+    out = library.library_search(_ctx(tmp_path), "不存在的书名XYZ")
+    assert "没有匹配" in out
+    assert "条书目" in out and "库内共 5 条书目" in out

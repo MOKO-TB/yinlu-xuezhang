@@ -206,8 +206,13 @@ def library_guide_prompt_section(workspace: Path | None = None) -> str:
     cat = facts.get("catalog") or {}
     return (
         "\n# 图书馆导览模块(新生入馆教学)\n"
-        f"已装载图书馆导览数据(馆藏 {cat.get('total_records', 0):,} 条书目、"
+        # 这里的条数是导览包里的**抓取快照**,不代表当前 library.db 可用。
+        # 现场核对一律以 library_search 的实时结果为准(库坏了它会明确报错)。
+        f"已装载图书馆导览数据(导览包快照:馆藏 {cat.get('total_records', 0):,} 条书目、"
         "中图法大类→楼层书库映射、馆舍空间与借还流程,随技能打包)。\n"
+        "上面的条数是导览包打包时的快照:某本书到底在不在馆、有几个可借册,\n"
+        "一律以 library_search 的实时结果为准;若 library_search 报「库读不出来」,\n"
+        "不要拿这个快照数字当证据去回答“馆里有/没有”。\n"
         "用户问「某类书在几楼 / 某本索书号 X 在哪 / 图书馆几层有什么 / 第一次怎么借书 / "
         "图书馆怎么用」时,调用 library_guide 工具(topic=floor|space|flow|stats|all,\n"
         "floor 可带 query 传中图法大类字母或类名);查**具体某本书**仍用 library_search。\n"
