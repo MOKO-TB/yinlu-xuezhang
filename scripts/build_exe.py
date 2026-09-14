@@ -66,6 +66,30 @@ def bundle_library_db(dist: Path) -> None:
     print(f"已内置馆藏库 {dst} ({dst.stat().st_size/1e9:.2f} GB)")
 
 
+def stamp_library_db(dist: Path) -> Path | None:
+    """给包内馆藏库写完整性凭证(大小/条数/sha256),供安装后与启动时自检。
+
+    每次构建都**重写**:库更新过、或上一次构建中途失败留下半截包时,凭证跟着重算
+    才不会“以坏为好”;安装包也会把凭证一起装过去,于是现场一眼就能看出库装全没有。
+    """
+    import sqlite3
+
+    from minicode import library
+
+    db = dist / "crawled" / "mfindgzyykj.libsp.cn" / "library.db"
+    if not db.is_file():
+        print("!! 包内没有馆藏库,跳过写凭证(包内图书馆查询将不可用)")
+        return None
+    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        total = c.execute("SELECT COUNT(*) FROM books").fetchone()[0]
+    finally:
+        c.close()
+    sp = library.write_stamp(db, total, extra={"app_version": __version__})
+    print(f"已写馆藏库凭证 {sp.name}({total} 条,{db.stat().st_size/1e9:.2f} GB)")
+    return sp
+
+
 def main() -> None:
     subprocess.run(
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
@@ -81,14 +105,19 @@ def main() -> None:
 
     # 内置离线馆藏库:必须在打安装包/zip 之前,否则分发出去不带图书馆数据
     bundle_library_db(dist)
+    stamp_library_db(dist)
+    lib_db = dist / "crawled" / "mfindgzyykj.libsp.cn" / "library.db"
+    lib_db_bytes = lib_db.stat().st_size if lib_db.is_file() else 0
 
     # Inno Setup 编译安装包(已安装于当前用户目录或 Program Files)
+    # /DLibDbBytes 传给 .iss 的 [Code]:装完后校验 1.3 GB 的馆藏库是否完整
     iscc = next((p for p in [
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe"),
         r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
         r"C:\Program Files\Inno Setup 6\ISCC.exe"] if os.path.exists(p)), None)
     if iscc:
         subprocess.run([iscc, f"/DAppVersion={__version__}",
+                        f"/DLibDbBytes={lib_db_bytes}",
                         str(ROOT / "packaging" / "gcode.iss")],
                        check=True, cwd=str(ROOT))
         setup_exe = ROOT / "dist" / f"引路学长-{__version__}-setup.exe"
@@ -114,9 +143,15 @@ def main() -> None:
         "1. 引路学长.exe 是图形界面(推荐);引路学长-CLI.exe 是终端版;\n"
         "   引路学长-单文件版.exe 免解压,双击直接打开。\n"
         "2. 模型已内置学校服务,打开即可用,不需要填 API Key。\n"
-        "3. 想接 MCP 服务器:编辑 config.json 的 mcp_servers 数组\n"
+        "3. 图书馆搜书用的是包内的离线馆藏库 crawled/mfindgzyykj.libsp.cn/library.db\n"
+        "   (约 1.31 GB / 133 万条书目)。\n"
+        "   - 需要至少 2 GB 空闲磁盘;库没拷全时界面会当场提示「馆藏数据不完整」;\n"
+        "   - 单文件版(引路学长-单文件版.exe)**不带**这个馆藏库,单独用无法搜书;\n"
+        "     要能搜书请用安装包,或把整个便携文件夹一起拷过去。\n"
+        "   - 自检:引路学长-CLI.exe 里输入 /library 看库状态。\n"
+        "4. 想接 MCP 服务器:编辑 config.json 的 mcp_servers 数组\n"
         "   (格式见 config.example.json,支持 npx/uvx/python 启动的任意 MCP 服务器);\n"
-        "4. 会话留档在 sessions/;技能放 skills/(SKILL.md 格式);知识库放 kb/;\n"
+        "5. 会话留档在 sessions/;技能放 skills/(SKILL.md 格式);知识库放 kb/;\n"
         "   长期记忆在 memory/MEMORY.md。\n",
         encoding="utf-8",
     )

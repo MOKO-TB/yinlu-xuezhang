@@ -8,11 +8,19 @@
 
 用户问「图书馆有没有某本书」「某本书在哪个书库」「索书号是多少」「某作者
 有哪些书」时直接查本地库,毫秒级返回,不必联网等 OPAC 响应。
+
+**完整性自检**:库是 1.3 GB 的大文件,分发/安装/拷贝都可能只拿到半截。
+构建时会在库旁边写一份 `library.db.stamp.json` 凭证(大小/条数/sha256),
+运行时 `catalog_health()` 拿它比对文件大小,启动就能发现「库没装全」,
+不用等用户搜书搜不到才去猜。
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import sqlite3
+import time
 from pathlib import Path
 
 from minicode.paths import app_path, resource_path
@@ -426,14 +434,132 @@ def library_search(ctx, query: str, top_k: int = DEFAULT_TOP_K,
 
 def catalog_total(workspace: Path | None = None) -> int | None:
     """库内书目总数;库不在或读不出来返回 None(给“到底加载了没有”做判据)。"""
+    return catalog_count_or_error(workspace)[0]
+
+
+def catalog_count_or_error(workspace: Path | None = None) -> tuple[int | None, str | None]:
+    """(书目总数, 错误描述)。库不在 → (None, None);库在但查不了 → (None, 错误)。"""
     path = db_path(workspace)
     if path is None:
-        return None
+        return None, None
     try:
         row = conn(path).execute("SELECT COUNT(*) FROM books").fetchone()
-    except (sqlite3.Error, OSError):
+    except (sqlite3.Error, OSError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    return (int(row[0]) if row else 0), None
+
+
+# ------------------------------------------------------------------ 完整性自检
+# 库是 1.3 GB 的大文件:安装中途没空间、拷贝被中断、杀软动过它,都可能只留下
+# 半截。旧版对此毫无察觉,直到用户搜书才表现为「没有这一本书」——最难查的一类
+# 现场问题。构建时写一份凭证(大小/条数/sha256),运行时比对大小即可秒判。
+
+STAMP_SUFFIX = ".stamp.json"
+
+
+def stamp_path_for(db: Path) -> Path:
+    return db.with_name(db.name + STAMP_SUFFIX)
+
+
+def stamp_path(workspace: Path | None = None) -> Path | None:
+    p = db_path(workspace)
+    return stamp_path_for(p) if p is not None else None
+
+
+def read_stamp(db: Path) -> dict:
+    """读凭证;没有/坏了就返回空 dict(老包与开发态都没有凭证,不能当错误)。"""
+    try:
+        data = json.loads(stamp_path_for(db).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_stamp(db: Path, count: int, extra: dict | None = None) -> Path:
+    """给库文件写完整性凭证(**构建时**调用;要算完整 sha256,不要放启动路径里)。
+
+    sha256 只在自检脚本里复核:每次启动重算 1.3 GB 太慢,启动只比文件大小。
+    """
+    h = hashlib.sha256()
+    with open(db, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 22), b""):
+            h.update(chunk)
+    data = {
+        "schema": 1,
+        "file": db.name,
+        "size": db.stat().st_size,
+        "count": int(count),
+        "sha256": h.hexdigest(),
+        "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    data.update(extra or {})
+    sp = stamp_path_for(db)
+    sp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return sp
+
+
+def catalog_health(workspace: Path | None = None) -> dict:
+    """馆藏库能不能用:启动自检用(只看文件大小 + 开库查表,毫秒级)。
+
+    status:
+      ok          可用
+      missing     库文件不在(没装/被杀软删了/单文件版本就不带)
+      incomplete  库文件不在凭证记录的大小上(没装全/被截断)
+      unreadable  文件在,但打不开或查不了(损坏/被占用)
+      empty       库能开,但里面 0 条书目(空壳)
+    """
+    path = db_path(workspace)
+    if path is None:
+        return {"status": "missing", "path": None}
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        return {"status": "unreadable", "path": path,
+                "detail": f"{type(exc).__name__}: {exc}"}
+    stamp = read_stamp(path)
+    expect = stamp.get("size")
+    if isinstance(expect, int) and expect > 0 and size != expect:
+        return {"status": "incomplete", "path": path, "size": size,
+                "expected": expect, "count": stamp.get("count")}
+    total, err = catalog_count_or_error(workspace)
+    if err is not None:
+        return {"status": "unreadable", "path": path, "size": size, "detail": err}
+    if not total:
+        return {"status": "empty", "path": path, "size": size}
+    want = stamp.get("count")
+    if isinstance(want, int) and want != total:
+        return {"status": "incomplete", "path": path, "size": size,
+                "total": total, "count": want, "expected": expect}
+    return {"status": "ok", "path": path, "size": size, "total": total}
+
+
+# 完整版参照值(仅用于给用户一句可核对的期望值,不做判定 —— 真正的判定走凭证)
+FULL_SIZE_TEXT = "约 1.31 GB / 133 万条书目"
+REINSTALL_HINT = ("图书馆搜书会不可用。请腾出磁盘空间后重新运行安装包/重新解压一次。")
+
+
+def health_notice(health: dict) -> str | None:
+    """把自检结果翻成给用户看的一句话;一切正常返回 None(界面不吵)。"""
+    st = health.get("status")
+    if st == "ok" or st is None:
         return None
-    return int(row[0]) if row else None
+    path = health.get("path")
+    size = health.get("size")
+    size_txt = f"{size / 1e9:.2f} GB" if isinstance(size, int) else "未知"
+    if st == "missing":
+        return (f"⚠ 图书馆馆藏数据未安装({path})。"
+                f"图书馆搜书不可用。完整版包内自带 {FULL_SIZE_TEXT}。")
+    if st == "incomplete":
+        want = health.get("expected")
+        want_txt = f"{want / 1e9:.2f} GB" if isinstance(want, int) else FULL_SIZE_TEXT
+        return (f"⚠ 图书馆馆藏数据不完整:现为 {size_txt},应为 {want_txt}。"
+                + REINSTALL_HINT)
+    if st == "empty":
+        return (f"⚠ 图书馆馆藏数据是空的(库内 0 条书目,文件 {size_txt})。"
+                + REINSTALL_HINT)
+    detail = health.get("detail") or "未知错误"
+    return (f"⚠ 图书馆馆藏数据读不出来({detail};文件 {size_txt})。"
+            + REINSTALL_HINT)
 
 
 def catalog_stats(workspace: Path | None = None) -> dict | None:

@@ -29,6 +29,7 @@ from minicode.memory import (
     memory_path as mem_path,
 )
 from minicode.llm import LLMClient
+from minicode.library import catalog_health, health_notice
 from minicode.paths import SESSIONS_DIR, resource_path
 from minicode.sandbox import SandboxState, classify_path, policy_from_raw, policy_to_raw
 from minicode.session import Session, list_sessions
@@ -285,6 +286,22 @@ class Bridge:
             "sandbox": self._sandbox_info(),
             "vision": bool(self.config.vision),
             "campus_map": campus_map_data(),
+            # 馆藏库自检:共享给同学后「图书馆搜书用不了」的头号原因就是库没装全
+            # (1.3 GB 的大文件)。启动就把结论一并下发给界面,不用等搜书失败。
+            "library_health": self._library_health(),
+        }
+
+    def _library_health(self) -> dict:
+        try:
+            health = catalog_health(self.workspace)
+            notice = health_notice(health)
+        except Exception as exc:      # 自检本身绝不能把窗口拖垮
+            return {"status": "unknown", "notice": "",
+                    "detail": f"{type(exc).__name__}: {exc}"}
+        return {
+            "status": health.get("status"),
+            "total": health.get("total"),
+            "notice": notice or "",
         }
 
     def _mcp_summary(self) -> list[dict]:

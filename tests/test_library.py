@@ -361,3 +361,94 @@ def test_miss_message_shows_catalog_total(tmp_path):
     out = library.library_search(_ctx(tmp_path), "不存在的书名XYZ")
     assert "没有匹配" in out
     assert "条书目" in out and "库内共 5 条书目" in out
+
+
+# ------------------------- 完整性凭证 + 启动自检(分享给同学后“搜不到书”的头号原因)
+
+def test_stamp_roundtrip(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    db = library.db_path(tmp_path)
+    sp = library.write_stamp(db, 5, extra={"app_version": "0.9.02"})
+    assert sp.is_file() and sp.name == "library.db.stamp.json"
+    st = library.read_stamp(db)
+    assert st["size"] == db.stat().st_size and st["count"] == 5
+    assert len(st["sha256"]) == 64 and st["app_version"] == "0.9.02"
+
+
+def test_read_stamp_tolerates_missing_and_broken(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    db = library.db_path(tmp_path)
+    assert library.read_stamp(db) == {}                  # 没凭证(开发态/旧包)
+    library.stamp_path_for(db).write_text("not json", encoding="utf-8")
+    assert library.read_stamp(db) == {}                  # 凭证坏了也不能抛
+
+
+def test_health_ok(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    db = library.db_path(tmp_path)
+    library.write_stamp(db, 5)
+    h = library.catalog_health(tmp_path)
+    assert h["status"] == "ok" and h["total"] == 5
+    assert library.health_notice(h) is None              # 正常时不打扰用户
+
+
+def test_health_missing(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    h = library.catalog_health(tmp_path)
+    assert h["status"] == "missing" and h["path"] is None
+    assert "未安装" in library.health_notice(h)
+
+
+def test_health_incomplete_when_size_differs(tmp_path, monkeypatch):
+    """核心场景:库只拷了一半 → 必须在启动时就报「不完整」,不能等搜书失败。"""
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    db = library.db_path(tmp_path)
+    library.write_stamp(db, 5)
+    with open(db, "r+b") as f:                            # 截掉尾巴模拟没拷全
+        f.truncate(db.stat().st_size - 4096)
+    h = library.catalog_health(tmp_path)
+    assert h["status"] == "incomplete"
+    assert h["size"] != h["expected"]
+    msg = library.health_notice(h)
+    assert "不完整" in msg and "重新" in msg
+
+
+def test_health_unreadable(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    _broken_db(tmp_path, b"SQLite format 3\x00" + b"\x00" * 4096)
+    h = library.catalog_health(tmp_path)
+    assert h["status"] == "unreadable" and "file is not a database" in h["detail"]
+    assert "读不出来" in library.health_notice(h)
+
+
+def test_health_empty(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    c = sqlite3.connect(library.db_path(tmp_path))
+    c.execute("DELETE FROM books")
+    c.commit()
+    c.close()
+    h = library.catalog_health(tmp_path)
+    assert h["status"] == "empty"
+    assert "空的" in library.health_notice(h)
+
+
+def test_health_incomplete_when_count_differs(tmp_path, monkeypatch):
+    """大小对得上但条数对不上(比如被换成了别的库)→ 也算不完整。"""
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    db = library.db_path(tmp_path)
+    library.write_stamp(db, 999)
+    h = library.catalog_health(tmp_path)
+    assert h["status"] == "incomplete" and h["count"] == 999 and h["total"] == 5
+
+
+def test_health_ignores_stampless_db(tmp_path, monkeypatch):
+    """没有凭证(开发态、旧包)时只做开库校验,不能误报。"""
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    assert library.catalog_health(tmp_path)["status"] == "ok"

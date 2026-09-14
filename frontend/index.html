@@ -399,6 +399,7 @@ try {
   .send:hover{ transform:translateY(-1px); box-shadow:0 8px 20px rgba(224,122,63,.45); }
   .stop{ background:var(--danger); color:#fff; display:none; }
   .composer .hint{ color:var(--text-3); font-size:11px; margin-top:6px; }
+  .composer .hint.warn{ color:var(--warning); }
 
   /* ---------------- 弹窗 & 提示 ---------------- */
   .overlay{ position:fixed; inset:0; background:rgba(9,15,23,.5);
@@ -1522,8 +1523,12 @@ window.addEventListener("DOMContentLoaded", () => {
       if (info.campus_map && window.CampusMap) window.CampusMap.setData(info.campus_map);
       renderMemoryButton({ project: info.memory_count, user: info.memory_user_count });
       visionOn = !!info.vision;
-      $("hint").textContent = info.api_key_configured ? ""
+      // 馆藏库自检:库没装全时搜书必然失败,得让用户当场看见原因(不用等搜书失败)
+      const libNotice = (info.library_health && info.library_health.notice) || "";
+      const keyNotice = info.api_key_configured ? ""
         : "当前模型服务不可用:请检查校园网连接,或联系管理员配置 API Key";
+      $("hint").textContent = [libNotice, keyNotice].filter(Boolean).join(" ");
+      $("hint").classList.toggle("warn", !!libNotice);
       pywebview.api.refresh_sessions();
       refreshHomeSuggestions();
     }).catch(e => {

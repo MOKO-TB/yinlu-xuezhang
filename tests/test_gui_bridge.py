@@ -174,6 +174,48 @@ def test_get_info_has_skills_and_providers(config, tmp_path):
     assert isinstance(info["skills"], list)
 
 
+def test_get_info_ships_library_health(config, tmp_path, monkeypatch):
+    """馆藏库自检结果要随 get_info 下发:库没装全时界面当场就能提示。"""
+    import json as _json
+    import sqlite3
+
+    from minicode import library
+    # 开发态的 app_path 兑底会命中仓库里那份 1.3 GB 真库,把兑底指到空目录
+    nowhere = tmp_path / "_no_bundled_db"
+    monkeypatch.setattr(library, "app_path", lambda *p: nowhere.joinpath(*p))
+    monkeypatch.setattr(library, "resource_path", lambda *p: nowhere.joinpath(*p))
+
+    bridge, _window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+
+    # 1) 目录里没有库 → 界面提示“未安装”
+    health = bridge.get_info()["library_health"]
+    assert health["status"] == "missing"
+    assert "未安装" in health["notice"]
+
+    # 2) 有库但比凭证记录的小(分发/安装时只拿到半截)→ 提示“不完整”
+    db = tmp_path / "crawled" / library.DOMAIN / library.DB_NAME
+    db.parent.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(db)
+    c.executescript("CREATE TABLE books(record_id INTEGER PRIMARY KEY, title TEXT);"
+                    "INSERT INTO books VALUES (1, '活着');")
+    c.commit()
+    c.close()
+    library.write_stamp(db, 1)
+    sp = library.stamp_path_for(db)
+    stamp = _json.loads(sp.read_text(encoding="utf-8"))
+    stamp["size"] = stamp["size"] + 1_000_000     # 凭证说应该有更大的一份
+    sp.write_text(_json.dumps(stamp), encoding="utf-8")
+    health = bridge.get_info()["library_health"]
+    assert health["status"] == "incomplete"
+    assert "不完整" in health["notice"]
+
+    # 3) 库正常时不下发提示(界面不吵)
+    library.write_stamp(db, 1)
+    health = bridge.get_info()["library_health"]
+    assert health["status"] == "ok"
+    assert health["notice"] == ""
+
+
 def test_provider_management(config, tmp_path, monkeypatch):
     monkeypatch.setattr("minicode.config.CREDENTIALS_PATH",
                         tmp_path / "credentials.json")

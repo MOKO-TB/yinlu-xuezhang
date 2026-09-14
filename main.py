@@ -95,6 +95,24 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                     + f"{total} 条\n" + "\n".join(
                         f"  • {s['file']}: {s['count']} 条" for s in stats)
                     + "\n  提问相关话题时,Agent 会用 search_knowledge 检索并给出来源网址。")
+    elif name == "/library":
+        from minicode.library import catalog_health, health_notice
+        health = catalog_health(workspace)
+        notice = health_notice(health)
+        lines = [f"馆藏库状态: {health.get('status')}",
+                 f"  库文件: {health.get('path')}"]
+        if health.get("total") is not None:
+            lines.append(f"  书目: {health['total']} 条")
+        if health.get("size") is not None:
+            lines.append(f"  大小: {health['size'] / 1e9:.2f} GB")
+        if health.get("expected"):
+            lines.append(f"  应为: {health['expected'] / 1e9:.2f} GB")
+        if notice:
+            lines.append(notice)
+        else:
+            lines.append("  ✓ 图书馆搜书可用")
+        lines.append("  逐项核对用:python scripts/check_library_db.py <安装目录>")
+        ui.info("\n".join(lines))
     elif name == "/history":
         est = estimate_tokens(session.messages)
         threshold = int(config.context_window * config.compact_at_ratio)
@@ -125,7 +143,7 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
 
 SLASH_NAMES = {"/help", "/clear", "/model", "/history", "/resume",
                "/undo", "/compact", "/sandbox", "/memory", "/remember",
-               "/dream", "/skills", "/kb", "/plan", "/exit", "/quit"}
+               "/dream", "/skills", "/kb", "/plan", "/library", "/exit", "/quit"}
 # Git Bash(MSYS)会把 "/cmd" 形式的参数转成 Git 安装目录下的路径,
 # 如 "D:/git/Git/history" 或 "C:/Program Files/Git/history"
 _MSYSED_COMMAND = re.compile(r"(?i)^[A-Z]:[\\/].*git[\\/]([^\\/]+)$")
@@ -187,6 +205,7 @@ def main() -> None:
     workspace = Path.cwd().resolve()
     ui = TerminalUI(config, workspace)
     ui.banner(key_ok=config.api_key_configured)
+    _warn_library_health(workspace, ui)
 
     agent, session = create_agent(config, workspace, ui)
 
@@ -194,6 +213,20 @@ def main() -> None:
         _repl(config, workspace, ui, agent, session)
     finally:
         agent.close()      # 关掉 MCP 子进程,不留孤儿
+
+
+def _warn_library_health(workspace: Path, ui: TerminalUI) -> None:
+    """启动自检馆藏库:库没装全/读不出来时当场说清,别等搜书搜不到才猜。
+
+    库是好的时候什么都不打印(不吵);自检本身出错也绝不能拦住启动。
+    """
+    try:
+        from minicode.library import catalog_health, health_notice
+        notice = health_notice(catalog_health(workspace))
+    except Exception:
+        return
+    if notice:
+        ui.error(notice)
 
 
 def _repl(config, workspace, ui, agent, session) -> None:
