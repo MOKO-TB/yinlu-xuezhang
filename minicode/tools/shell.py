@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from minicode.tools.base import ToolContext
 
@@ -20,6 +21,27 @@ _GIT_BASH_CANDIDATES = (
 )
 
 
+def _bash_beside_git() -> str | None:
+    r"""Git 装在非标准位置时,从 git.exe 的位置反推 bash。
+
+    固定候选表只盖得住默认的 C:\Program Files\Git;换盘符/换安装方式的机器
+    (如 D:\git\Git)会漏掉,于是静默退回 cmd——`sleep`/`grep` 这类命令直接报
+    "不是内部或外部命令",而且沙箱超时也测不出来。
+    """
+    git = shutil.which("git")
+    if not git:
+        return None
+    p = Path(git).resolve()
+    # 安装包版在 <root>\cmd\git.exe;其它安装方式可能只多一层,两种都试
+    for root in (p.parent.parent, p.parent.parent.parent):
+        for rel in (Path("bin") / "bash.exe", Path("usr") / "bin" / "bash.exe"):
+            cand = root / rel
+            if cand.exists() and not any(m in str(cand).lower()
+                                         for m in _WSL_MARKERS):
+                return str(cand)
+    return None
+
+
 def _pick_bash() -> str | None:
     found = shutil.which("bash")
     if found and not any(m in found.lower() for m in _WSL_MARKERS):
@@ -27,7 +49,7 @@ def _pick_bash() -> str | None:
     for cand in _GIT_BASH_CANDIDATES:
         if os.path.exists(cand):
             return cand
-    return None
+    return _bash_beside_git()
 
 
 def resolve_shell_argv(shell_cfg: str) -> list[str] | None:

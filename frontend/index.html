@@ -1142,6 +1142,14 @@ function findRunningTool() {
 }
 
 /* ---------------- 事件入口 ---------------- */
+function resetMap() {
+  // 切换/新建会话:把上一会话遗留的地图标注清掉(B12)。
+  // 即使地图当前是关着的也要清——否则用户下次手动展开面板,看到的还是上个会话的框。
+  if (window.CampusMap) {
+    window.CampusMap.reset();
+    window.CampusMap.close();
+  }
+}
 window.__gcodeEvent = function (e) {
   // 后台会话的事件:不往当前视图里画(切回去时会用 resumed 重建)
   if (e.session && currentSessionKey && e.session !== currentSessionKey
@@ -1234,11 +1242,13 @@ window.__gcodeEvent = function (e) {
       renderHome();
       refreshHomeSuggestions();
       cur = null; lastTool = null; lastTraceTurn = null;
+      resetMap();
       break;
     case "resumed":
       if (e.session) currentSessionKey = e.session;
       clearAttachments();
       renderHistory(e.messages || []);
+      resetMap();
       requestAnimationFrame(() => toBottom());
       setTimeout(() => toBottom(), 80);      // 异步布局后再补一次,确保看到最新回答
       break;

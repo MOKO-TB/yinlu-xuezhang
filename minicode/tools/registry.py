@@ -142,8 +142,12 @@ def build_default_registry() -> list[Tool]:
             description=(
                 "复杂任务的计划管理(保存在工作区 plans/plan.md)。"
                 "action=write:列 2-8 步计划,然后展示给用户等待确认再执行;"
+                "步骤可用 depends_on 声明依赖(如第 3 步 depends_on=[1,2]),"
+                "只有依赖全部完成的步骤才是「可执行」,互不依赖的可并行派子代理;"
                 "action=update:每完成一步标记 status=done(可附 note);"
-                "action=read:查看当前计划。接到多文件/多阶段的复杂任务时应先建计划。"
+                "失败的上游步骤标 status=failed,下游会被自动判为「被卡住」;"
+                "action=read:查看当前计划与调度视图(可执行/被卡住的步骤)。"
+                "接到多文件/多阶段的复杂任务时应先建计划。"
             ),
             parameters={
                 "type": "object",
@@ -151,13 +155,15 @@ def build_default_registry() -> list[Tool]:
                     "action": {"type": "string", "enum": ["write", "read", "update"],
                                "description": "write=新建/覆盖计划;read=查看;update=更新某步状态"},
                     "goal": {"type": "string", "description": "action=write 时:计划目标(一句话)"},
-                    "steps": {"type": "array", "description": "action=write 时:2-8 步,每步 {title, detail?},每步一个可独立验证的动作",
+                    "steps": {"type": "array", "description": "action=write 时:2-8 步,每步 {title, detail?, depends_on?},每步一个可独立验证的动作;depends_on 是前置步骤编号数组,如 [1,2]",
                               "items": {"type": "object", "properties": {
                                   "title": {"type": "string"},
-                                  "detail": {"type": "string"}}}},
+                                  "detail": {"type": "string"},
+                                  "depends_on": {"type": "array", "items": {"type": "integer"},
+                                                 "description": "前置步骤编号;这些步骤完成后本步才可执行"}}}},
                     "step": {"type": "integer", "description": "action=update 时:步骤编号"},
-                    "status": {"type": "string", "enum": ["done", "pending"],
-                               "description": "action=update 时:新状态,默认 done"},
+                    "status": {"type": "string", "enum": ["done", "pending", "failed"],
+                               "description": "action=update 时:新状态,默认 done;failed 表示这步没做成,下游会被判为卡住"},
                     "note": {"type": "string", "description": "action=update 时:可选备注"},
                 },
                 "required": ["action"],

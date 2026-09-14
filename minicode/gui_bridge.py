@@ -183,6 +183,9 @@ class Bridge:
         self._current: SessionRunner | None = None
         self._confirm_event = threading.Event()
         self._confirm_choice = "no"
+        # 确认握手是一次一条的(前端只有一个弹窗):并行子代理同时要确认时
+        # 靠这把锁排队,否则两个线程会互抢 event/choice,确认框对不上是谁在等。
+        self._confirm_lock = threading.Lock()
         ui.confirm_handler = self.confirm_tool
         self.open_session()                  # 第一个会话
 
@@ -682,14 +685,15 @@ class Bridge:
     def confirm_tool(self, tool: Tool, args: dict, reason: str = "") -> str:
         from minicode.explain import permission_why
         why = permission_why(tool.name, args, reason)
-        self._confirm_event.clear()
-        self._confirm_choice = "no"
-        self.ui.push("confirm_request", tool=tool.name,
-                     detail=self._permission_detail_text(tool, args),
-                     why=why.get("why", ""), digest=why.get("digest", ""),
-                     risks=why.get("risks", []))
-        self._confirm_event.wait()
-        return self._confirm_choice
+        with self._confirm_lock:             # 一次只处理一个确认请求
+            self._confirm_event.clear()
+            self._confirm_choice = "no"
+            self.ui.push("confirm_request", tool=tool.name,
+                         detail=self._permission_detail_text(tool, args),
+                         why=why.get("why", ""), digest=why.get("digest", ""),
+                         risks=why.get("risks", []))
+            self._confirm_event.wait()
+            return self._confirm_choice
 
     def _permission_detail_text(self, tool: Tool, args: dict) -> str:
         if tool.name == "bash":

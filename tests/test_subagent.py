@@ -1,5 +1,6 @@
-"""子代理(task 工具)测试:派发、只读隔离、递归拒绝、步数上限。"""
+"""子代理(task 工具)测试:派发、只读隔离、递归拒绝、步数上限、只读并行。"""
 import json
+import threading
 
 from minicode.llm import AssistantTurn, ToolCall
 from test_gui_bridge import make, wait_until
@@ -191,3 +192,169 @@ def test_task_sub_steps_capped(config, tmp_path):
 
     assert endless.consumed == 22   # 父 task 1 + 子 20(上限)+ 父收尾 1
     assert "(子代理已结束,但未返回文本报告)" in _tool_result(session)
+
+
+# ------------------------------------------------------- 只读子代理并行派发
+
+
+class RoutingLLM:
+    """按会话内容分派回复,并记录并发峰值。
+
+    并发子代理的消费顺序不确定,不能用全局队列(先到先得会把回复串台);
+    每个子代理有独立的 system prompt 与各自的用户消息,据此路由才稳。
+
+    gate:在"占着并发名额"的状态里调用(用完才释放)。假回复几乎是瞬时的,
+    不加闸门就观察不到重叠——用 Barrier 卡住两路,才能真正证明是并发执行。
+    """
+
+    def __init__(self, route, gate=None, gate_when=None):
+        self.route = route
+        self.gate = gate
+        self.gate_when = gate_when or (lambda messages: False)
+        self.calls: list[list[dict]] = []
+        self.live = 0
+        self.max_live = 0
+        self._lock = threading.Lock()
+
+    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
+                    on_retry=None):
+        with self._lock:
+            self.calls.append([dict(m) for m in messages])
+            self.live += 1
+            self.max_live = max(self.max_live, self.live)
+        try:
+            if self.gate and self.gate_when(messages):
+                self.gate()
+            turn = self.route(messages)
+            if on_text and turn.text:
+                on_text(turn.text)
+            return turn
+        finally:
+            with self._lock:
+                self.live -= 1
+
+
+def _is_subagent(messages) -> bool:
+    head = _sys_of(messages)
+    return "子代理" in head and "# 角色" in head
+
+
+def _sys_of(messages) -> str:
+    return str(messages[0].get("content") or "") if messages else ""
+
+
+_BATCH_TURN = AssistantTurn(tool_calls=[
+    _call("task", {"type": ["explore", "review"],
+                   "task": ["找登录相关代码", "审查权限模块"]}, "b1")])
+
+
+def test_task_batch_runs_readonly_subagents_in_parallel(config, tmp_path):
+    _accept_all(config)
+
+    def route(messages):
+        head = _sys_of(messages)
+        if "只读侦察子代理" in head:
+            return _final("侦察报告:登录逻辑在 auth.py")
+        if "审查子代理" in head:
+            return _final("审查报告:权限判断缺边界检查")
+        if any(m.get("role") == "tool" for m in messages):
+            return _final("两路侦察都回来了")
+        return _BATCH_TURN
+
+    llm = RoutingLLM(route, gate=threading.Barrier(2).wait,
+                     gate_when=_is_subagent)
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("并行调查")
+    assert wait_until(lambda: not bridge._busy, timeout=15)
+
+    result = _tool_result(session)
+    assert "[并行子代理完成 · 2 个]" in result
+    assert "侦察报告:登录逻辑在 auth.py" in result
+    assert "审查报告:权限判断缺边界检查" in result
+    # 报告按请求顺序合并(explore 在前,review 在后),不受完成先后影响
+    assert result.index("侦察报告") < result.index("审查报告")
+    assert "## 1. explore" in result and "## 2. review" in result
+    assert llm.max_live >= 2, "两路只读子代理应在同一时刻并发执行"
+
+
+def test_task_batch_keeps_subagent_streaming_out_of_the_chat(config, tmp_path):
+    """并发子代理的流式文本不能插进主聊天区(会互相穿插成乱码)。"""
+    _accept_all(config)
+
+    def route(messages):
+        head = _sys_of(messages)
+        if "只读侦察子代理" in head:
+            return _final("侦察流式噪声")
+        if "审查子代理" in head:
+            return _final("审查流式噪声")
+        if any(m.get("role") == "tool" for m in messages):
+            return _final("主代理结论")
+        return _BATCH_TURN
+
+    llm = RoutingLLM(route)
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("并行调查")
+    assert wait_until(lambda: not bridge._busy, timeout=15)
+
+    streamed = "".join(e["text"] for e in window.of_type("text_delta"))
+    assert "侦察流式噪声" not in streamed
+    assert "审查流式噪声" not in streamed
+    assert "主代理结论" in streamed          # 主代理自己的输出照常流式
+    # 工具卡片也只在主代理侧出现,子代理的不往聊天区画
+    assert [e["name"] for e in window.of_type("tool_start")] == ["task"]
+
+
+def test_task_batch_rejects_write_types(config, tmp_path):
+    _accept_all(config)
+    llm = RoutingLLM(lambda messages: (
+        AssistantTurn(tool_calls=[_call("task", {
+            "type": ["explore", "implement"],
+            "task": ["看看代码", "顺手改一下"]}, "b1")])
+        if not any(m.get("role") == "tool" for m in messages)
+        else _final("被拒了")))
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("混合批次")
+    assert wait_until(lambda: not bridge._busy, timeout=15)
+
+    result = _tool_result(session)
+    assert "只支持只读类型" in result and "implement" in result
+
+
+def test_task_batch_validation(config, tmp_path):
+    _accept_all(config)
+    cases = [
+        ({"type": ["explore", "review"], "task": ["只有一个"]}, "数量必须一致"),
+        ({"type": ["explore"] * 5, "task": ["a"] * 5}, "一次最多并行"),
+        ({"type": ["explore", "fly"], "task": ["a", "b"]}, "未知子代理类型"),
+        ({"type": ["explore", ""], "task": ["a", "b"]}, "不能为空"),
+        ({"type": 42, "task": "a"}, "必须是字符串或字符串数组"),
+    ]
+    for args, expect in cases:
+        case_dir = tmp_path / expect[:6]
+        case_dir.mkdir(parents=True, exist_ok=True)
+        llm = RoutingLLM(lambda messages, _a=args: (
+            AssistantTurn(tool_calls=[_call("task", _a, "b1")])
+            if not any(m.get("role") == "tool" for m in messages)
+            else _final("ok")))
+        bridge, window, session = make(config, case_dir, llm)
+        bridge.send_task("校验")
+        assert wait_until(lambda: not bridge._busy, timeout=15), expect
+        assert expect in _tool_result(session), (expect, _tool_result(session))
+
+
+def test_task_single_string_unchanged(config, tmp_path):
+    """向后兼容:type/task 传字符串仍是单发,流式输出照常进聊天区。"""
+    _accept_all(config)
+    llm = QueueLLM([
+        _task_turn("explore", "看看工作区有什么"),
+        _final("侦察字幕"),
+        _final("主代理总结"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("看看工作区")
+    assert wait_until(lambda: not bridge._busy)
+
+    result = _tool_result(session)
+    assert "[侦察子代理完成]" in result and "侦察字幕" in result
+    assert not result.startswith("[并行子代理完成")
+    assert "侦察字幕" in "".join(e["text"] for e in window.of_type("text_delta"))

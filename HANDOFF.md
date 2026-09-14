@@ -1,13 +1,15 @@
 # 引路学长(Agent)开发交接文档
 
-> 更新:2026-09-13　用途:任何新会话(人或 Agent)读完本文档即可无缝接手。
+> 更新:2026-09-14　用途:任何新会话(人或 Agent)读完本文档即可无缝接手。
 > 项目代码:`D:\game\mini-code`(引路学长,原 mini-code/Gcode)。
+> 本轮参考实现:`https://gitee.com/feng-chenhao/xingyao-y-code`(星瑶 Y-Code,v1.2.26);
+> 开发记录见 `docs/roadmap-v0.9.01.md`。
 
 ---
 
 ## 1. 项目一句话现状
 
-对标星瑶 Y-Code 的自研编码智能体,**v0.8.17**,已完成:Agent 主循环 + 内置 17 工具与 MCP 外部工具 + 权限门与**沙箱边界**(敏感路径硬禁/工作区外逐次确认) + 内置校园模型(界面不提供密钥与模型切换,顶栏标识只展示)+ **附件上传**(文件/图片,可选视觉多模态)+ **后台任务**(多会话并发:新建/切换不再打断正在跑的任务) + SKILL.md 技能 + 知识库检索(来源网址+可信度)+ 子代理 + 计划模式 + 长期记忆(含 Dream 整理与用户级全局记忆)+ **校园地图**(map_* 工具 + 手绘地图面板:框出建筑、出单栋标注图、歧义不猜)+ 会话管理 + 上下文压缩 + GUI(**暮色玻璃**全屏校园黄昏背景,深浅主题,时间问候首页+动态校园建议 chips,**划词复制**/消息复制与编辑重发,**思考与工具调用收成一条可折叠的"工作过程"**,立方体图标+校名 logo)+ 三形态分发(安装包/单文件/便携 zip,另含内置 crawl4ai 的完整版)。
+对标星瑶 Y-Code 的自研编码智能体,**v0.9.01**,已完成:Agent 主循环 + 内置 18 工具与 MCP 外部工具 + 权限门与**沙箱边界**(敏感路径硬禁/工作区外逐次确认) + 内置校园模型(界面不提供密钥与模型切换,顶栏标识只展示)+ **附件上传**(文件/图片,可选视觉多模态)+ **后台任务**(多会话并发:新建/切换不再打断正在跑的任务) + SKILL.md 技能 + 知识库检索(来源网址+可信度)+ 子代理(**只读类型并行派发**,上限 4)+ 计划模式(**含 `depends_on` 依赖图与可执行/卡住调度视图**)+ 长期记忆(含 Dream 整理与用户级全局记忆)+ **校园地图**(map_* 工具 + 手绘地图面板:框出建筑、出单栋标注图、歧义不猜)+ 会话管理 + 上下文压缩 + GUI(**暮色玻璃**全屏校园黄昏背景,深浅主题,时间问候首页+动态校园建议 chips,**划词复制**/消息复制与编辑重发,**思考与工具调用收成一条可折叠的"工作过程"**,立方体图标+校名 logo)+ 三形态分发(安装包/单文件/便携 zip,另含内置 crawl4ai 的完整版)。
 
 ## 2. 已完成事项(按里程碑)
 
@@ -45,6 +47,7 @@
 | v0.8.17 地图易用性 | 地图从「模型才能用」变成「用户自己也能用」,四项都不消耗模型调用(纯前端 + 索引下发):①**面板搜索框**:输入即出候选列表(回车定位第一个),本地匹配「楼名 / 俗称 / 类别」——俗称靠 `frontend_payload` 新下发的 `aliases` 字段,归一化规则与后端 `campus.normalize()` 保持一致(剥提问词、去标点、栋座楼等价、拉丁转小写),所以「E栋」「s5」「食堂」都能搜到;命中多处只列候选不猜(与模型侧同一口径)。**坑**:最初把 `area`(区域描述)也当匹配字段,搜「图书馆」会把「图书馆东侧的学思苑F」也命中,已改成只匹配名称/别名/类别。②**图例即筛选**:类别徽章(学生宿舍16 / 食堂2 …)点一下只看这一类,再点取消,面板内自探索。③**详情卡增强**:邻近建筑变成可点跳转(从图书馆逛到学思苑F),加「⧉ 复制位置说明」按钮(复制一句可发群的位置描述,clipboard 失败退 execCommand)。④**首页入口**:首页首个 chip 是「🗺 打开校园地图」(点了直接开面板并聚焦搜索框,不发送消息),提示语也补了「找楼可以直接问,也可以点上面的地图自己搜」。浏览器实测:搜索(E栋→2 候选 / s5 / 宿舍→16 / 霍格沃茨→友好提示)、类别筛选、邻近跳转、复制按钮、首页 chip 全部按预期;全量测试绿 |
 | 打包分发 | PyInstaller 双 exe(GUI+CLI)+ onefile 单文件版 + Inno Setup 安装包(中文向导/仅当前用户/快捷方式/卸载器,卸载保留用户数据) |
 | 网页版(校园助手) | **同学打开网址就能用的只读问答形态**,详见 `WEB.md`。①形态:同一套引擎 + 同一套前端,新增 `minicode/web_server.py`(标准库 ThreadingHTTPServer + `POST /api/<方法>` + SSE `GET /api/events` + 静态文件,零新依赖)、`minicode/web_ui.py`(`WebUI(GuiUI)`:`push` 出口改成队列、`confirm_tool` 一律拒绝)、`minicode/web_profile.py`(工具白名单 + 对外提示词 + `PublicFacade`)与 `frontend/bridge-web.js`(服务时注入 `<head>` 的 shim:把 `pywebview.api` 换成 fetch、SSE 事件转给 `__gcodeEvent`,**index.html 一行未改**);入口 `web_main.py` 与 `main.py --web`。②复用 `Bridge` 既有的多运行器结构做访客隔离:**每个 cookie 访客一个 `WebBridge` 实例**(私有 `sessions_dir`)、不连 MCP,访客之间不共享任何内存状态。③安全边界(踩过的洞,别推翻):**只读工具集必须用 `PUBLIC_TOOLS` 显式白名单,绝不能用 `Tool.read_only` 过滤** —— 该标志语义是"执行前不需确认"(`read_file`/`glob`/`grep` 都是 `read_only=True`),而工作区根目录就躺着含内置 Key 的 `config.local.json`,按标志过滤等于把 Key 送出去(网页版部署应把 Key 改走 `YINLUXS_BUILTIN_API_KEY` 并把该文件移出工作区);`get_asset` 只放行图片扩展名(否则它是覆盖整个工作区的文件读取原语);对外提示词不注入 `memory/MEMORY.md`、也不含编码 agent 的 `# 工作准则`;会话浏览只在访客私有目录内;`Origin`/`Referer` 与 `Host` 同源校验(挡"任意网站 POST 本机端口");`task` 子代理必须排除(会携带写工具绕过白名单)。④多访客与滥用控制:每访客 12 次/分钟令牌桶、全局同时 3 个回合(超出回"前面还有 N 位同学",靠 `busy` 事件 + `reserved_turns` 计数)、每日 2000 次上限、30 分钟无动静回收访客、`web-usage.log` 记来源 IP 与提问。⑤**坑**:`GuiUI.request_stop()` 设的停止标志是**跨回合**的,而 SSE 断开(刷新/切标签/自动重连)是常态 —— 必须在新回合开始前清掉 `stop_requested`,否则刷新后的下一次提问会在第一个输出增量处被打断;SSE 断开时也只在确有回合在跑时才停。⑥验收:15 项新测试(`tests/test_web_server.py`)+ `scripts/e2e_web.py`(真 HTTP 全链路,含 search_knowledge 真跑知识库与越权/跨站复核),并在真浏览器实测启动、回车发送、SSE 流式渲染、工具卡 `search_knowledge ✓`、"工作过程"折叠均正常 |
+| v0.9.01 计划依赖图 + 只读子代理并行 | 移植星瑶 Y-Code 已跑通的两套做法(参考仓库 `gitee.com/feng-chenhao/xingyao-y-code`,dev@b00ed5b)。①**B12 收尾(会话级状态隔离)**:新建/切会话时地图状态串到新会话——`frontend/map.js` 新增 `reset()`(清框/图钉/筛选/搜索/详情卡/灯箱)并挂到 `window.CampusMap`,`index.html` 的 `cleared` 与 `resumed` 两个分支各调一次 `resetMap()`;**不能复用 `apply({op:'clear'})`**——它第一行就是 `openPanel()`,会把地图又弹开;面板隐藏时 `rect()` 宽高为 0,`fitAll()` 会算出歪缩放,故改为回默认视角。②**计划依赖图**(`minicode/planning.py`):步骤可声明 `depends_on`(文件里落成 `  - 依赖: 1, 2`),写入时校验未知依赖/自依赖/环(不合法不落盘);新增 `ready_steps()`/`blocked_steps()` 与「调度视图」,status 扩到 `pending/done/failed`(标记 `[ ]`/`[x]`/`[!]`);顺带修掉两处旧缺陷——备注会被写到每一步下面、备注在重写时丢失。③**只读子代理并行**(`minicode/subagents.py`):`task` 的 type/task 传数组即批量(`ThreadPoolExecutor`,上限 4,报告按请求顺序合并);**只对只读类型 explore/review 开放**——`PermissionGate` 里 read_only 工具直接 ALLOW 不走确认,写类型并发会争抢同一条确认通道,混入直接报错不静默降级;批量用 `_QuietUI` 吞掉子代理的流式输出与工具卡(否则几路 `text_delta` 在同一聊天区互相穿插),错误类回调照常透传;`Bridge.confirm_tool` 加确认锁(`_confirm_lock`),并发要确认时排队。④**顺手修掉既有环境失败**:`shell._pick_bash()` 原来只认 `C:\Program Files\Git`,Git 装在非默认盘符(如本机 `D:\git\Git`)时会静默退回 cmd,`sleep`/`grep` 直接报「不是内部或外部命令」且沙箱超时测不出来;新增 `_bash_beside_git()` 从 `git.exe` 位置反推 `bin/bash.exe` 与 `usr/bin/bash.exe`。验收:全量 `pytest -q` **451 passed / 0 failed**(基线 438 项中原本 1 failed);B12 另有真浏览器回归 `scripts/e2e_map_reset.py`(Playwright + 真 Chromium,stub pywebview 桥后按后端事件序推 `map{focus}` → `cleared`,断言 `.cm-box`/`.cm-pin` 归零、面板收起、搜索框清空、副标题复位,并回归「清零后地图仍可正常标注」) |
 
 ## 3. 关键决策(不要推翻)
 
@@ -106,14 +109,17 @@ cd /d/game/mini-code
 
 ## 6. 未完成的待办(路线图,按优先级)
 
-1. **子代理并行**:当前 task 工具串行执行;星瑶支持无依赖子任务并行派发(依赖感知调度)。
-2. **计划模式依赖图**:计划项加 `depends_on`,主代理按依赖顺序派发。
+1. ~~**子代理并行**:当前 task 工具串行执行~~ → **v0.9.01 已做只读并行**(explore/review,上限 4)。
+   剩:**写子代理并行**——需先把确认通道从「全局单 event」改成「每个子代理独立确认队列」,
+   否则并发写子代理会争抢同一条确认通道(`Bridge.confirm_tool` 现已有锁排队,但用户仍分不清是哪个子代理在等)。
+2. ~~**计划模式依赖图**:计划项加 `depends_on`,主代理按依赖顺序派发~~ → **v0.9.01 已完成**(`planning.py` 的 `depends_on` + `ready_steps`/`blocked_steps` + 调度视图)。
+   剩:**依赖感知自动派发**——现在是模型看调度视图自己决定派哪几步,可以再做「一键把 ready 的步骤批量派给子代理」。
 3. **MCP 增强**:HTTP/SSE 传输、AI 自助配置(`mcp_add_server` 一类)、预设模板库。
 4. **沙箱增强**:项目级白名单(`permissions.json` 式的命令前缀/文件路径授权)、Git worktree 隔离工作区。
 5. **附件增强**:拖拽上传(pywebview file_drop)、`fetch_image` 抓网页图片、附件在历史会话里的可视化。
 6. **计划模式可视化**:GUI 加计划面板(当前计划文件已在聊天中渲染勾选清单,足够 MVP)。
 7. **长期记忆增强**:记忆去重/整理(星瑶的 Dream 线程)、用户级全局记忆(跨项目)。
-8. **浏览器验证能力**:纯前端项目页面效果只能人肉点检(见 yinlu-xuezhang/AGENT-PLAN.md §8)。**这次做地图用的是折中办法**:`py -3.12 -m http.server 8877 -d frontend` 起本地静态服务,浏览器里 `fetch` 最新 `map.js`/`campus-map.json` 注入后截图核对(顺带发现两个真 bug:`"、".join(name)` 把名字按字符拆成"图、书、馆"、路口名靠"最近顶点"判定把主干道中段误判成"校区主路")。
+8. **浏览器验证能力**:纯前端项目页面效果只能人肉点检(见 yinlu-xuezhang/AGENT-PLAN.md §8)。**v0.9.01 已有可复用套路**:`scripts/e2e_map_reset.py` —— Playwright + 真 Chromium 起静态服务加载 `frontend/`,`add_init_script` stub 掉 `pywebview` 桥(`get_info` 返回真实 `campus.frontend_payload()`),再按后端真实事件序推 `window.__gcodeEvent`,断言 DOM 事实(不靠截图看)。新写前端回归可直接照抄这个骨架。
 9. **bash 长命令**:后台任务/输出流式化。
 10. **地图数据维护在交付侧**:`frontend/campus-index.json` 与 `frontend/img/campus/*` 都是**生成物**,改数据要改交付包的 `build_index.py` 数据表,再重跑 `scripts/build_campus_assets.py --src <交付目录>`。已知缺口:①学生口语「综合馆」「旧图」这类叫法交付索引里没有(问到会答「没有这个标注」),要在交付侧补别名;②全尺寸标注图默认不出(`--full` 才有),要把原图发给同学时用它;③交付包的 `not_buildings` 只有位置文字描述、没有坐标,所以田径场/篮球场这类问到了只能口头说位置。
 11. **会话切换的定位方式**:前端传的是列表序号,后端 `resume_session(index)` 会重新扫目录取第 N 条(排序按 mtime);渲染到点击之间若有新会话落盘,序号可能错位到另一条会话。要彻底稳,改成前端回传文件名、后端按名解析(参照 `edit_resend` 的 `expect` 校验思路)。
@@ -121,7 +127,7 @@ cd /d/game/mini-code
 ## 7. 新会话上手指南
 
 1. 读本文档 + `README.md`(能力/配置/命令全集)。
-2. 跑 `pytest -q` 确认基线(应为全绿;若并行会话在改,先跑全量再动手)。
+2. 跑 `pytest -q` 确认基线(应为**全绿 451 项**;若并行会话在改,先跑全量再动手)。
 3. 改代码前**重读要编辑的文件**——本仓库有多个会话并行开发(web_crawl、school-qa、koubei-extract 技能与校园语料爬虫均为并行会话所加),编辑前用当前实际内容做锚点,改完跑全量测试。
 4. 相关文档:产品侧 `D:\game\yinlu-xuezhang\PLAN.md`(v2.0 冻结)与 `AGENT-PLAN.md`(用本 Agent 开发该项目的计划);产品知识库 JSON 数据源在 `D:\yy\yinlu-master\yinlu-master\`(已拷贝到本仓库 kb/)。
 5. 远端两个:`origin` = GitHub `MOKO-TB/yinlu-xuezhang`(**私有**,2026-09-13 从 `MOKO-TB/momo` 改名而来),`gitee` = `gitee.com/inkzero/momo`(**公开**)。注意 `branch.main.remote` 指向 gitee,所以 `git push` 不带参数推的是 gitee,推 GitHub 要显式写 `git push origin main`。

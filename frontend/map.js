@@ -388,6 +388,26 @@
   }
   function closeLightbox() { $("mapLightbox").classList.remove("show"); }
 
+  /* 会话切换时把地图恢复到"刚打开"的样子(B12)。
+     不能复用 apply({op:'clear'}):它第一行就是 openPanel(),会把地图又弹开;
+     这里只清状态、不动面板,关不关由调用方决定。 */
+  function reset() {
+    if (!svg) return;              // 底图还没加载,没有可清的状态
+    boxes = []; pins = []; activeCat = ""; boxColor = "orange";
+    closeLightbox();
+    $("mapSearch").value = ""; $("mapSearchInfo").textContent = "";
+    $("mapList").style.display = "none";
+    renderCard([]); renderNotice(null);
+    $("mapSub").textContent = "手绘地图 · 滚轮缩放 · 拖动平移 · 点框看大图";
+    renderLegend(); drawBoxes();
+    if (isOpen()) {
+      fitAll();                     // 面板可见:正常量尺寸重排
+    } else {
+      view.cx = W() / 2; view.cy = H() / 2; view.k = 1;
+      applyView();                  // 隐藏时 rect 为 0,fitAll 会算错缩放;回默认视角
+    }
+  }
+
   /* ------------------------------------------------------------ 对外接口 */
   function apply(ev) {
     if (!ev || !svg) return;
@@ -561,7 +581,7 @@
 
   window.CampusMap = {
     setData, apply, open: openPanel, close: closePanel, toggle: togglePanel,
-    isOpen, fitAll, closeLightbox,
+    isOpen, fitAll, closeLightbox, reset,
     zoom: (f) => { view.k = Math.max(0.5, Math.min(8, view.k * f)); applyView(); },
   };
 })();
