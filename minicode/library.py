@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -123,11 +124,119 @@ def _rank_vals(query: str) -> list:
     return [query, esc + "%", "%" + esc + "%"]
 
 
+# --------------------------------------------------------------- 查询归一化
+# 学生输入常带装饰与标注,而库里标题未必有:「《C程序设计》」「C语言程序设计
+# (第5版)」「高等数学(上)」。整串当字面量去查必然 0 命中,于是被误判成
+# "馆里没有这本书"。下面几组正则用于逐级放宽(只在上一级落空后才试下一级,
+# 不会把"精确命中"放宽成"模糊命中")。
+
+# 整串被书名号/引号包住:《三体》 / "三体"。这时书名本身才是用户要的
+_WRAP_PAIR_RE = re.compile(r"^\s*[《〈「『\"'](.+?)[》〉」』\"']\s*$")
+# 书名号等装饰字符(用于宽松一级的变体)
+_WRAP_RE = re.compile(r"[《》〈〉「」『』\"']")
+# 括号标注:(第5版)(修订本)(上册)
+_ANNOT_PAREN_RE = re.compile(r"[（(][^）)]{0,12}[）)]")
+# 裸标注:第5版 / 第2册 / 修订版
+_ANNOT_BARE_RE = re.compile(
+    r"第\s*[0-9一二三四五六七八九十百]+\s*[版次册卷辑]|修订版|增订本|影印本")
+# 分隔符:半/全角空格、冒号、间隔号、逗号、顿号、斜杠
+_SEP_RE = re.compile(r"[\s　：:·・，,；;、/|\\]+")
+# 作为独立变体至少要 2 字:单字 LIKE 必然全库乱匹配
+MIN_TERM_LEN = 2
+
+
+def _variants(query: str) -> list[str]:
+    """检索变体阶梯(从严到宽):原串 → 去书名号 → 去版次标注 → 拆词。
+
+    返回去重后的候选列表,调用方按序尝试、命中即停。
+    """
+    out: list[str] = []
+
+    def add(s: str) -> None:
+        s = re.sub(r"\s+", " ", (s or "").strip())
+        if s and s not in out:
+            out.append(s)
+
+    q = (query or "").strip()
+    if not q:
+        return out
+
+    pair = _WRAP_PAIR_RE.match(q)
+    if pair:
+        # 整串被书名号包住:去壳形态优先(库里标题通常不带《》)
+        add(pair.group(1))
+        add(q)
+    else:
+        add(q)
+        unwrapped = _WRAP_RE.sub("", q).strip()
+        if unwrapped != q:
+            add(unwrapped)
+
+    # 去掉版本/卷册标注
+    core = _ANNOT_PAREN_RE.sub(" ", _ANNOT_BARE_RE.sub(" ", _WRAP_RE.sub(" ", q)))
+    core = re.sub(r"\s+", " ", core).strip()
+    add(core)
+
+    # 拆词:按原词序(保留"先试哪个词"的可预期性)
+    for tok in _SEP_RE.split(core):
+        if len(tok) >= MIN_TERM_LEN:
+            add(tok)
+    return out
+
+
+def _fts_rows(c: sqlite3.Connection, variant: str, top_k: int,
+              kind: str) -> list[sqlite3.Row]:
+    """精确书名 + FTS5 trigram(仅 ≥3 字,毫秒级)。"""
+    kc = _kind_clause(kind)
+    rows: list[sqlite3.Row] = []
+    # 1) 精确书名(含「书名.」这类带后缀的写法)
+    try:
+        rows += c.execute(
+            SEL + "WHERE (b.title=? OR b.title=?)" + kc + " LIMIT 5",
+            (variant, variant + ".")).fetchall()
+    except sqlite3.Error:
+        pass
+    # 2) FTS5;?1=MATCH ?2..?4=排序 ?5=limit
+    if len(variant) >= 3:
+        expr = _fts_expr(variant)
+        if expr:
+            try:
+                rows += c.execute(
+                    SEL + "JOIN books_fts f ON f.rowid=b.record_id "
+                    "WHERE (books_fts MATCH ?1)" + kc + _rank_sql(2),
+                    tuple([expr] + _rank_vals(variant) + [top_k])).fetchall()
+            except sqlite3.Error:
+                pass
+    return rows
+
+
+def _like_rows(c: sqlite3.Connection, variant: str, top_k: int,
+               kind: str) -> list[sqlite3.Row]:
+    """LIKE 兜底(书名/作者/出版社/分类号/索书号)。
+
+    注意:前导通配符用不上索引,1.3 M 行是全表扫(约 1.5 s),因此一次检索
+    最多只走一次。
+    """
+    like = _like(variant)
+    if not like:
+        return []
+    try:
+        return c.execute(
+            SEL + "WHERE (b.title LIKE ?1 ESCAPE '\\' OR b.author LIKE ?1 ESCAPE '\\' "
+            "OR b.publisher LIKE ?1 ESCAPE '\\' OR b.class_no LIKE ?1 ESCAPE '\\' "
+            "OR b.call_no LIKE ?1 ESCAPE '\\')" + _kind_clause(kind) + _rank_sql(2),
+            tuple([like] + _rank_vals(variant) + [top_k])).fetchall()
+    except sqlite3.Error:
+        return []
+
+
 def search(workspace: Path | None, query: str, top_k: int = DEFAULT_TOP_K,
            kind: str = "all") -> list[dict]:
-    """混合检索:精确书名 → FTS5 trigram(≥3 字,毫秒级) → LIKE 兜底。
+    """按变体阶梯检索:精确书名 → FTS5 trigram → LIKE 兜底。
 
-    单字/两字关键词 FTS5 trigram 建不出索引,直接走 LIKE。
+    每个变体先走"精确 + FTS"(毫秒级),命中即停;全落空时只对最宽的那个变体
+    做一次 LIKE 全表扫。这样既修掉"带书名号/版次标注就查不到",又不会因为
+    多试几级而把耗时翻好几倍。
     """
     path = db_path(workspace)
     if path is None:
@@ -136,50 +245,22 @@ def search(workspace: Path | None, query: str, top_k: int = DEFAULT_TOP_K,
     if not query:
         return []
     c = conn(path)
-    kc = _kind_clause(kind)
+    variants = _variants(query)
+
     rows: list[sqlite3.Row] = []
+    for v in variants:
+        if len(v) < 3:
+            # 1-2 字 FTS5 trigram 建不出索引,这个变体只能走 LIKE
+            rows = _like_rows(c, v, top_k, kind)
+        else:
+            rows = _fts_rows(c, v, top_k, kind)
+            if rows and len(rows) < top_k:
+                rows += _like_rows(c, v, top_k, kind)   # 命中不足时补足(与旧行为一致)
+        if rows:
+            break
 
-    # 1) 精确书名(含「书名. 第N版」这类带后缀的写法)
-    try:
-        rows += c.execute(
-            SEL + "WHERE (b.title=? OR b.title=?)" + kc + " LIMIT 5",
-            (query, query + ".")).fetchall()
-    except sqlite3.Error:
-        pass
-
-    # 2) FTS5(≥3 字符);?1=MATCH ?2..?4=排序 ?5=limit
-    if len(query) >= 3:
-        expr = _fts_expr(query)
-        if expr:
-            try:
-                rows += c.execute(
-                    SEL + "JOIN books_fts f ON f.rowid=b.record_id "
-                    "WHERE (books_fts MATCH ?1)" + kc + _rank_sql(2),
-                    tuple([expr] + _rank_vals(query) + [top_k])).fetchall()
-            except sqlite3.Error:
-                pass
-
-    # 3) LIKE 兜底(书名/作者/出版社/分类号/索书号);?1=LIKE ?2..?4=排序 ?5=limit
-    if len(rows) < top_k:
-        like = _like(query)
-        if like:
-            try:
-                rows += c.execute(
-                    SEL + "WHERE (b.title LIKE ?1 ESCAPE '\\' OR b.author LIKE ?1 ESCAPE '\\' "
-                    "OR b.publisher LIKE ?1 ESCAPE '\\' OR b.class_no LIKE ?1 ESCAPE '\\' "
-                    "OR b.call_no LIKE ?1 ESCAPE '\\')" + kc + _rank_sql(2),
-                    tuple([like] + _rank_vals(query) + [top_k])).fetchall()
-            except sqlite3.Error:
-                pass
-
-    # 4) 多词是 AND 语义:调用方常把「书名+作者」或臆造词拼在一起,AND 后必然 0 命中。
-    #    查不到时按词序逐个退回单关键词再试,避免把"组合词不存在"误判成"库里没有这本书"。
-    if not rows and " " in query:
-        for tok in query.split():
-            sub = search(workspace, tok, top_k=top_k, kind=kind)
-            if sub:
-                return sub
-        return []
+    if not rows and variants and len(variants[-1]) >= 3:
+        rows = _like_rows(c, variants[-1], top_k, kind)   # 全落空:对最宽的变体扫一次
 
     seen, out = set(), []
     for r in rows:
@@ -274,8 +355,16 @@ def library_search(ctx, query: str, top_k: int = DEFAULT_TOP_K,
                 "crawled/mfindgzyykj.libsp.cn/ 下的抓取脚本生成 library.db。")
     hits = search(ctx.workspace, query, top_k=top_k, kind=kind)
     if not hits:
-        return (f"本地馆藏书目库没有匹配「{query}」的记录(全库 133 万条)。"
-                "可换作者名、ISBN、书名关键词或中图法分类号再试。")
+        variants = _variants(query)
+        tried = " / ".join(f"「{v}」" for v in variants[1:4]) or "—"
+        return (
+            f"本地馆藏书目库没有匹配「{query}」的记录。"
+            f"(已自动放宽重试:{tried})\n"
+            "⚠ 这只说明**库里没有这种书名写法**,不等于馆里没有这本书。\n"
+            "请先用**更短的书名关键词**(2-6 字,去掉《》、“（第N版）”这类\n"
+            "书名号与版次标注)或作者名/ISBN/中图法分类号再查一次。\n"
+            "若仍无结果,向用户如实说「按这个书名没检索到」,并建议改用\n"
+            "关键词重试或到图书馆检索台查;不要直接说成“图书馆没有这本书”。")
     header = (f"本地馆藏书目库命中 {len(hits)} 条(数据源:图书馆 OPAC,已离线化):\n")
     tail = ("\n\n引用时给出书名、作者、索书号与馆藏地,并说明「据图书馆 OPAC 馆藏数据」。"
             "馆藏为 0 册的是电子书(无纸本馆藏位置)。")
@@ -314,10 +403,14 @@ def library_prompt_section(workspace: Path | None = None) -> str:
         "回答时给出书名+作者+索书号+馆藏地,并说明「据图书馆 OPAC 馆藏数据」;"
         "kind 参数可筛 paper(纸本,有馆藏位置)/ ebook(电子书)/ all(默认)。\n"
         "**检索纪律(直接决定用户等待时间)**:\n"
+        "- 书名号《》与版次标注“（第N版）/（上）/：副标题”工具**已自动逐级放宽**,\n"
+        "  直接用用户原话查一次即可,不必自己删改后再查一次。\n"
         "- 一次 library_search 的结果通常就够答,拿到结果**立刻作答**,不要用同义词、\n"
         "  近义书名、拆词反复重查;确实没命中,最多再试一次作者名或 ISBN 就停。\n"
         "- 查询词只用用户**真实提到**的书名/作者/主题,不要自己臆造书名再去找\n"
         "  (查不到并不代表馆里没有,只代表库里没有这个书名);中文书名不要翻译成外文重试。\n"
+        "- **绝不要把“库里没查到”说成“图书馆没有这本书”**:如实说“按这个书名没检索到”,\n"
+        "  并建议换关键词重试或到馆检索台查。\n"
         "- 结果里的「楼层提示」已经把中图法大类映射成楼层,据此回答即可,不必再调\n"
         "  library_guide(那是一次多余的模型往返)。\n"
         "需要成批书目清单(整类导出、按类浏览)时,数据文件在 "

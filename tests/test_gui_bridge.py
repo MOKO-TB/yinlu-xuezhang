@@ -1,6 +1,7 @@
 """GUI 桥接层测试:假 webview 捕获事件 + 假 LLM 驱动完整回合。"""
 import json
 import os
+import threading
 import time
 
 from minicode.attachments import save_attachment, save_attachments
@@ -49,22 +50,27 @@ class FakeLLMScripted(FakeLLM):
         return AssistantTurn(text="".join(self.chunks))
 
 
-class SlowLLM(FakeLLM):
-    """分片慢速输出:每片之间 sleep,让"任务进行中"这个状态稳定存在一会儿。
+class GatedLLM(FakeLLM):
+    """流式输出被闸门卡住:任务会一直保持「进行中」,直到测试放行。
 
-    用 FakeLLMScripted 做"进行中"的断言会踩竞态:它瞬间跑完,任务可能已经结束。
+    原来这组用例用 SlowLLM(按 sleep 配速):「任务还在跑」这个断言本质上依赖
+    "几秒的窗口内断言一定能到达"。全量回归时机器负载一高,窗口可能提前跑完,
+    于是出现 `assert False is True` 的随机失败。这里换成显式闸门——测试不
+    release,任务就不可能结束,断言不再依赖时间。
     """
 
-    def __init__(self, chunks, delay=0.05):
-        self.chunks = chunks
-        self.delay = delay
+    def __init__(self, gate: threading.Event, chunk: str = "x",
+                 wait_timeout: float = 10.0):
+        self.gate = gate
+        self.chunk = chunk
+        self.wait_timeout = wait_timeout
 
-    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None):
-        for chunk in self.chunks:
-            time.sleep(self.delay)
-            if on_text:
-                on_text(chunk)
-        return AssistantTurn(text="".join(self.chunks))
+    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
+                    on_retry=None):
+        if on_text:
+            on_text(self.chunk)          # 先吐一片,让 wait_until(text_delta) 成立
+        self.gate.wait(timeout=self.wait_timeout)   # 卡住:任务保持 busy
+        return AssistantTurn(text=self.chunk)
 
 
 def wait_until(cond, timeout=5.0):
@@ -443,7 +449,8 @@ def test_confirm_request_carries_why(config, tmp_path):
 
 def test_new_task_keeps_previous_run_in_background(config, tmp_path):
     """任务进行中点"新建任务":开一个新会话,原任务转后台继续跑完(v0.8.13 起的行为)。"""
-    llm = SlowLLM(list("abcdefghijklmnop"), delay=0.2)
+    gate = threading.Event()
+    llm = GatedLLM(gate)
     bridge, window, session = make(config, tmp_path, llm)
     bridge.send_task("长任务")
     assert wait_until(lambda: bridge._busy and session.log_path is not None)
@@ -456,16 +463,18 @@ def test_new_task_keeps_previous_run_in_background(config, tmp_path):
     # 新会话是干净的;原会话既没被清空,也还在后台跑
     assert len(bridge.session.messages) == 1                  # 只有 system
     assert bridge._busy is False                              # 当前会话空闲
-    assert running.busy is True                               # 原任务继续
+    assert running.busy is True                               # 闸门未开,必然还在跑
     assert window.of_type("cleared")[-1]["session"] == r["session"]
 
-    assert wait_until(lambda: not running.busy)               # 后台自己跑完
+    gate.set()                                                # 放行:后台自己跑完
+    assert wait_until(lambda: not running.busy)
     assert any(m["role"] == "assistant" for m in session.messages)
 
 
 def test_resume_running_session_attaches_without_interrupt(config, tmp_path):
     """切回一个正在后台跑的会话:直接接上,而不是打断它。"""
-    llm = SlowLLM(list("abcdefghijklmnop"), delay=0.2)
+    gate = threading.Event()
+    llm = GatedLLM(gate)
     bridge, window, session = make(config, tmp_path, llm)
     bridge.send_task("长任务")
     assert wait_until(lambda: bridge._busy and session.log_path is not None)
@@ -483,6 +492,9 @@ def test_resume_running_session_attaches_without_interrupt(config, tmp_path):
     assert bridge._busy                     # 仍在跑,没被打断
     assert not any(e["type"] == "info" and "已中断" in (e.get("text") or "")
                    for e in window.events)
+
+    gate.set()                              # 收尾:别让后台线程卡到超时
+    assert wait_until(lambda: not running.busy)
     assert wait_until(lambda: not bridge._busy)
 
 

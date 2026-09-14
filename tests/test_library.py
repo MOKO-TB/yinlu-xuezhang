@@ -172,6 +172,92 @@ def test_multiword_falls_back_to_first_token(tmp_path):
     assert hits and hits[0]["title"] == "活着"
 
 
+# ------------------------------------------------- 查询归一化(B01 类误报修复)
+# 真实用户输入常带书名号《》与版次标注“（第N版）”,而库里标题未必有:
+# 整串当字面量查必然 0 命中,于是被报成"图书馆没有这本书"。
+
+
+def _add_books(tmp_path: Path, rows: list[tuple]) -> None:
+    """往已建好的临时库追加书目(重建 FTS,外部内容表要显式 rebuild)。"""
+    p = tmp_path / "crawled" / library.DOMAIN / library.DB_NAME
+    c = sqlite3.connect(p)
+    c.executemany(
+        "INSERT INTO books(record_id,title,author,publisher,isbn,year,pub_place,"
+        "lang,class_no,call_no,abstract,subject,chi_subject,p_count,onshelf,"
+        "e_count,d_count,doc_code,doc_name,price,book_page,ecol,pic,part) "
+        "VALUES(" + ",".join("?" * 24) + ")", rows)
+    c.execute("INSERT INTO books_fts(books_fts) VALUES('rebuild')")
+    c.commit()
+    c.close()
+
+
+def _book(rid: int, title: str, author: str = "某作者", cls: str = "O13",
+          pc: int = 2) -> tuple:
+    return (rid, title, author, "某出版社", None, "2020", "北京", "chi",
+            cls, f"{cls}/{rid}", "简介。", None, None, pc, pc,
+            0, 0, 1, "图书", "39.00", "300页", None, None, None)
+
+
+def test_variants_ladder_order(tmp_path):
+    """阶梯从严到宽:原串 → 去书名号/版次标注 → 拆词。"""
+    assert library._variants("《高等数学》")[0] == "高等数学"   # 整串包住→去壳优先
+    vs = library._variants("C语言程序设计（第5版）")
+    assert "C语言程序设计" in vs
+    assert vs.index("C语言程序设计（第5版）") < vs.index("C语言程序设计")
+    vs = library._variants("三体：地球往事")
+    assert "三体" in vs and "地球往事" in vs
+
+
+def test_book_title_marks_are_stripped(tmp_path):
+    """《书名》应能查到书名本身(库里标题不带书名号)。"""
+    _make_db(tmp_path)
+    assert library.search(tmp_path, "《人工智能导论》")          # 修复前:0 命中
+    hits = library.search(tmp_path, "《人工智能导论》")
+    assert hits[0]["title"] == "人工智能导论"
+
+
+def test_wrapped_query_prefers_the_book_itself(tmp_path):
+    """《活着》要返回《活着》本身,而不是恰好含“《活着》”的其它书。"""
+    _make_db(tmp_path)
+    _add_books(tmp_path, [_book(101, "《活着》解读", cls="I247.5")])
+    hits = library.search(tmp_path, "《活着》")
+    assert hits and hits[0]["title"] == "活着"
+
+
+def test_edition_annotation_ignored(tmp_path):
+    """“（第N版）”这类标注库里未必有,应去掉后再查。"""
+    _make_db(tmp_path)
+    _add_books(tmp_path, [_book(102, "高等数学. 上册. 第2版")])
+    for q in ("高等数学（第2版）", "高等数学(第2版)", "高等数学 第2版"):
+        hits = library.search(tmp_path, q)
+        assert hits, f"{q} 应该能查到"            # 修复前:（第2版）形态 0 命中
+        assert hits[0]["title"].startswith("高等数学")
+
+
+def test_volume_annotation_ignored(tmp_path):
+    """“（上）”“（上、下册）”等卷册括注同样应能回退到书名主体。"""
+    _make_db(tmp_path)
+    _add_books(tmp_path, [_book(103, "线性代数  第6版")])
+    hits = library.search(tmp_path, "线性代数（上）")
+    assert hits and hits[0]["title"].startswith("线性代数")
+
+
+def test_subtitle_colon_falls_back_to_core(tmp_path):
+    """“书名：副标题”副标题写法对不上时,退回书名主体。"""
+    _make_db(tmp_path)
+    hits = library.search(tmp_path, "人工智能导论：从理论到实践")
+    assert hits and hits[0]["title"] == "人工智能导论"
+
+
+def test_hit_message_does_not_claim_book_absent(tmp_path):
+    """真查不到时的提示语不能说成“图书馆没有这本书”,并要引导换关键词再试。"""
+    _make_db(tmp_path)
+    out = library.library_search(_ctx(tmp_path), "不存在的书名XYZ")
+    assert "没有匹配" in out
+    assert "不等于馆里没有这本书" in out
+    assert "不要直接说成" in out
+
+
 def _isolate_guide(monkeypatch, tmp_path):
     """把导览数据包的回退路径也指到空目录,免得开发态真实数据包混进断言。"""
     from minicode import library_guide
