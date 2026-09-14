@@ -149,7 +149,43 @@ B12 的根因:新建/切换会话时后端推 `cleared` / `resumed` 事件,前�
 - zip 包 CRC 核对:`引路学长/crawled/…/library.db` 的 CRC32 与 `dist\引路学长` 内一致(3715ffa0,
   1,309,589,504 字节)→ 分发出去的包是完整的。
 
-**未做**:本轮**未重新打包**(修复只在源码树;若要分发带新文案的版本需跑 `scripts/build_exe.py`)。
+**未做**:本轮修复已在 **v0.9.02** 重新出包(见 WP7),不再停留在源码树。
+
+## WP7 · v0.9.02:馆藏库完整性凭证 + 三处启动自检(2026-09-14)
+
+用户追问「分享给别人到底发哪个包才能用图书馆搜书」。顺着这个问题发现:
+**真正会坏的环节根本没人监管**——库是 1.31 GB 的大文件,目标机磁盘不够或拷贝
+被中断时只剩半截,而程序一路把它表现成「没有这一本书」。
+
+| 编号 | 内容 | 落点 |
+| --- | --- | --- |
+| H1 | 构建时写完整性凭证 `library.db.stamp.json`(size / count / sha256 / 版本),随 setup 与 zip 分发 | `scripts/build_exe.py` + `minicode/library.py` |
+| H2 | `catalog_health()` 启动自检:missing / incomplete / unreadable / empty / ok 五态(只比文件大小 + 开库查表,毫秒级);`health_notice()` 翻成用户可读的一句 | `minicode/library.py` |
+| H3 | **Inno 装完就校验**:`[Code]` 比对 `library.db` 存在与字节数,不一致直接弹窗。坑:`FileSize()` 在本机 Inno 6 不存在(编译期就挂),改用 `FindFirst` 取 `SizeHigh`/`SizeLow` 组合比较 | `packaging/gcode.iss` |
+| H4 | GUI `get_info` 下发 `library_health`,库异常时输入框下方橙色警示(正常时不显示);CLI 启动自检 + `/library` 命令 | `gui_bridge.py` / `frontend/index.html` / `main.py` |
+| H5 | **分发顺序修正**:《使用说明.txt》原来在编译 setup **之后**才写 → 安装包里没它。现由 `write_user_files()` 在 ISCC 前写好,并写明「需 2 GB 空闲磁盘」与「**单文件版不带馆藏库、单独用无法搜书**」 | `scripts/build_exe.py` |
+| H6 | `check_library_db.py` 加凭证比对(含 sha256 全量核对)+ 启动自检结论预览;新增 `scripts/e2e_frozen_health.py`(冻结版验库不完整必须报 incomplete);`build_exe.py` 新增 `--skip-build`(只用现有 dist 重出包,省 9 分钟) | `scripts/` |
+
+**验收(全部在真产物上跑)**:
+- 全量 `pytest -q`:**474 passed / 0 failed**(v0.9.02 新增 10 项:凭证往返、
+  无/坏凭证容错、五态判定、条数不符、`get_info` 下发)。
+- `scripts/check_library_db.py dist\引路学长` → sha256 一致(`b44a47ea…`)、
+  1331774 条、5 样本全命中、启动自检 ok。
+- 冻结版三件套全 PASS:`e2e_frozen.py`(CLI 全链路 + GUI 启动)、
+  `e2e_frozen_library.py`(包内真库 4/4 命中)、`e2e_frozen_health.py`
+  (空壳库 + 真凭证 → 启动就报「现为 0.00 GB,应为 1.31 GB」、`/library` 回 incomplete)。
+- 0.9.02 setup 静默装完实测:`library.db`(1,309,589,504 字节)与凭证**均落盘**;
+  测试安装目录已卸除。
+
+**分享结论**:能搜书的 = `引路学长-0.9.02-setup.exe`(578 MB)或
+`引路学长-0.9.02-win64.zip`(732 MB,绿色便携);**`引路学长-单文件版.exe`(51 MB)不带馆藏库**。
+
+### 顺手记一笔现场坑
+
+- 冻结版 CLI 的 stdout 被重定向(走管道)时**仍按系统 ANSI 码页输出**,
+  `_fix_console_encoding()` 只修了控制台。写验收脚本时不能直接按 utf-8 解码,
+  得 utf-8 / gb18030 都试一遍。
+- ISCC 编译 1.3 GB 馆藏库耗时约 5 分钟(lzma2/max);`--skip-build` 可单独重跑后半程。
 
 ## 不做 / 暂缓(对齐 HANDOFF §6,避免范围膨胀)
 
@@ -171,4 +207,8 @@ B12 的根因:新建/切换会话时后端推 `cleared` / `resumed` 事件,前�
       引路学长-单文件版.exe(53 MB);包内自带 1.31 GB 馆藏库。
       冻结态验收:`scripts/e2e_frozen.py`(CLI 全链路 + GUI 启动)与新增
       `scripts/e2e_frozen_library.py`(用打包内真库查书,4/4 命中)均 PASS。
-- [x] WP6 馆藏库不可读显式报错(安装版报障追加) —— 2026-09-14(未重新打包)
+- [x] WP6 馆藏库不可读显式报错(安装版报障追加) —— 2026-09-14
+- [x] WP7 v0.9.02 馆藏库完整性凭证 + 三处启动自检 + 重新出包 —— 2026-09-14
+      dist/引路学长-0.9.02-setup.exe(578 MB)/ 引路学长-0.9.02-win64.zip(732 MB);
+      包内自带 1.31 GB 馆藏库 + 完整性凭证,安装器与程序启动都会校验。
+      全量 474 passed;三项冻结态验收均 PASS。

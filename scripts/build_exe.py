@@ -90,13 +90,48 @@ def stamp_library_db(dist: Path) -> Path | None:
     return sp
 
 
-def main() -> None:
-    subprocess.run(
-        [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-         str(ROOT / "packaging" / "gcode.spec")],
-        cwd=ROOT, check=True,
+def write_user_files(dist: Path) -> None:
+    """把面向用户的文件放到 exe 旁边(清理冒烟残留 + config 样例 + 使用说明)。
+
+    **必须在编译安装包之前**调用:否则 setup 里不带《使用说明.txt》,
+    而分发给同学时最需要的就是里面那两句(要 2 GB 磁盘 / 单文件版不带馆藏库)。
+    """
+    shutil.rmtree(dist / "sessions", ignore_errors=True)
+    (dist / "config.json").unlink(missing_ok=True)
+    shutil.copy(ROOT / "config.example.json", dist / "config.example.json")
+    (dist / "使用说明.txt").write_text(
+        "引路学长 —— 校园 AI 助手 / 编程引路智能体(GUI + CLI)\n"
+        "====================================================\n\n"
+        "【便携版用法】整个文件夹拷到任意目录或 U 盘,双击 引路学长.exe 即可;\n"
+        "config.json、sessions/、memory/ 都生成在 exe 同目录,换电脑连文件夹一起搬走。\n\n"
+        "1. 引路学长.exe 是图形界面(推荐);引路学长-CLI.exe 是终端版;\n"
+        "   引路学长-单文件版.exe 免解压,双击直接打开。\n"
+        "2. 模型已内置学校服务,打开即可用,不需要填 API Key。\n"
+        "3. 图书馆搜书用的是包内的离线馆藏库 crawled/mfindgzyykj.libsp.cn/library.db\n"
+        "   (约 1.31 GB / 133 万条书目)。\n"
+        "   - 需要至少 2 GB 空闲磁盘;库没拷全时界面会当场提示「馆藏数据不完整」;\n"
+        "   - 单文件版(引路学长-单文件版.exe)**不带**这个馆藏库,单独用无法搜书;\n"
+        "     要能搜书请用安装包,或把整个便携文件夹一起拷过去。\n"
+        "   - 自检:引路学长-CLI.exe 里输入 /library 看库状态。\n"
+        "4. 想接 MCP 服务器:编辑 config.json 的 mcp_servers 数组\n"
+        "   (格式见 config.example.json,支持 npx/uvx/python 启动的任意 MCP 服务器);\n"
+        "5. 会话留档在 sessions/;技能放 skills/(SKILL.md 格式);知识库放 kb/;\n"
+        "   长期记忆在 memory/MEMORY.md。\n",
+        encoding="utf-8",
     )
+
+
+def main() -> None:
+    skip_build = "--skip-build" in sys.argv
     dist = ROOT / "dist" / "引路学长"
+    if not skip_build:
+        subprocess.run(
+            [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
+             str(ROOT / "packaging" / "gcode.spec")],
+            cwd=ROOT, check=True,
+        )
+    else:
+        print("跳过 PyInstaller(--skip-build),只用现有 dist 产物重新出包")
     _ensure_collected(dist)
     assert (dist / "引路学长.exe").exists(), "构建产物缺失(GUI 版)"
     assert (dist / "引路学长-CLI.exe").exists(), "构建产物缺失(CLI 版)"
@@ -106,6 +141,8 @@ def main() -> None:
     # 内置离线馆藏库:必须在打安装包/zip 之前,否则分发出去不带图书馆数据
     bundle_library_db(dist)
     stamp_library_db(dist)
+    # 用户可见文件也要在编译安装包之前写好(安装包递归收 dist/引路学长/*)
+    write_user_files(dist)
     lib_db = dist / "crawled" / "mfindgzyykj.libsp.cn" / "library.db"
     lib_db_bytes = lib_db.stat().st_size if lib_db.is_file() else 0
 
@@ -130,31 +167,6 @@ def main() -> None:
     if "--no-zip" in sys.argv:
         print(f"完成(未打包 zip): {dist}")
         return
-
-    # zip 前清理冒烟测试残留,并把面向用户的文件放到 exe 旁边
-    shutil.rmtree(dist / "sessions", ignore_errors=True)
-    (dist / "config.json").unlink(missing_ok=True)
-    shutil.copy(ROOT / "config.example.json", dist / "config.example.json")
-    (dist / "使用说明.txt").write_text(
-        "引路学长 —— 校园 AI 助手 / 编程引路智能体(GUI + CLI)\n"
-        "====================================================\n\n"
-        "【便携版用法】整个文件夹拷到任意目录或 U 盘,双击 引路学长.exe 即可;\n"
-        "config.json、sessions/、memory/ 都生成在 exe 同目录,换电脑连文件夹一起搬走。\n\n"
-        "1. 引路学长.exe 是图形界面(推荐);引路学长-CLI.exe 是终端版;\n"
-        "   引路学长-单文件版.exe 免解压,双击直接打开。\n"
-        "2. 模型已内置学校服务,打开即可用,不需要填 API Key。\n"
-        "3. 图书馆搜书用的是包内的离线馆藏库 crawled/mfindgzyykj.libsp.cn/library.db\n"
-        "   (约 1.31 GB / 133 万条书目)。\n"
-        "   - 需要至少 2 GB 空闲磁盘;库没拷全时界面会当场提示「馆藏数据不完整」;\n"
-        "   - 单文件版(引路学长-单文件版.exe)**不带**这个馆藏库,单独用无法搜书;\n"
-        "     要能搜书请用安装包,或把整个便携文件夹一起拷过去。\n"
-        "   - 自检:引路学长-CLI.exe 里输入 /library 看库状态。\n"
-        "4. 想接 MCP 服务器:编辑 config.json 的 mcp_servers 数组\n"
-        "   (格式见 config.example.json,支持 npx/uvx/python 启动的任意 MCP 服务器);\n"
-        "5. 会话留档在 sessions/;技能放 skills/(SKILL.md 格式);知识库放 kb/;\n"
-        "   长期记忆在 memory/MEMORY.md。\n",
-        encoding="utf-8",
-    )
 
     zip_base = str(ROOT / "dist" / f"引路学长-{__version__}-win64")
     shutil.make_archive(zip_base, "zip", root_dir=ROOT / "dist", base_dir="引路学长")
