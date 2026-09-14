@@ -344,6 +344,7 @@ python scripts/e2e_frozen_mcp.py --exe dist/引路学长-crawl4ai/引路学长-C
 python scripts/e2e_frozen_sandbox.py    # 打包后验证:工作区外访问触发确认且拒绝后不泄露内容
 python scripts/e2e_web.py               # 网页版:静态/shim/越权拒绝/跨站拦截/SSE 回合全链路
 python scripts/e2e_map_reset.py         # 前端:切会话后地图状态是否清零(B12 回归,真实浏览器)
+python scripts/e2e_frozen_library.py    # 打包后验证:用包内 1.3 GB 真库查书(书名号/版次标注都能命中)
 ```
 
 ## 打包发布

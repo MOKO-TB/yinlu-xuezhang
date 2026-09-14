@@ -82,9 +82,11 @@
 
 ```bash
 cd /d/game/mini-code
-./.venv/Scripts/python.exe -m pytest -q                    # 257 个测试全绿
+./.venv/Scripts/python.exe -m pytest -q                    # 458 个测试全绿(约 92 s)
 ./.venv/Scripts/python.exe scripts/e2e_fake_server.py      # CLI 端到端(假 SSE 服务器)
 ./.venv/Scripts/python.exe scripts/e2e_frozen.py           # 打包后 exe 验证:CLI + GUI 启动
+./.venv/Scripts/python.exe scripts/e2e_frozen_library.py   # 打包后查书:用包内 1.3 GB 真库(书名号/版次标注回归)
+./.venv/Scripts/python.exe scripts/e2e_map_reset.py        # 前端:切会话后地图状态清零(B12,真浏览器)
 ./.venv/Scripts/python.exe scripts/e2e_frozen_mcp.py       # 打包后 MCP:连服务器 → 调工具 → 回填模型
 ./.venv/Scripts/python.exe scripts/e2e_frozen_sandbox.py   # 打包后沙箱:工作区外触发确认且不泄露内容
 ./.venv/Scripts/python.exe scripts/e2e_frozen_crawl.py     # 打包后爬取 → 入库 → 命中
