@@ -831,6 +831,14 @@ class Bridge:
             js = str(args.get("js", ""))
             return "在当前页面里执行这段 JS:\n" + (
                 js if len(js) <= PREVIEW_CHARS else js[:PREVIEW_CHARS] + "…")
+        if name == "browser_click":
+            return f"在当前页面里点击:{args.get('target', '')}"
+        if name == "browser_fill":
+            keys = list((args.get("fields") or {}).keys())
+            text = "在当前页面的表单里填:" + "、".join(str(k) for k in keys[:8])
+            if args.get("submit"):
+                text += ";填完自动点提交"
+            return text
         if name == "browser_screenshot":
             return (f"把当前页面截图存到:{args.get('path') or 'shots/ 下(自动命名)'}"
                     + ("" if args.get("full_page", True) else "(只截可视区)"))

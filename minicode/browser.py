@@ -699,6 +699,299 @@ def screenshot(path: str | Path, *, full_page: bool = True) -> dict:
             "url": sess.url, "title": sess.title}
 
 
+# ---------------------------------------------------------------- 页面交互
+
+_JS_INTERACTABLE = r"""
+(() => {
+  document.querySelectorAll('[data-ylx]').forEach(el => el.removeAttribute('data-ylx'));
+  const SEL = ['a[href]', 'button', 'input', 'select', 'textarea',
+               '[role="button"]', '[role="link"]', '[role="tab"]',
+               '[role="checkbox"]', '[role="menuitem"]', 'summary'].join(',');
+  const nodes = [...document.querySelectorAll(SEL)];
+  const out = [];
+  let n = 0;
+  for (const el of nodes) {
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    if (tag === 'input' && ['hidden', 'image', 'reset', 'file'].includes(type)) continue;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) continue;
+    if (el.disabled) continue;
+    const aria = (el.getAttribute('aria-label') || '').trim();
+    const label = ((el.labels && el.labels[0] && el.labels[0].innerText) || '').trim();
+    const placeholder = (el.getAttribute('placeholder') || '').trim();
+    const text = ((el.innerText || el.value || '') + '').trim().replace(/\s+/g, ' ');
+    let kind = 'button';
+    if (tag === 'a') kind = 'link';
+    else if (tag === 'select') kind = 'select';
+    else if (tag === 'textarea') kind = 'textarea';
+    else if (tag === 'input') {
+      kind = (type === 'checkbox' || type === 'radio') ? 'check' : 'input';
+    } else if (el.getAttribute('role') === 'tab') kind = 'tab';
+    const item = { n: ++n, kind };
+    if (text) item.text = text.slice(0, 60);
+    if (aria) item.aria = aria.slice(0, 80);
+    if (label) item.label = label.slice(0, 60);
+    if (placeholder) item.ph = placeholder.slice(0, 60);
+    if (el.name) item.name = el.name;
+    if (el.id) item.id = el.id;
+    if (type) item.type = type;
+    if (kind === 'check') item.checked = !!el.checked;
+    if (kind === 'select') {
+      const cur = [...(el.selectedOptions || [])].map(o => o.textContent.trim());
+      const all = [...el.options].map(o => o.textContent.trim()).filter(Boolean);
+      item.value = cur.join(', ');
+      if (all.length) item.options = all.slice(0, 20).join(' | ').slice(0, 200);
+    }
+    if (!item.text && !item.aria && !item.label && !item.ph
+        && !item.name && !item.id && !item.value) continue;
+    el.setAttribute('data-ylx', String(item.n));
+    out.push(item);
+    if (out.length >= 150) break;
+  }
+  return JSON.stringify(out);
+})()
+""".strip()
+
+
+def snapshot(max_items: int = 120) -> dict:
+    """列出「当前页面」上可见、可交互的元素(带序号,给 click/fill 定位用)。"""
+    sess = _current()
+    if sess is None:
+        raise BrowserError("还没有打开的页面:请先用 browser_open 打开一个网址,再交互。")
+    limit = max(10, min(int(max_items or 120), 150))
+    js = _JS_INTERACTABLE.replace("out.length >= 150", f"out.length >= {limit}")
+    raw = evaluate(js, timeout=15)
+    try:
+        items = json.loads(raw) if isinstance(raw, str) else (raw or [])
+    except Exception:
+        items = []
+    return {"url": sess.url, "title": sess.title, "count": len(items), "items": items}
+
+
+# 点击:三种定位。序号 = 快照里打上的 data-ylx 标记(页面一变标记自动失效,绝不点错);
+# 文字 = 精确匹配 innerText/value/aria-label,多于一个就拒;选择器 = 原样交给 querySelector。
+_JS_CLICK_BY_INDEX = r"""
+(n => {
+  const el = document.querySelector('[data-ylx="' + n + '"]');
+  if (!el) return JSON.stringify({ ok: false, error: '序号 ' + n + ' 已失效(页面变过或还没做过 snapshot),请先 browser_snapshot' });
+  el.scrollIntoView({ block: 'center' });
+  el.click();
+  return JSON.stringify({ ok: true, tag: el.tagName.toLowerCase(),
+    desc: String(el.innerText || el.value || el.getAttribute('aria-label') || el.id || '').trim().replace(/\s+/g, ' ').slice(0, 60) });
+})"""
+
+_JS_CLICK_BY_TEXT = r"""
+(t => {
+  const want = String(t).trim();
+  const low = want.toLowerCase();
+  const texts = el => [el.innerText, el.value, el.getAttribute('aria-label') || '']
+      .map(x => String(x || '').trim().replace(/\s+/g, ' '));
+  const cand = [...document.querySelectorAll(
+      'a[href], button, input[type="submit"], input[type="button"], [role="button"], [role="link"], [role="tab"], [role="menuitem"], summary')]
+      .filter(el => {
+        if (el.disabled) return false;
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) return false;
+        return texts(el).some(s => s === want || s.toLowerCase() === low);
+      });
+  if (cand.length === 0) return JSON.stringify({ ok: false, error: '页面上没有文字正好是「' + want + '」的可点元素,先 browser_snapshot 看看' });
+  if (cand.length > 1) return JSON.stringify({ ok: false, error: '有 ' + cand.length + ' 个元素都叫「' + want + '」,先 browser_snapshot 拿序号再点' });
+  const el = cand[0];
+  el.scrollIntoView({ block: 'center' });
+  el.click();
+  return JSON.stringify({ ok: true, tag: el.tagName.toLowerCase(),
+    desc: texts(el)[0].slice(0, 60) });
+})"""
+
+_JS_CLICK_BY_SELECTOR = r"""
+(s => {
+  let el = null;
+  try { el = document.querySelector(String(s)); } catch (e) { return JSON.stringify({ ok: false, error: '选择器不合法:' + e.message }); }
+  if (!el) return JSON.stringify({ ok: false, error: '选择器没匹配到元素:' + s });
+  const style = getComputedStyle(el);
+  if (style.display === 'none' || style.visibility === 'hidden') return JSON.stringify({ ok: false, error: '目标元素不可见(display:none/visibility:hidden),先 snapshot 看看页面上有什么' });
+  el.scrollIntoView({ block: 'center' });
+  el.click();
+  return JSON.stringify({ ok: true, tag: el.tagName.toLowerCase(),
+    desc: String(el.innerText || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 60) });
+})"""
+
+# 填单个字段:按 name/id/placeholder/aria/label 找字段;select 下拉按选项文字/值匹配;
+# checkbox/radio 按真假值切换;文本类用「原生 setter + input/change 事件」——
+# 这样 React/Vue 的受控组件也能收到变化(直接 el.value= 它们感知不到)。
+_JS_FILL_FIELD = r"""
+(rec => {
+  const want = String(rec.field).trim().toLowerCase();
+  const squeeze = x => String(x || '').trim().toLowerCase().replace(/\s+/g, '');
+  const wantKeys = new Set([want, squeeze(want)]);
+  const fields = [...document.querySelectorAll('input, select, textarea')].filter(el => {
+    if (el.disabled || el.readOnly) return false;
+    if (['hidden', 'file', 'submit'].includes(el.type)) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    return true;
+  });
+  const names = el => {
+    const bag = new Set();
+    const add = x => { const s = squeeze(x); if (s) { bag.add(s); } };
+    add(el.name); add(el.id);
+    add(el.getAttribute('placeholder'));
+    add(el.getAttribute('aria-label'));
+    if (el.labels && el.labels[0]) add(el.labels[0].innerText);
+    return bag;
+  };
+  let el = null;
+  for (const c of fields) {
+    const ns = names(c);
+    if ([...ns].some(x => wantKeys.has(x))) { el = c; break; }
+  }
+  if (!el) {
+    const loose = fields.filter(c => [...names(c)].some(x => x && (x.includes(want) || want.includes(x))));
+    if (loose.length === 1) el = loose[0];
+  }
+  if (!el) return JSON.stringify({ ok: false, error: '页面上找不到字段「' + rec.field + '」(试过 name/id/placeholder/aria-label/label),先 browser_snapshot 看字段名' });
+  if (el.tagName === 'SELECT') {
+    const v = String(rec.value == null ? '' : rec.value).trim().toLowerCase();
+    const opts = [...el.options];
+    let opt = opts.find(o => o.value.toLowerCase() === v || o.textContent.trim().toLowerCase() === v);
+    if (!opt) opt = v ? opts.find(o => o.textContent.trim().toLowerCase().includes(v)) : null;
+    if (!opt) return JSON.stringify({ ok: false, error: '下拉框「' + rec.field + '」里没有「' + rec.value + '」,现有选项: ' + opts.map(o => o.textContent.trim()).filter(Boolean).join(' | ') });
+    el.value = opt.value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return JSON.stringify({ ok: true, field: rec.field, tag: 'select', set: opt.textContent.trim() });
+  }
+  if (el.type === 'checkbox' || el.type === 'radio') {
+    if (el.type === 'radio' && rec.value != null && rec.value !== true && rec.value !== false) {
+      const v = String(rec.value).trim().toLowerCase();
+      const opt = [...document.querySelectorAll('input[type="radio"][name="' + (el.name || '') + '"]')]
+          .find(r => r.value.toLowerCase() === v);
+      if (opt) { opt.click(); return JSON.stringify({ ok: true, field: rec.field, tag: 'radio', set: opt.value }); }
+    }
+    const truthy = !['0', 'false', 'no', 'off', '', '否'].includes(String(rec.value).trim().toLowerCase());
+    if (el.checked !== truthy) el.click();
+    return JSON.stringify({ ok: true, field: rec.field, tag: el.type, set: truthy });
+  }
+  const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+  desc.set.call(el, String(rec.value == null ? '' : rec.value));
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return JSON.stringify({ ok: true, field: rec.field, tag: el.tagName.toLowerCase(), set: String(rec.value == null ? '' : rec.value).slice(0, 30) });
+})"""
+
+_JS_SUBMIT = r"""
+(() => {
+  const btn = [...document.querySelectorAll(
+      'button[type="submit"], input[type="submit"], button:not([type]), [role="button"]')]
+      .find(el => {
+        if (el.disabled) return false;
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      });
+  if (!btn) return JSON.stringify({ ok: false, error: '页面上没有可用的提交按钮;可以让模型自己 browser_click 指定,或请用户手动提交' });
+  btn.click();
+  return JSON.stringify({ ok: true, desc: String(btn.innerText || btn.value || '').trim().replace(/\s+/g, ' ').slice(0, 40) });
+})"""
+
+
+def _run_js_json(sess: PageSession, expression: str, *, timeout: float = 20.0) -> dict:
+    """跑一段「返回 JSON 字符串」的页面 JS;解析失败/结构不对都当作页面侧失败。"""
+    raw = _cmd("Runtime.evaluate",
+               {"expression": expression, "returnByValue": True,
+                "awaitPromise": False, "userGesture": True},
+               session=sess, timeout=timeout)
+    if res_err := raw.get("exceptionDetails"):
+        msg = (res_err.get("exception") or {}).get("description") or res_err.get("text") or "JS 执行出错"
+        raise BrowserError(f"页面里执行 JS 出错:{msg.splitlines()[0][:300]}")
+    out = raw.get("result") or {}
+    try:
+        data = json.loads(out.get("value") or "{}")
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    return data
+
+
+def _after_action_state(sess: PageSession, wait_ms: int) -> dict:
+    """点击/提交后的短暂等待 + 新页面状态(导航常在几百毫秒后才开始)。"""
+    time.sleep(max(0, wait_ms) / 1000)
+    ok, waited, state = _wait_loaded(sess, wait_ms=DEFAULT_WAIT_MS)
+    title = ""
+    with contextlib.suppress(Exception):
+        title = str(evaluate(_JS_TITLE, timeout=10) or "")
+    url = sess.url
+    with contextlib.suppress(Exception):
+        url = str(evaluate("location.href", timeout=10) or sess.url)
+    sess.url, sess.title = url, title
+    return {"url": url, "title": title, "loaded": ok, "waited_ms": int(waited)}
+
+
+def click(target: str, *, by: str = "auto", wait_ms: int = 1500) -> dict:
+    """点击「当前页面」上的一个元素,返回结果与点击后的页面状态。"""
+    sess = _current()
+    if sess is None:
+        raise BrowserError("还没有打开的页面:请先用 browser_open 打开一个网址,再交互。")
+    target = (target or "").strip()
+    if not target:
+        raise BrowserError("点击目标不能为空:传快照序号、元素文字或 CSS 选择器。")
+    wait_ms = max(0, min(int(wait_ms), 10000))
+    how = by
+    if how == "auto":
+        how = "index" if target.isdigit() else "text"
+    builders = {"index": lambda t: _JS_CLICK_BY_INDEX + f"({int(t)})",
+                "text": lambda t: _JS_CLICK_BY_TEXT + "(" + json.dumps(t, ensure_ascii=False) + ")",
+                "selector": lambda t: _JS_CLICK_BY_SELECTOR + "(" + json.dumps(t, ensure_ascii=False) + ")"}
+    if how not in builders:
+        raise BrowserError(f"by 只能是 auto/index/text/selector,收到:{by}")
+    res = _run_js_json(sess, builders[how](target))
+    if not res.get("ok"):
+        raise BrowserError(str(res.get("error") or "点击失败(页面没有报出原因)"))
+    after = _after_action_state(sess, wait_ms)
+    return {"clicked": res.get("desc") or target, "tag": res.get("tag", ""),
+            "by": how, "after": after}
+
+
+def fill(fields: dict, *, submit: bool = False, wait_ms: int = 1500) -> dict:
+    """在「当前页面」上按字段名批量填表单;可选点提交按钮。"""
+    sess = _current()
+    if sess is None:
+        raise BrowserError("还没有打开的页面:请先用 browser_open 打开一个网址,再交互。")
+    if not fields:
+        raise BrowserError("fields 不能为空:至少给一对「字段名: 值」。")
+    done: list[dict] = []
+    failed: list[dict] = []
+    for name, value in fields.items():
+        arg = json.dumps({"field": str(name), "value": value}, ensure_ascii=False)
+        try:
+            res = _run_js_json(sess, _JS_FILL_FIELD + f"({arg})")
+        except BrowserError as exc:
+            failed.append({"field": str(name), "error": str(exc)})
+            continue
+        if res.get("ok"):
+            done.append(res)
+        else:
+            failed.append({"field": str(name), "error": str(res.get("error") or "未知错误")})
+    submitted = ""
+    after: dict = {}
+    if submit and not failed:
+        res = _run_js_json(sess, _JS_SUBMIT + "()")
+        if res.get("ok"):
+            submitted = str(res.get("desc") or "已提交")
+            after = _after_action_state(sess, wait_ms)
+        else:
+            failed.append({"field": "(submit)", "error": str(res.get("error") or "提交失败")})
+    return {"filled": done, "failed": failed, "submitted": submitted, "after": after}
+
+
 def current_info() -> dict | None:
     """当前线程页面的概况(没打开过则 None)。"""
     sess = _current()
@@ -799,7 +1092,7 @@ def health() -> dict:
 
 # ---------------------------------------------------------------- 提示词片段
 
-BROWSER_PROMPT = """# 浏览器能力(browser_open / browser_eval / browser_screenshot / browser_close)
+BROWSER_PROMPT = """# 浏览器能力(browser_open / browser_snapshot / browser_click / browser_fill / browser_eval / browser_screenshot / browser_close)
 
 需要看**网页的真实内容**时用它,而不是猜:官网通知页、图书馆/教务这类靠 JS 渲染的站点、
 要登录才看得到的页面、用户自己写的本地页面(localhost:端口)。web_crawl 抓的是静态正文,
@@ -810,6 +1103,9 @@ BROWSER_PROMPT = """# 浏览器能力(browser_open / browser_eval / browser_scre
   它会改用你自己开着远程调试的浏览器、以你的身份取页(确认框会单独向你警告)。
 - 一次任务里同一页面继续操作:再调一次 browser_open 换地址即可(复用同一个标签页)。
 - 要精确数据(价格、表格、链接列表、某个元素是否存在)用 browser_eval 跑一段 JS 取回来。
+- 要**操作页面**(点按钮、翻页、填表单、勾选项):先 browser_snapshot 拿到元素序号与
+  字段名,再 browser_click(序号最稳)/ browser_fill(fields 传「字段名: 值」,可
+  submit=true 自动提交)。不要凭空猜选择器;页面变过之后旧序号会失效,重新 snapshot。
 - 用户说「截图看看 / 这页面长什么样」,或要证明页面效果正确时用 browser_screenshot,
   并把工具返回的 `![](路径)` 一段原样写进回答,用户才能看到图。
 - 页面看完了(或这一问结束)用 browser_close 关掉,别让浏览器堆一屏标签页。

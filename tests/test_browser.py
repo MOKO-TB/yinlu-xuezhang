@@ -601,12 +601,15 @@ def test_tool_close_and_status(ctx):
 def test_registry_has_browser_tools_with_reason():
     from minicode.tools.registry import build_default_registry
     tools = {t.name: t for t in build_default_registry()}
-    for name in ("browser_open", "browser_eval", "browser_screenshot",
+    for name in ("browser_open", "browser_eval", "browser_snapshot",
+                 "browser_click", "browser_fill", "browser_screenshot",
                  "browser_close", "browser_status"):
         assert name in tools, f"缺工具 {name}"
-    # 会开浏览器/操作页面的一律要走确认;纯查询的 browser_status 才是只读
-    assert tools["browser_status"].read_only is True
-    for name in ("browser_open", "browser_eval", "browser_screenshot", "browser_close"):
+    # 会开浏览器/操作页面的一律要走确认;纯查询的 browser_status/snapshot 才是只读
+    for name in ("browser_status", "browser_snapshot"):
+        assert tools[name].read_only is True
+    for name in ("browser_open", "browser_eval", "browser_click", "browser_fill",
+                 "browser_screenshot", "browser_close"):
         props = tools[name].parameters["properties"]
         assert "reason" in props, f"{name} 缺 reason 参数(确认框要给用户看目的)"
 
@@ -653,7 +656,8 @@ def test_permission_detail_shows_url_and_js(config, tmp_path):
 def test_web_public_profile_excludes_browser():
     """对外只读的网页版绝对不能拿到浏览器工具(SSRF + 在服务器上起浏览器)。"""
     from minicode.web_profile import EXCLUDED_TOOLS, PUBLIC_TOOLS
-    for name in ("browser_open", "browser_eval", "browser_screenshot",
+    for name in ("browser_open", "browser_eval", "browser_snapshot",
+                 "browser_click", "browser_fill", "browser_screenshot",
                  "browser_close", "browser_status"):
         assert name not in PUBLIC_TOOLS
         assert name in EXCLUDED_TOOLS, f"{name} 应当被显式排除并写明原因"
@@ -664,3 +668,186 @@ def test_browser_section_is_stable_text():
     from minicode.browser import browser_prompt_section
     a, b = browser_prompt_section(), browser_prompt_section()
     assert a == b and a.startswith("\n\n#")
+
+
+# ---------------------------------------------------------------- 页面交互(snapshot/click/fill)
+
+def _page_with_form():
+    """一个带表单、按钮与延迟跳转的假页面(挂在 Runtime.evaluate 假连接后面)。"""
+    br.open_page("https://a.test/form", wait_ms=20)
+
+
+def _form_eval_handler(extra: dict | None = None):
+    """按表达式特征回响应的 Runtime.evaluate 假连接;extra 可覆盖个别片段。"""
+    def fake_call(self, method, params=None, session=None, timeout=30.0):
+        FakeConn.calls.append((method, params or {}, session))
+        if method != "Runtime.evaluate":
+            return _DEFAULTS.get(method, {})
+        expr = (params or {}).get("expression", "")
+        for key, val in (extra or {}).items():
+            if key in expr:
+                return {"result": {"value": val}}
+        if "data-ylx" in expr and "querySelectorAll" in expr:
+            return {"result": {"value": json.dumps([
+                {"n": 1, "kind": "input", "name": "username", "ph": "用户名"},
+                {"n": 2, "kind": "input", "name": "pwd", "type": "password"},
+                {"n": 3, "kind": "select", "name": "grade", "value": "大一",
+                 "options": "大一 | 大二 | 大三"},
+                {"n": 4, "kind": "check", "name": "agree", "label": "同意条款",
+                 "checked": False},
+                {"n": 5, "kind": "button", "text": "登录", "type": "submit"},
+            ], ensure_ascii=False)}}
+        if "readyState" in expr:
+            return {"result": {"value": "complete"}}
+        if "location.href" in expr:
+            return {"result": {"value": "https://a.test/form"}}
+        if "document.title" in expr:
+            return {"result": {"value": "登录页"}}
+        return {"result": {"value": None}}
+    return fake_call
+
+
+def test_snapshot_lists_interactable_elements(ctx, monkeypatch):
+    _page_with_form()
+    monkeypatch.setattr(FakeConn, "call", _form_eval_handler())
+    out = bt.browser_snapshot(ctx)
+    assert "1. " in out and "登录" in out
+    assert "下拉框" in out and "大一 | 大二" in out
+    assert "勾选" in out and "未勾选" in out
+    assert "browser_click" in out            # 教模型下一步干什么
+    # 密码框只有 name 没有 value/文字:不该把值带出来
+    assert "pwd" in out
+
+
+def test_snapshot_no_page_gives_guidance(ctx):
+    out = bt.browser_snapshot(ctx)
+    assert out.startswith("错误:") and "browser_open" in out
+
+
+def test_click_by_index_uses_snapshot_marker(ctx, monkeypatch):
+    _page_with_form()
+    clicked: list[str] = []
+
+    def fake_call(self, method, params=None, session=None, timeout=30.0):
+        if method == "Runtime.evaluate":
+            expr = (params or {}).get("expression", "")
+            if "data-ylx" in expr and "click()" in expr:
+                clicked.append(expr)
+                return {"result": {"value": json.dumps(
+                    {"ok": True, "tag": "button", "desc": "登录"}, ensure_ascii=False)}}
+            if "readyState" in expr:
+                return {"result": {"value": "complete"}}
+            if "location.href" in expr:
+                return {"result": {"value": "https://a.test/after"}}
+            if "document.title" in expr:
+                return {"result": {"value": "登录成功"}}
+            return {"result": {"value": None}}
+        return _DEFAULTS.get(method, {})
+
+    monkeypatch.setattr(FakeConn, "call", fake_call)
+    out = bt.browser_click(ctx, "5")
+    assert clicked and "[data-ylx=" in clicked[0]      # 按标记点,不是按序数数
+    assert "已点击:登录" in out
+    assert "登录成功" in out and "https://a.test/after" in out
+
+
+def test_click_by_text_refuses_ambiguity(ctx, monkeypatch):
+    _page_with_form()
+    monkeypatch.setattr(FakeConn, "call", _form_eval_handler({
+        # 模拟页面上有两个「登录」
+        "innerText": json.dumps({"ok": False,
+                                 "error": "有 2 个元素都叫「登录」,先 browser_snapshot 拿序号再点"}),
+    }))
+    out = bt.browser_click(ctx, "登录")
+    assert out.startswith("错误:") and "snapshot" in out
+
+
+def test_click_stale_index_errors(ctx, monkeypatch):
+    _page_with_form()
+    monkeypatch.setattr(FakeConn, "call", _form_eval_handler({
+        "data-ylx": json.dumps({"ok": False, "error": "序号 9 已失效,请先 browser_snapshot"}),
+    }))
+    out = bt.browser_click(ctx, "9")
+    assert out.startswith("错误:") and "snapshot" in out
+
+
+def test_fill_fields_and_submit(ctx, monkeypatch):
+    _page_with_form()
+    submitted: list[str] = []
+
+    def fake_call(self, method, params=None, session=None, timeout=30.0):
+        FakeConn.calls.append((method, params or {}, session))
+        if method != "Runtime.evaluate":
+            return _DEFAULTS.get(method, {})
+        expr = (params or {}).get("expression", "")
+        if "rec" in expr and "field" in expr:
+            field = "年级" if "年级" in expr else "用户名"
+            tag = "select" if field == "年级" else "input"
+            val = "大二" if field == "年级" else "lihua"
+            return {"result": {"value": json.dumps(
+                {"ok": True, "field": field, "tag": tag, "set": val},
+                ensure_ascii=False)}}
+        if "submit" in expr or "提交" in expr:
+            submitted.append(expr)
+            return {"result": {"value": json.dumps(
+                {"ok": True, "desc": "登录"}, ensure_ascii=False)}}
+        if "readyState" in expr:
+            return {"result": {"value": "complete"}}
+        if "location.href" in expr:
+            return {"result": {"value": "https://a.test/welcome"}}
+        if "document.title" in expr:
+            return {"result": {"value": "欢迎"}}
+        return {"result": {"value": None}}
+
+    monkeypatch.setattr(FakeConn, "call", fake_call)
+    out = bt.browser_fill(ctx, {"用户名": "lihua", "年级": "大二"}, submit=True)
+    assert "已填" in out and "lihua" in out and "大二" in out
+    assert "已点提交" in out and "欢迎" in out
+    assert submitted, "submit=true 却没点提交按钮"
+
+
+def test_fill_partial_failure_does_not_submit(ctx, monkeypatch):
+    _page_with_form()
+    submitted = []
+
+    def fake_call(self, method, params=None, session=None, timeout=30.0):
+        FakeConn.calls.append((method, params or {}, session))
+        if method != "Runtime.evaluate":
+            return _DEFAULTS.get(method, {})
+        expr = (params or {}).get("expression", "")
+        if "提交按钮" in expr or "button" in expr.lower():
+            submitted.append(expr)
+        if "找不到字段" in expr:
+            return {"result": {"value": json.dumps(
+                {"ok": False, "error": "页面上找不到字段「学号」"}, ensure_ascii=False)}}
+        if "rec" in expr:
+            return {"result": {"value": json.dumps(
+                {"ok": True, "field": "用户名", "set": "x"}, ensure_ascii=False)}}
+        if "readyState" in expr:
+            return {"result": {"value": "complete"}}
+        if "location.href" in expr:
+            return {"result": {"value": "https://a.test/form"}}
+        if "document.title" in expr:
+            return {"result": {"value": "登录页"}}
+        return {"result": {"value": None}}
+
+    monkeypatch.setattr(FakeConn, "call", fake_call)
+    out = bt.browser_fill(ctx, {"用户名": "x", "学号": "20xx"}, submit=True)
+    assert "学号" in out and "找不到字段" in out
+    assert "没有点提交" in out, "字段失败还去点提交会把半张表单发出去"
+    assert not submitted, "失败路径不该触发提交按钮的 JS"
+
+
+def test_fill_reports_missing_options_of_select(ctx, monkeypatch):
+    _page_with_form()
+    monkeypatch.setattr(FakeConn, "call", _form_eval_handler({
+        "SELECT": json.dumps({"ok": False,
+                              "error": "下拉框「年级」里没有「博五」,现有选项: 大一 | 大二 | 大三"}),
+    }))
+    out = bt.browser_fill(ctx, {"年级": "博五"})
+    assert "大一 | 大二 | 大三" in out          # 选项列表要带回给模型
+
+
+def test_click_and_fill_require_open_page(ctx):
+    assert bt.browser_click(ctx, "1").startswith("错误:")
+    assert bt.browser_fill(ctx, {"a": "b"}).startswith("错误:")

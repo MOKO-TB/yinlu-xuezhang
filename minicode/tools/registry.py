@@ -185,6 +185,77 @@ def build_default_registry() -> list[Tool]:
             handler=browser_tools.browser_eval,
         ),
         Tool(
+            name="browser_snapshot",
+            description=(
+                "列出「当前页面」上所有可见、可交互的元素(链接/按钮/输入框/下拉框),"
+                "每个带序号和文字/字段名,供 browser_click 与 browser_fill 定位。"
+                "准备点按钮、填表单之前先调它,不要凭空猜选择器。"
+                "需要先 browser_open 打开页面。只读,不改动页面。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "max_items": {"type": "integer",
+                                  "description": "最多列多少个元素,默认 120"},
+                    "reason": {"type": "string", "description": "可选:一句中文说明"},
+                },
+            },
+            handler=browser_tools.browser_snapshot,
+            read_only=True,
+        ),
+        Tool(
+            name="browser_click",
+            description=(
+                "点击当前页面上的一个元素。target 三种写法:"
+                "① 快照序号(如 \"3\",browser_snapshot 给的,最稳——页面一变序号就失效);"
+                "② 按钮文字(如 \"登录\",页面上有多个同名的会报错让你先 snapshot);"
+                "③ CSS 选择器(如 \"#login-btn\")。点击后自动等页面稳定并返回新页面的标题与地址。"
+                "需要先 browser_open 打开页面;找不到目标会提示先 browser_snapshot。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string",
+                               "description": "快照序号 / 元素文字 / CSS 选择器"},
+                    "by": {"type": "string", "enum": ["auto", "index", "text", "selector"],
+                           "description": "定位方式;auto=纯数字按序号、否则按文字"},
+                    "wait_ms": {"type": "integer",
+                                "description": "点击后等多久再看页面状态,默认 1500ms"},
+                    "reason": {"type": "string",
+                               "description": "用一句中文说明要点什么、为什么(显示在权限确认框里)"},
+                },
+                "required": ["target"],
+            },
+            handler=browser_tools.browser_click,
+        ),
+        Tool(
+            name="browser_fill",
+            description=(
+                "在当前页面的表单里按字段名批量填值,可选自动点提交。"
+                "fields 传 {\"字段名\": \"值\"};字段名可以是 name/id/占位符/aria/标签文字"
+                "(如 {\"用户名\":\"lihua\",\"密码\":\"xx\",\"记住我\":true});"
+                "下拉框按选项文字或值匹配,勾选框接受 true/false。"
+                "找不到字段时先 browser_snapshot 看字段名。填完可选 submit=true 自动点提交按钮,"
+                "并返回提交后的页面状态。密码框的值不会回显在结果里。"
+                "需要先 browser_open 打开页面。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "fields": {"type": "object",
+                               "description": "字段名到值的映射,如 {\"用户名\": \"lihua\", \"记住我\": true}"},
+                    "submit": {"type": "boolean",
+                               "description": "全部填好后是否自动点提交按钮,默认 false"},
+                    "wait_ms": {"type": "integer",
+                                "description": "提交后等多久看页面状态,默认 1500ms"},
+                    "reason": {"type": "string",
+                               "description": "用一句中文说明要填什么表单、为什么(显示在权限确认框里)"},
+                },
+                "required": ["fields"],
+            },
+            handler=browser_tools.browser_fill,
+        ),
+        Tool(
             name="browser_screenshot",
             description=(
                 "把「当前页面」截图保存到工作区,并在界面上直接把这张图给用户看。"

@@ -6,7 +6,8 @@ def test_registry_contents():
     names = [t.name for t in tools]
     assert names == ["read_file", "write_file", "edit_file", "bash", "glob",
                      "grep", "web_crawl",
-                     "browser_open", "browser_eval", "browser_screenshot",
+                     "browser_open", "browser_eval", "browser_snapshot",
+                     "browser_click", "browser_fill", "browser_screenshot",
                      "browser_close", "browser_status",
                      "use_skill", "plan",
                      "search_knowledge", "library_search", "library_guide", "memory",
@@ -29,6 +30,9 @@ def test_read_only_flags():
         # 不标只读(browser_status 只是查能力,不驱动页面)。
         "browser_open": False,
         "browser_eval": False,
+        "browser_snapshot": True,     # 只列出页面上有什么,不驱动页面
+        "browser_click": False,
+        "browser_fill": False,
         "browser_screenshot": False,
         "browser_close": False,
         "browser_status": True,

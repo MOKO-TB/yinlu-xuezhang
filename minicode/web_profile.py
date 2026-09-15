@@ -53,6 +53,9 @@ EXCLUDED_TOOLS: dict[str, str] = {
     "browser_open": "对外模式不给浏览器:能访内网地址、带不上访客登录态却要占一台浏览器,"
                     "且 launch 出的实例会留在服务器上",
     "browser_eval": "等于在服务器浏览器里执行访客给的 JS",
+    "browser_snapshot": "会列出服务器浏览器里的页面内容",
+    "browser_click": "驱动服务器浏览器点击",
+    "browser_fill": "驱动服务器浏览器填表单",
     "browser_screenshot": "往服务器工作区写文件",
     "browser_close": "同上,浏览器能力整体不进白名单",
     "browser_status": "不暴露服务器的浏览器信息",

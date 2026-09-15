@@ -106,6 +106,15 @@ def risk_notes(tool_name: str, args: dict) -> list[str]:
                 else "若你正开着远程调试,可能会改用你自己的浏览器(带你的登录态)")
     elif name == "browser_eval":
         notes.append("会在打开的页面里执行这段 JavaScript(可触发跳转/点击)")
+    elif name == "browser_click":
+        notes.append(f"会在打开的页面里点击「{args.get('target', '')}」,可能引起页面跳转")
+    elif name == "browser_fill":
+        keys = list(args.get("fields").keys())[:6] \
+            if isinstance(args.get("fields"), dict) else []
+        notes.append("会在打开的页面的表单里填写字段"
+                     + (f"({'、'.join(str(k) for k in keys)})" if keys else ""))
+        if args.get("submit"):
+            notes.append("填完会自动点提交按钮,可能把表单发送出去")
     elif name == "browser_screenshot":
         notes.append("会往工作区写入截图文件(需手动删,「撤销」不跟踪它)")
     elif name == "browser_close":

@@ -107,6 +107,11 @@ class GuiUI:
             s = str(args.get("url", ""))         # 卡片上直接看到要开哪个网址
         elif name == "browser_eval":
             s = "JS: " + " ".join(str(args.get("js", "")).split())
+        elif name == "browser_click":
+            s = str(args.get("target", ""))
+        elif name == "browser_fill":
+            keys = list((args.get("fields") or {}).keys())
+            s = "填表单: " + "、".join(str(k) for k in keys[:6]) + ("…" if len(keys) > 6 else "")
         elif name in ("browser_screenshot", "browser_close", "browser_status"):
             s = str(args.get("path", "")) or "当前页面"
         else:

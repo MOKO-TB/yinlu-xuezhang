@@ -139,6 +139,87 @@ def browser_screenshot(ctx: ToolContext, path: str = "", full_page: bool = True,
     return "\n".join(lines)
 
 
+_KIND_CN = {"link": "链接", "button": "按钮", "input": "输入框", "textarea": "文本域",
+            "select": "下拉框", "check": "勾选/单选", "tab": "标签页(页内)"}
+
+
+def _describe(el: dict) -> str:
+    parts = [_KIND_CN.get(el.get("kind"), el.get("kind", "元素"))]
+    for key, pre in (("text", ""), ("aria", "[aria] "), ("label", "[标签] "),
+                     ("ph", "[占位] "), ("name", "[name] "), ("id", "[id] "),
+                     ("value", "[当前值] "), ("options", "[选项] "), ("type", "")):
+        if el.get(key):
+            parts.append(f"{pre}{el[key]}")
+    if el.get("checked") is not None:
+        parts.append("已勾选" if el.get("checked") else "未勾选")
+    return " ".join(str(p) for p in parts)
+
+
+def browser_snapshot(ctx: ToolContext, max_items: int = 120, reason: str = "") -> str:
+    """列出当前页面可交互元素;read_only,不弹确认框。"""
+    try:
+        info = br.snapshot(max_items=max_items)
+    except br.BrowserUnavailable as exc:
+        return _unavailable(exc)
+    except Exception as exc:
+        return f"错误:获取页面交互元素失败:{exc}"
+    lines = [f"页面:{info['title'] or '(无标题)'} {info['url']}",
+             f"共 {info['count']} 个可交互元素(序号给 browser_click 定位用):"]
+    for el in info["items"]:
+        lines.append(f"{el.get('n')}. {_describe(el)}")
+    if info["count"] == 0:
+        lines.append("(页面上没有可见的可交互元素)")
+    lines.append("点击用 browser_click(传序号/文字/选择器);填表单用 browser_fill;"
+                 "页面变了之后旧序号会失效,重新 snapshot 再点。")
+    return "\n".join(lines)
+
+
+def browser_click(ctx: ToolContext, target: str, by: str = "auto",
+                  wait_ms: int = 1500, reason: str = "") -> str:
+    try:
+        info = br.click(target, by=by, wait_ms=wait_ms)
+    except br.BrowserUnavailable as exc:
+        return _unavailable(exc)
+    except Exception as exc:
+        return f"错误:点击失败:{exc}"
+    after = info["after"]
+    lines = [f"已点击:{info['clicked']}({'按快照序号' if info['by'] == 'index' else info['by']})"]
+    if after.get("url") and after["url"] != after.get("prev_url"):
+        lines.append(f"页面现在是:{after['title'] or '(无标题)'} {after['url']}"
+                     f"({'' if after['loaded'] else '未'}加载完成)")
+    else:
+        lines.append(f"页面:{after.get('title') or '(无标题)'}(加载{'完成' if after.get('loaded') else '未完成'})")
+    lines.append("要看点击后的内容,继续 browser_open(当前地址)或 browser_snapshot;要画面用 browser_screenshot。")
+    return "\n".join(lines)
+
+
+def browser_fill(ctx: ToolContext, fields: dict, submit: bool = False,
+                 wait_ms: int = 1500, reason: str = "") -> str:
+    try:
+        info = br.fill(fields, submit=submit, wait_ms=wait_ms)
+    except br.BrowserUnavailable as exc:
+        return _unavailable(exc)
+    except Exception as exc:
+        return f"错误:填表单失败:{exc}"
+    lines = []
+    if info["filled"]:
+        lines.append("已填:" + ";".join(
+            f"{f.get('field')}={f.get('set')}" for f in info["filled"]))
+    for bad in info["failed"]:
+        lines.append(f"错误:{bad['field']}: {bad['error']}")
+    if not info["filled"] and not info["failed"]:
+        return "错误:什么都没填上(页面里没有可填字段)——先 browser_snapshot。"
+    if info["submitted"]:
+        after = info["after"]
+        lines.append(f"已点提交:{info['submitted']};页面现在是:"
+                     f"{after.get('title') or '(无标题)'} {after.get('url', '')}"
+                     f"(加载{'完成' if after.get('loaded') else '未完成'})")
+    elif submit and info["failed"]:
+        lines.append("因为还有字段没填上,没有点提交。")
+    lines.append("要看表单提交后的内容,用 browser_open(当前地址)或 browser_snapshot。")
+    return "\n".join(lines)
+
+
 def browser_close(ctx: ToolContext, reason: str = "") -> str:
     try:
         closed = br.close_current()
