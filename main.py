@@ -131,6 +131,19 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
             lines.append("  ✓ 图书馆搜书可用")
         lines.append("  逐项核对用:python scripts/check_library_db.py <安装目录>")
         ui.info("\n".join(lines))
+    elif name == "/browser":
+        from minicode import browser as browser_mod
+        h = browser_mod.health()
+        lines = [f"浏览器能力: {'✓ 可用' if h['ok'] else '✗ 不可用'}",
+                 f"  浏览器: {h['browser'] or '(没找到 Edge/Chrome)'}",
+                 f"  接入方式: {h['mode'] or '(未确定)'}",
+                 f"  说明: {h['detail'] or '-'}"]
+        if h["ok"]:
+            lines.append("  Agent 需要看网页真实内容(JS 渲染 / 要登录 / 本地页面)时会自动用它。")
+        else:
+            lines.append("  修复:让 Edge/Chrome 带 --remote-debugging-port=9222 启动,"
+                         "或设环境变量 YINLUXS_CDP_URL=http://127.0.0.1:9222,然后重试。")
+        ui.info("\n".join(lines))
     elif name == "/history":
         est = estimate_tokens(session.messages)
         threshold = int(config.context_window * config.compact_at_ratio)
@@ -155,13 +168,15 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
         agent.compact_now()
     else:
             ui.error(f"未知命令 {name}。可用: /help /clear /model /history "
-                     f"/resume /undo /compact /sandbox /memory /remember /dream /exit")
+                     f"/resume /undo /compact /sandbox /memory /remember /dream "
+                     f"/plan /skills /kb /library /usage /browser /exit")
     return False
 
 
 SLASH_NAMES = {"/help", "/clear", "/model", "/history", "/resume",
                "/undo", "/compact", "/sandbox", "/memory", "/remember",
                "/dream", "/skills", "/kb", "/plan", "/library", "/usage",
+               "/browser",
                "/exit", "/quit"}
 # Git Bash(MSYS)会把 "/cmd" 形式的参数转成 Git 安装目录下的路径,
 # 如 "D:/git/Git/history" 或 "C:/Program Files/Git/history"

@@ -56,9 +56,14 @@ for pkg in ("openai", "httpx2", "pydantic", "pydantic_core",
 
 # 内置轻量抓取器(打包版联网爬取的引擎):bs4 解析 HTML、httpx 取页面。
 # 它们在函数内部 import,PyInstaller 静态分析能发现,这里再显式声明一次更稳。
+# websockets 同理:minicode/browser.py 在函数内才 import(为了测试可替身与
+# “缺依赖时只报错不阻断启动”),不声明的话打包版跑浏览器能力会 ModuleNotFoundError。
+# 它是纯 Python(+一个可选 C 扩展),几 MB,不像 playwright 那样背 270MB 内核。
+hiddenimports += ["bs4", "soupsieve", "httpx", "httpcore", "h11", "websockets"]
+
 # 不要把 crawl4ai/patchright/playwright 加回来:浏览器内核 270MB+、驱动 100MB,
-# 便携包放不下(会把 79MB 的 zip 撑到 500MB),抓取改用内置轻量抓取器。
-hiddenimports += ["bs4", "soupsieve", "httpx", "httpcore", "h11"]
+# 便携包放不下(会把 79MB 的 zip 撑到 500MB)。抓取用上面的内置轻量抓取器,
+# 看真实页面用 minicode/browser.py 的 CDP 路线(只需 websockets)。
 
 common = dict(
     pathex=[ROOT],

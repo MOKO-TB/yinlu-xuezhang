@@ -19,10 +19,11 @@
 - **会话持久化**:每轮写入 `sessions/*.jsonl`;GUI 侧栏一键恢复,CLI `/resume`
 - **校园地图(肇庆校区,手绘版)**:用线下交付的手绘地图 + 36 张单栋标注图做"位置图"——问「图书馆在哪」「E栋怎么走」,agent 会把该建筑在手绘地图上框出来、并给出它的单栋标注图(整图 + 一个红框),面板支持滚轮缩放/拖动平移/点框看大图;也能**不用问模型自己找**:面板里有搜索框(支持 E栋、s5 这类俗称与「食堂」这类类别词,命中多处会全列出来让你挑)、图例上的类别徽章一点即筛(只看食堂/只看宿舍)、邻近建筑可点跳转、一键复制位置说明;首页首位的「🗺 打开校园地图」按钮点开即是地图并自动聚焦搜索框。**A栋~E栋在地图上是两栋楼(学思苑X / 集贤苑X座),工具会返回歧义并把候选都摆出来,绝不自作主张挑一个**。这份数据没有路网,所以只答"在哪、旁边是什么",不编路线与步行时间。数据是 `frontend/campus-index.json`(交付包索引副本),底图与建筑图由 `scripts/build_campus_assets.py` 从交付 PNG 生成
 - **权限确认解释"为什么"**:确认框顶部给出「这一步为什么要做 / 这一步会做什么 / 影响」——目的优先取模型填的 `reason`,没填就用同一轮它写的说明文字,再不行按命令形态做启发式解读(如"用 Python 读取并解析数据文件(一条命令里含多个步骤)"),并标出影响面(只读 / 会写文件 / 会联网 / 删除不可恢复 / bash 改动不在撤销范围)
-- **18 个内置工具**:`read_file` / `write_file` / `edit_file` / `bash` / `glob` / `grep` / `web_crawl` / `use_skill` / `plan` / `search_knowledge` / `library_search` / `library_guide` / `memory` + 地图 `map_find_place` / `map_show_list` / `map_highlight_building` / `map_drop_pin` / `map_clear`;另有 `task`(子代理派发,由应用装配层注入)
+- **23 个内置工具**:`read_file` / `write_file` / `edit_file` / `bash` / `glob` / `grep` / `web_crawl` / `use_skill` / `plan` / `search_knowledge` / `library_search` / `library_guide` / `memory` + 地图 `map_find_place` / `map_show_list` / `map_highlight_building` / `map_drop_pin` / `map_clear` + 浏览器 `browser_open` / `browser_eval` / `browser_screenshot` / `browser_close` / `browser_status`;另有 `task`(子代理派发,由应用装配层注入)
 - **计划依赖图**:`plans/plan.md` 的步骤可以声明 `depends_on`(文件里落成 `- 依赖: 1, 2`),写入时校验未知依赖/自依赖/环(不合法就不落盘);读计划时附一份「调度视图」——哪些步可执行(依赖已满足,可并行)、哪些被上游失败卡住(标 `[!]` 后下游自动判卡住,不会静默跳过)。老计划文件(无依赖行)照常读写
 - **只读子代理并行派发**:一次要查多件互不相干的事时,`task` 的 `type` 与 `task` 都传数组就能并发(上限 4 个,报告按请求顺序合并)。**只对只读类型 explore/review 开放**——写类型并发会争抢同一条权限确认通道,混入会直接报错;并发时子代理的流式输出与工具卡片被静默(toast 与错误照常透传),避免几路 `text_delta` 在同一聊天区里互相穿插
-- **网页抓取**:`web_crawl` 抓网页/整站为 markdown(同域 BFS 跟链、限页限速),入库前自动去掉每页重复的导航/页脚;可选 to_kb 一键写入本地知识库 `kb/crawl-<域名>.json`,用 `kb_category`/`kb_tags` 打主题标签(检索时标签权重×2),由 search_knowledge 带来源网址检索。源码环境用 crawl4ai(真浏览器,能渲染 JS);**打包版自动切到内置轻量抓取器(httpx + BeautifulSoup)**,不带浏览器内核(否则 79MB 的包会涨到约 500MB),静态站点效果一致,需要 JS 的页面会明确提示
+- **网页抓取**:`web_crawl` 抓网页/整站为 markdown(同域 BFS 跟链、限页限速),入库前自动去掉每页重复的导航/页脚;可选 to_kb 一键写入本地知识库 `kb/crawl-<域名>.json`,用 `kb_category`/`kb_tags` 打主题标签(检索时标签权重×2),由 search_knowledge 带来源网址检索。源码环境用 crawl4ai(真浏览器,能渲染 JS);**打包版自动切到内置轻量抓取器(httpx + BeautifulSoup)**,不带浏览器内核(否则 79MB 的包会涨到约 500MB),静态站点效果一致,需要 JS 的页面会明确提示(或改用下面的浏览器能力)
+- **浏览器能力(CDP 直连,不背浏览器内核)**:给 agent 装上"眼睛"——它能真的开一个浏览器看页面,而不只能抓静态 HTML。`browser_open` 返回 **JS 渲染完成后**的标题与正文(教务/通知页这类靠 JS 渲染的站点终于是真内容);`browser_eval` 在页面里跑一段 JS 精确取数(价格/表格/链接列表)或点按钮、滚动;`browser_screenshot` 把页面截成 PNG 存进工作区,**图直接出现在对话里**(点图可放大);`browser_close` 收标签页。两条接入路线:**launch**(默认,零配置:自己找 Edge/Chrome 用独立 profile 起一个无窗口实例)与 **attach**(连用户自己开了远程调试的浏览器,**带他的登录态**,能看只看得到登录用户的页面)。靠纯 Python 的 `websockets` 说 CDP,所以轻量版安装包**不**需要 playwright 与 270MB 内核。安全三条:只允许 http/https(`file://`、`javascript:`、`chrome://` 一律拒);每个线程/会话/子代理**各自一个标签页**,并发不串台,已结束线程留下的页会被回收;网页版(对外只读)**不给浏览器工具**(可被用来打内网 + 在服务器上起浏览器)。终端 `/browser` 看当前能不能用、走的哪条路线
 - **校园主题语料库**:`scripts/crawl_school_topics.py` 按"用户会问什么"分主题爬官网(奖助学金 / 入党党建 / 团学推优 / 学科竞赛 / 证书与等级考试 / 考研升学 / 转专业与专业选择 / 选课与学分 / 教务考试 / 就业与考公考编 / 榜样风采 / 心理与情绪 / 学风与学习方法 / 招生专升本 / 校园活动与文体 / 宿舍与生活服务 / 社团与学生组织 / 军训与国防教育 / 校园新闻动态 / 学生故事与风采 / 学生事务办理 / 校园讲座与专题 / 视频与图文校园 / 服务大厅与办事入口,共 24 个),关键词过滤 + 翻页 + 发布日期提取 + 去导航,产出 `kb/school-gzasc.json`(每条都带原文链接与发布日期;视频页与图文指引页也建条目,正文里给出观看/查看链接),换学校只改 `scripts/school_topics.json`,不用改代码
 - **OpenAI 兼容内核**:底层走 OpenAI 协议(流式 + 工具调用),所以默认的校园模型之外,任何 OpenAI 兼容服务(DeepSeek / Kimi / Qwen / 智谱)都能在源码层接;本地服务(127.0.0.1)与校园内网(10.x)自动绕过系统代理
 
@@ -64,7 +65,10 @@ python main.py "修复 pytest 报错"    # 一次性执行
 echo "列出 TODO" | python main.py   # 管道输入
 ```
 
-CLI 命令:`/help` `/clear` `/model`(供应商列表)`/history` `/resume [<n>]` `/undo` `/compact` `/skills` `/kb`(知识库统计)`/exit`;`Ctrl+C` 中断当前回合。
+CLI 命令:`/help` `/clear` `/model`(供应商列表)`/history` `/resume [<n>]` `/undo` `/compact`
+`/sandbox` `/memory` `/remember` `/dream` `/skills` `/kb`(知识库统计)`/plan`
+`/library`(馆藏库状态)`/usage [1|7|30]`(token 用量)`/browser`(浏览器能力状态)`/exit`;
+`Ctrl+C` 中断当前回合。
 
 ## 网页版(校园助手)
 
@@ -344,6 +348,9 @@ python scripts/e2e_frozen_mcp.py --exe dist/引路学长-crawl4ai/引路学长-C
 python scripts/e2e_frozen_sandbox.py    # 打包后验证:工作区外访问触发确认且拒绝后不泄露内容
 python scripts/e2e_web.py               # 网页版:静态/shim/越权拒绝/跨站拦截/SSE 回合全链路
 python scripts/e2e_map_reset.py         # 前端:切会话后地图状态是否清零(B12 回归,真实浏览器)
+python scripts/e2e_browser.py           # 浏览器能力:真 Edge/Chrome 全链路(渲染后取正文/取数/截图/并发隔离/file 拒绝)
+python scripts/e2e_browser.py --attach  # 同上,但改用已开远程调试的浏览器(带登录态那条路线)
+python scripts/e2e_browser_shot.py      # 前端:Agent 截的图是否真的画进对话(取图/放大/后台会话不串台)
 python scripts/e2e_frozen_library.py    # 打包后验证:用包内 1.3 GB 真库查书(书名号/版次标注都能命中)
 ```
 

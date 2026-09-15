@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from minicode.agent import Agent
+from minicode.browser import browser_prompt_section
 from minicode.config import Config
 from minicode.kb import kb_dirs, kb_prompt_section
 from minicode.library import library_prompt_section
@@ -35,6 +36,7 @@ def build_system_prompt(workspace: Path) -> str:
             + kb_prompt_section(kb_dirs(workspace))
             + library_prompt_section(workspace)
             + library_guide_prompt_section(workspace)
+            + browser_prompt_section()
             + memory_prompt_section(workspace))
 
 

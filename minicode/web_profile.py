@@ -50,6 +50,12 @@ EXCLUDED_TOOLS: dict[str, str] = {
     "memory": "读写所有者自己的长期记忆",
     "task": "子代理会携带 implement 类写工具,绕过白名单",
     "web_crawl": "SSRF:可让服务端请求校园内网任意地址;且会写 crawled//kb/",
+    "browser_open": "对外模式不给浏览器:能访内网地址、带不上访客登录态却要占一台浏览器,"
+                    "且 launch 出的实例会留在服务器上",
+    "browser_eval": "等于在服务器浏览器里执行访客给的 JS",
+    "browser_screenshot": "往服务器工作区写文件",
+    "browser_close": "同上,浏览器能力整体不进白名单",
+    "browser_status": "不暴露服务器的浏览器信息",
 }
 
 # 只允许通过 get_asset 读回的扩展名(该接口的原意是显示技能正文里的配图)

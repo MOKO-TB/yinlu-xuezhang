@@ -35,7 +35,8 @@ _CMD_RULES: list[tuple[str, str]] = [
 
 _READONLY_TOOLS = {"read_file", "glob", "grep", "search_knowledge", "use_skill",
                    "library_search", "map_find_place", "map_show_list",
-                   "map_highlight_building", "map_drop_pin", "map_clear"}
+                   "map_highlight_building", "map_drop_pin", "map_clear",
+                   "browser_status"}
 
 
 def _clean(text: str) -> str:
@@ -92,6 +93,17 @@ def risk_notes(tool_name: str, args: dict) -> list[str]:
         notes.append("会修改文件内容,可用「撤销」回滚")
     elif name in _READONLY_TOOLS:
         notes.append("只读,不会改动任何文件")
+    elif name == "browser_open":
+        notes.append("会启动/使用本机浏览器联网访问页面")
+        if str(args.get("mode", "")) == "attach":
+            # 确认框是纯文本,别写 markdown 强调符(会照原样显示)
+            notes.append("将使用你自己浏览器的登录态(页面内容以你的身份取得)")
+    elif name == "browser_eval":
+        notes.append("会在打开的页面里执行这段 JavaScript(可触发跳转/点击)")
+    elif name == "browser_screenshot":
+        notes.append("会往工作区写入截图文件(需手动删,「撤销」不跟踪它)")
+    elif name == "browser_close":
+        notes.append("只关掉引路学长自己打开的标签页,不会动你其他的页面")
     return notes
 
 

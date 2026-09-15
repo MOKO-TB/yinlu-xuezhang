@@ -41,6 +41,7 @@ from minicode.tools.base import Tool
 
 PREVIEW_LINES = 15
 DIFF_MAX_LINES = 40
+PREVIEW_CHARS = 1200      # 浏览器 JS 之类"长参数"在确认框里的截断长度
 
 
 class PublicApi:
@@ -821,6 +822,18 @@ class Bridge:
             if len(diff) > DIFF_MAX_LINES:
                 text += f"\n…(diff 共 {len(diff)} 行)"
             return text
+
+        # 浏览器工具:让用户一眼看清"要开哪个网址 / 要执行什么 JS / 图存到哪"
+        name = tool.name.rsplit("·", 1)[-1]        # 子代理工具带类型前缀
+        if name == "browser_open":
+            return f"打开网页:{args.get('url', '')}"
+        if name == "browser_eval":
+            js = str(args.get("js", ""))
+            return "在当前页面里执行这段 JS:\n" + (
+                js if len(js) <= PREVIEW_CHARS else js[:PREVIEW_CHARS] + "…")
+        if name == "browser_screenshot":
+            return (f"把当前页面截图存到:{args.get('path') or 'shots/ 下(自动命名)'}"
+                    + ("" if args.get("full_page", True) else "(只截可视区)"))
 
         return json.dumps(args, ensure_ascii=False)[:500]
 

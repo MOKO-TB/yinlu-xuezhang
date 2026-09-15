@@ -5,7 +5,10 @@ def test_registry_contents():
     tools = build_default_registry()
     names = [t.name for t in tools]
     assert names == ["read_file", "write_file", "edit_file", "bash", "glob",
-                     "grep", "web_crawl", "use_skill", "plan",
+                     "grep", "web_crawl",
+                     "browser_open", "browser_eval", "browser_screenshot",
+                     "browser_close", "browser_status",
+                     "use_skill", "plan",
                      "search_knowledge", "library_search", "library_guide", "memory",
                      "map_find_place", "map_show_list", "map_highlight_building",
                      "map_drop_pin", "map_clear"]
@@ -22,6 +25,13 @@ def test_read_only_flags():
         "glob": True,
         "grep": True,
         "web_crawl": False,
+        # 浏览器会带用户的登录态、browser_eval 能在页面里执行 JS:要确认,
+        # 不标只读(browser_status 只是查能力,不驱动页面)。
+        "browser_open": False,
+        "browser_eval": False,
+        "browser_screenshot": False,
+        "browser_close": False,
+        "browser_status": True,
         "use_skill": True,
         "search_knowledge": True,
         "library_search": True,      # 离线书目库查询,只读

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from minicode import campus, kb, library, library_guide, memory, planning, skills
+from minicode.tools import browser as browser_tools
 from minicode.tools import crawl, fs, search, shell
 from minicode.tools.base import Tool
 
@@ -123,6 +124,105 @@ def build_default_registry() -> list[Tool]:
                 "required": ["url"],
             },
             handler=crawl.crawl_web,
+        ),
+        # ---------------- 浏览器(browser_*)----------------
+        # 与 web_crawl 的分工:crawl 抓静态正文入库;browser 是「真的开一个浏览器」——
+        # 能看 JS 渲染后的页面、能拿登录态(连用户自己的浏览器)、能截图给用户看。
+        Tool(
+            name="browser_open",
+            description=(
+                "用真实浏览器打开一个网页,返回 JS 渲染完成后的标题与正文文本。"
+                "凡是「网页抓不到内容 / 页面要靠 JS 渲染 / 需要登录态 / 要看自己写的页面"
+                "(localhost)效果」都用它,而不是 web_crawl。"
+                "同一会话里重复调用会复用同一个标签页(相当于刷新成新地址),"
+                "所以连续翻页很便宜。mode=attach 会连用户自己开着的浏览器(带他的登录态);"
+                "默认 auto:有可连的就连,没有就自己起一个独立实例(零配置)。"
+                "要拿精确数据(价格/表格/链接列表)接着用 browser_eval,要看画面用 browser_screenshot。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "要打开的网址,须为 http/https"},
+                    "wait_ms": {"type": "integer",
+                                "description": "最多等页面加载多久(毫秒),默认 8000,上限 30000"},
+                    "wait_for": {"type": "string",
+                                 "description": "可选的 CSS 选择器:等到它出现才算加载好,如 #app .list"},
+                    "max_chars": {"type": "integer",
+                                  "description": "正文返回上限字符数,默认 6000,上限 20000"},
+                    "mode": {"type": "string", "enum": ["auto", "attach", "launch"],
+                             "description": "auto=自动(默认);attach=必须用用户自己的浏览器(要登录态时);launch=自己起独立实例"},
+                    "headless": {"type": "boolean",
+                                 "description": "mode=launch 时是否无窗口运行,默认 true"},
+                    "reason": {"type": "string",
+                               "description": "用一句中文向用户说明这次要打开什么页面、为什么(显示在权限确认框里)"},
+                },
+                "required": ["url"],
+            },
+            handler=browser_tools.browser_open,
+        ),
+        Tool(
+            name="browser_eval",
+            description=(
+                "在「当前页面」里执行一段 JavaScript 并把结果返回,用于精确取数或操作页面:"
+                "取表格/价格/链接列表(返回 JSON 更好用)、读某元素的文字、判断元素是否存在、"
+                "点按钮(如 document.querySelector('#btn').click())、滚动到页面底部后再取内容。"
+                "需要先 browser_open 打开页面。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "js": {"type": "string",
+                           "description": "要执行的 JS 表达式或语句,返回值会被带回,如 JSON.stringify([...document.querySelectorAll('a')].map(a=>a.href))"},
+                    "await_promise": {"type": "boolean",
+                                      "description": "表达式返回 Promise 时是否等它完成(如 fetch),默认 false"},
+                    "max_chars": {"type": "integer", "description": "返回值截断长度,默认 4000"},
+                    "reason": {"type": "string", "description": "用一句中文说明这次要取什么(显示在权限确认框里)"},
+                },
+                "required": ["js"],
+            },
+            handler=browser_tools.browser_eval,
+        ),
+        Tool(
+            name="browser_screenshot",
+            description=(
+                "把「当前页面」截图保存到工作区,并在界面上直接把这张图给用户看。"
+                "用户说「截图看看 / 这页面长什么样」、或需要证明页面效果/排版是否正确时用它。"
+                "需要先 browser_open 打开页面。回答里请原样带上工具返回的 ![](路径) 一段,用户才能看到图。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "保存路径(相对工作区),默认 shots/网页-时间戳.png"},
+                    "full_page": {"type": "boolean",
+                                  "description": "整页截图(含滚动部分),默认 true;false 则只截当前可视区"},
+                    "reason": {"type": "string", "description": "用一句中文说明为什么要截图(显示在权限确认框里)"},
+                },
+            },
+            handler=browser_tools.browser_screenshot,
+        ),
+        Tool(
+            name="browser_close",
+            description="关闭当前页面(浏览器里的标签页一并关掉)。这一轮的页面看完了就顺手关掉,别让浏览器堆一屏标签。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "可选:一句中文说明"},
+                },
+            },
+            handler=browser_tools.browser_close,
+        ),
+        Tool(
+            name="browser_status",
+            description="检查浏览器能力是否可用(能不能连上浏览器、走哪种方式)。browser_open 报错时用它自查。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "可选:一句中文说明"},
+                },
+            },
+            handler=browser_tools.browser_status,
+            read_only=True,
         ),
         Tool(
             name="use_skill",

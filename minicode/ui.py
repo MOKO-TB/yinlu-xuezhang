@@ -21,7 +21,8 @@ from minicode.tools.base import Tool
 
 SLASH_COMMANDS = ["/help", "/clear", "/model", "/history", "/resume",
                   "/undo", "/compact", "/sandbox", "/memory", "/remember",
-                  "/dream", "/skills", "/kb", "/plan", "/exit"]
+                  "/dream", "/skills", "/kb", "/plan", "/library", "/usage",
+                  "/browser", "/exit"]
 
 REFRESH_INTERVAL = 0.12     # 流式 Markdown 刷新节流
 DIFF_MAX_LINES = 40
@@ -117,10 +118,17 @@ class TerminalUI:
         ))
 
     def _arg_summary(self, tool: Tool, args: dict) -> str:
-        if tool.name == "bash":
+        name = tool.name.rsplit("·", 1)[-1]      # 子代理的工具名带类型前缀
+        if name == "bash":
             s = args.get("command", "")
-        elif tool.name in ("write_file", "edit_file", "read_file"):
+        elif name in ("write_file", "edit_file", "read_file"):
             s = str(args.get("path", ""))
+        elif name == "browser_open":
+            s = str(args.get("url", ""))
+        elif name == "browser_eval":
+            s = "JS: " + " ".join(str(args.get("js", "")).split())[:100]
+        elif name in ("browser_screenshot", "browser_close", "browser_status"):
+            s = str(args.get("path", "")) or "当前页面"
         else:
             s = "  ".join(f"{k}={str(v)[:40]}" for k, v in args.items())
         return s[:120]
@@ -242,6 +250,8 @@ class TerminalUI:
             "  /clear        清空当前会话上下文\n"
             "  /model        查看当前使用的模型(GUI 顶部标识可添加/切换模型)\n"
             "  /usage [1|7|30] 查看 token 用量统计(默认近 7 天)\n"
+            "  /browser      查看浏览器能力(能不能开网页/截图,连的是哪个浏览器)\n"
+            "  /library      查看馆藏书目库状态\n"
             "  /history      查看上下文消息数与 token 估算\n"
             "  /resume [<n>] 查看/恢复历史会话\n"
             "  /undo         撤销最近一次文件改动(可连续;bash 改动不在跟踪范围)\n"

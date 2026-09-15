@@ -24,5 +24,10 @@ config.local.json
 token-usage.db
 token-usage.db-*
 
+# 浏览器能力运行时产物:Agent 截图与独立实例的 profile(开发态落仓库根)
+shots/
+browser-profile/
+_build_*.log
+
 # 交付材料压缩包(内容与 引入学长/ 目录重复,只留目录)
 /引入学长.zip

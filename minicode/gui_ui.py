@@ -98,10 +98,17 @@ class GuiUI:
 
     @staticmethod
     def _arg_summary(tool: Tool, args: dict) -> str:
-        if tool.name == "bash":
+        name = tool.name.rsplit("·", 1)[-1]      # 子代理的工具名带类型前缀
+        if name == "bash":
             s = str(args.get("command", ""))
-        elif tool.name in ("write_file", "edit_file", "read_file"):
+        elif name in ("write_file", "edit_file", "read_file"):
             s = str(args.get("path", ""))
+        elif name == "browser_open":
+            s = str(args.get("url", ""))         # 卡片上直接看到要开哪个网址
+        elif name == "browser_eval":
+            s = "JS: " + " ".join(str(args.get("js", "")).split())
+        elif name in ("browser_screenshot", "browser_close", "browser_status"):
+            s = str(args.get("path", "")) or "当前页面"
         else:
             s = "  ".join(f"{k}={str(v)[:40]}" for k, v in args.items())
         return s[:160]
