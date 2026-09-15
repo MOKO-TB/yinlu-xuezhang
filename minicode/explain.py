@@ -94,10 +94,16 @@ def risk_notes(tool_name: str, args: dict) -> list[str]:
     elif name in _READONLY_TOOLS:
         notes.append("只读,不会改动任何文件")
     elif name == "browser_open":
-        notes.append("会启动/使用本机浏览器联网访问页面")
-        if str(args.get("mode", "")) == "attach":
-            # 确认框是纯文本,别写 markdown 强调符(会照原样显示)
-            notes.append("将使用你自己浏览器的登录态(页面内容以你的身份取得)")
+        mode = str(args.get("mode", "") or "auto")
+        if mode == "launch":
+            notes.append("会用一个独立的无窗口浏览器实例(不带你现有的登录态)")
+        else:
+            # auto 也可能落到用户自己的浏览器:确认框不能只按字面参数说话。
+            # (纯文本框,别写 markdown 强调符,会照原样显示)
+            notes.append("会启动/使用本机浏览器联网访问页面")
+            notes.append(
+                "将使用你自己浏览器的登录态(页面内容以你的身份取得)" if mode == "attach"
+                else "若你正开着远程调试,可能会改用你自己的浏览器(带你的登录态)")
     elif name == "browser_eval":
         notes.append("会在打开的页面里执行这段 JavaScript(可触发跳转/点击)")
     elif name == "browser_screenshot":

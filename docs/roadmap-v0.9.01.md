@@ -222,7 +222,7 @@ B12 的根因:新建/切换会话时后端推 `cleared` / `resumed` 事件,前�
   死循环、删除确认弹窗 z-index、`model_catalog.py` 能力/窗口目录、会话内切模型不写回全局。
 - **v0.9.05 浏览器能力(CDP 直连真实浏览器)**:本轮。`minicode/browser.py` + 5 个 `browser_*` 工具
   + 截图直接进对话。**为什么不用 playwright**:轻量包排除内核(见 gcode.spec),CDP 只需 `websockets`。
-  全量 **516 passed**;真浏览器 e2e(`e2e_browser.py`)、假 LLM 驱真浏览器
+  全量 **521 passed**;真浏览器 e2e(`e2e_browser.py` 与 `--attach` 两条路线)、假 LLM 驱真浏览器
   (`E2E_SCRIPT=browser scripts/e2e_fake_server.py`)、前端截图卡片回归(`e2e_browser_shot.py`)均 PASS。
 
 ### 不做 / 暂缓

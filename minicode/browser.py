@@ -117,16 +117,8 @@ def _http_json(url: str, timeout: float = 2.0) -> dict | None:
         return None
 
 
-def probe_endpoint(port: int, timeout: float = 1.5) -> dict | None:
-    """探测某个端口上有没有开着的 CDP 端点,有则返回 /json/version 内容。"""
-    data = _http_json(f"http://127.0.0.1:{int(port)}/json/version", timeout=timeout)
-    if data and data.get("webSocketDebuggerUrl"):
-        return data
-    return None
-
-
-def _active_port_files() -> list[int]:
-    """读 Edge/Chrome 用户目录里的 DevToolsActivePort(用户自己开了远程调试时)。"""
+def _devtools_files() -> list[Path]:
+    """Edge/Chrome 用户目录里的 DevToolsActivePort 文件(开了远程调试才有)。"""
     local = os.environ.get("LOCALAPPDATA", "")
     if not local:
         return []
@@ -134,15 +126,56 @@ def _active_port_files() -> list[int]:
         Path(local) / "Microsoft" / "Edge" / "User Data",
         Path(local) / "Google" / "Chrome" / "User Data",
     ]
+    return [root / "DevToolsActivePort" for root in roots]
+
+
+def _port_from_file() -> list[int]:
+    """从 DevToolsActivePort 文件里读端口(用户自己开了远程调试时)。"""
     ports: list[int] = []
-    for root in roots:
-        f = root / "DevToolsActivePort"
+    for f in _devtools_files():
         try:
-            first = f.read_text(encoding="utf-8", errors="replace").splitlines()[0]
-            ports.append(int(first.strip()))
+            ports.append(int(f.read_text(encoding="utf-8", errors="replace")
+                             .splitlines()[0].strip()))
         except Exception:
             continue
     return ports
+
+
+def _ws_path_from_file(port: int) -> str | None:
+    """从 DevToolsActivePort 第二行拿浏览器级 WebSocket 路径。
+
+    为什么要这条兼容路:实测用户自己的 Edge 153 在 9222 上对
+    `127.0.0.1:9222/json/version` **返回 404**(只认 localhost 作 Host),
+    而文件里直接记着可用的 ws 路径 —— 只依赖 HTTP 探测就会在这类环境里
+    把可用的登录态浏览器误判成「没找到」。
+    """
+    for f in _devtools_files():
+        try:
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+            if int(lines[0].strip()) != int(port):
+                continue
+            path = lines[1].strip()
+            if path.startswith("/"):
+                return f"ws://127.0.0.1:{port}{path}"
+        except Exception:
+            continue
+    return None
+
+
+def probe_endpoint(port: int, timeout: float = 1.5) -> dict | None:
+    """探测某个端口上有没有开着的 CDP 端点,有则返回可用的连接信息。
+
+    三种探测依次试:127.0.0.1 → localhost(部分 Edge 只认后者)
+    → DevToolsActivePort 里的 ws 路径。
+    """
+    for host in ("127.0.0.1", "localhost"):
+        data = _http_json(f"http://{host}:{int(port)}/json/version", timeout=timeout)
+        if data and data.get("webSocketDebuggerUrl"):
+            return data
+    ws = _ws_path_from_file(port)
+    if ws:
+        return {"webSocketDebuggerUrl": ws, "Browser": "浏览器(由 DevToolsActivePort 探测)"}
+    return None
 
 
 def find_browser_exe() -> tuple[str, str] | None:
@@ -316,7 +349,7 @@ def _attach_endpoint() -> tuple[str, dict] | None:
                 f"{ENV_CDP_URL} 指向的 {env} 连不上:确认浏览器开着且带 --remote-debugging-port")
         return info["webSocketDebuggerUrl"], info
     ports: list[int] = list(DEFAULT_PORTS)
-    for p in _active_port_files():
+    for p in _port_from_file():
         if p not in ports:
             ports.append(p)
     for port in ports:
@@ -381,9 +414,21 @@ def _ensure_conn(*, mode: str = "auto", headless: bool = True) -> tuple[_Conn, s
             if hit is not None:
                 ws_url, info = hit
                 conn = _Conn(ws_url)
-                _STATE.conn, _STATE.browser, _STATE.mode = conn, info.get("Browser", "浏览器"), "attach"
-                return conn, _STATE.browser, _STATE.mode
-            if mode == "attach":
+                # 真试一次只读命令:DevToolsActivePort 可能是浏览器关后的残留文件,
+                # 不验证会把"已死端点"当成可 attach,直到用户等半天收个超时。
+                try:
+                    product = conn.call("Browser.getVersion", timeout=8).get("product", "")
+                except Exception as exc:
+                    conn.close()
+                    if mode == "attach":
+                        raise BrowserUnavailable(
+                            f"探到调试端口但连不上(浏览器可能已关):{exc}") from exc
+                    hit = None                      # auto:退回 launch 路线
+                else:
+                    browser = product or info.get("Browser", "浏览器")
+                    _STATE.conn, _STATE.browser, _STATE.mode = conn, browser, "attach"
+                    return conn, _STATE.browser, _STATE.mode
+            if hit is None and mode == "attach":
                 raise BrowserUnavailable(
                     "没找到开着远程调试的浏览器。要在你自己的登录态里打开页面,请先让 Edge/Chrome "
                     "带 --remote-debugging-port=9222 启动(Edge 的 edge://inspect 里有对应开关),"
@@ -656,15 +701,26 @@ def health() -> dict:
             info.update(ok=True, mode=_STATE.mode, browser=_STATE.browser,
                         detail=f"已连接({len(_STATE.sessions)} 个标签页)")
             return info
+    hit = None
     try:
         hit = _attach_endpoint()
-    except BrowserUnavailable as exc:
-        info["detail"] = str(exc)
+    except Exception:
         hit = None
     if hit is not None:
-        info.update(ok=True, mode="attach", browser=hit[1].get("Browser", "浏览器"),
-                    detail="可用:会连你已开远程调试的浏览器(带登录态)")
-        return info
+        # 真连一下:端口上挂着残留文件/被别的程序占了时不能报"可用"
+        try:
+            probe = _Conn(hit[0])
+            product = probe.call("Browser.getVersion", timeout=6).get("product", "")
+        except Exception:
+            product = ""
+            probe = None
+        if probe is not None:
+            probe.close()
+            info.update(ok=True, mode="attach",
+                        browser=product or hit[1].get("Browser", "浏览器"),
+                        detail="可用:会连你已开远程调试的浏览器(带登录态)")
+            return info
+        info["detail"] = "探到调试端口但连不上(浏览器可能已关,或残留的 DevToolsActivePort)"
     try:
         found = find_browser_exe()
     except BrowserUnavailable as exc:

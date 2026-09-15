@@ -328,6 +328,90 @@ def test_attach_mode_required_reports_fix(isolated_state, monkeypatch):
     assert "remote-debugging-port" in str(e.value)
 
 
+# -------------------------------------------------- 真环境探测兼容(踩过的坑)
+
+def test_probe_falls_back_to_devtools_active_port(monkeypatch, tmp_path):
+    """实测环保类坑:用户自己的 Edge 在 9222 上对 /json/version 返 404,
+    只认 localhost;而 DevToolsActivePort 文件里直接记着可用的 ws 路径。
+    只依赖 HTTP 探测会把可用的登录态浏览器误判成「没找到」。"""
+    f = tmp_path / "DevToolsActivePort"
+    f.write_text("9222\n/devtools/browser/abc-123\n", encoding="utf-8")
+    monkeypatch.setattr(br, "_devtools_files", lambda: [f])
+
+    def fake_http(url, timeout=2.0):
+        if "localhost" in url:                     # 只认 localhost 的那种 Edge
+            return {"webSocketDebuggerUrl": "ws://localhost:9222/devtools/browser/abc-123"}
+        return None
+
+    monkeypatch.setattr(br, "_http_json", fake_http)
+    info = br.probe_endpoint(9222)
+    assert info and info["webSocketDebuggerUrl"].endswith("abc-123")
+
+
+def test_probe_uses_port_file_when_http_all_404(monkeypatch, tmp_path):
+    f = tmp_path / "DevToolsActivePort"
+    f.write_text("9222\n/devtools/browser/dead-beef\n", encoding="utf-8")
+    monkeypatch.setattr(br, "_devtools_files", lambda: [f])
+    monkeypatch.setattr(br, "_http_json", lambda url, timeout=2.0: None)   # 两种 Host 都 404
+    info = br.probe_endpoint(9222)
+    assert info == {"webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/dead-beef",
+                    "Browser": "浏览器(由 DevToolsActivePort 探测)"}
+    assert br.probe_endpoint(59999) is None       # 文件里的端口对不上就不算
+
+
+def test_attach_validated_by_real_handshake(monkeypatch):
+    """探到端口不等于能用:浏览器已关/端口被别的程序占着时不能报「可 attach」。"""
+    monkeypatch.setattr(br, "_attach_endpoint",
+                        lambda: ("ws://127.0.0.1:9222/devtools/browser/x", {"Browser": "E"}))
+
+    class DeadConn(FakeConn):
+        def call(self, method, params=None, session=None, timeout=30.0):
+            raise br.BrowserError("不是 CDP 服务")
+
+    monkeypatch.setattr(br, "_Conn", DeadConn)
+    with pytest.raises(br.BrowserUnavailable) as e:
+        br._ensure_conn(mode="attach")
+    assert "连不上" in str(e.value)
+    assert br._STATE.conn is None
+
+
+def test_auto_falls_back_to_launch_when_attach_dies(monkeypatch):
+    """auto 模式下 attach 探到了但握手失败 → 要能退回 launch,而不是报错。"""
+    monkeypatch.setattr(br, "_attach_endpoint",
+                        lambda: ("ws://127.0.0.1:9222/devtools/browser/x", {"Browser": "E"}))
+
+    class DeadConn(FakeConn):
+        def call(self, method, params=None, session=None, timeout=30.0):
+            raise br.BrowserError("不是 CDP 服务")
+
+    launched = {"n": 0}
+
+    def fake_launch(**kw):
+        launched["n"] += 1
+        return object(), 9999, {"webSocketDebuggerUrl": "ws://ok", "Browser": "Edg/153"}
+
+    monkeypatch.setattr(br, "_Conn", DeadConn)
+    monkeypatch.setattr(br, "launch_browser", fake_launch)
+    conn, browser, mode = br._ensure_conn(mode="auto")
+    assert launched["n"] == 1 and mode == "launch"
+
+
+def test_health_does_not_overclaim_when_probe_dies(monkeypatch):
+    """health 要真连一下:探到残留端口却连不上时,不能对用户报「可用」。"""
+    monkeypatch.setattr(br, "_attach_endpoint",
+                        lambda: ("ws://127.0.0.1:9222/devtools/browser/x", {"Browser": "E"}))
+    monkeypatch.setattr(br, "find_browser_exe", lambda: None)
+
+    class DeadConn(FakeConn):
+        def call(self, method, params=None, session=None, timeout=30.0):
+            raise br.BrowserError("不是 CDP 服务")
+
+    monkeypatch.setattr(br, "_Conn", DeadConn)
+    h = br.health()
+    assert not h["ok"], "探到死端点却报可用"
+    assert "连不上" in h["detail"]
+
+
 def test_shutdown_is_idempotent(isolated_state):
     br._ensure_session()
     br.shutdown()
