@@ -33,15 +33,28 @@ def test_legacy_flat_format(tmp_path, cred):
                           "api_key": "sk-1", "model": "deepseek-chat"})
     cfg = load_config(p)
     assert [x.id for x in cfg.providers] == ["gzasc", "default"]   # 旧配置仍被解析保留
-    # 校内分发版只认内置校园模型:其他供应商配置保留但不激活
-    assert cfg.provider.id == "gzasc"
-    assert cfg.base_url == BUILTIN_PROVIDER.base_url
-    assert cfg.model == BUILTIN_PROVIDER.model
+    # v0.9.03 起:旧配置里填过 key 的供应商保持激活,不再被静默换成内置模型
+    assert cfg.provider.id == "default"
+    assert cfg.base_url == "https://api.deepseek.com/v1"
+    assert cfg.model == "deepseek-chat"
     assert cfg.api_key_configured
     # 迁移:内嵌 key 搬进凭据文件,config.json 重写为无密钥
     on_disk = json.loads(p.read_text(encoding="utf-8"))
     assert on_disk["providers"][0]["api_key"] == ""
     assert json.loads(cred.read_text(encoding="utf-8"))["default"] == "sk-1"
+    # 内置校园模型仍在列表里,可随时切回
+    assert cfg.set_active_provider("gzasc")
+    assert cfg.api_key == "sk-builtin-test" and cfg.model == BUILTIN_PROVIDER.model
+
+
+def test_legacy_flat_format_without_key_uses_builtin(tmp_path, cred):
+    """旧配置没填 key:仍是原来的默认体验——直接用内置校园模型。"""
+    p = _write(tmp_path, {"base_url": "https://api.deepseek.com/v1",
+                          "api_key": "", "model": "deepseek-chat"})
+    cfg = load_config(p)
+    assert cfg.provider.id == "gzasc"
+    assert cfg.model == BUILTIN_PROVIDER.model
+    assert cfg.api_key_configured            # 内置 key 来自本地注入
 
 
 def test_providers_format_and_switch(tmp_path, cred):
@@ -89,12 +102,16 @@ def test_save_roundtrip_keys_go_to_credentials(tmp_path, cred):
 
     cfg2 = load_config(p2)
     assert [x.id for x in cfg2.providers] == ["gzasc", "a"]
-    # 其他供应商的 key 仍安全存在凭据文件里,但当前模型固定为内置校园模型
-    assert cfg2.provider.id == "gzasc"
-    assert cfg2.api_key == "sk-builtin-test"        # 内置 key 来自本地注入
-    assert cfg2.model == BUILTIN_PROVIDER.model
+    # v0.9.03 起:用户自己填过 key 的供应商可以保持激活(添加模型功能)
+    assert cfg2.provider.id == "a"
+    assert cfg2.api_key == "k"
+    assert cfg2.api_key_configured
     assert json.loads(cred.read_text(encoding="utf-8"))["a"] == "k"
     assert "gzasc" not in json.loads(cred.read_text(encoding="utf-8"))  # 内置 key 不进凭据文件
+    # 换回内置也是允许的(默认推荐)
+    assert cfg2.set_active_provider("gzasc")
+    assert cfg2.provider.id == "gzasc"
+    assert cfg2.api_key == "sk-builtin-test"        # 内置 key 来自本地注入
     assert cfg2.max_output_chars == 123 and cfg2.compact_at_ratio == 0.5
     assert cfg2.permission_mode == "accept_all"
 

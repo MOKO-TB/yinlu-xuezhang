@@ -10,6 +10,7 @@ import difflib
 import json
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from minicode import APP_NAME, __version__
@@ -115,6 +116,10 @@ class PublicApi:
 
     def set_provider(self, provider_id: str) -> dict:
         return self._b.set_provider(provider_id)
+
+    def get_token_usage(self, days: int = 7) -> dict:
+        """每日 token 用量统计(弹窗圆环图数据源)。"""
+        return self._b.get_token_usage(days)
 
 
 def _within(path: Path, root: Path) -> bool:
@@ -309,11 +314,21 @@ class Bridge:
         return mcp.tools_summary() if mcp is not None else []
 
     def get_providers(self) -> dict:
-        """API Key 管理弹窗用:返回完整配置(本机单用户应用,key 不脱敏)。"""
+        """「添加模型」弹窗用。内置校园供应商的 key 永不回传(用户不可见,
+        也不可编辑);其他供应商本机单用户,key 原样返回便于修改。"""
         return {
-            "providers": [p.to_dict() for p in self.config.providers],
+            "providers": [
+                p.to_dict() if p.id != "gzasc"
+                else {**p.to_dict(), "api_key": "", "builtin": True}
+                for p in self.config.providers
+            ],
             "active_provider": self.config.provider.id if self.config.provider else "",
         }
+
+    def get_token_usage(self, days: int = 7) -> dict:
+        """每日/按模型聚合的 token 用量统计(前端弹窗圆环图)。"""
+        from minicode import usage
+        return usage.statistics(int(days))
 
     def save_providers(self, providers_json: str, active_id: str) -> dict:
         """整体保存供应商列表(前端编辑后提交),并切换到 active_id。"""
@@ -324,15 +339,20 @@ class Bridge:
         if not isinstance(items, list) or not items:
             return {"ok": False, "msg": "至少需要一个供应商"}
 
-        from minicode.config import DEFAULT_MODEL, Provider, _slug
+        from minicode.config import (BUILTIN_PROVIDER, BUILTIN_PROVIDER_ID,
+                                     DEFAULT_MODEL, Provider, _builtin_api_key,
+                                     _slug)
         providers, seen = [], set()
         for i, item in enumerate(items, start=1):
             if not isinstance(item, dict):
                 return {"ok": False, "msg": f"第 {i} 项格式错误"}
+            pid = _slug(str(item.get("id") or ""), f"provider_{i}")
+            if pid == BUILTIN_PROVIDER_ID:
+                # 内置校园供应商不可通过保存接口改写(伪造 id 也一样)
+                return {"ok": False, "msg": "内置校园模型不可编辑,请保留原样"}
             base = str(item.get("base_url") or "").strip()
             if not base:
                 return {"ok": False, "msg": f"第 {i} 个供应商缺少 base_url"}
-            pid = _slug(str(item.get("id") or ""), f"provider_{i}")
             if pid in seen:
                 return {"ok": False, "msg": f"供应商 id 重复: {pid}"}
             seen.add(pid)
@@ -344,8 +364,13 @@ class Bridge:
             ))
         active = active_id if any(p.id == active_id for p in providers) else providers[0].id
 
-        self.config.providers = providers
-        self.config.active_provider_id = active
+        # 内置供应商始终在第一位(界面与配置的展示顺序一致)
+        builtin = replace(BUILTIN_PROVIDER)
+        builtin.api_key = _builtin_api_key()
+        self.config.providers = [builtin] + providers
+        self.config.active_provider_id = (BUILTIN_PROVIDER_ID
+                                          if active == BUILTIN_PROVIDER_ID
+                                          else active)
         save_config(self.config_path, self.config)
         self._apply_active_provider()
         self.ui.push("info", text=f"已保存 {len(providers)} 个供应商,当前: {self.config.provider.name}")

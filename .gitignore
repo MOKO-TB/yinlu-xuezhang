@@ -20,5 +20,9 @@ crawled/
 # 本地密钥注入文件(不随仓库分发)
 config.local.json
 
+# Token 用量记账库(运行时生成,开发态落在仓库根)
+token-usage.db
+token-usage.db-*
+
 # 交付材料压缩包(内容与 引入学长/ 目录重复,只留目录)
 /引入学长.zip

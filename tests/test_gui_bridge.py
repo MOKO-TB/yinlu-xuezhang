@@ -229,15 +229,30 @@ def test_provider_management(config, tmp_path, monkeypatch):
     assert r["ok"]
     assert config.model == "my"
     saved = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
-    assert [p["id"] for p in saved["providers"]] == ["x", "y"]
+    # 内置校园模型始终第一位(用户供应商跟在后面)
+    assert [p["id"] for p in saved["providers"]] == ["gzasc", "x", "y"]
     assert saved["active_provider"] == "y"
     assert bridge.get_providers()["active_provider"] == "y"
+    # 内置供应商的 key 永不下发(界面不可见、也不可改)
+    gp = bridge.get_providers()["providers"][0]
+    assert gp["id"] == "gzasc" and gp["api_key"] == "" and gp.get("builtin") is True
 
     # 切换供应商并重建 LLM 客户端
     assert bridge.set_provider("x")["ok"]
     assert config.model == "mx"
     assert bridge.agent.llm.config.base_url == "https://x/v1"
+    # 切回内置校园模型也允许(默认推荐)
+    assert bridge.set_provider("gzasc")["ok"]
+    assert config.provider.id == "gzasc"
+    assert bridge.agent.llm.config.base_url.endswith("/v1")
     assert not bridge.set_provider("ghost")["ok"]
+
+    # 伪造内置 id 想改写内置供应商 → 拒绝
+    forged = [{"id": "gzasc", "name": "假", "base_url": "https://evil/v1",
+               "api_key": "k", "model": "m"}]
+    r = bridge.save_providers(json.dumps(forged), "gzasc")
+    assert not r["ok"] and "内置" in r["msg"]
+    assert config.providers[0].base_url != "https://evil/v1"   # 原样未动
 
     # 非法输入
     assert not bridge.save_providers("{bad", "x")["ok"]

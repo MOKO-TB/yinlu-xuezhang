@@ -57,22 +57,33 @@ def _builtin_api_key() -> str:
 
 
 def _ensure_builtin_provider(cfg: Config) -> None:
-    """把内置供应商合并进配置:始终存在、以代码为准,并且**永远是唯一在用的模型**。
+    """把内置供应商合并进配置:始终存在、以代码为准,并固定在列表第一位。
 
-    本应用面向校内分发,界面不提供模型/密钥切换;config.json 里残留的其他供应商
-    配置不会被删除(保留用户数据),但绝不会被激活。
+    激活规则(v0.9.03 起,由"只准用校园模型"改为"默认用它,可自主切换"):
+    - 已配置的供应商**有可用 key**(凭据文件或环境变量注入)→ 尊重用户选择;
+    - 否则(没配过、key 为空/占位符)→ 回落到内置校园模型,保证开箱即用。
+    内置供应商的字段(base_url/model 等)仍以代码为准,防止被改坏。
     """
     if not any(p.id == BUILTIN_PROVIDER_ID for p in cfg.providers):
         # 插入副本而不是共享的模块级单例:避免任何写入(如测试的环境变量覆盖)
         # 污染内置模板,影响同进程里的后续配置。
         cfg.providers.insert(0, replace(BUILTIN_PROVIDER))
+    else:                                    # 挪到第一位,保证"内置优先"的展示顺序
+        idx = next(i for i, p in enumerate(cfg.providers)
+                   if p.id == BUILTIN_PROVIDER_ID)
+        cfg.providers.insert(0, cfg.providers.pop(idx))
     for p in cfg.providers:
         if p.id == BUILTIN_PROVIDER_ID:
             p.name = BUILTIN_PROVIDER.name
             p.base_url = BUILTIN_PROVIDER.base_url
             p.api_key = _builtin_api_key()   # 每次解析,本地换 Key 无需改配置
             p.model = BUILTIN_PROVIDER.model
-    cfg.active_provider_id = BUILTIN_PROVIDER_ID
+    active = cfg.provider
+    if active is None or active.id == BUILTIN_PROVIDER_ID:
+        cfg.active_provider_id = BUILTIN_PROVIDER_ID
+    elif active.api_key.strip() in API_KEY_PLACEHOLDERS:
+        # 选中了但没填 key:只能用回内置校园模型(配置保留,填 key 后可再切)
+        cfg.active_provider_id = BUILTIN_PROVIDER_ID
 
 
 def _apply_env_overrides(cfg: Config) -> None:
@@ -223,7 +234,11 @@ def _config_from_raw(raw: dict) -> Config:
         sandbox=raw.get("sandbox") if isinstance(raw.get("sandbox"), dict) else {},
         vision=bool(raw.get("vision", False)),
     )
-    if providers and not cfg.provider:      # active 指向不存在的供应商
+    # active 缺失/指向不存在的供应商 → 钉到第一个**用户配置**的供应商上。
+    # 必须显式写回:Config.provider 在 id 为空时会隐式回退到 providers[0],
+    # 而内置供应商随后会被插到第 0 位,不显式化的话旧配置(尤其 v0.2 扁平格式,
+    # 根本没有 active_provider 字段)会被静默改成"用内置模型",用户填的 key 白配。
+    if providers and not any(p.id == cfg.active_provider_id for p in providers):
         cfg.active_provider_id = providers[0].id
     return cfg
 

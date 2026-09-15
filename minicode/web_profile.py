@@ -183,6 +183,7 @@ class PublicFacade:
             "get_providers": lambda **k: _refuse("网页版不提供密钥管理"),
             "save_providers": lambda **k: _refuse("网页版不提供密钥管理"),
             "set_provider": lambda **k: _refuse("网页版不提供密钥管理"),
+            "get_token_usage": lambda **k: _refuse("网页版不开放用量统计"),
         }
 
     # ------------------------------------------------------------ 分发

@@ -83,12 +83,22 @@ def main() -> None:
     workspace = Path(tempfile.mkdtemp(prefix="minicode-e2e-"))
     config_path = PROJECT_ROOT / "config.json"
     original = config_path.read_bytes() if config_path.exists() else None
+    # v0.2 扁平格式:顺带锁住"旧配置不被静默换成内置模型"这条回归
     config_path.write_text(json.dumps({
         "base_url": f"http://127.0.0.1:{port}/v1",
         "api_key": "test-key-e2e",
         "model": "fake-model",
         "permission_mode": "accept_all",
     }, ensure_ascii=False), encoding="utf-8")
+
+    # 隔离:凭据文件与记账库都必须落在临时目录。
+    # 否则 load_config 的凭据迁移会把测试 key 写进真实
+    # ~/.yinluxs/credentials.json(曾经真的污染过用户主目录)。
+    from minicode import config as config_mod
+    from minicode import usage as usage_mod
+    original_cred_path = config_mod.CREDENTIALS_PATH
+    config_mod.CREDENTIALS_PATH = workspace / "credentials.json"
+    usage_mod.set_db_path(workspace / "token-usage.db")
 
     os.chdir(workspace)
     sys.argv = ["main.py", "创建 e2e_demo.txt"]
@@ -97,8 +107,14 @@ def main() -> None:
         entry.main()
         assert (workspace / "e2e_demo.txt").read_text(encoding="utf-8") == "hello e2e", \
             "工具未真正写出文件"
-        print(f"\n=== E2E PASS: 文件已写出,模型请求 {REQ_COUNT['n']} 次 ===")
+        # v0.9.03:真 usage(12+6)必须被记进本地统计
+        stats = usage_mod.statistics(1)
+        assert stats["ok"] and stats["summary"]["total"] == 18, stats["summary"]
+        print(f"\n=== E2E PASS: 文件已写出,模型请求 {REQ_COUNT['n']} 次,"
+              f"token 记账 {stats['summary']['total']} ===")
     finally:
+        config_mod.CREDENTIALS_PATH = original_cred_path
+        usage_mod.set_db_path(None)
         if original is None:
             config_path.unlink(missing_ok=True)
         else:

@@ -73,6 +73,7 @@ class Agent:
 
             self.ui.finish_stream()
             self.session.add_assistant(turn)
+            self._record_usage(turn)
             self._narration = str(turn.text or "")   # 供本步工具确认框解释"为什么要做"
 
             if not turn.tool_calls:
@@ -83,6 +84,23 @@ class Agent:
                 self.session.add_tool_result(call.id, call.name, result)
         else:
             self.ui.max_steps_reached(self.max_steps)
+
+    def _record_usage(self, turn) -> None:
+        """把本轮真实 token 用量记进本地统计(见 minicode/usage.py)。
+
+        只在**有真实 usage** 时记账;服务端没返回 usage 就不记,绝不估算。
+        记账失败静默忽略——统计功能绝不能拖垮对话主流程。
+        """
+        try:
+            from minicode import usage
+            cfg = self.ctx.config
+            usage.record_usage(
+                provider=cfg.provider.id if cfg.provider else "",
+                model=cfg.model,
+                usage=turn.usage,
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ 回滚
 

@@ -95,6 +95,24 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                     + f"{total} 条\n" + "\n".join(
                         f"  • {s['file']}: {s['count']} 条" for s in stats)
                     + "\n  提问相关话题时,Agent 会用 search_knowledge 检索并给出来源网址。")
+    elif name == "/usage":
+        from minicode import usage as usage_mod
+        days = int(arg) if arg.isdigit() and int(arg) in (1, 7, 30) else 7
+        s = usage_mod.statistics(days)
+        if not s.get("ok"):
+            ui.error(s.get("msg", "统计不可用"))
+        else:
+            r, sum_ = s["range"], s["summary"]
+            lines = [f"Token 用量({r['start_date']} 至 {r['end_date']},共 {r['days']} 天)",
+                     f"  合计: {sum_['total']:,} tokens(输入 {sum_['prompt']:,} / "
+                     f"输出 {sum_['completion']:,})· {sum_['requests']} 次请求"]
+            for m in s["models"]:
+                lines.append(f"  • {m['model'] or m['key']}: {m['total']:,} tokens"
+                             f"(输入 {m['prompt']:,} / 输出 {m['completion']:,})")
+            if not s["models"]:
+                lines.append("  暂无记录(服务端返回 usage 后自动统计;GUI 顶部「📊 用量」"
+                             "可看每日圆环图)")
+            ui.info("\n".join(lines))
     elif name == "/library":
         from minicode.library import catalog_health, health_notice
         health = catalog_health(workspace)
@@ -143,7 +161,8 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
 
 SLASH_NAMES = {"/help", "/clear", "/model", "/history", "/resume",
                "/undo", "/compact", "/sandbox", "/memory", "/remember",
-               "/dream", "/skills", "/kb", "/plan", "/library", "/exit", "/quit"}
+               "/dream", "/skills", "/kb", "/plan", "/library", "/usage",
+               "/exit", "/quit"}
 # Git Bash(MSYS)会把 "/cmd" 形式的参数转成 Git 安装目录下的路径,
 # 如 "D:/git/Git/history" 或 "C:/Program Files/Git/history"
 _MSYSED_COMMAND = re.compile(r"(?i)^[A-Z]:[\\/].*git[\\/]([^\\/]+)$")

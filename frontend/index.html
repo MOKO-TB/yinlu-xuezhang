@@ -150,11 +150,12 @@ try {
                white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
                text-shadow:0 1px 4px rgba(9,15,23,.12); }
   .topbar .tok{ color:var(--text-3); font-size:11.5px; }
-  /* 固定模型标识:只展示,不可点选 */
+  /* 模型标识:可点开「添加模型」弹窗(内置模型 key 永不展示) */
   .topbar .modelpill{ background:var(--primary-light); color:var(--primary-text);
                       border:1px solid var(--primary); border-radius:var(--r-full);
                       padding:5px 14px; font-size:12px; font-weight:800;
-                      white-space:nowrap; cursor:default; }
+                      white-space:nowrap; cursor:pointer; }
+  .topbar .modelpill:hover{ filter:brightness(.97); transform:translateY(-1px); }
   .topbar button, .topbar select{
     background:var(--glass-lite); color:var(--text-2); border:1px solid var(--line-soft);
     border-radius:var(--r-full); padding:5px 14px; font-size:12px; font-weight:700;
@@ -599,6 +600,64 @@ try {
                font:inherit; outline:none; }
   .frow input:focus{ border-color:var(--primary); }
   .prov-empty{ color:var(--text-3); text-align:center; padding:14px 0; font-size:12.5px; }
+
+  /* ---------------- 添加模型弹窗 ---------------- */
+  #provOverlay .prov-list{ max-height:220px; overflow-y:auto; margin-bottom:12px; }
+  .prov-row .k .nokey{ color:var(--text-3); font-weight:600; }
+  .prov-row .k .haskey{ color:var(--ok,#2f9e6e); font-weight:700; }
+  .prov-row .buitag{ font-size:10.5px; color:var(--primary-text); background:var(--primary-light);
+                     border:1px solid var(--primary); border-radius:var(--r-full);
+                     padding:1px 8px; font-weight:800; margin-left:6px; }
+  .prov-form{ border-top:1px solid var(--line-soft); padding-top:12px; }
+  .prov-form .frow label{ width:64px; }
+  .prov-form input::placeholder{ color:var(--text-3); }
+  .prov-tip{ color:var(--text-3); font-size:11.5px; line-height:1.7; margin:6px 0 0; }
+
+  /* ---------------- 用量统计弹窗 ---------------- */
+  #usageOverlay .dialog{ width:680px; max-width:94vw; }
+  .usage-head{ display:flex; align-items:center; gap:10px; margin-bottom:4px; }
+  .usage-head h3{ flex:1; }
+  .usage-range{ display:flex; gap:0; border:1px solid var(--line-soft);
+                border-radius:var(--r-full); overflow:hidden; }
+  .usage-range button{ background:transparent; border:none; padding:6px 14px;
+                       font-size:12px; font-weight:700; color:var(--text-2);
+                       cursor:pointer; }
+  .usage-range button.on{ background:var(--primary); color:#fff; }
+  .usage-sum{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:12px 0 14px; }
+  .usage-sum .cell{ background:var(--glass-lite); border:1px solid var(--line-soft);
+                    border-radius:var(--r-m); padding:10px 12px; }
+  .usage-sum .cell b{ display:block; font-size:19px; letter-spacing:-.4px; }
+  .usage-sum .cell span{ color:var(--text-3); font-size:11px; }
+  .usage-days{ display:grid; grid-template-columns:repeat(auto-fill,minmax(84px,1fr));
+               gap:8px; margin-bottom:14px; }
+  .usage-day{ display:flex; flex-direction:column; align-items:center; gap:7px;
+              background:var(--glass-lite); border:1px solid var(--line-soft);
+              border-radius:var(--r-m); padding:10px 4px 8px; }
+  .usage-ring{ width:56px; height:56px; border-radius:50%; position:relative;
+               box-shadow:inset 0 0 0 1px rgba(0,0,0,.05); }
+  .usage-ring .rc{ position:absolute; inset:7px; border-radius:50%;
+                   background:var(--glass-strong); display:grid; place-content:center;
+                   text-align:center; }
+  .usage-ring .rc b{ font-size:10.5px; }
+  .usage-ring .rc span{ display:block; font-size:7.5px; color:var(--text-3);
+                        text-transform:uppercase; }
+  .usage-day .dm{ font-size:10.5px; font-weight:700; color:var(--text-2); }
+  .usage-day .dm i{ display:block; font-style:normal; font-weight:400;
+                    color:var(--text-3); font-size:9.5px; }
+  .usage-empty{ color:var(--text-3); font-size:12px; text-align:center;
+                padding:18px 0 6px; }
+  .usage-table{ width:100%; border-collapse:collapse; font-size:12px; }
+  .usage-table th{ text-align:right; color:var(--text-3); font-size:10.5px;
+                   font-weight:700; padding:6px 8px; border-bottom:1px solid var(--line-soft); }
+  .usage-table th:first-child{ text-align:left; }
+  .usage-table td{ padding:7px 8px; text-align:right; color:var(--text-2);
+                   border-bottom:1px solid var(--line-soft); }
+  .usage-table td:first-child{ text-align:left; }
+  .usage-table td b{ color:var(--text-1); }
+  .usage-legend{ display:flex; flex-wrap:wrap; gap:6px 14px; margin:4px 0 10px; }
+  .usage-legend span{ display:inline-flex; align-items:center; gap:5px;
+                      color:var(--text-2); font-size:11px; }
+  .usage-legend i{ width:8px; height:8px; border-radius:50%; display:inline-block; }
 </style>
 </head>
 <body>
@@ -617,6 +676,7 @@ try {
       <span class="tok" id="tok"></span>
       <span class="modelpill" id="modelPill"></span>
       <button id="btnMap" title="打开/收起校园地图(肇庆校区)">🗺 地图</button>
+      <button id="btnUsage" title="查看每日 token 消耗">📊 用量</button>
       <button id="btnSandbox" style="display:none" title="沙箱状态">🛡 沙箱</button>
       <button id="btnMemory" title="整理长期记忆">🧠 记忆</button>
       <button id="btnTheme" title="切换深色/浅色主题">🌙 深色</button>
@@ -711,6 +771,39 @@ try {
   </div>
 </div>
 <div class="toasts" id="toasts"></div>
+
+<div class="overlay" id="provOverlay">
+  <div class="dialog" style="width:520px">
+    <h3>模型管理</h3>
+    <div class="prov-list" id="provList"></div>
+    <div class="prov-form">
+      <div class="frow"><label>名称</label><input id="pvName" placeholder="如:DeepSeek"></div>
+      <div class="frow"><label>接口地址</label><input id="pvBase" placeholder="https://api.deepseek.com/v1"></div>
+      <div class="frow"><label>API Key</label><input id="pvKey" type="password" placeholder="供应商控制台申请的密钥"></div>
+      <div class="frow"><label>模型名</label><input id="pvModel" placeholder="如:deepseek-chat"></div>
+      <p class="prov-tip">内置的「广州应用科技学院」开箱即用、密钥由学校侧提供;上表选中即可切换。自己添加的模型支持任意 OpenAI 兼容接口,密钥只存在本机,不会出现在 config.json 里。</p>
+    </div>
+    <div class="btns">
+      <button class="b-no" id="btnProvClose">关闭</button>
+      <button class="b-yes" id="btnProvSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="usageOverlay">
+  <div class="dialog">
+    <div class="usage-head">
+      <h3>📊 每日 token 消耗</h3>
+      <div class="usage-range" id="usageRange">
+        <button data-days="1">今日</button>
+        <button data-days="7" class="on">近 7 天</button>
+        <button data-days="30">近 30 天</button>
+      </div>
+    </div>
+    <div id="usageBody"></div>
+    <div class="btns"><button class="b-no" id="btnUsageClose">关闭</button></div>
+  </div>
+</div>
 
 <script src="vendor/marked.min.js"></script>
 <script src="map.js"></script>
@@ -1352,13 +1445,167 @@ $("btnAppCancel").addEventListener("click", () => {
   appConfirmCb = null;
 });
 
-/* ---------------- 模型标识(固定内置校园模型,不提供切换) ---------------- */
+/* ---------------- 模型管理(添加模型/切换;内置 key 不下发) ---------------- */
+let provData = [];
 function renderModelPill(info) {
   const active = (info.providers || []).find(p => p.id === info.active_provider);
   const name = active ? active.name : "广州应用科技学院";
   $("modelPill").textContent = `${name} · ${info.model}`;
-  $("modelPill").title = `当前模型(固定):${name} · ${info.model}`;
+  $("modelPill").title = `当前模型:${name} · ${info.model}(点击管理/添加模型)`;
 }
+
+function openProvDlg() {
+  pywebview.api.get_providers().then(r => {
+    provData = r.providers || [];
+    renderProvList();
+    $("provOverlay").classList.add("show");
+  }).catch(e => toast("读取模型配置失败:" + String(e).slice(0, 60), true));
+}
+
+function renderProvList() {
+  const box = $("provList");
+  const active = provData.find(p => p.id === currentProvActive) || provData[0];
+  box.innerHTML = "";
+  if (!provData.length) {
+    box.innerHTML = '<div class="prov-empty">还没有模型,在下方添加一个</div>';
+    return;
+  }
+  for (const p of provData) {
+    const row = document.createElement("div");
+    row.className = "prov-row" + (active && p.id === active.id ? " on" : "");
+    const isBuiltin = !!p.builtin;
+    const keyState = isBuiltin
+      ? '<span class="buitag">已内置</span>'
+      : (p.api_key ? '<span class="haskey">已配 Key</span>' : '<span class="nokey">未配 Key</span>');
+    row.innerHTML = `<input type="radio" name="prov" ${active && p.id === active.id ? "checked" : ""}>
+      <span class="pn">${esc(p.name)}${isBuiltin ? '<span class="buitag">内置</span>' : ""}</span>
+      <span class="pm">${esc(p.model || "")}</span>
+      <span class="pb">${esc(p.base_url || "")}</span>
+      <span class="k">${keyState}</span>
+      ${isBuiltin ? "" : '<button class="del" data-id="' + esc(p.id) + '">删除</button>'}`;
+    row.addEventListener("click", (e) => {
+      if (e.target.classList.contains("del")) return;
+      currentProvActive = p.id;
+      renderProvList();
+    });
+    row.querySelector(".del")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      appConfirm(`删除模型「${p.name}」?`, () => {
+        provData = provData.filter(x => x.id !== p.id);
+        if (currentProvActive === p.id) currentProvActive = provData[0] && provData[0].id;
+        renderProvList();
+      }, "删除模型");
+    });
+    box.appendChild(row);
+  }
+}
+
+let currentProvActive = "";
+$("modelPill").addEventListener("click", openProvDlg);
+$("btnProvClose").addEventListener("click", () => $("provOverlay").classList.remove("show"));
+$("btnProvSave").addEventListener("click", () => {
+  const name = $("pvName").value.trim(), base = $("pvBase").value.trim(),
+        key = $("pvKey").value, model = $("pvModel").value.trim();
+  if (name || base || key || model) {
+    if (!base) { toast("接口地址必填", true); return; }
+    provData.push({ id: "", name: name || base.replace(/^https?:\/\//, "").split("/")[0],
+                    base_url: base, api_key: key,
+                    model: model || "deepseek-chat" });
+  }
+  const items = provData.map(p => ({ id: p.id || "", name: p.name,
+    base_url: p.base_url, api_key: p.api_key || "", model: p.model }));
+  pywebview.api.save_providers(JSON.stringify(items), currentProvActive).then(r => {
+    if (!r.ok) { toast(r.msg, true); return; }
+    $("provOverlay").classList.remove("show");
+    ["pvName", "pvBase", "pvKey", "pvModel"].forEach(id => $(id).value = "");
+    toast("模型配置已保存");
+    pywebview.api.get_info().then(renderModelPill);
+  }).catch(e => toast("保存失败:" + String(e).slice(0, 60), true));
+});
+
+/* ---------------- 每日 token 用量统计(圆环图) ---------------- */
+const USAGE_COLORS = ["#F97316", "#5EB8AD", "#6D9CFF", "#B79CFF", "#FF9F7A",
+                      "#FFD166", "#62D0E8", "#F38BA8"];
+function usageColor(key) {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return USAGE_COLORS[(h >>> 0) % USAGE_COLORS.length];
+}
+function donutGradient(models) {
+  const vis = (models || []).filter(m => Number(m.total) > 0);
+  const total = vis.reduce((s, m) => s + Number(m.total), 0);
+  if (total <= 0) return "conic-gradient(var(--line-soft) 0% 100%)";
+  let cur = 0;
+  const segs = vis.map((m, i) => {
+    const from = cur;
+    cur = (i === vis.length - 1) ? 100 : cur + (m.total / total) * 100;
+    return `${usageColor(m.key)} ${from.toFixed(3)}% ${cur.toFixed(3)}%`;
+  });
+  return `conic-gradient(${segs.join(", ")})`;
+}
+function fmtTok(n) {
+  n = Number(n) || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
+  return String(Math.round(n));
+}
+
+let usageDays = 7;
+function openUsageDlg(days) {
+  if (days) usageDays = days;
+  $("usageOverlay").classList.add("show");
+  loadUsage();
+}
+function loadUsage() {
+  $("usageBody").innerHTML = '<div class="usage-empty">正在读取本地统计…</div>';
+  pywebview.api.get_token_usage(usageDays).then(s => {
+    if (!s.ok) { $("usageBody").innerHTML = `<div class="usage-empty">${esc(s.msg || "读取失败")}</div>`; return; }
+    renderUsage(s);
+  }).catch(e => {
+    $("usageBody").innerHTML = `<div class="usage-empty">读取失败:${esc(String(e).slice(0, 80))}</div>`;
+  });
+}
+function renderUsage(s) {
+  const sum = s.summary;
+  const legend = (s.models || []).map(m =>
+    `<span><i style="background:${usageColor(m.key)}"></i>${esc(m.model || m.key)}</span>`).join("");
+  const days = (s.days || []).map(d => {
+    const label = d.date.slice(5).replace("-", "/");
+    const aria = `${d.date},共 ${d.total} token`;
+    return `<div class="usage-day" title="${aria}">
+      <div class="usage-ring" role="img" aria-label="${aria}" style="background:${donutGradient(d.models)}">
+        <div class="rc"><b>${d.total ? fmtTok(d.total) : "0"}</b><span>tok</span></div>
+      </div>
+      <div class="dm">${label}<i>${d.requests || 0} 次</i></div>
+    </div>`;
+  }).join("");
+  const rows = (s.models || []).map(m => `<tr title="${esc(m.key)} · ${m.total} token">
+      <td><b>${esc(m.model || m.key)}</b><br><small style="color:var(--text-3)">${esc(m.provider || "")}</small></td>
+      <td>${fmtTok(m.prompt)}</td><td>${fmtTok(m.completion)}</td>
+      <td><b>${fmtTok(m.total)}</b></td></tr>`).join("");
+  $("usageBody").innerHTML = `
+    <div class="usage-sum">
+      <div class="cell"><b>${fmtTok(sum.total)}</b><span>总 Token · ${sum.requests} 次请求</span></div>
+      <div class="cell"><b>${fmtTok(sum.prompt)}</b><span>输入</span></div>
+      <div class="cell"><b>${fmtTok(sum.completion)}</b><span>输出</span></div>
+      <div class="cell"><b>${fmtTok(Math.round(sum.completion / (sum.prompt || 1) * 100))}%</b><span>输出/输入</span></div>
+    </div>
+    ${legend ? `<div class="usage-legend">${legend}</div>` : ""}
+    <div class="usage-days">${days}</div>
+    ${rows ? `<table class="usage-table"><thead><tr><th>模型</th><th>输入</th><th>输出</th><th>合计</th></tr></thead><tbody>${rows}</tbody></table>`
+           : '<div class="usage-empty">暂无记录——发出第一句对话后,这里会出现真实的用量统计。</div>'}`;
+}
+$("btnUsage").addEventListener("click", () => openUsageDlg());
+$("btnUsageClose").addEventListener("click", () => $("usageOverlay").classList.remove("show"));
+$("usageRange").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-days]");
+  if (!btn) return;
+  usageDays = Number(btn.dataset.days);
+  document.querySelectorAll("#usageRange button").forEach(b =>
+    b.classList.toggle("on", b === btn));
+  loadUsage();
+});
 
 /* ---------------- 输入与按钮 ---------------- */
 function send() {
@@ -1514,11 +1761,12 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function boot() {
     pywebview.api.get_info().then(info => {
-      $("ver").textContent = "v" + info.version;
-      $("ws").textContent = " workspace " + info.workspace;
-      $("perm").value = info.permission_mode;
-      if (info.session_key) currentSessionKey = info.session_key;
-      renderModelPill(info);
+    $("ver").textContent = "v" + info.version;
+    $("ws").textContent = " workspace " + info.workspace;
+    $("perm").value = info.permission_mode;
+    if (info.session_key) currentSessionKey = info.session_key;
+    currentProvActive = info.active_provider || "";
+    renderModelPill(info);
       renderSandbox(info.sandbox);
       if (info.campus_map && window.CampusMap) window.CampusMap.setData(info.campus_map);
       renderMemoryButton({ project: info.memory_count, user: info.memory_user_count });
