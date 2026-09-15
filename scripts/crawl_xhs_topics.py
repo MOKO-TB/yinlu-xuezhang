@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import sys
 import time
@@ -366,9 +367,11 @@ async def run(cfg: dict, only: str, limit: int, dry_run: bool) -> int:
     ok = fail = 0
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True, channel="msedge")
+        # 小红书 2026-09 起对 headless 全墙("安全限制"页),必须用有头浏览器。
+        # 环境变量 XHS_HEADLESS=1 可临时切回 headless(无桌面环境/打包版)。
+        headless = os.environ.get("XHS_HEADLESS", "0") == "1"
+        browser = await pw.chromium.launch(headless=headless, channel="msedge")
         ctx = await browser.new_context(
-            storage_state=str(STORAGE_STATE), locale="zh-CN",
             viewport={"width": 1400, "height": 900})
         page = await ctx.new_page()
         try:
