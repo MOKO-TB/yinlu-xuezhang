@@ -247,17 +247,74 @@ def test_provider_management(config, tmp_path, monkeypatch):
     assert bridge.agent.llm.config.base_url.endswith("/v1")
     assert not bridge.set_provider("ghost")["ok"]
 
-    # 伪造内置 id 想改写内置供应商 → 拒绝
+    # 伪造内置 id 想改写内置供应商 → 静默过滤(不是报错):
+    # v0.9.03 的 bug 就是 get_providers 把内置项一并返回、保存时又被“内置不可编辑”
+    # 挡死,导致任何添加/删除都存不进去。现在提交里的内置项一律跳过,由后端按
+    # 代码补回,所以"保存失败"不应再发生。
     forged = [{"id": "gzasc", "name": "假", "base_url": "https://evil/v1",
                "api_key": "k", "model": "m"}]
     r = bridge.save_providers(json.dumps(forged), "gzasc")
-    assert not r["ok"] and "内置" in r["msg"]
-    assert config.providers[0].base_url != "https://evil/v1"   # 原样未动
+    assert r["ok"]
+    assert config.providers[0].base_url != "https://evil/v1"   # 内置以代码为准
+    assert [p.id for p in config.providers] == ["gzasc"]       # 没被伪造项污染
+    assert config.provider.id == "gzasc"                       # 激活内置不被偷换
 
     # 非法输入
     assert not bridge.save_providers("{bad", "x")["ok"]
     r = bridge.save_providers(json.dumps([{"name": "无地址"}]), "x")
     assert not r["ok"] and "base_url" in r["msg"]
+
+
+def test_session_model_switch_and_metrics(config, tmp_path):
+    """任务面板:会话内切模型不写回全局配置,指标随切换刷新。"""
+    from minicode.config import Provider
+    bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    cfg = bridge.config
+    cfg.providers.append(Provider(id="deepseek", name="DeepSeek",
+                                  base_url="https://api.deepseek.com",
+                                  api_key="sk-test", model="deepseek-chat"))
+
+    m = bridge.get_session_metrics()
+    assert m["ok"] and m["model"] == cfg.model
+    assert m["provider_id"] == cfg.provider.id
+    assert m["context_window"] > 0
+    assert m["selectable"][0]["builtin"] is False           # 夹具的 test 不是内置
+    gz = next((p for p in m["selectable"] if p["id"] == "gzasc"), None)
+    if gz is not None:
+        assert gz["builtin"] is True            # 内置供应商永远带 builtin 标记
+    ds = next(p for p in m["selectable"] if p["id"] == "deepseek")
+    assert ds["capabilities"]                               # 能力标签非空
+
+    r = bridge.set_session_model("deepseek")
+    assert r["ok"]
+    runner = bridge._current
+    assert runner.llm_override == {"provider_id": "deepseek", "model": "deepseek-chat"}
+    assert runner.agent.llm.config.model == "deepseek-chat"  # 本会话生效
+    assert cfg.provider.id != "deepseek"                     # 全局没动
+    m2 = bridge.get_session_metrics()
+    assert m2["provider_id"] == "deepseek" and m2["model"] == "deepseek-chat"
+
+    # 没配 key 的供应商不给切
+    cfg.providers.append(Provider(id="nokey", name="无钥",
+                                  base_url="https://n/v1",
+                                  api_key="", model="m"))
+    r = bridge.set_session_model("nokey")
+    assert not r["ok"] and "Key" in r["msg"]
+
+
+def test_model_catalog_lookup():
+    """能力目录:已知模型给窗口与视觉标签,未知模型不猜数字。"""
+    from minicode.model_catalog import capabilities, context_window_for, lookup
+    qwen = lookup("qwen3.8-27b")
+    assert qwen["known"] and qwen["context_window"] == 1_000_000 and qwen["supports_vision"]
+    mini = lookup("minimax-m2.5")
+    assert mini["known"] and not mini["supports_vision"]
+    assert lookup("不存在的模型")["known"] is False
+    assert context_window_for("qwen3.8-27b", 131072) == 1_000_000
+    assert context_window_for("未知", 131072) == 131072
+    assert capabilities("qwen3.8-27b") == ["文本", "视觉", "工具调用"]
+
+
 def test_get_info_and_history_roundtrip(config, tmp_path):
     llm = FakeLLM([AssistantTurn(text="回复一")])
     bridge, window, session = make(config, tmp_path, llm)

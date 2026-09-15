@@ -20,6 +20,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -34,6 +35,7 @@ DEFAULT_TOP_K = 8
 MAX_TOP_K = 30
 
 _CACHE: dict[str, tuple[float, sqlite3.Connection]] = {}
+_LIB_LOCK = threading.Lock()   # 缓存连接跨线程共用(GUI 主线程自检 + Agent 线程检索)
 
 
 class CatalogUnavailable(RuntimeError):
@@ -79,24 +81,32 @@ def db_path(workspace: Path | None = None) -> Path | None:
 
 
 def conn(path: Path) -> sqlite3.Connection:
-    """按 mtime 缓存连接:库更新后自动重连。"""
+    """按 mtime 缓存连接:库更新后自动重连。
+
+    连接必须 check_same_thread=False:自检跑在 webview 主线程,检索跑在
+    Agent 后台线程,缓存里的连接会被两边先后使用——SQLite 默认只允许
+    创建它的线程用,不然直接 ProgrammingError(用户看到的“图书馆数据读
+    不出来”报错就是它)。缓存命中时连接可能已是别的线程建过的,所以
+    读写都在 _LIB_LOCK 保护下串行化,游标不跨锁使用。
+    """
     key = str(path)
     try:
         mtime = path.stat().st_mtime
     except OSError:
         raise
-    hit = _CACHE.get(key)
-    if hit is not None and hit[0] == mtime:
-        return hit[1]
-    if hit is not None:
-        try:
-            hit[1].close()
-        except sqlite3.Error:
-            pass
-    c = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    c.row_factory = sqlite3.Row
-    _CACHE[key] = (mtime, c)
-    return c
+    with _LIB_LOCK:
+        hit = _CACHE.get(key)
+        if hit is not None and hit[0] == mtime:
+            return hit[1]
+        if hit is not None:
+            try:
+                hit[1].close()
+            except sqlite3.Error:
+                pass
+        c = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
+        c.row_factory = sqlite3.Row
+        _CACHE[key] = (mtime, c)
+        return c
 
 
 SEL = (

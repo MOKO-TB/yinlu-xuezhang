@@ -74,6 +74,7 @@ class Agent:
             self.ui.finish_stream()
             self.session.add_assistant(turn)
             self._record_usage(turn)
+            self._bump_turn_tokens(turn)
             self._narration = str(turn.text or "")   # 供本步工具确认框解释"为什么要做"
 
             if not turn.tool_calls:
@@ -99,6 +100,23 @@ class Agent:
                 model=cfg.model,
                 usage=turn.usage,
             )
+        except Exception:
+            pass
+
+    def _bump_turn_tokens(self, turn) -> None:
+        """累计本任务的真实消耗(有服务端 usage 才累计),并推面板事件。
+
+        agent.turn_tokens 供 session_metrics 用;turn_usage 事件给前端
+        实时刷新任务面板(消耗/上下文占用),失败静默——绝不能影响对话。
+        """
+        u = turn.usage if isinstance(turn.usage, dict) else {}
+        pt = u.get("prompt_tokens")
+        ct = u.get("completion_tokens")
+        if isinstance(pt, int) and pt >= 0 and isinstance(ct, int) and ct >= 0:
+            self.turn_tokens = getattr(self, "turn_tokens", 0) + pt + ct
+        try:
+            from minicode.model_catalog import push_turn_usage
+            push_turn_usage(self, self.session, self.ctx.config, turn)
         except Exception:
             pass
 

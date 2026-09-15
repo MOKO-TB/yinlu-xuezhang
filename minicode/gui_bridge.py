@@ -31,6 +31,7 @@ from minicode.memory import (
 )
 from minicode.llm import LLMClient
 from minicode.library import catalog_health, health_notice
+from minicode.model_catalog import session_metrics
 from minicode.paths import SESSIONS_DIR, resource_path
 from minicode.sandbox import SandboxState, classify_path, policy_from_raw, policy_to_raw
 from minicode.session import Session, list_sessions
@@ -117,6 +118,14 @@ class PublicApi:
     def set_provider(self, provider_id: str) -> dict:
         return self._b.set_provider(provider_id)
 
+    def set_session_model(self, provider_id: str) -> dict:
+        """任务面板:把当前会话的模型切到指定供应商(不影响全局默认)。"""
+        return self._b.set_session_model(provider_id)
+
+    def get_session_metrics(self) -> dict:
+        """任务面板:当前会话模型/能力/消耗/上下文占用/可切列表。"""
+        return self._b.get_session_metrics()
+
     def get_token_usage(self, days: int = 7) -> dict:
         """每日 token 用量统计(弹窗圆环图数据源)。"""
         return self._b.get_token_usage(days)
@@ -160,6 +169,9 @@ class SessionRunner:
         self.ui = ui
         self.busy = False
         self.thread: threading.Thread | None = None
+        # 本会话单独切过的模型:None = 跟随全局;非 None = {"provider_id", "model"}
+        # 切换只影响这个会话的 Agent(LLMClient 逐会话重建),不写回全局配置。
+        self.llm_override: dict | None = None
 
     @property
     def log_path(self):
@@ -294,6 +306,10 @@ class Bridge:
             # 馆藏库自检:共享给同学后「图书馆搜书用不了」的头号原因就是库没装全
             # (1.3 GB 的大文件)。启动就把结论一并下发给界面,不用等搜书失败。
             "library_health": self._library_health(),
+            # 任务面板:当前会话模型/能力/消耗/上下文占用/可切列表(见 model_catalog)
+            "session_metrics": session_metrics(
+                self.agent, self.session, self.config,
+                self._current.llm_override if self._current else None),
         }
 
     def _library_health(self) -> dict:
@@ -336,20 +352,22 @@ class Bridge:
             items = json.loads(providers_json)
         except json.JSONDecodeError as e:
             return {"ok": False, "msg": f"数据不是有效 JSON: {e}"}
-        if not isinstance(items, list) or not items:
-            return {"ok": False, "msg": "至少需要一个供应商"}
+        if not isinstance(items, list):
+            return {"ok": False, "msg": "数据不是有效列表"}
 
         from minicode.config import (BUILTIN_PROVIDER, BUILTIN_PROVIDER_ID,
                                      DEFAULT_MODEL, Provider, _builtin_api_key,
                                      _slug)
+        # 内置校园供应商不随前端提交走:v0.9.03 的提交里混进了它,导致任何保存
+        # 都被「内置不可编辑」挡死(自定义模型存不进去)。这里一律跳过,由下方
+        # 统一按代码补回;提交列表为空 = 只用内置,也允许。
         providers, seen = [], set()
         for i, item in enumerate(items, start=1):
             if not isinstance(item, dict):
                 return {"ok": False, "msg": f"第 {i} 项格式错误"}
             pid = _slug(str(item.get("id") or ""), f"provider_{i}")
             if pid == BUILTIN_PROVIDER_ID:
-                # 内置校园供应商不可通过保存接口改写(伪造 id 也一样)
-                return {"ok": False, "msg": "内置校园模型不可编辑,请保留原样"}
+                continue      # 内置供应商始终以代码为准,由下方补回
             base = str(item.get("base_url") or "").strip()
             if not base:
                 return {"ok": False, "msg": f"第 {i} 个供应商缺少 base_url"}
@@ -362,15 +380,19 @@ class Bridge:
                 api_key=str(item.get("api_key") or ""),
                 model=str(item.get("model") or DEFAULT_MODEL),
             ))
-        active = active_id if any(p.id == active_id for p in providers) else providers[0].id
+        ids = {p.id for p in providers}
+        if active_id == BUILTIN_PROVIDER_ID or not providers:
+            active = BUILTIN_PROVIDER_ID      # 内置/空列表:激活内置,绝不悄悄换
+        elif active_id in ids:
+            active = active_id
+        else:
+            active = providers[0].id
 
         # 内置供应商始终在第一位(界面与配置的展示顺序一致)
         builtin = replace(BUILTIN_PROVIDER)
         builtin.api_key = _builtin_api_key()
         self.config.providers = [builtin] + providers
-        self.config.active_provider_id = (BUILTIN_PROVIDER_ID
-                                          if active == BUILTIN_PROVIDER_ID
-                                          else active)
+        self.config.active_provider_id = active
         save_config(self.config_path, self.config)
         self._apply_active_provider()
         self.ui.push("info", text=f"已保存 {len(providers)} 个供应商,当前: {self.config.provider.name}")
@@ -384,9 +406,42 @@ class Bridge:
         self.ui.push("info", text=f"已切换到 {self.config.provider.name} · {self.config.model}")
         return {"ok": True}
 
+    def set_session_model(self, provider_id: str) -> dict:
+        """把当前会话的模型切到指定供应商(不写回全局配置)。
+
+        给这个会话的 Agent 重建一个 LLMClient;后续回合立即用新模型。
+        """
+        runner = self._current
+        if runner is None:
+            return {"ok": False, "msg": "没有活动会话"}
+        if runner.busy:
+            return {"ok": False, "msg": "任务进行中,等这轮跑完再切模型"}
+        target = next((p for p in self.config.providers if p.id == provider_id), None)
+        if target is None:
+            return {"ok": False, "msg": f"供应商不存在: {provider_id}"}
+        if not target.api_key.strip() or target.api_key.strip() in API_KEY_PLACEHOLDERS:
+            return {"ok": False, "msg": f"「{target.name}」还没配 API Key,先在模型管理里配好"}
+        runner.llm_override = {"provider_id": target.id, "model": target.model}
+        runner.agent.llm = LLMClient(replace(self.config, active_provider_id=target.id))
+        self.ui.push("info", text=f"本会话已切换到 {target.name} · {target.model}(不影响其他会话与默认模型)")
+        self.ui.push("session_metrics", **session_metrics(
+            runner.agent, runner.session, self.config, runner.llm_override))
+        return {"ok": True}
+
+    def get_session_metrics(self) -> dict:
+        """任务面板一屏数据:模型/能力/消耗/上下文占用/可切列表。"""
+        runner = self._current
+        if runner is None:
+            return {"ok": False, "msg": "没有活动会话"}
+        m = session_metrics(runner.agent, runner.session, self.config,
+                            runner.llm_override)
+        m["ok"] = True
+        return m
+
     def _apply_active_provider(self) -> None:
-        """供应商/密钥变更后重建 LLM 客户端并提示当前模型。"""
-        self.agent.llm = LLMClient(self.config)
+        """供应商/密钥变更后重建共享 LLM 客户端并同步给当前会话。"""
+        self._shared_llm = LLMClient(self.config)
+        self.agent.llm = self._shared_llm
         self.ui.push("info", text=f"当前模型: {self.config.model} @ {self.config.base_url}")
 
     def send_task(self, text: str, attachments: str = "[]") -> dict:
