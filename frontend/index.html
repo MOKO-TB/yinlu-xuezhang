@@ -16,78 +16,97 @@ try {
      靛蓝山影 / 橘粉晚霞 / 暖金窗灯 / 暮色青顶棚
      ============================================================ */
   :root{
-    --primary:#F97316;         /* 晚霞橘:主按钮、强调 */
-    --primary-light:rgba(255,158,94,.16);  /* 橘玻璃底:选中态 */
-    --primary-text:#C2410C;    /* 橘底上的文字 */
-    --bubble-user:#3D1E07;     /* 用户气泡文字(实心橘底上用深棕,保证对比度) */
-    --accent:#5EB8AD;          /* 暮色青:成功态/点缀 */
-    --gold:#FFD9A8;            /* 窗灯暖金 */
+    /* ============================================================
+       晨光薄荷 Morning Mint(浅色主题)
+       取色自校园日景航拍:远山黛青 / 薄荷池水 / 白墙暖沙
+       ============================================================ */
+    --primary:#3FBDAE;         /* 薄荷青:主按钮、强调(p3 的 Send/选中态) */
+    --primary-light:rgba(63,189,174,.14);  /* 青玻璃底:选中态 */
+    --primary-text:#1F7A70;    /* 青底上的文字(浅底上加深保证对比) */
+    --bubble-user:#123B36;     /* 用户气泡文字(实心青底上用深绿) */
+    --accent:#3FBDAE;          /* 点缀(与主色同族) */
+    --gold:#E8B86D;            /* 操场暖沙 */
 
-    --bg:#22303C;              /* 照片加载前的兜底底色 */
-    --glass:rgba(252,248,241,.7);         /* 侧栏/顶栏:亮磨砂 */
-    --glass-strong:rgba(253,250,245,.88); /* 消息气泡:高可读 */
-    --glass-lite:rgba(255,255,255,.5);    /* chips/输入框:轻玻璃 */
-    --surface:rgba(255,255,255,.72);
-    --line:rgba(70,50,35,.14);
-    --line-soft:rgba(255,255,255,.4);
+    --bg:#DCE8E4;              /* 照片加载前的兜底底色(日景天空浅青) */
+    --glass:rgba(252,253,251,.62);         /* 侧栏/顶栏:白玻璃 */
+    --glass-strong:rgba(253,254,252,.88);  /* 消息气泡:高可读 */
+    --glass-lite:rgba(255,255,255,.55);    /* chips/输入框:轻玻璃 */
+    --surface:rgba(255,255,255,.78);
+    --line:rgba(40,80,72,.14);
+    --line-soft:rgba(255,255,255,.55);
 
-    --text-1:#1E2A33;
-    --text-2:#46545F;
-    --text-3:#6B7885;
-
+    --text-1:#1C2B28;
+    --text-2:#41544F;
+    --text-3:#6E8380;
 
     --danger:#E5484D;  --danger-bg:rgba(229,72,77,.12);
     --warning:#C77E12; --warning-bg:rgba(245,165,36,.16);
-    --success:#3E8E62; --success-bg:rgba(65,163,110,.14);
+    --success:#2F9E6E; --success-bg:rgba(47,158,110,.14);
 
-    --code-bg:rgba(10,17,24,.88); --code-text:#F2E3CC;
+    --code-bg:rgba(16,32,29,.88); --code-text:#DFF3EE;
 
     --r-s:8px; --r-m:14px; --r-l:20px; --r-full:999px;
     --blur:saturate(150%) blur(18px);
-    --shadow:0 10px 30px rgba(10,16,24,.25);
-    --shadow-sm:0 4px 14px rgba(10,16,24,.18);
+    --shadow:0 10px 30px rgba(30,60,55,.18);
+    --shadow-sm:0 4px 14px rgba(30,60,55,.12);
+
+    /* 双主题各有一张全屏航拍背景,切主题即换景 */
+    --hero-img:url("img/campus_day.jpg");
+    /* 日景很亮,只需轻压顶部与底部,保住"白玻璃浮在照片上"的通透感 */
+    --hero-dim:linear-gradient(180deg, rgba(255,255,255,.10) 0%,
+                rgba(255,255,255,0) 40%, rgba(24,52,48,.22) 100%);
   }
   html.dark{
-    --primary:#FF9E5E; --primary-light:rgba(255,158,94,.14);
-    --primary-text:#FFC08A;
-    --bubble-user:#FFF4E6;
-    --accent:#7FD1C8; --gold:#FFD9A8;
+    /* ============================================================
+       暮色青辉 Dusk Glow(深色主题)
+       取色自校园暮色航拍:靛蓝山影 / 天际橙霞 / 窗灯青辉
+       ============================================================ */
+    --primary:#4FD8C8;         /* 暮色青:chips 描边/输入框光晕/Send(p2) */
+    --primary-light:rgba(79,216,200,.14);
+    --primary-text:#8AE6DC;
+    --bubble-user:#EAFBF8;
+    --accent:#4FD8C8; --gold:#FFD9A8;
 
-    --glass:rgba(11,19,27,.55);
-    --glass-strong:rgba(10,17,24,.8);
-    --glass-lite:rgba(255,255,255,.08);
-    --surface:rgba(14,23,32,.72);
-    --line:rgba(255,214,170,.14);
-    --line-soft:rgba(255,255,255,.1);
+    --glass:rgba(13,22,33,.58);            /* 深海蓝玻璃 */
+    --glass-strong:rgba(11,19,28,.82);
+    --glass-lite:rgba(120,180,200,.10);    /* 带一点冷青的轻玻璃 */
+    --surface:rgba(14,24,34,.75);
+    --line:rgba(140,220,210,.16);
+    --line-soft:rgba(160,225,220,.14);
 
-    --text-1:#F4EDE2; --text-2:#D8CBBA; --text-3:#A9B6C2;
-
+    --text-1:#EAF4F3; --text-2:#BCD2D2; --text-3:#8FA6A9;
 
     --danger:#FF8A8F;  --danger-bg:rgba(229,72,77,.18);
     --warning:#FFC46B; --warning-bg:rgba(245,165,36,.14);
-    --success:#9BD34A; --success-bg:rgba(101,163,13,.16);
+    --success:#4FD8A8; --success-bg:rgba(79,216,168,.16);
 
-    --code-bg:rgba(6,11,16,.9); --code-text:#F0DCC0;
+    --code-bg:rgba(5,12,17,.92); --code-text:#CFEFE9;
 
-    --shadow:0 12px 34px rgba(0,0,0,.4);
-    --shadow-sm:0 4px 16px rgba(0,0,0,.32);
+    --shadow:0 12px 34px rgba(0,0,0,.42);
+    --shadow-sm:0 4px 16px rgba(0,0,0,.34);
+
+    --hero-img:url("img/campus_dusk.jpg");
+    --hero-dim:linear-gradient(180deg, rgba(7,13,20,.38) 0%,
+                rgba(7,13,20,.18) 45%, rgba(4,9,14,.5) 100%);
   }
   *{ margin:0; padding:0; box-sizing:border-box; }
   html, body { height:100%; }
   body{
-    /* 全屏校园黄昏航拍做背景,照片本身就是 UI 的一部分 */
-    background-color:#22303C;
-    background-image:url("img/campus_dusk.jpg");
+    /* 全屏校园航拍做背景,照片本身就是 UI 的一部分:
+       浅色=日景(campus_day) 深色=暮色(campus_dusk),随主题一起切 */
+    background-color:var(--bg);
+    background-image:var(--hero-img);
     background-size:cover; background-position:center;
     background-repeat:no-repeat; background-attachment:fixed;
     color:var(--text-1);
     font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;
     font-size:14px; line-height:1.75; overflow:hidden;
+    transition:background-image .35s ease;
   }
-  /* 轻压照片亮度,保证玻璃面板上的文字可读(气泡另有实底,这里只压背景)*/
+  /* 轻压照片亮度,保证玻璃面板上的文字可读(气泡另有实底,这里只压背景)。
+     两主题各有自己的压暗/提亮曲线(--hero-dim) */
   body::before{ content:""; position:fixed; inset:0; pointer-events:none;
-                background:linear-gradient(180deg, rgba(9,15,23,.34) 0%,
-                            rgba(9,15,23,.20) 45%, rgba(9,15,23,.46) 100%); }
+                background:var(--hero-dim); }
   ::-webkit-scrollbar{ width:10px; height:10px; }
   ::-webkit-scrollbar-thumb{ background:rgba(150,160,170,.5); border-radius:99px;
                              border:2px solid transparent; background-clip:padding-box; }
@@ -112,11 +131,16 @@ try {
   .school img{ height:26px; width:auto; opacity:.92; }
   html.dark .school img{ filter:invert(1) brightness(1.15); opacity:.85; }
   .newtask{ margin:14px 12px 10px; padding:10px; border-radius:var(--r-full);
-            border:none; color:#fff; cursor:pointer; font-size:13px; font-weight:800;
-            background:linear-gradient(135deg,#F98B3D,#E07A3F);
-            box-shadow:0 6px 16px rgba(224,122,63,.35); transition:.15s; }
-  .newtask:hover{ transform:translateY(-1px);
-                  box-shadow:0 8px 20px rgba(224,122,63,.45); }
+            border:1px solid var(--line-soft); color:var(--text-1); cursor:pointer;
+            font-size:13px; font-weight:800;
+            background:var(--glass-strong);
+            box-shadow:var(--shadow-sm); transition:.15s; }
+  .newtask:hover{ transform:translateY(-1px); border-color:var(--primary);
+                  color:var(--primary-text); }
+  /* 深色(p2):New Mission 白玻璃 pill + 青字 */
+  html.dark .newtask{ background:rgba(236,244,246,.92); color:#0E2A30;
+                      border-color:rgba(255,255,255,.6); }
+  html.dark .newtask:hover{ color:#0E5A54; }
   .sess .spin{ display:inline-block; width:9px; height:9px; margin-right:6px;
                border-radius:50%; border:2px solid var(--primary);
                border-right-color:transparent; animation:spin .9s linear infinite;
@@ -164,12 +188,17 @@ try {
   .topbar button:hover{ border-color:var(--primary); color:var(--primary-text);
                         transform:translateY(-1px); }
 
+  /* 深色(p2 暮色青辉):顶栏按钮带一点青调描边,与下方 chips 同一语言 */
+  html.dark .topbar button, html.dark .topbar select{
+    border-color:rgba(79,216,200,.28); color:var(--text-1); }
+  html.dark .topbar button:hover{ border-color:var(--primary);
+                                  box-shadow:0 0 10px rgba(79,216,200,.18); }
   .chat-wrap{ position:relative; flex:1; min-height:0; overflow:hidden;
               display:flex; flex-direction:column; }
   #chat{ flex:1; min-height:0; overflow-y:auto; padding:20px 24px;
          scroll-behavior:smooth; overscroll-behavior:contain;
-         background:rgba(253,250,245,.55); }   /* 磨砂半透:让校园黄昏照透出来;消息气泡自带实底保证可读 */
-  html.dark #chat{ background:rgba(10,16,23,.5); }
+         background:rgba(250,253,252,.42); }   /* 磨砂半透:让校园照片透出来;消息气泡自带实底保证可读 */
+  html.dark #chat{ background:rgba(8,14,20,.44); }
   #scrollBtn{ position:absolute; right:26px; bottom:18px; width:42px; height:42px;
               border-radius:50%; background:var(--primary); color:#fff; border:none;
               cursor:pointer; font-size:17px; font-weight:900; display:none;
@@ -183,26 +212,37 @@ try {
                             border:1px solid var(--line-soft);
                             backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
                             box-shadow:var(--shadow); overflow:hidden; }
-  /* 顶部一条晚霞橘光,呼应照片天际线 */
+  /* 顶部一条主题色光带,呼应照片天际线(深色下收成纯青,不掺暖色) */
   #chat .placeholder .hero::before{ content:""; position:absolute; top:0; left:0; right:0;
                                     height:3px;
-                                    background:linear-gradient(90deg,#FFB27A,#F97316 40%,#5EB8AD);
+                                    background:linear-gradient(90deg,var(--accent),var(--primary) 55%,var(--gold));
                                     opacity:.9; }
+  html.dark #chat .placeholder .hero::before{
+    background:linear-gradient(90deg,rgba(79,216,200,.9),rgba(79,216,200,.25) 70%,transparent); }
   #chat .placeholder .hero .greet{ font-size:27px; font-weight:900; color:var(--text-1);
                                    margin-bottom:2px; line-height:1.45; }
   #chat .placeholder .hero .greet b{ color:var(--primary); }
+  /* 深色(p2):问候标题带一点青色微光,像夜里的灯牌 */
+  html.dark #chat .placeholder .hero .greet{ text-shadow:0 0 22px rgba(79,216,200,.25); }
   #chat .placeholder .hero .sub{ color:var(--text-2); font-size:13.5px;
                                  margin:0; line-height:1.7; max-width:640px; }
   #chat .placeholder .chips{ display:flex; flex-wrap:wrap; align-items:center;
                              gap:10px; max-width:760px; padding:0 4px; }
-  #chat .placeholder .chips>span{ color:var(--text-3); font-size:12.5px;
+  /* chips + 小提示坐进同一块玻璃托盘:细字不再直接压在照片亮部 */
+  #chat .placeholder .home-tray{ background:var(--glass-strong);
+                                 border:1px solid var(--line-soft);
+                                 border-radius:var(--r-l); padding:14px 16px 2px;
+                                 backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+                                 box-shadow:var(--shadow-sm); }
+  /* 深色:托盘底更实一点,托盘里的细字要压得住楼群灯火的亮部 */
+  html.dark #chat .placeholder .home-tray{ background:rgba(10,18,26,.78);
+                                           border-color:rgba(79,216,200,.22); }
+  #chat .placeholder .tip{ color:var(--text-2); font-size:12px;
+                           max-width:640px; line-height:1.7; padding:6px 4px 10px; }
+  #chat .placeholder .chips>span{ color:var(--text-2); font-size:12.5px;
                                   font-weight:700;
-                                  text-shadow:0 1px 4px rgba(255,255,255,.4); }
-  html.dark #chat .placeholder .chips>span{ text-shadow:0 1px 4px rgba(9,15,23,.6); }
-  #chat .placeholder .tip{ color:var(--text-3); font-size:12px; margin-top:18px;
-                           max-width:620px; line-height:1.7; padding:0 4px;
-                           text-shadow:0 1px 4px rgba(255,255,255,.4); }
-  html.dark #chat .placeholder .tip{ text-shadow:0 1px 4px rgba(9,15,23,.6); }
+                                  text-shadow:0 1px 6px rgba(255,255,255,.65); }
+  html.dark #chat .placeholder .chips>span{ text-shadow:0 1px 4px rgba(7,13,20,.7); }
   #chat .placeholder .chip{ background:var(--glass-strong); border:1px solid var(--line-soft);
                             border-radius:var(--r-full); padding:7px 16px; font-size:12.5px;
                             font-weight:700; color:var(--text-2); cursor:pointer;
@@ -216,34 +256,37 @@ try {
   /* 图书馆入口 chip:固定功能模块,点一下直接进图书馆导览 */
   #chat .placeholder .chip-lib{ border-color:var(--primary); color:var(--primary-text);
                                 background:var(--primary-light); font-weight:800; }
-  /* 深色下背景照片较暗,chips 加亮描边与更实的底,避免融进山体暗部 */
-  html.dark #chat .placeholder .chip{ background:rgba(16,26,36,.72);
-                                      border-color:rgba(255,214,170,.22); }
+  /* 深色(p2 暮色青辉):chips 用青色描边玻璃,像霓虹灯管浮在暮色上 */
+  html.dark #chat .placeholder .chip{ background:rgba(13,24,34,.6);
+                                      border:1px solid rgba(79,216,200,.45);
+                                      color:var(--text-1);
+                                      box-shadow:0 0 14px rgba(79,216,200,.12); }
   html.dark #chat .placeholder .chip:hover{ border-color:var(--primary);
-                                            background:rgba(255,158,94,.16); }
+                                            background:rgba(79,216,200,.14);
+                                            box-shadow:0 0 18px rgba(79,216,200,.28); }
 
   .msg{ margin-bottom:16px; position:relative; }
   .msg .who{ font-size:11.5px; color:var(--text-1); margin-bottom:4px; font-weight:700;
-             letter-spacing:1px; text-shadow:0 1px 3px rgba(253,250,245,.9), 0 0 10px rgba(253,250,245,.75); }
-  html.dark .msg .who{ color:var(--text-2); text-shadow:0 1px 4px rgba(9,15,23,.85), 0 0 10px rgba(9,15,23,.7); }
+             letter-spacing:1px; text-shadow:0 1px 3px rgba(255,255,255,.9), 0 0 10px rgba(255,255,255,.6); }
+  html.dark .msg .who{ color:var(--text-2); text-shadow:0 1px 4px rgba(6,12,18,.85), 0 0 10px rgba(6,12,18,.7); }
   .msg.user{ display:flex; justify-content:flex-end; }
   .msg.user .col{ display:flex; flex-direction:column; align-items:flex-end; max-width:78%; }
-  /* 用户气泡:实心橘底 —— 半透明橘压在照片上时文字对比度不稳,读起来费劲 */
-  .msg.user .bubble{ background:rgba(255,178,120,.97); border:1px solid rgba(214,110,44,.55);
+  /* 用户气泡:实心主题色底 —— 半透明色压在照片上时文字对比度不稳,读起来费劲 */
+  .msg.user .bubble{ background:rgba(63,189,174,.94); border:1px solid rgba(31,122,112,.5);
                      color:var(--bubble-user); border-radius:var(--r-m) var(--r-m) 4px var(--r-m);
                      padding:9px 14px; max-width:100%; white-space:pre-wrap; font-weight:700;
                      box-shadow:var(--shadow-sm); }
-  html.dark .msg.user .bubble{ background:rgba(196,104,52,.92);
-                               border-color:rgba(255,180,120,.45); }
-  .msg.assistant .body{ background:rgba(253,250,245,.97); border:1px solid var(--line-soft);
+  html.dark .msg.user .bubble{ background:rgba(38,142,138,.88);
+                               border-color:rgba(140,235,225,.4); }
+  .msg.assistant .body{ background:rgba(251,253,252,.97); border:1px solid var(--line-soft);
                         border-radius:var(--r-m); padding:12px 16px; line-height:1.8;
                         font-size:14.2px; color:var(--text-1);
                         box-shadow:var(--shadow-sm); }
-  html.dark .msg.assistant .body{ background:rgba(9,15,22,.93); }
+  html.dark .msg.assistant .body{ background:rgba(9,16,24,.93); }
   /* 思考过程:默认折叠,点头部小箭头展开(参照主流客户端) */
   .think{ border:1px solid var(--line); border-radius:var(--r-m); margin-bottom:8px;
-          background:rgba(252,250,246,.92); }
-  html.dark .think{ background:rgba(12,20,29,.9); }
+          background:rgba(247,250,249,.92); }
+  html.dark .think{ background:rgba(12,21,32,.9); }
   .think .th-head{ display:flex; align-items:center; gap:6px; padding:6px 12px; cursor:pointer;
                    font-size:12px; font-weight:700; color:var(--text-2); user-select:none; }
   .think .th-head:hover{ color:var(--text-2); background:var(--primary-light); }
@@ -279,17 +322,17 @@ try {
   .reasoning{ display:none; }
 
   /* 可读性:消息相关表面一律实底(覆盖半透明),深浅两套都给足对比 */
-  .msg.assistant .body{ background:#fdfaf5; }
-  html.dark .msg.assistant .body{ background:#0d141c; }
-  .trace{ background:#fcfaf6; }
-  html.dark .trace{ background:#0c141d; }
-  .toolcard{ background:#fcfaf6; }
-  html.dark .toolcard{ background:#0c141d; }
+  .msg.assistant .body{ background:#fbfdfc; }
+  html.dark .msg.assistant .body{ background:#0d1720; }
+  .trace{ background:#f7faf9; }
+  html.dark .trace{ background:#0c1520; }
+  .toolcard{ background:#f7faf9; }
+  html.dark .toolcard{ background:#0c1520; }
 
   /* 工作过程区:思考 + 工具调用收在一起,点标题行整体折叠 */
   .trace{ border:1.5px dashed var(--line); border-radius:var(--r-m); margin-bottom:8px;
-          background:rgba(252,250,246,.96); }
-  html.dark .trace{ background:rgba(12,20,29,.94); }
+          background:rgba(247,250,249,.96); }
+  html.dark .trace{ background:rgba(12,21,32,.94); }
   .trace .tr-head{ display:flex; align-items:center; gap:6px; padding:6px 12px; cursor:pointer;
                    font-size:12px; font-weight:700; color:var(--text-3); user-select:none; }
   .trace .tr-head:hover{ color:var(--text-2); background:var(--primary-light); }
@@ -334,8 +377,8 @@ try {
   .body pre{ background:var(--code-bg); color:var(--code-text); border-radius:var(--r-m);
              padding:11px 14px; overflow-x:auto; margin:8px 0; font-size:12.5px; }
   .body code{ font-family:Consolas,"Cascadia Code",monospace; }
-  .body :not(pre) > code{ background:rgba(249,115,22,.15); color:var(--primary-text);
-                          border:1px solid rgba(249,115,22,.28);
+  .body :not(pre) > code{ background:rgba(63,189,174,.13); color:var(--primary-text);
+                          border:1px solid rgba(63,189,174,.32);
                           padding:1px 6px; border-radius:6px; font-size:12.5px; }
   .body ul, .body ol{ padding-left:22px; margin:6px 0; }
   .body h1,.body h2,.body h3,.body h4{ margin:10px 0 6px; }
@@ -345,13 +388,13 @@ try {
   .body blockquote{ border-left:3px solid var(--primary); padding-left:10px;
                     color:var(--text-2); margin:6px 0; }
 
-  .toolcard{ display:flex; align-items:baseline; gap:8px; background:rgba(252,250,246,.96);
+  .toolcard{ display:flex; align-items:baseline; gap:8px; background:rgba(247,250,249,.96);
              border:1px solid var(--line); border-left:3px solid var(--text-3);
              border-radius:var(--r-m); padding:8px 13px; margin:8px 0; font-size:12.5px;
              transition:.15s;
              backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
              box-shadow:var(--shadow-sm); }
-  html.dark .toolcard{ background:rgba(12,20,29,.94); }
+  html.dark .toolcard{ background:rgba(12,21,32,.94); }
   .toolcard .dot{ width:8px; height:8px; border-radius:50%; background:var(--text-3);
                   flex:none; align-self:center; }
   .toolcard.run{ border-left-color:var(--warning); background:rgba(255,243,222,.97); }
@@ -376,10 +419,10 @@ try {
 
   /* ---------------- 浏览器截图卡片 ---------------- */
   /* Agent 用真实浏览器看过的页面:直接把画面贴进对话,点图放大 */
-  .shotcard{ margin:8px 0 4px; background:rgba(252,250,246,.96);
+  .shotcard{ margin:8px 0 4px; background:rgba(247,250,249,.96);
              border:1px solid var(--line-soft); border-left:3px solid var(--accent);
              border-radius:10px; padding:8px 10px; }
-  html.dark .shotcard{ background:rgba(12,20,29,.94); }
+  html.dark .shotcard{ background:rgba(12,21,32,.94); }
   .shotcard .cap{ font-size:11.5px; color:var(--text-2); margin-bottom:6px;
                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .shotcard img{ display:block; max-width:100%; max-height:360px; border-radius:8px;
@@ -401,15 +444,20 @@ try {
                   border:1.5px solid var(--primary); border-radius:var(--r-full);
                   padding:8px 8px 8px 20px; box-shadow:var(--shadow-sm);
                   backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
+  /* 深色(p2):输入框一圈青色光晕,像暮色里亮起的灯带 */
+  html.dark .composer .box{ border-color:rgba(79,216,200,.55);
+                            box-shadow:0 0 18px rgba(79,216,200,.18),
+                                       0 0 4px rgba(79,216,200,.25); }
   textarea{ flex:1; background:transparent; border:none; outline:none; resize:none;
             color:var(--text-1); font:inherit; line-height:1.5; max-height:180px;
             padding:4px 0; }
   textarea::placeholder{ color:var(--text-3); }
   .send, .stop{ border:none; border-radius:var(--r-full); padding:9px 22px; cursor:pointer;
                 font-size:13px; font-weight:800; transition:.15s; }
-  .send{ background:linear-gradient(135deg,#F98B3D,#E07A3F); color:#fff;
-         box-shadow:0 6px 16px rgba(224,122,63,.35); }
-  .send:hover{ transform:translateY(-1px); box-shadow:0 8px 20px rgba(224,122,63,.45); }
+  /* Send:浅色=薄荷实心(p3),深色=青→蓝霓虹渐变(p2) */
+  .send{ background:linear-gradient(135deg,#4FD8C8,#2FA8C8); color:#08302C;
+         box-shadow:0 6px 16px rgba(63,189,174,.4); }
+  .send:hover{ transform:translateY(-1px); box-shadow:0 8px 20px rgba(63,189,174,.5); }
   .stop{ background:var(--danger); color:#fff; display:none; }
   .composer .hint{ color:var(--text-3); font-size:11px; margin-top:6px; }
   .composer .hint.warn{ color:var(--warning); }
@@ -472,7 +520,7 @@ try {
   .b-no:hover{ border-color:var(--danger); color:var(--danger); }
   .b-always{ background:var(--primary-light); border:1px solid var(--primary);
              color:var(--primary-text); }
-  .b-yes{ background:linear-gradient(135deg,#F98B3D,#E07A3F); border:none; color:#fff; }
+  .b-yes{ background:var(--primary); border:none; color:#fff; }
   .b-yes:hover{ transform:translateY(-1px); }
 
   /* 提示条:抬到输入框上方,不再压住发送键;同文重复只留一条 */
@@ -593,9 +641,9 @@ try {
   /* SVG 图层:底图 + 标注框 + 图钉(坐标都基于源图 2559×1279) */
   .cm-svg text{ font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif; }
   .cm-bg-g{ cursor:pointer; }
-  .cm-box{ fill:rgba(249,115,22,.10); stroke-width:8; stroke-dasharray:26 16;
+  .cm-box{ fill:rgba(63,189,174,.12); stroke:var(--primary); stroke-width:8; stroke-dasharray:26 16;
            animation:cmpulse 1.1s linear infinite; }
-  .cm-bg-g:hover .cm-box{ fill:rgba(249,115,22,.22); }
+  .cm-bg-g:hover .cm-box{ fill:rgba(63,189,174,.26); }
   @keyframes cmpulse{ to{ stroke-dashoffset:-42; } }
   .cm-box-label{ fill:#FFFFFF; font-weight:900; text-anchor:middle;
                  paint-order:stroke; stroke-width:10px; stroke-linejoin:round;
@@ -942,8 +990,10 @@ function renderHome() {
       <div class="greet"><b>${esc(timeGreeting())}</b>，同学！</div>
       <div class="sub">我是引路学长，你的校园 AI 助手 —— 学习、考试、活动、校园生活，都可以问我。</div>
     </div>
-    <div class="chips"><span>试试这些：</span>${mapChip}${libChip}${chips}</div>
-    <div class="tip">小提示：找楼可以直接问我「图书馆在哪」，也可以点上面的地图自己搜（支持 E栋、s5 这类俗称）；聊天里用鼠标选中文字会出现「复制选区」按钮；思考过程与工具卡片在最终回复给出后会自动收起，点击可重新展开。</div>
+    <div class="home-tray">
+      <div class="chips"><span>试试这些：</span>${mapChip}${libChip}${chips}</div>
+      <div class="tip">小提示：找楼可以直接问我「图书馆在哪」，也可以点上面的地图自己搜（支持 E栋、s5 这类俗称）；聊天里用鼠标选中文字会出现「复制选区」按钮；思考过程与工具卡片在最终回复给出后会自动收起，点击可重新展开。</div>
+    </div>
   </div>`;
   chat.querySelectorAll(".chip").forEach(el => el.addEventListener("click", () => {
     if (el.classList.contains("chip-map")) {
@@ -993,7 +1043,7 @@ function toast(text, isError) {
   while (box.children.length > 3) box.firstChild.remove();
 }
 
-/* ---------------- 主题切换 ---------------- */
+/* ---------------- 主题切换(昼暮双景:浅色=日景,深色=暮色) ---------------- */
 function applyTheme(dark, persist) {
   document.documentElement.classList.toggle("dark", dark);
   $("btnTheme").textContent = dark ? "☀️ 浅色" : "🌙 深色";
@@ -1625,8 +1675,8 @@ $("btnProvSave").addEventListener("click", () => {
 });
 
 /* ---------------- 每日 token 用量统计(圆环图) ---------------- */
-const USAGE_COLORS = ["#F97316", "#5EB8AD", "#6D9CFF", "#B79CFF", "#FF9F7A",
-                      "#FFD166", "#62D0E8", "#F38BA8"];
+const USAGE_COLORS = ["#3FBDAE", "#5A8FD8", "#B79CFF", "#E8B86D", "#7FD1C8",
+                      "#E58FB1", "#6BBF73", "#D89B6A"];
 function usageColor(key) {
   let h = 2166136261;
   for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); }
