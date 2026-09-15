@@ -115,7 +115,11 @@ def write_user_files(dist: Path) -> None:
         "   - 自检:引路学长-CLI.exe 里输入 /library 看库状态。\n"
         "4. 想接 MCP 服务器:编辑 config.json 的 mcp_servers 数组\n"
         "   (格式见 config.example.json,支持 npx/uvx/python 启动的任意 MCP 服务器);\n"
-        "5. 会话留档在 sessions/;技能放 skills/(SKILL.md 格式);知识库放 kb/;\n"
+        "5. 问网页内容时它可以用真实浏览器看页面(靠 JS 渲染的站点、自己写的本地\n"
+        "   页面都能看,还能截图给你)。默认自己起一个干净的后台实例,不会动你\n"
+        "   正在用的浏览器,也不带你的登录态;只有要看必须登录才看得到的页面时,\n"
+        "   它会先问你才能用你自己的浏览器。终端里输 /browser 可看当前状态。\n"
+        "6. 会话留档在 sessions/;技能放 skills/(SKILL.md 格式);知识库放 kb/;\n"
         "   长期记忆在 memory/MEMORY.md。\n",
         encoding="utf-8",
     )

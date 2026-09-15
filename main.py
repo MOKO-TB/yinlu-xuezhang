@@ -139,10 +139,11 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                  f"  接入方式: {h['mode'] or '(未确定)'}",
                  f"  说明: {h['detail'] or '-'}"]
         if h["ok"]:
-            lines.append("  Agent 需要看网页真实内容(JS 渲染 / 要登录 / 本地页面)时会自动用它。")
+            lines.append("  Agent 默认会自己起一个独立无窗口实例(不带你现有登录态);"
+                         "要看需登录的页面时它会用 mode=attach 连你自己的浏览器。")
         else:
-            lines.append("  修复:让 Edge/Chrome 带 --remote-debugging-port=9222 启动,"
-                         "或设环境变量 YINLUXS_CDP_URL=http://127.0.0.1:9222,然后重试。")
+            lines.append("  修复:装一个 Edge/Chrome(或设环境变量 YINLUXS_BROWSER 指向浏览器 exe);"
+                         "若只想用已开远程调试的浏览器,可设 YINLUXS_CDP_URL=http://127.0.0.1:9222。")
         ui.info("\n".join(lines))
     elif name == "/history":
         est = estimate_tokens(session.messages)

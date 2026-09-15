@@ -132,11 +132,13 @@ def build_default_registry() -> list[Tool]:
             name="browser_open",
             description=(
                 "用真实浏览器打开一个网页,返回 JS 渲染完成后的标题与正文文本。"
-                "凡是「网页抓不到内容 / 页面要靠 JS 渲染 / 需要登录态 / 要看自己写的页面"
+                "凡是「网页抓不到内容 / 页面要靠 JS 渲染 / 要看自己写的页面"
                 "(localhost)效果」都用它,而不是 web_crawl。"
                 "同一会话里重复调用会复用同一个标签页(相当于刷新成新地址),"
-                "所以连续翻页很便宜。mode=attach 会连用户自己开着的浏览器(带他的登录态);"
-                "默认 auto:有可连的就连,没有就自己起一个独立实例(零配置)。"
+                "所以连续翻页很便宜。"
+                "默认自己起一个独立浏览器实例(零配置、不带你现有登录态);"
+                "**只有要看需要登录才看得到的页面**(教务系统、我的课表、已登录的站内页)"
+                "才传 mode=attach——它会用用户自己开着远程调试的浏览器,以他的身份取页。"
                 "要拿精确数据(价格/表格/链接列表)接着用 browser_eval,要看画面用 browser_screenshot。"
             ),
             parameters={
@@ -150,7 +152,7 @@ def build_default_registry() -> list[Tool]:
                     "max_chars": {"type": "integer",
                                   "description": "正文返回上限字符数,默认 6000,上限 20000"},
                     "mode": {"type": "string", "enum": ["auto", "attach", "launch"],
-                             "description": "auto=自动(默认);attach=必须用用户自己的浏览器(要登录态时);launch=自己起独立实例"},
+                             "description": "默认 auto=自己起一个干净实例(无登录态);attach=改用用户自己开着的浏览器(带他的登录态),只在页面必须登录才看得到时用;launch=显式要求独立实例"},
                     "headless": {"type": "boolean",
                                  "description": "mode=launch 时是否无窗口运行,默认 true"},
                     "reason": {"type": "string",

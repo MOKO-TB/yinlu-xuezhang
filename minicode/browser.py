@@ -50,6 +50,11 @@ DEFAULT_MAX_CHARS = 6000
 MAX_CHARS = 20000
 MAX_SESSIONS = 6                     # 同时活着的标签页上限(超出关最旧的)
 LAUNCH_TIMEOUT = 25.0                # 冷启动耐心值(秒)
+# attach 握手限时:实测用户开着几十个标签页的 Edge **首次** WS 握手可超过 3 s
+# (把它当"冷启动"看),紧接着重试只要 ~1.1 s。所以:
+#   真要用 attach 时给够耐心(10 s);/browser 这种交互自检给短一点(6 s)。
+ATTACH_TIMEOUT = 10.0
+HEALTH_PROBE_TIMEOUT = 6.0
 
 _EDGE_PATHS = (
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
@@ -378,6 +383,9 @@ def launch_browser(*, headless: bool = True, port: int | None = None,
         f"--user-data-dir={profile}",
         "--no-first-run", "--no-default-browser-check",
         "--disable-sync", "--disable-extensions", "--disable-background-networking",
+        # 限制磁盘缓存:不设的话这个常驻 profile 会慢慢涨(实测开发机 79 MB/1100 文件),
+        # 而引路学长拿它只为了看页面,不需要缓存网页资源。
+        "--disk-cache-size=1", "--disable-dev-shm-usage",
         "--window-size=1280,900",
     ]
     if headless:
@@ -401,39 +409,83 @@ def launch_browser(*, headless: bool = True, port: int | None = None,
     raise BrowserUnavailable(f"{name} 启动超时({LAUNCH_TIMEOUT:.0f}s),没等到调试端口 {port}。")
 
 
+def _try_attach(*, timeout: float = ATTACH_TIMEOUT) -> tuple[tuple['_Conn', str] | None, str]:
+    """探一下能不能 attach,能就连上并真握手。
+
+    返回 ((连接, 浏览器产品串) 或 None, 失败原因) —— 失败原因要带回去给用户看,
+    但不能把探不到当成错误:attach 只是一条可选路线。
+    为何要真跑一次握手:DevToolsActivePort 可能是浏览器关后的残留文件,也可能
+    端口被别的程序占着;不验证就会把"已死端点"当成可 attach,然后让用户等完超时。
+    """
+    try:
+        hit = _attach_endpoint()
+    except BrowserUnavailable as exc:
+        return None, str(exc)
+    if hit is None:
+        return None, "没找到开着远程调试的浏览器"
+    ws_url, info = hit
+    conn = None
+    try:
+        conn = _Conn(ws_url, timeout=timeout)
+        product = conn.call("Browser.getVersion", timeout=timeout).get("product", "")
+    except Exception as exc:
+        if conn is not None:
+            conn.close()
+        # 文案要诚实:超时不能肯定地说"浏览器已关"(实测也可能是首次握手慢),
+        # 也不能只报一个技术词——用户得知道下一步干什么。
+        return None, (f"调试端点 {ws_url} 没在 {timeout:.0f}s 内完成握手"
+                      "(浏览器可能已关、正忙,或首次被唤起的很慢;重试一次往往就通)")
+    return (conn, product or info.get("Browser", "浏览器")), ""
+
+
 def _ensure_conn(*, mode: str = "auto", headless: bool = True) -> tuple[_Conn, str, str]:
-    """拿到连接(优先复用),返回 (连接, 浏览器产品串, 接入方式)。"""
+    """拿到连接(优先复用),返回 (连接, 浏览器产品串, 接入方式)。
+
+    auto 的默认是 **launch(独立无窗口实例)**,不是 attach:
+    用户自己那个浏览器里有几十个标签页与真实登录态,拿它去自动化属于
+    "静默代办"——对要分发给他人的程序太侵入,而且实测很容易卡住。
+    只有两种情况 auto 会先走 attach:
+      - 用户显设了 YINLUXS_CDP_URL(这就是他的意图);
+      - 本机根本 launch 不起来(没浏览器可执行文件),拿 attach 当兵底。
+    需要登录态时让模型显式传 mode="attach"(确认框会单独警告)。
+    """
     with _LOCK:
         if _STATE.conn is not None:
             return _STATE.conn, _STATE.browser, _STATE.mode
         if mode not in ("auto", "attach", "launch"):
             raise BrowserError(f"mode 只能是 auto/attach/launch,收到:{mode}")
 
-        if mode in ("auto", "attach"):
-            hit = _attach_endpoint()
-            if hit is not None:
-                ws_url, info = hit
-                conn = _Conn(ws_url)
-                # 真试一次只读命令:DevToolsActivePort 可能是浏览器关后的残留文件,
-                # 不验证会把"已死端点"当成可 attach,直到用户等半天收个超时。
-                try:
-                    product = conn.call("Browser.getVersion", timeout=8).get("product", "")
-                except Exception as exc:
-                    conn.close()
-                    if mode == "attach":
-                        raise BrowserUnavailable(
-                            f"探到调试端口但连不上(浏览器可能已关):{exc}") from exc
-                    hit = None                      # auto:退回 launch 路线
-                else:
-                    browser = product or info.get("Browser", "浏览器")
-                    _STATE.conn, _STATE.browser, _STATE.mode = conn, browser, "attach"
-                    return conn, _STATE.browser, _STATE.mode
-            if hit is None and mode == "attach":
+        if mode == "attach":
+            got, why = _try_attach()
+            if got is None:
                 raise BrowserUnavailable(
-                    "没找到开着远程调试的浏览器。要在你自己的登录态里打开页面,请先让 Edge/Chrome "
-                    "带 --remote-debugging-port=9222 启动(Edge 的 edge://inspect 里有对应开关),"
-                    f"或用环境变量 {ENV_CDP_URL} 指定端口。")
-        proc, port, info = launch_browser(headless=headless)
+                    f"连不上你开着远程调试的浏览器:{why}。要使用这条路,"
+                    "请先让 Edge/Chrome 带 --remote-debugging-port=9222 启动"
+                    f"(Edge 的 edge://inspect 里有开关),或用环境变量 {ENV_CDP_URL} 指定端口。"
+                    "不需要登录态的页面可以直接用默认模式自己起一个实例。")
+            conn, browser = got
+            _STATE.conn, _STATE.browser, _STATE.mode = conn, browser, "attach"
+            return conn, browser, "attach"
+
+        if mode == "auto" and (os.environ.get(ENV_CDP_URL) or "").strip():
+            got, _why = _try_attach()          # 用户显式设过端点:按他的意思走
+            if got is not None:
+                conn, browser = got
+                _STATE.conn, _STATE.browser, _STATE.mode = conn, browser, "attach"
+                return conn, browser, "attach"
+
+        try:
+            proc, port, info = launch_browser(headless=headless)
+        except BrowserUnavailable as launch_exc:
+            # 本机起不了浏览器(比如没装 Edge/Chrome):attach 是最后的兵底
+            got, why = _try_attach()
+            if got is None:
+                raise BrowserUnavailable(
+                    f"{launch_exc}(用已开远程调试的浏览器也不行:{why})") from launch_exc
+            conn, browser = got
+            _STATE.conn, _STATE.browser, _STATE.mode = conn, browser, "attach"
+            return conn, browser, "attach"
+
         try:
             conn = _Conn(info["webSocketDebuggerUrl"])
         except Exception as exc:
@@ -693,46 +745,55 @@ atexit.register(shutdown)
 # ---------------------------------------------------------------- 自检
 
 def health() -> dict:
-    """能不能用浏览器能力:给 /browser 命令与排障用(不主动弹提示)。"""
+    """能不能用浏览器能力:给 /browser 命令与排障用(不主动弹提示)。
+
+    口径与 _ensure_conn 一致:**launch 是主路线**,attach 只是可选的登录态路线。
+    attach 探针限时很短(3 s):/browser 是交互命令,不能卡在这儿。
+    """
     info: dict[str, Any] = {"ok": False, "mode": "", "browser": "", "detail": ""}
+    # 只把"读全局状态"放进锁内;下面的握手探针是网络 I/O,不能持锁(最长几秒,
+    # 会把其它线程的浏览器操作全堵住)。
     with _LOCK:
         _sweep_dead_sessions_locked()
         if _STATE.conn is not None:
             info.update(ok=True, mode=_STATE.mode, browser=_STATE.browser,
                         detail=f"已连接({len(_STATE.sessions)} 个标签页)")
             return info
-    hit = None
-    try:
-        hit = _attach_endpoint()
-    except Exception:
-        hit = None
-    if hit is not None:
-        # 真连一下:端口上挂着残留文件/被别的程序占了时不能报"可用"
-        try:
-            probe = _Conn(hit[0])
-            product = probe.call("Browser.getVersion", timeout=6).get("product", "")
-        except Exception:
-            product = ""
-            probe = None
-        if probe is not None:
-            probe.close()
-            info.update(ok=True, mode="attach",
-                        browser=product or hit[1].get("Browser", "浏览器"),
-                        detail="可用:会连你已开远程调试的浏览器(带登录态)")
-            return info
-        info["detail"] = "探到调试端口但连不上(浏览器可能已关,或残留的 DevToolsActivePort)"
+    # 主路线:能不能自己起实例
     try:
         found = find_browser_exe()
     except BrowserUnavailable as exc:
         found = None
         info["detail"] = str(exc)
-    if found is None:
-        if not info["detail"]:
-            info["detail"] = "本机没找到 Edge/Chrome"
+    # 可选路线:有没有开着远程调试的浏览器(短超时,连不上不报错)
+    attach_note = ""
+    try:
+        hit = _attach_endpoint()
+    except Exception:
+        hit = None
+    if hit is not None:
+        probe = None
+        try:
+            probe = _Conn(hit[0], timeout=HEALTH_PROBE_TIMEOUT)
+            product = probe.call("Browser.getVersion",
+                                 timeout=HEALTH_PROBE_TIMEOUT).get("product", "")
+            attach_note = f"{product or hit[1].get('Browser', '浏览器')} 开着远程调试"
+        except Exception:
+            attach_note = (f"探到调试端点但 {HEALTH_PROBE_TIMEOUT:.0f}s 内握手不通"
+                           "(浏览器已关、正忙,或首次唤起很慢)")
+        finally:
+            if probe is not None:
+                probe.close()
+    if found is not None:
+        detail = f"可用:需要时用 {found[1]} 起独立实例(零配置)"
+        if attach_note:
+            detail += f";另可选 attach:{attach_note}"
+        info.update(ok=True, mode="launch", browser=found[0], detail=detail)
         return info
-    info.update(ok=True, mode="launch",
-                browser=f"{found[0]}",
-                detail=f"可用:需要时用 {found[1]} 起独立实例(零配置)")
+    if attach_note.startswith("另") or (hit is not None and not info["detail"]):
+        pass
+    if not info["detail"]:
+        info["detail"] = attach_note or "本机没找到 Edge/Chrome,也没有可连的调试端口"
     return info
 
 
@@ -744,6 +805,9 @@ BROWSER_PROMPT = """# 浏览器能力(browser_open / browser_eval / browser_scre
 要登录才看得到的页面、用户自己写的本地页面(localhost:端口)。web_crawl 抓的是静态正文,
 页面靠 JS 渲染或要登录态时它会拿到空壳 —— 这种情况直接换 browser_open。
 
+- 默认自己起一个干净的浏览器实例(零配置、**没有**你现有的登录态)。
+  只有页面必须登录才看得到(教务系统、我的课表、站内通知)时才传 mode="attach",
+  它会改用你自己开着远程调试的浏览器、以你的身份取页(确认框会单独向你警告)。
 - 一次任务里同一页面继续操作:再调一次 browser_open 换地址即可(复用同一个标签页)。
 - 要精确数据(价格、表格、链接列表、某个元素是否存在)用 browser_eval 跑一段 JS 取回来。
 - 用户说「截图看看 / 这页面长什么样」,或要证明页面效果正确时用 browser_screenshot,

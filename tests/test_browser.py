@@ -64,7 +64,11 @@ def _eval_results(values: dict):
 
 @pytest.fixture(autouse=True)
 def isolated_state(monkeypatch):
-    """每个用例一份干净的全局状态,且绝不碰真实 WebSocket / 真实进程。"""
+    """每个用例一份干净的全局状态,且**绝不碰真实 WebSocket / 真实浏览器进程**。
+
+    launch_browser 也必须桩掉:auto 现在默认走 launch,不桩的话几乎每个用例都会
+    真的起一个 Edge(全量测试因此慢几十秒)——本文件先前就有这类隐性泄漏。
+    """
     saved = (br._STATE.conn, br._STATE.browser, br._STATE.mode, br._STATE.proc,
              br._STATE.port, dict(br._STATE.sessions))
     br._STATE.conn = None
@@ -79,6 +83,25 @@ def isolated_state(monkeypatch):
     monkeypatch.setattr(br, "_attach_endpoint",
                         lambda: ("ws://127.0.0.1:9222/devtools/browser/x",
                                  {"Browser": "Edg/153.0"}))
+
+    class FakeProc:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_launch(*, headless=True, port=None, profile_dir=None):
+        FakeConn.calls.append(("__launch__", {"headless": headless}, None))
+        return (FakeProc(), 9999,
+                {"webSocketDebuggerUrl": "ws://127.0.0.1:9999/devtools/browser/y",
+                 "Browser": "Edg/153.0"})
+
+    monkeypatch.setattr(br, "launch_browser", fake_launch)
+    monkeypatch.delenv(br.ENV_CDP_URL, raising=False)
     yield
     br._STATE.sessions.clear()
     (br._STATE.conn, br._STATE.browser, br._STATE.mode, br._STATE.proc,
@@ -112,11 +135,8 @@ def test_check_url_normalizes():
 
 # ---------------------------------------------------------------- 打开页面
 
-def test_open_page_drives_cdp_and_returns_rendered_text(isolated_state):
-    seq = {"document.readyState": "complete", "document.title": "通知详情",
-           "location.href": "https://news.test/a",
-           "innerText": "新生入学须知 正文第一段"}
-
+def _page_eval_handler(seq: dict):
+    """生成一个按"表达式子串 → 返回值"答 Runtime.evaluate 的 FakeConn.call。"""
     def fake_call(self, method, params=None, session=None, timeout=30.0):
         FakeConn.calls.append((method, params or {}, session))
         if method == "Runtime.evaluate":
@@ -128,25 +148,40 @@ def test_open_page_drives_cdp_and_returns_rendered_text(isolated_state):
         if method in _DEFAULTS:
             return _DEFAULTS[method]
         return {}
+    return fake_call
 
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(FakeConn, "call", fake_call)
+
+def test_open_page_drives_cdp_and_returns_rendered_text(isolated_state, monkeypatch):
+    seq = {"document.readyState": "complete", "document.title": "通知详情",
+           "location.href": "https://news.test/a",
+           "innerText": "新生入学须知 正文第一段"}
+    monkeypatch.setattr(FakeConn, "call", _page_eval_handler(seq))
     out = br.open_page("https://news.test/a", wait_ms=300)
     assert out["title"] == "通知详情"
     assert out["url"] == "https://news.test/a"
     assert out["text"].startswith("新生入学须知")
     assert out["loaded"] is True
-    assert out["mode"] == "attach"                # fixture 提供了可 attach 的端点
+    # auto 默认走独立实例(fixture 里是假 launch),绝不默认连用户自己的浏览器
+    assert out["mode"] == "launch"
     assert "Page.navigate" in _method_names()
     # 新标签页要 enable 这两个域,否则收不到页面事件/求值上下文
     assert "Page.enable" in _method_names() and "Runtime.enable" in _method_names()
     nav = [c for c in FakeConn.calls if c[0] == "Page.navigate"][0]
     assert nav[1]["url"] == "https://news.test/a"
     assert nav[2] == "S1"                        # 命令带上了页面的 sessionId
-    monkey.undo()
 
 
-def test_open_page_truncates_and_reports_full_length(isolated_state):
+def test_open_page_uses_attach_when_explicitly_asked(isolated_state, monkeypatch):
+    """mode=attach 是"要用我的登录态"的显式请求,得真落到那条路上。"""
+    seq = {"document.readyState": "complete", "document.title": "教务系统",
+           "location.href": "https://jw.test/home", "innerText": "我的课表"}
+    monkeypatch.setattr(FakeConn, "call", _page_eval_handler(seq))
+    out = br.open_page("https://jw.test/home", wait_ms=200, mode="attach")
+    assert out["mode"] == "attach" and out["title"] == "教务系统"
+    assert "__launch__" not in [c[0] for c in FakeConn.calls], "不该另外起实例"
+
+
+def test_open_page_truncates_and_reports_full_length(isolated_state, monkeypatch):
     long = "字" * 3000
 
     def fake_call(self, method, params=None, session=None, timeout=30.0):
@@ -157,13 +192,11 @@ def test_open_page_truncates_and_reports_full_length(isolated_state):
             return {"result": {"value": val}}
         return _DEFAULTS.get(method, {})
 
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(FakeConn, "call", fake_call)
+    monkeypatch.setattr(FakeConn, "call", fake_call)
     out = br.open_page("https://a.test", wait_ms=100, max_chars=200)
     assert out["chars"] == 3000                 # 真实长度仍然报出来
     assert out["truncated"] is True
     assert len(out["text"]) < 300
-    monkey.undo()
 
 
 def test_navigate_error_text_surfaces(isolated_state):
@@ -175,7 +208,7 @@ def test_navigate_error_text_surfaces(isolated_state):
 
 # ---------------------------------------------------------------- 线程隔离
 
-def test_each_thread_gets_its_own_tab(isolated_state):
+def test_each_thread_gets_its_own_tab(isolated_state, monkeypatch):
     """两个会话(= 两个并发线程)各自开标签页,不会互相抢「当前页面」。
 
     必须真并发:线程退出后 ident 会被复用,那样测试就变成假阳性。
@@ -190,8 +223,7 @@ def test_each_thread_gets_its_own_tab(isolated_state):
             return {"sessionId": "S-" + (params or {}).get("targetId", "")}
         return _DEFAULTS.get(method, {})
 
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(FakeConn, "call", fake_call)
+    monkeypatch.setattr(FakeConn, "call", fake_call)
     gate = threading.Barrier(2)
     seen = {}
 
@@ -208,7 +240,6 @@ def test_each_thread_gets_its_own_tab(isolated_state):
     assert seen["a"][0] != seen["b"][0], "两个线程共用了同一个标签页"
     assert seen["a"][1] != seen["b"][1]
     assert len(br._STATE.sessions) == 2
-    monkey.undo()
 
 
 def test_same_thread_reuses_tab(isolated_state):
@@ -218,7 +249,7 @@ def test_same_thread_reuses_tab(isolated_state):
     assert _method_names().count("Target.createTarget") == 1
 
 
-def test_dead_thread_tab_is_swept(isolated_state):
+def test_dead_thread_tab_is_swept(isolated_state, monkeypatch):
     """线程跑完(后台会话结束/子代理交差)后,它的标签页要能被回收。"""
     hold = threading.Event()
     ids = iter(["Tmain", "Tworker"])
@@ -231,8 +262,7 @@ def test_dead_thread_tab_is_swept(isolated_state):
             return {"sessionId": "S" + str((params or {}).get("targetId"))}
         return _DEFAULTS.get(method, {})
 
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(FakeConn, "call", fake_call)
+    monkeypatch.setattr(FakeConn, "call", fake_call)
     main_sess = br._ensure_session()
     assert main_sess.target_id == "Tmain"
 
@@ -249,7 +279,6 @@ def test_dead_thread_tab_is_swept(isolated_state):
     assert br.health()["ok"]
     assert list(br._STATE.sessions) == [f"{br._KEY}:{threading.get_ident()}"], \
         "回收时误删了主线程的页,或没回收死线程的页"
-    monkey.undo()
 
 
 def test_session_cap_closes_oldest(isolated_state):
@@ -302,9 +331,14 @@ def test_close_current_releases_tab(isolated_state):
 
 # ---------------------------------------------------------------- 自检
 
-def test_health_reports_attach_route(isolated_state):
+def test_health_reports_launch_as_primary_route(isolated_state, monkeypatch):
+    """health 的主口径要与 _ensure_conn 一致:能 launch 就报 launch,
+    可选的登录态路线附在说明里(不再把 attach 当默认可用路线报)。"""
+    monkeypatch.setattr(br, "find_browser_exe", lambda: ("Edge", r"C:\x\msedge.exe"))
     h = br.health()
-    assert h["ok"] and h["mode"] == "attach"
+    assert h["ok"] and h["mode"] == "launch"
+    assert "独立实例" in h["detail"]
+    assert "开着远程调试" in h["detail"]      # fixture 提供了可连端点,要一并报出来
 
 
 def test_health_reports_launch_route_when_no_endpoint(isolated_state, monkeypatch):
@@ -359,11 +393,8 @@ def test_probe_uses_port_file_when_http_all_404(monkeypatch, tmp_path):
     assert br.probe_endpoint(59999) is None       # 文件里的端口对不上就不算
 
 
-def test_attach_validated_by_real_handshake(monkeypatch):
+def test_attach_validated_by_real_handshake(isolated_state, monkeypatch):
     """探到端口不等于能用:浏览器已关/端口被别的程序占着时不能报「可 attach」。"""
-    monkeypatch.setattr(br, "_attach_endpoint",
-                        lambda: ("ws://127.0.0.1:9222/devtools/browser/x", {"Browser": "E"}))
-
     class DeadConn(FakeConn):
         def call(self, method, params=None, session=None, timeout=30.0):
             raise br.BrowserError("不是 CDP 服务")
@@ -375,41 +406,70 @@ def test_attach_validated_by_real_handshake(monkeypatch):
     assert br._STATE.conn is None
 
 
-def test_auto_falls_back_to_launch_when_attach_dies(monkeypatch):
-    """auto 模式下 attach 探到了但握手失败 → 要能退回 launch,而不是报错。"""
-    monkeypatch.setattr(br, "_attach_endpoint",
-                        lambda: ("ws://127.0.0.1:9222/devtools/browser/x", {"Browser": "E"}))
-
+def test_explicit_attach_failure_does_not_silently_launch(isolated_state, monkeypatch):
+    """mode=attach 连不上时必须报错,不能改用 launch —— 那是把用户要的"登录态"
+    偷偷换成一个干净实例,结果完全不同(例如只会看到登录页)。"""
     class DeadConn(FakeConn):
         def call(self, method, params=None, session=None, timeout=30.0):
             raise br.BrowserError("不是 CDP 服务")
 
-    launched = {"n": 0}
+    monkeypatch.setattr(br, "_Conn", DeadConn)
+    with pytest.raises(br.BrowserUnavailable):
+        br._ensure_conn(mode="attach")
+    assert "__launch__" not in [c[0] for c in FakeConn.calls]
 
-    def fake_launch(**kw):
-        launched["n"] += 1
-        return object(), 9999, {"webSocketDebuggerUrl": "ws://ok", "Browser": "Edg/153"}
+
+def test_auto_prefers_launch_even_when_attach_available(isolated_state):
+    """即使探到用户开着的调试端点,auto 也起独立实例:不默认动他那个
+    带登录态、带几十个标签页的浏览器(对分发型程序太侵入,实测也容易卡住)。"""
+    # fixture 已把 _attach_endpoint 桩成"探得到"、launch_browser 桩成假 launch
+    _conn, _browser, mode = br._ensure_conn(mode="auto")
+    assert mode == "launch"
+    assert ("__launch__", {"headless": True}, None) in FakeConn.calls
+
+
+def test_auto_uses_attach_only_when_user_asked(isolated_state, monkeypatch):
+    """用户显式设了 YINLUXS_CDP_URL = 他的意图,auto 要按它走。"""
+    monkeypatch.setenv(br.ENV_CDP_URL, "http://127.0.0.1:9222")
+    _conn, _browser, mode = br._ensure_conn(mode="auto")
+    assert mode == "attach"
+    assert "__launch__" not in [c[0] for c in FakeConn.calls]
+
+
+def test_auto_falls_back_to_attach_when_launch_impossible(isolated_state, monkeypatch):
+    """本机起不了浏览器(比如没装 Edge/Chrome)时,attach 是最后的兜底。"""
+    def boom(**kw):
+        raise br.BrowserUnavailable("本机没找到 Edge/Chrome")
+
+    monkeypatch.setattr(br, "launch_browser", boom)
+    _conn, _browser, mode = br._ensure_conn(mode="auto")
+    assert mode == "attach"
+
+
+def test_auto_reports_both_routes_failed(isolated_state, monkeypatch):
+    """两条路都不通:报错要把两个原因都带上,别只说一半。"""
+    def boom(**kw):
+        raise br.BrowserUnavailable("本机没找到 Edge/Chrome")
+
+    monkeypatch.setattr(br, "launch_browser", boom)
+    monkeypatch.setattr(br, "_attach_endpoint", lambda: None)
+    with pytest.raises(br.BrowserUnavailable) as e:
+        br._ensure_conn(mode="auto")
+    msg = str(e.value)
+    assert "没找到 Edge/Chrome" in msg and "没找到开着远程调试" in msg
+
+
+def test_health_does_not_overclaim_when_probe_dies(isolated_state, monkeypatch):
+    """探到残留端口却握手不通、且本机没浏览器时,不能对用户报「可用」。"""
+    class DeadConn(FakeConn):
+        def call(self, method, params=None, session=None, timeout=30.0):
+            raise br.BrowserError("不是 CDP 服务")
 
     monkeypatch.setattr(br, "_Conn", DeadConn)
-    monkeypatch.setattr(br, "launch_browser", fake_launch)
-    conn, browser, mode = br._ensure_conn(mode="auto")
-    assert launched["n"] == 1 and mode == "launch"
-
-
-def test_health_does_not_overclaim_when_probe_dies(monkeypatch):
-    """health 要真连一下:探到残留端口却连不上时,不能对用户报「可用」。"""
-    monkeypatch.setattr(br, "_attach_endpoint",
-                        lambda: ("ws://127.0.0.1:9222/devtools/browser/x", {"Browser": "E"}))
     monkeypatch.setattr(br, "find_browser_exe", lambda: None)
-
-    class DeadConn(FakeConn):
-        def call(self, method, params=None, session=None, timeout=30.0):
-            raise br.BrowserError("不是 CDP 服务")
-
-    monkeypatch.setattr(br, "_Conn", DeadConn)
     h = br.health()
     assert not h["ok"], "探到死端点却报可用"
-    assert "连不上" in h["detail"]
+    assert "握手不通" in h["detail"]
 
 
 def test_shutdown_is_idempotent(isolated_state):
@@ -453,7 +513,7 @@ def test_launch_connect_failure_does_not_leak_process(isolated_state, monkeypatc
 
 # ---------------------------------------------------------------- 工具层文案
 
-def test_tool_browser_open_returns_readable_text(ctx):
+def test_tool_browser_open_returns_readable_text(ctx, monkeypatch):
     def fake_call(self, method, params=None, session=None, timeout=30.0):
         FakeConn.calls.append((method, params or {}, session))
         if method == "Runtime.evaluate":
@@ -467,27 +527,25 @@ def test_tool_browser_open_returns_readable_text(ctx):
             return {"result": {"value": "国家奖学金评定办法 第一条 …"}}
         return _DEFAULTS.get(method, {})
 
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(FakeConn, "call", fake_call)
+    monkeypatch.setattr(FakeConn, "call", fake_call)
     out = bt.browser_open(ctx, "https://a.test/g", wait_ms=100, reason="看看奖学金公告")
     assert "奖学金公告" in out and "国家奖学金" in out
     assert "browser_screenshot" in out          # 引导下一步
-    monkey.undo()
 
 
-def test_tool_browser_open_unavailable_gives_fallback(ctx):
-    def boom(*a, **k):
+def test_tool_browser_open_unavailable_gives_fallback(ctx, monkeypatch):
+    """两条路都不通时,给模型的要是「错误:」开头 + 可执行的兜底方案。"""
+    def boom(**kw):
         raise br.BrowserUnavailable("本机没找到 Edge/Chrome")
 
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(br, "_ensure_conn", boom)
-    monkey.setattr(br, "_attach_endpoint", lambda: None)
+    monkeypatch.setattr(br, "launch_browser", boom)
+    monkeypatch.setattr(br, "_attach_endpoint", lambda: None)
     out = bt.browser_open(ctx, "https://a.test")
+    assert out.startswith("错误:"), "不成刜 '错误:' 开头,工具卡片会误判成功"
     assert "不可用" in out and "web_crawl" in out      # 必须给兜底方案
-    monkey.undo()
 
 
-def test_tool_browser_eval_formats_json(ctx):
+def test_tool_browser_eval_formats_json(ctx, monkeypatch):
     br.open_page("https://a.test", wait_ms=20)
 
     def fake_call(self, method, params=None, session=None, timeout=30.0):
@@ -495,12 +553,10 @@ def test_tool_browser_eval_formats_json(ctx):
             return {"result": {"value": json.dumps([{"书": "三体"}], ensure_ascii=False)}}
         return _DEFAULTS.get(method, {})
 
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(FakeConn, "call", fake_call)
+    monkeypatch.setattr(FakeConn, "call", fake_call)
     out = bt.browser_eval(ctx, "JSON.stringify(rows)")
     assert "三体" in out
-    assert bt.browser_eval(ctx, "   ") .startswith("错误")
-    monkey.undo()
+    assert bt.browser_eval(ctx, "   ").startswith("错误")
 
 
 def test_tool_screenshot_pushes_event_and_markdown(ctx):
