@@ -170,6 +170,22 @@ class PublicApi:
         """把某个工作区移出最近列表(不切走、不删文件夹)。"""
         return self._b.forget_workspace(path)
 
+    def delete_project(self, path: str) -> dict:
+        """项目面板「删除」:移出列表;删当前项目则回默认工作区。"""
+        return self._b.delete_project(path)
+
+    def rename_workspace(self, path: str, name: str) -> dict:
+        """给项目起备注名(只改 workspaces.json 里的显示名,不碰磁盘)。"""
+        return self._b.rename_workspace(path, name)
+
+    def list_project_files(self, path: str, subdir: str = "") -> dict:
+        """项目面板「查看文件」:列某个工作区(或其子目录)的直接子项。
+
+        只读、有上限;敏感目录(sandbox 同一套清单)与越界路径一律拒绝 ——
+        面板是纯展示入口,不给它变成任意目录遍历器。
+        """
+        return self._b.list_project_files(path, subdir)
+
 
 def _within(path: Path, root: Path) -> bool:
     try:
@@ -438,6 +454,53 @@ class Bridge:
         ws.forget(path, state_file=self.workspace_file, app_dir=self.app_dir)
         return {"ok": True, "recent": self.get_workspaces()["recent"]}
 
+    def delete_project(self, path: str) -> dict:
+        """把项目从列表里删掉(仅移出记录,磁盘文件夹不动)。
+
+        只允许删「列表里存在的项目」—— 不在列表里的路径直接报错,
+        避免把任意路径当成项目操作。当前项目也能删:删完回默认工作区。
+        """
+        target, _err = ws.resolve_target(path, app_dir=self.app_dir)
+        if target is None:
+            return {"ok": False, "msg": _err}
+        state = ws.load_state(self.workspace_file, app_dir=self.app_dir)
+        listed = any(ws.key(i.get("path") or "") == ws.key(target)
+                     for i in state.get("recent") or [])
+        if not listed:
+            return {"ok": False, "msg": f"这个项目不在列表里:{target.name}"}
+        is_current = ws.key(target) == ws.key(self.workspace)
+        ws.forget(target, state_file=self.workspace_file, app_dir=self.app_dir)
+        if is_current:
+            result = self._apply_workspace(
+                str(ws.default_workspace(self.app_dir)))
+            if not result.get("ok"):
+                return result
+            self.ui.push("info", text=f"已移除项目:{target.name}(文件夹未删除)")
+        else:
+            self.ui.push("info", text=f"已移除项目:{target.name}(文件夹未删除)")
+        return {"ok": True, "recent": self.get_workspaces()["recent"]}
+
+    def rename_workspace(self, path: str, name: str) -> dict:
+        """给项目起备注名(只改 workspaces.json,不碰磁盘上的文件夹)。"""
+        target, _err = ws.resolve_target(path, app_dir=self.app_dir)
+        if target is None:
+            return {"ok": False, "msg": _err}
+        final = ws.rename(target, name, state_file=self.workspace_file,
+                          app_dir=self.app_dir)
+        self.ui.push("workspace", session=self.session.key,
+                     **ws.entry(self.workspace, self.app_dir))
+        self.ui.push("info", text=(f"已改名:{final}"
+                                   if final else f"已恢复默认名:{target.name}"))
+        return {"ok": True, "name": final,
+                "recent": self.get_workspaces()["recent"]}
+
+    def list_project_files(self, path: str, subdir: str = "") -> dict:
+        """项目面板「查看文件」:列某个工作区(或其子目录)的直接子项。
+
+        只读、有上限;敏感目录与越界路径一律拒绝(ws.list_files 兑底)。
+        """
+        return ws.list_files(path, subdir, home=Path.home())
+
     def switch_workspace(self, path: str) -> dict:
         return self._apply_workspace(path)
 
@@ -536,6 +599,11 @@ class Bridge:
         self.config.active_provider_id = active
         save_config(self.config_path, self.config)
         self._apply_active_provider()
+        # 实时同步(v0.9.11):任务面板的可切列表/能力标签直接吃这份配置,
+        # 不推的话用户在模型管理里加完模型,面板要等切会话才看得到(p1/p2)。
+        for r in self._runners.values():
+            self.ui.push("session_metrics", session=r.key, **session_metrics(
+                r.agent, r.session, self.config, r.llm_override))
         self.ui.push("info", text=f"已保存 {len(providers)} 个供应商,当前: {self.config.provider.name}")
         return {"ok": True}
 
@@ -544,6 +612,11 @@ class Bridge:
             return {"ok": False, "msg": f"供应商不存在: {provider_id}"}
         save_config(self.config_path, self.config)
         self._apply_active_provider()
+        # 跟 save_providers 同理:面板立刻跟上新的全局模型(p1/p2 实时同步)
+        for r in self._runners.values():
+            if r.llm_override is None:      # 会话单独切过模型的不受全局影响
+                self.ui.push("session_metrics", session=r.key, **session_metrics(
+                    r.agent, r.session, self.config, None))
         self.ui.push("info", text=f"已切换到 {self.config.provider.name} · {self.config.model}")
         return {"ok": True}
 
@@ -551,6 +624,7 @@ class Bridge:
         """把当前会话的模型切到指定供应商(不写回全局配置)。
 
         给这个会话的 Agent 重建一个 LLMClient;后续回合立即用新模型。
+        切回「全局当前模型」时清掉会话级覆盖 = 重新跟随全局(p1/p2 同步语义)。
         """
         runner = self._current
         if runner is None:
@@ -562,12 +636,16 @@ class Bridge:
             return {"ok": False, "msg": f"供应商不存在: {provider_id}"}
         if not target.api_key.strip() or target.api_key.strip() in API_KEY_PLACEHOLDERS:
             return {"ok": False, "msg": f"「{target.name}」还没配 API Key,先在模型管理里配好"}
-        runner.llm_override = {"provider_id": target.id, "model": target.model}
+        follows_global = target.id == self.config.active_provider_id
+        runner.llm_override = None if follows_global else \
+            {"provider_id": target.id, "model": target.model}
         runner.agent.llm = LLMClient(replace(self.config, active_provider_id=target.id))
         # 模型换了,思考能力表也换了:档位归回 default,并把新能力推给界面
         runner.agent.llm.reasoning_choice = "default"
         self._push_reasoning(runner)
-        self.ui.push("info", text=f"本会话已切换到 {target.name} · {target.model}(不影响其他会话与默认模型)")
+        note = "(重新跟随全局默认模型)" if follows_global \
+            else "(不影响其他会话与默认模型)"
+        self.ui.push("info", text=f"本会话已切换到 {target.name} · {target.model}{note}")
         self.ui.push("session_metrics", **session_metrics(
             runner.agent, runner.session, self.config, runner.llm_override))
         return {"ok": True}

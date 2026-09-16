@@ -600,3 +600,169 @@ def test_repl_routes_workspace_command(tmp_path, monkeypatch):
 
     assert "已记住工作区" in ui.messages[-1][1]
     assert state_of(app_dir)["current"] == str(target.resolve())
+
+# --------------------------------------------------------------------- v0.9.11:项目面板(重命名/删除/查看文件)
+
+def test_rename_writes_custom_name_and_restores(tmp_path):
+    """备注名只写进 workspaces.json;留空恢复默认叫法。"""
+    app_dir = tmp_path / "appdir"
+    app_dir.mkdir()
+    d = tmp_path / "资料"
+    d.mkdir()
+    ws.remember(d, app_dir=app_dir)
+
+    assert ws.rename(d, "毕业设计", app_dir=app_dir) == "毕业设计"
+    assert ws.display_name_of(d, app_dir=app_dir) == "毕业设计"
+    # 磁盘文件夹名不被改
+    assert d.is_dir() and d.name == "资料"
+
+    ws.rename(d, "", app_dir=app_dir)
+    assert ws.display_name_of(d, app_dir=app_dir) == "资料"
+
+
+def test_rename_current_uses_current_name_slot(tmp_path):
+    app_dir = tmp_path / "appdir"
+    app_dir.mkdir()
+    d = tmp_path / "a"
+    d.mkdir()
+    ws.remember(d, app_dir=app_dir)
+    ws.rename(d, "主项目", app_dir=app_dir)
+    assert ws.display_name_of(d, app_dir=app_dir) == "主项目"
+
+
+def test_list_files_basic_and_dirs_first(tmp_path):
+    root = tmp_path / "proj"
+    (root / "sub").mkdir(parents=True)
+    (root / "b.txt").write_text("x" * 10, encoding="utf-8")
+    (root / "a.txt").write_text("y", encoding="utf-8")
+
+    r = ws.list_files(root)
+    assert r["ok"] is True and r["rel"] == ""
+    names = [i["name"] for i in r["items"]]
+    # 目录排前面,文件按名字排
+    assert names == ["sub", "a.txt", "b.txt"]
+    assert r["items"][0]["is_dir"] is True
+    assert r["items"][1]["size"] == 1
+
+
+def test_list_files_subdir_rel_semantics(tmp_path):
+    """rel = 当前列出目录相对项目根的路径;上一级由调用方用 rel 推。"""
+    root = tmp_path / "proj"
+    (root / "sub" / "deep").mkdir(parents=True)
+    (root / "sub" / "note.md").write_text("n", encoding="utf-8")
+
+    r = ws.list_files(root, "sub")
+    assert r["ok"] is True and r["rel"] == "sub"
+    assert [i["name"] for i in r["items"]] == ["deep", "note.md"]
+
+    r2 = ws.list_files(root, "sub/deep")
+    assert r2["rel"] == "sub/deep"
+    # 上一级 = rel 去掉最后一段
+    up = "/".join(r2["rel"].split("/")[:-1])
+    r3 = ws.list_files(root, up)
+    assert [i["name"] for i in r3["items"]] == ["deep", "note.md"]
+
+
+def test_list_files_rejects_traversal(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (tmp_path / "secret.txt").write_text("s", encoding="utf-8")
+
+    for bad in ("../secret.txt", "..", "sub/../../x", str(tmp_path / "secret.txt")):
+        r = ws.list_files(root, bad)
+        assert r["ok"] is False, bad
+        assert "非法" in r["msg"] or "不存在" in r["msg"], bad
+
+
+def test_list_files_rejects_sensitive_roots(tmp_path):
+    home = tmp_path / "home"
+    ssh = home / ".ssh"
+    ssh.mkdir(parents=True)
+    r = ws.list_files(ssh, home=home)
+    assert r["ok"] is False and "敏感" in r["msg"]
+
+
+def test_bridge_delete_project_removes_and_resets_current(tmp_path):
+    """删除当前项目:列表里没了,并且回到默认工作区。"""
+    bridge, ui, window = make_bridge(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    bridge.switch_workspace(str(other))
+    window.events.clear()
+
+    res = bridge.delete_project(str(other))
+    assert res["ok"] is True
+    state = state_of(bridge.app_dir)
+    assert all(Path(i["path"]) != other for i in state["recent"])
+    # 当前工作区已回默认(默认 = app_dir)
+    assert Path(bridge.workspace) == bridge.app_dir.resolve()
+    assert other.is_dir()                     # 文件夹没删
+
+
+def test_bridge_delete_project_other_keeps_workspace(tmp_path):
+    bridge, ui, window = make_bridge(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    bridge.switch_workspace(str(other))
+    cur_before = Path(bridge.workspace)
+    window.events.clear()
+
+    res = bridge.delete_project(str(cur_before.parent / "nonexist-in-list"))  # 不存在 → 报错
+    assert res["ok"] is False
+
+    # 把 cur 自身从 recent 里 forget 再重新记住另一个,删那个
+    another = tmp_path / "another"
+    another.mkdir()
+    bridge.forget_workspace(str(another))     # 无害:不在列表里
+    res2 = bridge.delete_project(str(another))
+    assert res2["ok"] is False                # 不在最近列表/不存在 → resolve_target 报错
+
+
+def test_bridge_list_project_files_via_facade(tmp_path):
+    bridge, ui, window = make_bridge(tmp_path)
+    (bridge.workspace / "hello.txt").write_text("hi", encoding="utf-8")
+    api = bridge.public_api()
+    r = api.list_project_files(str(bridge.workspace))
+    assert r["ok"] is True
+    assert any(i["name"] == "hello.txt" and not i["is_dir"] for i in r["items"])
+
+
+def test_save_providers_pushes_session_metrics_live(tmp_path):
+    """p1/p2:保存模型后必须立刻推 session_metrics,面板才不用等切会话。"""
+    bridge, ui, window = make_bridge(tmp_path)
+    window.events.clear()
+
+    items = [{"id": "", "name": "DeepSeek", "base_url": "https://api.deepseek.com/v1",
+              "api_key": "sk-test", "model": "deepseek-chat"}]
+    res = bridge.save_providers(json.dumps(items), "gzasc")
+    assert res["ok"] is True
+    pushed = window.of_type("session_metrics")
+    assert pushed, "保存模型后必须推 session_metrics 事件"
+    selectable = pushed[-1]["selectable"]
+    names = [s["name"] for s in selectable]
+    assert "DeepSeek" in names and "广州应用科技学院" in names
+
+
+def test_set_provider_pushes_metrics_only_for_global_sessions(tmp_path):
+    """切全局模型:没单独切过模型的会话收到推送;切过的会话不受影响也不推错。"""
+    bridge, ui, window = make_bridge(tmp_path)
+    window.events.clear()
+    items = [{"id": "", "name": "DeepSeek", "base_url": "https://api.deepseek.com/v1",
+              "api_key": "sk-test", "model": "deepseek-chat"}]
+    bridge.save_providers(json.dumps(items), "gzasc")
+    custom_id = next(p["id"] for p in bridge.get_providers()["providers"]
+                     if p["name"] == "DeepSeek")
+    window.events.clear()
+
+    # 当前会话单独切到 DeepSeek(会话级覆盖)
+    bridge.set_session_model(custom_id)
+    window.events.clear()
+    res = bridge.set_provider("gzasc")        # 全局仍在内置
+    assert res["ok"] is True
+    pushed = window.of_type("session_metrics")
+    assert pushed == []                       # 该会话有 override,不跟随全局,不推
+
+    bridge.set_session_model("gzasc")         # 切回全局
+    window.events.clear()
+    bridge.set_provider(custom_id)
+    assert window.of_type("session_metrics")  # 无 override → 跟随并收到推送

@@ -137,10 +137,12 @@ try {
             box-shadow:var(--shadow-sm); transition:.15s; }
   .newtask:hover{ transform:translateY(-1px); border-color:var(--primary);
                   color:var(--primary-text); }
-  /* 深色(p2):New Mission 白玻璃 pill + 青字 */
-  html.dark .newtask{ background:rgba(236,244,246,.92); color:#0E2A30;
-                      border-color:rgba(255,255,255,.6); }
-  html.dark .newtask:hover{ color:#0E5A54; }
+  /* 深色(p3 修复):不再用白玻璃胶囊 —— 深色主题下它就是一块深色玻璃,
+     与顶栏按钮同语言;v0.9.07 照星瑶做的白底在深色下刺眼,已按用户反馈撤掉 */
+  html.dark .newtask{ background:rgba(13,22,33,.66); color:var(--text-1);
+                      border-color:rgba(79,216,200,.30); }
+  html.dark .newtask:hover{ color:var(--primary-text);
+                            box-shadow:0 0 12px rgba(79,216,200,.16); }
   .sess .spin{ display:inline-block; width:9px; height:9px; margin-right:6px;
                border-radius:50%; border:2px solid var(--primary);
                border-right-color:transparent; animation:spin .9s linear infinite;
@@ -183,23 +185,69 @@ try {
   .ws-group.closed .gt{ transform:rotate(-90deg); }
   .ws-group.closed .sess{ display:none; }
 
-  /* ---------------- 侧栏项目面板(最近工作区,点一下切过去) ---------------- */
-  .projects{ flex:none; max-height:38%; overflow-y:auto; padding:0 8px 6px;
+  /* ---------------- 侧栏项目面板(v0.9.11:卡片式,与普通任务/会话区分) ----------------
+     项目是「容器」:双行卡片(备注名 + 路径),带悬浮操作钮(＋任务/⋯菜单);
+     会话是「条目」:纯文本两行,无框。层级感一目了然(p6) */
+  .projects{ flex:none; max-height:46%; overflow-y:auto; padding:0 8px 6px;
              border-bottom:1px solid var(--line-soft); }
-  .proj{ display:flex; align-items:center; gap:8px; padding:7px 10px;
-         border-radius:var(--r-m); cursor:pointer; margin-bottom:2px;
-         border:1.5px solid transparent; transition:.15s; }
-  .proj:hover{ background:var(--glass-lite); }
-  .proj.current{ background:var(--primary-light); border-color:var(--primary); }
+  .proj{ position:relative; margin-bottom:6px; padding:9px 11px 8px;
+         border-radius:12px; cursor:pointer; transition:.15s;
+         border:1px solid var(--line-soft);
+         background:linear-gradient(180deg, var(--glass-lite), transparent); }
+  .proj:hover{ border-color:var(--primary); box-shadow:var(--shadow-sm); }
+  .proj.current{ border-color:var(--primary);
+                 background:var(--primary-light);
+                 box-shadow:inset 0 0 0 1px var(--primary); }
+  .proj .row1{ display:flex; align-items:center; gap:7px; min-width:0; }
   .proj .ic{ flex:none; width:16px; text-align:center; font-size:13px; }
-  .proj .n{ flex:1; min-width:0; font-size:12.5px; font-weight:700; color:var(--text-2);
+  .proj .n{ flex:1; min-width:0; font-size:12.5px; font-weight:800; color:var(--text-1);
             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .proj.current .n{ color:var(--primary-text); }
-  .proj .go{ display:none; flex:none; width:22px; height:20px; border:none;
-             border-radius:6px; background:transparent; color:var(--text-3);
-             cursor:pointer; font-size:11px; line-height:1; }
-  .proj:hover .go{ display:block; }
-  .proj .go:hover{ background:var(--danger-bg); color:var(--danger); }
+  .proj .curtag{ flex:none; font-size:9.5px; font-weight:800; color:var(--primary-text);
+                 background:var(--primary-light); border:1px solid var(--primary);
+                 border-radius:99px; padding:0 7px; line-height:15px; }
+  .proj .p{ font-size:10.5px; color:var(--text-3); margin:2px 0 0 23px;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* 悬浮操作钮(＋任务 / ⋯ 菜单) */
+  .proj .ops{ display:none; position:absolute; top:6px; right:7px; gap:3px; }
+  .proj:hover .ops{ display:flex; }
+  .proj .op{ width:22px; height:20px; border:none; border-radius:6px;
+             background:var(--glass-strong); color:var(--text-2); cursor:pointer;
+             font-size:11px; line-height:1; border:1px solid var(--line-soft); }
+  .proj .op:hover{ border-color:var(--primary); color:var(--primary-text); }
+  .proj .op.add{ font-weight:900; }
+  /* 卡片下的「＋ 新建任务」(p4 红圈:在这个项目里直接开任务);只有当前项目有 */
+  .proj .newhere{ display:none; width:100%; margin-top:7px; padding:5px;
+                  border-radius:8px; border:1px dashed var(--primary);
+                  background:transparent; color:var(--primary-text);
+                  font-size:11.5px; font-weight:800; cursor:pointer; transition:.15s; }
+  .proj.current .newhere{ display:block; }
+  .proj .newhere:hover{ background:var(--primary-light); }
+  /* ⋯ 菜单:重命名/删除/查看文件 */
+  .proj-menu{ position:fixed; z-index:90; min-width:132px; padding:5px;
+              background:var(--glass-strong); border:1px solid var(--line-soft);
+              border-radius:10px; box-shadow:var(--shadow); display:none;
+              backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
+  .proj-menu.show{ display:block; }
+  .proj-menu button{ display:block; width:100%; text-align:left; padding:7px 10px;
+                     border:none; background:transparent; color:var(--text-1);
+                     font-size:12px; font-weight:600; border-radius:7px; cursor:pointer; }
+  .proj-menu button:hover{ background:var(--glass-lite); }
+  .proj-menu button.danger:hover{ background:var(--danger-bg); color:var(--danger); }
+  /* 文件浏览弹窗(项目内的文件列表, p7) */
+  .flist{ max-height:46vh; overflow-y:auto; margin:10px 0; }
+  .frow{ display:flex; align-items:center; gap:8px; padding:6px 9px;
+         border-radius:8px; font-size:12.5px; color:var(--text-1); cursor:default; }
+  .frow.dir{ cursor:pointer; }
+  .frow.dir:hover{ background:var(--glass-lite); }
+  .frow .fi{ flex:none; width:18px; text-align:center; }
+  .frow .fn{ flex:1; min-width:0; white-space:nowrap; overflow:hidden;
+             text-overflow:ellipsis; }
+  .frow .fs{ flex:none; font-size:10.5px; color:var(--text-3); }
+  .fcrumb{ font-size:11.5px; color:var(--text-3); word-break:break-all; }
+  .fcrumb a{ color:var(--primary-text); cursor:pointer; text-decoration:none; }
+  .fcrumb a:hover{ text-decoration:underline; }
+  .fempty{ color:var(--text-3); text-align:center; padding:16px 0; font-size:12.5px; }
   .proj-add{ width:calc(100% - 4px); margin:2px 0 4px; padding:6px;
              border:1.5px dashed var(--line); border-radius:var(--r-m);
              background:transparent; color:var(--text-3); font-size:12px;
@@ -837,7 +885,7 @@ try {
   <aside class="sidebar">
     <div class="logo"><img class="m" src="img/cube.png" alt="引路学长">引路学长<small id="ver"></small></div>
     <div class="school"><img src="img/school.png" alt="广州应用科技学院"></div>
-    <button class="newtask" id="btnNew">＋ 新建任务</button>
+    <!-- v0.9.11:「+ 新建任务」搬进当前项目卡片(p4);这里不再放全局按钮 -->
     <div class="side-title">项目</div>
     <div class="projects" id="projects"></div>
     <div class="side-title">历史会话</div>
@@ -974,6 +1022,17 @@ try {
       <button class="b-no" id="btnProvClose">关闭</button>
       <button class="b-yes" id="btnProvSave">保存</button>
     </div>
+  </div>
+</div>
+
+<div class="proj-menu" id="projMenu"></div>
+
+<div class="overlay" id="filesOverlay">
+  <div class="dialog" style="width:560px">
+    <h3 id="filesTitle">📁 项目文件</h3>
+    <div class="fcrumb" id="filesCrumb"></div>
+    <div class="flist" id="filesList"></div>
+    <div class="btns"><button class="b-no" id="btnFilesClose">关闭</button></div>
   </div>
 </div>
 
@@ -1991,8 +2050,18 @@ $("thinkBtn").addEventListener("click", (ev) => {
   $("thinkMenu").classList.toggle("show");
 });
 
-/* ---------------- 侧栏项目面板(最近工作区) ---------------- */
+/* ---------------- 侧栏项目面板(v0.9.11:卡片式) ----------------
+   - 项目 = 卡片(备注名+路径+悬浮操作钮),与下方纯文本的会话条目区分(p6);
+   - 当前项目卡片内带「＋ 新建任务」(p4 红圈:在这个项目里直接开任务);
+   - 悬浮「⋯」菜单:重命名 / 查看文件(p7) / 删除(p4);
+   - 点卡片本体仍是切工作区。 */
 let wsCache = null;
+let projMenuCtx = null;      // ⋯ 菜单当前对应的项目
+function closeProjMenu(){ $("projMenu").classList.remove("show"); }
+document.addEventListener("click", (ev) => {
+  if (!ev.target.closest("#projMenu") && !ev.target.closest(".op.menu")) closeProjMenu();
+});
+
 function renderProjects(d) {
   wsCache = d;
   const box = $("projects");
@@ -2008,24 +2077,42 @@ function renderProjects(d) {
   addRow(cur);
   for (const r of (d.recent || [])) addRow(r);
   for (const r of rows) {
+    const isCur = r.path === cur.path;
     const el = document.createElement("div");
-    el.className = "proj" + (r.path === cur.path ? " current" : "");
-    el.innerHTML = `<span class="ic">${r.is_default ? "🏠" : "📁"}</span>
-      <span class="n"></span>
-      ${r.path === cur.path ? "" : '<button class="go" title="从列表移除(不删文件夹)">✕</button>'}`;
+    el.className = "proj" + (isCur ? " current" : "");
+    el.innerHTML = `
+      <div class="row1"><span class="ic">${r.is_default ? "🏠" : "📁"}</span>
+        <span class="n"></span>${isCur ? '<span class="curtag">当前</span>' : ""}</div>
+      <div class="p"></div>
+      <div class="ops">
+        <button class="op add" title="在这个项目里新建任务">＋</button>
+        <button class="op menu" title="项目操作">⋯</button>
+      </div>
+      ${isCur ? '<button class="newhere">＋ 新建任务</button>' : ""}`;
     el.querySelector(".n").textContent = r.name || r.path;
-    el.title = r.path + (r.path === cur.path ? "\n(当前工作区)" : "\n点击切换");
+    el.querySelector(".p").textContent = r.path;
+    el.title = isCur ? `当前工作区:${r.path}`
+                     : `${r.path}\n点击切换到这个项目`;
     el.addEventListener("click", (ev) => {
-      if (ev.target.classList.contains("go")) return;
-      if (r.path === cur.path) return;
+      if (ev.target.closest(".op") || ev.target.closest(".newhere")) return;
+      if (isCur) return;
       doSwitchWorkspace(r.path, false);
     });
-    const x = el.querySelector(".go");
-    if (x) x.addEventListener("click", (ev) => {
+    // ＋ 在这个项目里新建任务:非当前项目先切过去(切完本来就是新会话),
+    // 当前项目直接 new_task(原会话转后台,不打断)
+    el.querySelector(".op.add").addEventListener("click", (ev) => {
       ev.stopPropagation();
-      pywebview.api.forget_workspace(r.path).then(res => {
-        if (res && res.ok) renderProjects({ current: cur, default: d.default, recent: res.recent || [] });
-      }).catch(e => toast("移除失败:" + String(e).slice(0, 60), true));
+      if (!isCur) { doSwitchWorkspace(r.path, false); return; }
+      newTaskInProject();
+    });
+    const newHere = el.querySelector(".newhere");
+    if (newHere) newHere.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      newTaskInProject();
+    });
+    el.querySelector(".op.menu").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openProjMenu(r, ev.currentTarget, isCur);
     });
     box.appendChild(el);
   }
@@ -2043,6 +2130,137 @@ function renderProjects(d) {
   });
   box.appendChild(add);
 }
+
+function newTaskInProject() {
+  if (busy) toast("正在停止当前任务并新建…");
+  pywebview.api.new_task().then(r => {
+    if (r && r.ok === false) { toast(r.msg, true); return; }
+    if (r && r.session) currentSessionKey = r.session;
+  });
+}
+
+function openProjMenu(r, anchor, isCur) {
+  projMenuCtx = { path: r.path, name: r.name, isCur };
+  const menu = $("projMenu");
+  menu.innerHTML = `
+    <button data-act="files">📄 查看文件</button>
+    <button data-act="rename">✎ 重命名</button>
+    <button data-act="del" class="danger">🗑 删除项目</button>`;
+  menu.classList.add("show");
+  const rect = anchor.getBoundingClientRect();
+  const mw = 140, mh = 120;
+  menu.style.left = Math.min(rect.left, window.innerWidth - mw - 8) + "px";
+  menu.style.top = Math.min(rect.bottom + 4, window.innerHeight - mh - 8) + "px";
+  menu.querySelectorAll("button").forEach(btn => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      closeProjMenu();
+      const act = btn.dataset.act;
+      if (act === "files") openProjectFiles(r.path, r.name || r.path, "");
+      else if (act === "rename") promptRename(r);
+      else if (act === "del") deleteProject(r, isCur);
+    });
+  });
+}
+
+function promptRename(r) {
+  const name = prompt("项目备注名(留空恢复默认):", r.name || "");
+  if (name === null) return;                    // 取消
+  pywebview.api.rename_workspace(r.path, name.trim()).then(res => {
+    if (res && res.ok === false) { toast(res.msg || "改名失败", true); return; }
+    loadProjects();
+  }).catch(e => toast("改名失败:" + String(e).slice(0, 60), true));
+}
+
+function deleteProject(r, isCur) {
+  appConfirm(
+    `删除项目「${r.name || r.path}」?\n只从列表移除,磁盘上的文件夹不会删。`
+    + (isCur ? "\n这是当前项目,删除后会回到默认工作区。" : ""),
+    () => {
+      pywebview.api.delete_project(r.path).then(res => {
+        if (res && res.ok === false) { toast(res.msg || "删除失败", true); return; }
+        loadProjects();
+      }).catch(e => toast("删除失败:" + String(e).slice(0, 60), true));
+    }, "删除项目");
+}
+
+/* ---- 项目文件浏览(p7):只读;点目录进子目录,点面包屑返回 ---- */
+let filesCtx = { path: "", name: "" };
+function fmtSize(n) {
+  n = Number(n) || 0;
+  if (n >= 1 << 30) return (n / (1 << 30)).toFixed(1) + " GB";
+  if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + " MB";
+  if (n >= 1 << 10) return (n / (1 << 10)).toFixed(1) + " KB";
+  return n + " B";
+}
+function openProjectFiles(path, name, subdir) {
+  filesCtx = { path, name };
+  $("filesOverlay").classList.add("show");
+  loadProjectFiles(subdir || "");
+}
+function loadProjectFiles(subdir) {
+  $("filesList").innerHTML = '<div class="fempty">正在读取…</div>';
+  pywebview.api.list_project_files(filesCtx.path, subdir || "").then(r => {
+    if (!r || !r.ok) {
+      $("filesList").innerHTML = `<div class="fempty">${esc((r && r.msg) || "读取失败")}</div>`;
+      return;
+    }
+    renderFiles(r);
+  }).catch(e => {
+    $("filesList").innerHTML = `<div class="fempty">读取失败:${esc(String(e).slice(0, 80))}</div>`;
+  });
+}
+function renderFiles(r) {
+  const rel = r.rel || "";                      // 当前列出目录相对项目根的路径
+  const parentRel = rel ? rel.split("/").slice(0, -1).join("/") : null;
+  $("filesTitle").textContent = `📁 ${filesCtx.name}`;
+  const crumb = $("filesCrumb");
+  crumb.innerHTML = "";
+  const mk = (label, sub) => {
+    const a = document.createElement("a");
+    a.textContent = label;
+    a.addEventListener("click", () => loadProjectFiles(sub));
+    return a;
+  };
+  crumb.appendChild(mk("项目根目录", ""));
+  if (rel) {
+    let acc = "";
+    crumb.appendChild(document.createTextNode(" / "));
+    rel.split("/").forEach((seg, i, arr) => {
+      acc = acc ? acc + "/" + seg : seg;
+      crumb.appendChild(mk(seg, acc));
+      if (i < arr.length - 1) crumb.appendChild(document.createTextNode(" / "));
+    });
+  }
+  const box = $("filesList");
+  box.innerHTML = "";
+  if (parentRel !== null) {
+    const up = document.createElement("div");
+    up.className = "frow dir";
+    up.innerHTML = '<span class="fi">↩</span><span class="fn">..(上一级)</span>';
+    up.addEventListener("click", () => loadProjectFiles(parentRel));
+    box.appendChild(up);
+  }
+  if (!(r.items || []).length) {
+    box.insertAdjacentHTML("beforeend", '<div class="fempty">这个目录是空的</div>');
+    return;
+  }
+  for (const it of r.items) {
+    const row = document.createElement("div");
+    row.className = "frow" + (it.is_dir ? " dir" : "");
+    row.innerHTML = `<span class="fi">${it.is_dir ? "📁" : "📄"}</span>
+      <span class="fn"></span>
+      <span class="fs">${it.is_dir ? "" : fmtSize(it.size)}</span>`;
+    row.querySelector(".fn").textContent = it.name;
+    row.title = it.name + (it.is_dir ? "(点击进入)" : "");
+    if (it.is_dir) {
+      const childRel = rel ? rel + "/" + it.name : it.name;
+      row.addEventListener("click", () => loadProjectFiles(childRel));
+    }
+    box.appendChild(row);
+  }
+}
+$("btnFilesClose").addEventListener("click", () => $("filesOverlay").classList.remove("show"));
 function loadProjects() {
   if (!window.pywebview || !pywebview.api || !pywebview.api.get_recent_projects) return;
   pywebview.api.get_recent_projects().then(renderProjects).catch(() => {});
@@ -2134,14 +2352,7 @@ $("btnStop").addEventListener("click", () => pywebview.api.stop_task());
 $("btnNo").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("no"); });
 $("btnYes").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("yes"); });
 $("btnAlways").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("always"); });
-$("btnNew").addEventListener("click", () => {
-  // 任务进行中也能新建:后端会先停止当前回合,再开一个干净会话
-  if (busy) toast("正在停止当前任务并新建…");
-  pywebview.api.new_task().then(r => {
-    if (r && r.ok === false) { toast(r.msg, true); return; }
-    if (r && r.session) currentSessionKey = r.session;
-  });
-});
+// v0.9.11:「＋ 新建任务」搬进当前项目卡片(newTaskInProject);不再有全局按钮
 $("btnMap").addEventListener("click", () => window.CampusMap && window.CampusMap.toggle(true));
 $("mapClose").addEventListener("click", () => window.CampusMap && window.CampusMap.close());
 $("mapZoomIn").addEventListener("click", () => window.CampusMap && window.CampusMap.zoom(1.25));
