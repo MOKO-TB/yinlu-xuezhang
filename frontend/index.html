@@ -168,6 +168,21 @@ try {
   .sess:hover .sx{ display:block; }
   .sess .sx:hover{ background:var(--danger-bg); color:var(--danger); }
 
+  /* 侧栏会话按工作区分组(组头 = 📁 工作区名,点击可切到那个工作区) */
+  .ws-group{ margin-bottom:6px; }
+  .ws-group-head{ display:flex; align-items:center; gap:6px; padding:6px 10px 3px;
+                  font-size:11.5px; font-weight:800; color:var(--text-3);
+                  cursor:pointer; border-radius:8px; user-select:none; }
+  .ws-group-head:hover{ color:var(--primary-text); background:var(--glass-lite); }
+  .ws-group-head .gt{ flex:none; font-size:10px; transition:transform .15s; }
+  .ws-group-head .gn{ flex:1; min-width:0; white-space:nowrap; overflow:hidden;
+                      text-overflow:ellipsis; }
+  .ws-group-head .gc{ flex:none; font-size:10.5px; font-weight:700;
+                      background:var(--glass-lite); border-radius:99px; padding:1px 8px; }
+  .ws-group-head.here{ color:var(--primary-text); }
+  .ws-group.closed .gt{ transform:rotate(-90deg); }
+  .ws-group.closed .sess{ display:none; }
+
   /* ---------------- 侧栏项目面板(最近工作区,点一下切过去) ---------------- */
   .projects{ flex:none; max-height:38%; overflow-y:auto; padding:0 8px 6px;
              border-bottom:1px solid var(--line-soft); }
@@ -339,10 +354,15 @@ try {
   /* 悬停操作栏:复制 / 编辑重发
      常驻占位 + visibility 切换 —— 用 display:none 会在悬停时撑开高度,
      拖选文字的过程中内容会跳动,选不准。 */
+  /* 回复下方的实测数据行(耗时 · 每秒 token):常显、低对比,不抢正文 */
+  .stats{ display:flex; align-items:center; gap:8px; margin-top:4px;
+          font-size:11px; color:var(--text-3); }
+  .stats .st{ background:var(--glass-lite); border:1px solid var(--line-soft);
+              border-radius:99px; padding:0 8px; font-weight:600; }
+  .stats .st b{ color:var(--text-2); font-weight:800; }
   .acts{ display:flex; gap:6px; margin-top:5px; min-height:24px; visibility:hidden; }
   .msg:hover .acts{ visibility:visible; }
-  .msg.user .acts{ justify-content:flex-end; padding-right:4px; }
-  .acts button{ background:var(--glass-strong); border:1px solid var(--line-soft); border-radius:8px;
+  .msg.user .acts{ justify-content:flex-end; padding-right:4px; }  .acts button{ background:var(--glass-strong); border:1px solid var(--line-soft); border-radius:8px;
                 width:28px; height:24px; cursor:pointer; color:var(--text-3);
                 font-size:13px; line-height:1; transition:.12s; }
   .acts button:hover{ border-color:var(--primary); color:var(--primary-text); }
@@ -1276,6 +1296,7 @@ function ensureAssistant() {
       </div>
     </div>
     <div class="body" hidden></div>
+    <div class="stats" hidden title="本次输出的实测耗时与速度(服务端返回 token 数才显示速度)"></div>
     <div class="acts"><button class="cp" title="复制回复">⧉</button></div>`;
   chat.appendChild(wrap);
   bindCopy(wrap.querySelector(".cp"), () => wrap.dataset.raw);
@@ -1289,10 +1310,37 @@ function ensureAssistant() {
           tools: wrap.querySelector(".tr-tools"),
           think: wrap.querySelector(".think"),
           thTime: wrap.querySelector(".th-time"),
+          stats: wrap.querySelector(".stats"),
           text: "", reasoningText: "", reasonStart: 0, toolCount: 0,
           lastRender: 0, timer: null };
   lastTraceTurn = cur;                      // 本轮的工具卡片都落进这个 trace
   return cur;
+}
+
+/* ---------------- 回复下方的实测数据行(耗时 · 每秒 token) ---------------- */
+function fmtStats(ms) {
+  if (!(ms > 0)) return "";
+  return ms >= 60000
+    ? Math.floor(ms / 60000) + " 分 " + Math.round(ms % 60000 / 1000) + " 秒"
+    : ms >= 10000 ? (ms / 1000).toFixed(1) + " 秒"
+    : Math.round(ms / 1000 * 10) / 10 + " 秒";
+}
+function renderTurnStats(c, e) {
+  const el = c.stats;
+  if (!el) return;
+  const bits = [];
+  const sec = fmtStats(e.elapsed_ms);
+  if (sec) bits.push(`<span class="st">⏱ <b>${sec}</b></span>`);
+  if (e.tokens > 0) {
+    const spd = e.tps > 0 ? ` · ${e.tps} token/秒` : "";
+    bits.push(`<span class="st">⚡ <b>${e.tokens}</b> token${spd}</span>`);
+  } else if (sec) {
+    bits.push(`<span class="st">⚡ 速度未知(服务端未返回 token 数)</span>`);
+  }
+  if (e.reasoning) bits.push(`<span class="st">🧠 已思考</span>`);
+  if (!bits.length) { el.hidden = true; return; }
+  el.innerHTML = bits.join("");
+  el.hidden = false;
 }
 
 /* ---------------- 工作过程区(思考 + 工具调用收成一行) ---------------- */
@@ -1465,6 +1513,14 @@ window.__gcodeEvent = function (e) {
         cur = null;
       }
       break;
+    case "turn_stats": {
+      // 本段输出的实测数据(后端在 finish_stream 之后推):挂到最近一条
+      // 助手消息上。纯工具调用段(没有正文)不显示,避免一串空 meta。
+      const target = (cur && cur.text.trim()) ? cur
+        : (lastTraceTurn && lastTraceTurn.text.trim() ? lastTraceTurn : null);
+      if (target) renderTurnStats(target, e);
+      break;
+    }
     case "tool_start":
       cur = null;
       lastTool = addToolCard(e.name, e.summary);
@@ -1627,27 +1683,61 @@ function renderSessions(items) {
     box.innerHTML = `<div class="sess-empty">暂无历史会话<br>提一个问题就会自动存下来</div>`;
     return;
   }
+  // 按 workspace 分组:当前工作区的排最上(组头不带名字),其他工作区/未记录各成一组。
+  // 组头可折叠;其他工作区的组头悬停有"切过去"提示(切换入口在上方项目面板)。
+  const groups = [];                       // [{name, here, items:[]}]
+  const byName = new Map();
   for (const s of items) {
-    const el = document.createElement("div");
-    el.className = "sess" + (s.current ? " current" : "") + (s.running ? " running" : "");
-    el.innerHTML = `<div class="t">${s.running ? '<span class="spin" title="任务正在后台运行"></span>' : ""}<span class="tt"></span></div>`
-      + `<div class="m"></div><button class="sx" title="删除该会话">✕</button>`;
-    el.querySelector(".tt").textContent = s.last_user_text || "(无用户消息)";
-    el.querySelector(".m").textContent =
-      `${s.time} · ${s.n_messages} 条` + (s.running ? " · 运行中" : "")
-      + (s.workspace ? ` · 📁 ${s.workspace}` : "");
-    el.addEventListener("click", () => {
-      if (s.current) return;
-      // 切换会话不会打断任何任务:后台会话继续跑,切回去就能看到最新进度
-      pywebview.api.resume_session(s.index).then(r => {
-        if (r && r.ok === false) toast(r.msg, true);
+    const name = s.ws_current ? "__here__" : (s.workspace || "未记录");
+    if (!byName.has(name)) {
+      const g = { name, here: !!s.ws_current, items: [] };
+      byName.set(name, g);
+      groups.push(g);
+    }
+    byName.get(name).items.push(s);
+  }
+  groups.sort((a, b) => (b.here - a.here));  // 当前项目组置顶,其余按时间自然序
+
+  for (const g of groups) {
+    const grp = document.createElement("div");
+    grp.className = "ws-group";
+    const head = document.createElement("div");
+    head.className = "ws-group-head" + (g.here ? " here" : "");
+    const label = g.here ? "本项目" : g.name;
+    head.innerHTML = `<span class="gt">▾</span><span>📁</span>`
+      + `<span class="gn"></span><span class="gc">${g.items.length}</span>`;
+    head.querySelector(".gn").textContent = label;
+    head.title = g.here
+      ? `当前工作区的会话(${g.items.length} 条)`
+      : (g.name === "未记录" ? "旧版本留下的会话(当时还没记录工作区)"
+                             : `工作区「${g.name}」的会话,共 ${g.items.length} 条;要切到该工作区用上方「项目」面板`);
+    head.addEventListener("click", () => grp.classList.toggle("closed"));
+    grp.appendChild(head);
+    const wrap = document.createElement("div");
+    for (const s of g.items) {
+      const el = document.createElement("div");
+      el.className = "sess" + (s.current ? " current" : "") + (s.running ? " running" : "");
+      el.innerHTML = `<div class="t">${s.running ? '<span class="spin" title="任务正在后台运行"></span>' : ""}<span class="tt"></span></div>`
+        + `<div class="m"></div><button class="sx" title="删除该会话">✕</button>`;
+      el.querySelector(".tt").textContent = s.last_user_text || "(无用户消息)";
+      el.querySelector(".m").textContent =
+        `${s.time} · ${s.n_messages} 条` + (s.running ? " · 运行中" : "");
+      if (!g.here && s.workspace) el.title = `属于工作区:${s.workspace}`;
+      el.addEventListener("click", () => {
+        if (s.current) return;
+        // 切换会话不会打断任何任务:后台会话继续跑,切回去就能看到最新进度
+        pywebview.api.resume_session(s.index).then(r => {
+          if (r && r.ok === false) toast(r.msg, true);
+        });
       });
-    });
-    el.querySelector(".sx").addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      appConfirm(`删除该会话记录?`, () => pywebview.api.delete_session(s.index), "删除会话");
-    });
-    box.appendChild(el);
+      el.querySelector(".sx").addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        appConfirm(`删除该会话记录?`, () => pywebview.api.delete_session(s.index), "删除会话");
+      });
+      wrap.appendChild(el);
+    }
+    grp.appendChild(wrap);
+    box.appendChild(grp);
   }
 }
 

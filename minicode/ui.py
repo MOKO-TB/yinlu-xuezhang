@@ -292,8 +292,9 @@ class TerminalUI:
         lines = ["[bold]最近会话[/bold] [dim](用 /resume <序号> 恢复)[/dim]"]
         for i, s in enumerate(summaries, 1):
             preview = escape(s.last_user_text or "(无用户消息)")
+            ws_hint = f"  [dim]📁 {escape(str(s.workspace))}[/dim]" if s.workspace else ""
             lines.append(
-                f"  [cyan]{i}[/cyan]) {escape(s.time)}  {s.n_messages} 条消息  最后任务: {preview}"
+                f"  [cyan]{i}[/cyan]) {escape(s.time)}  {s.n_messages} 条消息  最后任务: {preview}{ws_hint}"
             )
         self.console.print("\n".join(lines))
 
