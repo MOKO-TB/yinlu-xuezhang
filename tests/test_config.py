@@ -3,8 +3,8 @@ import json
 import pytest
 
 from minicode import config as config_mod
-from minicode.config import (BUILTIN_PROVIDER, Config, Provider, ensure_config,
-                             load_config, save_config)
+from minicode.config import (BUILTIN_PROVIDER, BUILTIN_PROVIDER_ID, Config,
+                             Provider, ensure_config, load_config, save_config)
 
 
 @pytest.fixture
@@ -68,7 +68,7 @@ def test_providers_format_and_switch(tmp_path, cred):
     cfg = load_config(p)
     # b 没有可用 key:自动切到内置 gzasc(b 保留在列表里,填 key 后可切回)
     assert cfg.provider.id == "gzasc"
-    assert cfg.model == "qwen3.8-27b"
+    assert cfg.model == BUILTIN_PROVIDER.model
     assert cfg.set_active_provider("b")            # 仍可显式选择
     assert not cfg.api_key_configured
     assert cfg.set_active_provider("a")
@@ -187,9 +187,28 @@ def test_builtin_provider_not_shared_between_configs(tmp_path, cred):
     assert c1.provider is not c2.provider
     c1.provider.model = "mutated"
     assert c2.provider.model == BUILTIN_PROVIDER.model
-    assert BUILTIN_PROVIDER.model == "qwen3.8-27b"
+    assert BUILTIN_PROVIDER.model == "deepseek-v4-flash"
 
 
 def test_builtin_provider_key_is_not_hardcoded():
     """内置校园模型的 Key 不得写回源码:仓库是公开的,只能靠本地注入。"""
     assert BUILTIN_PROVIDER.api_key == ""
+
+
+def test_builtin_endpoint_never_written_to_config_file(tmp_path, cred):
+    """内置校园服务的内网地址也不落 config.json —— 它就摆在 exe 旁边,
+    用户随手能打开。地址每次加载由代码补回,磁盘上不必留一份。
+    """
+    p = _write(tmp_path, {"providers": []})
+    cfg = load_config(p)
+    assert cfg.provider.base_url == BUILTIN_PROVIDER.base_url   # 内存里照常有
+    save_config(p, cfg)
+
+    saved = json.loads(p.read_text(encoding="utf-8"))
+    gzasc = next(x for x in saved["providers"] if x["id"] == BUILTIN_PROVIDER_ID)
+    assert gzasc["base_url"] == "" and gzasc["api_key"] == ""
+
+    # 重新加载仍拿得到真地址(这叫"不落盘",不是"丢了")
+    again = load_config(p)
+    assert again.provider.id == BUILTIN_PROVIDER_ID
+    assert again.provider.base_url == BUILTIN_PROVIDER.base_url

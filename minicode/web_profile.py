@@ -193,6 +193,12 @@ class PublicFacade:
             "save_providers": lambda **k: _refuse("网页版不提供密钥管理"),
             "set_provider": lambda **k: _refuse("网页版不提供密钥管理"),
             "get_token_usage": lambda **k: _refuse("网页版不开放用量统计"),
+            # 工作区是服务器自己的目录选择:访客不能改(5 个方法整组拒绝)
+            "get_workspaces": lambda **k: _refuse("网页版不开放工作区管理"),
+            "pick_workspace": lambda **k: _refuse("网页版不开放工作区管理"),
+            "switch_workspace": lambda **k: _refuse("网页版不开放工作区管理"),
+            "reset_workspace": lambda **k: _refuse("网页版不开放工作区管理"),
+            "forget_workspace": lambda **k: _refuse("网页版不开放工作区管理"),
         }
 
     # ------------------------------------------------------------ 分发

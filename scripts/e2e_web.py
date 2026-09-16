@@ -26,6 +26,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # 同目录的 e2e_probe
+
+from e2e_probe import is_probe_request, refuse_probe  # noqa: E402
 
 REQ_COUNT = {"n": 0}
 
@@ -73,7 +76,10 @@ class FakeLLM(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if is_probe_request(raw):
+            refuse_probe(self)          # 能力探测不占对话剧本
+            return
         REQ_COUNT["n"] += 1
         payload = sse_tool_turn() if REQ_COUNT["n"] == 1 else sse_text_turn()
         self.send_response(200)

@@ -14,6 +14,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from minicode import APP_NAME, __version__
+from minicode import model_probe
+from minicode import workspace as ws
 from minicode.app_setup import build_runner_agent, mcp_log
 from minicode.attachments import (
     Attachment, build_content, display_text, is_image, mime_for,
@@ -21,7 +23,8 @@ from minicode.attachments import (
 )
 from minicode.campus import frontend_payload as campus_map_data
 from minicode.compaction import estimate_tokens
-from minicode.config import CONFIG_PATH, API_KEY_PLACEHOLDERS, save_config
+from minicode.config import (BUILTIN_PROVIDER_ID, CONFIG_PATH,
+                             API_KEY_PLACEHOLDERS, save_config)
 from minicode.gui_ui import GuiUI
 from minicode.kb import kb_dirs, kb_stats as kb_stats_fn
 from minicode.mcp import connect_servers, parse_servers
@@ -32,7 +35,7 @@ from minicode.memory import (
 from minicode.llm import LLMClient
 from minicode.library import catalog_health, health_notice
 from minicode.model_catalog import session_metrics
-from minicode.paths import SESSIONS_DIR, resource_path
+from minicode.paths import APP_DIR, SESSIONS_DIR, resource_path
 from minicode.sandbox import SandboxState, classify_path, policy_from_raw, policy_to_raw
 from minicode.session import Session, list_sessions
 from minicode.skills import load_skills, skill_dirs
@@ -54,7 +57,11 @@ class PublicApi:
 
     def __init__(self, bridge: "Bridge"):
         self._b = bridge
-        self.workspace = bridge.workspace
+
+    @property
+    def workspace(self) -> str:
+        """当前工作区路径。用属性而不是构造时的快照 —— 工作区可以切换。"""
+        return str(self._b.workspace)
 
     def get_info(self) -> dict:
         return self._b.get_info()
@@ -131,6 +138,25 @@ class PublicApi:
         """每日 token 用量统计(弹窗圆环图数据源)。"""
         return self._b.get_token_usage(days)
 
+    def get_workspaces(self) -> dict:
+        """工作区弹窗:当前 / 默认 / 最近。"""
+        return self._b.get_workspaces()
+
+    def pick_workspace(self) -> dict:
+        """弹系统文件夹选择框(只选不改)。"""
+        return self._b.pick_workspace()
+
+    def switch_workspace(self, path: str) -> dict:
+        return self._b.switch_workspace(path)
+
+    def reset_workspace(self) -> dict:
+        """回到默认工作区(程序目录)。"""
+        return self._b.reset_workspace()
+
+    def forget_workspace(self, path: str) -> dict:
+        """把某个工作区移出最近列表(不切走、不删文件夹)。"""
+        return self._b.forget_workspace(path)
+
 
 def _within(path: Path, root: Path) -> bool:
     try:
@@ -187,12 +213,20 @@ class Bridge:
 
     def __init__(self, config, workspace: Path, ui: GuiUI,
                  sessions_dir: Path = SESSIONS_DIR, config_path: Path = CONFIG_PATH,
-                 llm=None, mcp_tools=None, sandbox=None):
+                 llm=None, mcp_tools=None, sandbox=None,
+                 workspace_file: Path | None = None, app_dir: Path | None = None):
         self.config = config
+        # 模型能力探测(窗口多大 / 能不能看图):有缓存就立即生效,没有就在
+        # 后台问一次模型服务,结论经 model_catalog 影响面板标签与压缩阈值。
+        model_probe.ensure_async(config.base_url, config.api_key, config.model)
         self.workspace = workspace
         self.ui = ui
         self.sessions_dir = sessions_dir
         self.config_path = config_path
+        # 工作区记忆(workspaces.json)与「默认工作区」的基准目录
+        self.app_dir = Path(app_dir) if app_dir is not None else APP_DIR
+        self.workspace_file = (Path(workspace_file) if workspace_file is not None
+                               else ws.state_path(self.app_dir))
         self._shared_llm = llm
         self._mcp_tools = list(mcp_tools or [])
         self._sandbox = sandbox
@@ -280,12 +314,17 @@ class Bridge:
     def get_info(self) -> dict:
         skills = load_skills(skill_dirs(self.workspace))
         kb_stats = kb_stats_fn(kb_dirs(self.workspace))
+        provider = self.config.provider
+        # 内置校园服务的内网地址不下发给界面:用户只看得到模型名。
+        builtin_active = bool(provider and provider.id == BUILTIN_PROVIDER_ID)
         return {
             "app_name": APP_NAME,
             "version": __version__,
             "model": self.config.model,
-            "base_url": self.config.base_url,
+            "base_url": "" if builtin_active else self.config.base_url,
             "workspace": str(self.workspace),
+            "workspace_name": ws.display_name(self.workspace, self.app_dir),
+            "workspace_is_default": ws.is_default(self.workspace, self.app_dir),
             "permission_mode": self.config.permission_mode,
             "api_key_configured": self.config.api_key_configured,
             "messages": len(self.session.messages),
@@ -331,12 +370,13 @@ class Bridge:
         return mcp.tools_summary() if mcp is not None else []
 
     def get_providers(self) -> dict:
-        """「添加模型」弹窗用。内置校园供应商的 key 永不回传(用户不可见,
-        也不可编辑);其他供应商本机单用户,key 原样返回便于修改。"""
+        """「添加模型」弹窗用。内置校园供应商的 key 与服务地址(内网 IP)都
+        永不回传 —— 对用户只呈现为一个「内置」条目;其他供应商本机单用户,
+        key 原样返回便于修改。"""
         return {
             "providers": [
-                p.to_dict() if p.id != "gzasc"
-                else {**p.to_dict(), "api_key": "", "builtin": True}
+                p.to_dict() if p.id != BUILTIN_PROVIDER_ID
+                else {**p.to_dict(), "api_key": "", "base_url": "", "builtin": True}
                 for p in self.config.providers
             ],
             "active_provider": self.config.provider.id if self.config.provider else "",
@@ -346,6 +386,89 @@ class Bridge:
         """每日/按模型聚合的 token 用量统计(前端弹窗圆环图)。"""
         from minicode import usage
         return usage.statistics(int(days))
+
+    # ------------------------------------------------------------ 工作区
+
+    def get_workspaces(self) -> dict:
+        """工作区弹窗的数据:当前 / 默认 / 最近(已不存在的目录自动隐去)。"""
+        state = ws.load_state(self.workspace_file)
+        return {
+            "ok": True,
+            "current": ws.entry(self.workspace, self.app_dir),
+            "default": ws.entry(ws.default_workspace(self.app_dir), self.app_dir),
+            "recent": ws.recent_entries(state, app_dir=self.app_dir),
+            "busy": bool(self.running_sessions()),
+        }
+
+    def pick_workspace(self) -> dict:
+        """弹系统文件夹选择框:**只选不改**(切不切由用户下一步决定)。"""
+        window = getattr(self.ui, "window", None)
+        if window is None:
+            return {"ok": False, "msg": "窗口未就绪,无法打开文件夹选择框"}
+        try:
+            import webview
+            picked = window.create_file_dialog(webview.FOLDER_DIALOG)
+        except Exception as e:
+            return {"ok": False,
+                    "msg": f"打开文件夹选择框失败: {type(e).__name__}: {e}"}
+        if not picked:
+            return {"ok": False, "msg": "已取消"}
+        chosen = picked if isinstance(picked, str) else picked[0]
+        return {"ok": True, "path": str(chosen)}
+
+    def forget_workspace(self, path: str) -> dict:
+        """把某个工作区移出最近列表(不切走、更不删磁盘上的文件夹)。"""
+        ws.forget(path, state_file=self.workspace_file, app_dir=self.app_dir)
+        return {"ok": True, "recent": self.get_workspaces()["recent"]}
+
+    def switch_workspace(self, path: str) -> dict:
+        return self._apply_workspace(path)
+
+    def reset_workspace(self) -> dict:
+        """回到默认工作区(程序目录)。"""
+        return self._apply_workspace(str(ws.default_workspace(self.app_dir)))
+
+    def _apply_workspace(self, raw: str) -> dict:
+        """切工作区的唯一入口:校验 → 停旧会话 → 换围栏 → 开新会话。
+
+        旧会话运行器一律丢掉:它们的 ToolContext/Session 是按旧工作区装的
+        (读写围栏、提示词里的工作区路径都是旧的),留着就是两个工作区混用。
+        有任务在跑时直接拒绝,不偷偷停掉用户的工作。
+        """
+        target, err = ws.resolve_target(raw, app_dir=self.app_dir)
+        if target is None:
+            return {"ok": False, "msg": err}
+        if ws.key(target) == ws.key(self.workspace):
+            return {"ok": True, "path": str(target),
+                    "msg": f"已经在用这个工作区:{target}"}
+        running = self.running_sessions()
+        if running:
+            return {"ok": False,
+                    "msg": f"还有 {len(running)} 个任务在跑:等它们结束或先停止,再切工作区"}
+        self._close_runners()
+        self.workspace = target
+        if self._sandbox is not None:
+            self._sandbox.retarget(target)
+        ws.remember(target, state_file=self.workspace_file, app_dir=self.app_dir)
+        runner = self.open_session()          # 新工作区从空会话开始
+        # 先 cleared 再 workspace:前端用 cleared 认下新的 session 键,
+        # 否则带旧 session 键的事件会被“后台会话不渲染”那道阑筛掉
+        self.ui.push("cleared", session=runner.key)
+        self.ui.push("workspace", session=runner.key,
+                     **ws.entry(target, self.app_dir))
+        self._push_sessions()
+        self.ui.push("info", session=runner.key, text=f"工作区已切换:{target}")
+        return {"ok": True, "session": runner.key, "path": str(target)}
+
+    def _close_runners(self) -> None:
+        """丢掉所有会话运行器(切工作区时用),并请求它们手上的回合停下。"""
+        for r in list(self._runners.values()):
+            try:
+                r.ui.request_stop()
+            except Exception:
+                pass
+        self._runners.clear()
+        self._current = None
 
     def save_providers(self, providers_json: str, active_id: str) -> dict:
         """整体保存供应商列表(前端编辑后提交),并切换到 active_id。"""
@@ -753,13 +876,19 @@ class Bridge:
     def _push_sessions(self) -> None:
         running_paths = {str(r.log_path) for r in self.running_sessions() if r.log_path}
         cur_path = self.session.log_path
-        items = [
-            {"index": i, "time": s.time, "n_messages": s.n_messages,
-             "last_user_text": s.last_user_text,
-             "current": s.path == cur_path,
-             "running": str(s.path) in running_paths}
-            for i, s in enumerate(list_sessions(self.sessions_dir), start=1)
-        ]
+        cur_key = ws.key(self.workspace)
+        items = []
+        for i, s in enumerate(list_sessions(self.sessions_dir), start=1):
+            # 不是当前工作区的留档:带上名字,界面标出来(它是切工作区前留下的)
+            other = ""
+            if s.workspace and ws.key(s.workspace) != cur_key:
+                other = ws.display_name(s.workspace, self.app_dir)
+            items.append({
+                "index": i, "time": s.time, "n_messages": s.n_messages,
+                "last_user_text": s.last_user_text,
+                "current": s.path == cur_path,
+                "workspace": other,
+                "running": str(s.path) in running_paths})
         self.ui.push("sessions", items=items[:12])
 
     def _history_for_frontend(self) -> list[dict]:
@@ -847,7 +976,8 @@ class Bridge:
 
 
 def create_app(config, workspace: Path, llm=None, ui: GuiUI | None = None,
-               sessions_dir: Path | None = None, config_path: Path | None = None):
+               sessions_dir: Path | None = None, config_path: Path | None = None,
+               workspace_file: Path | None = None, app_dir: Path | None = None):
     """组装 GUI 形态的完整应用;llm/sessions_dir/config_path 仅供测试注入。
 
     MCP 客户端、LLM、沙箱在这里建**一次**,由所有会话共享 ——
@@ -860,7 +990,8 @@ def create_app(config, workspace: Path, llm=None, ui: GuiUI | None = None,
     bridge = Bridge(config, workspace, ui,
                     sessions_dir=sessions_dir or SESSIONS_DIR,
                     config_path=config_path or CONFIG_PATH,
-                    llm=llm, mcp_tools=mcp.build_tools(), sandbox=sandbox)
+                    llm=llm, mcp_tools=mcp.build_tools(), sandbox=sandbox,
+                    workspace_file=workspace_file, app_dir=app_dir)
     bridge._mcp = mcp
     for runner in bridge._runners.values():
         runner.agent.mcp = mcp          # 退出时 bridge.close() 统一关停

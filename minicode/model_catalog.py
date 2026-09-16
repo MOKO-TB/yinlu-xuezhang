@@ -26,7 +26,8 @@ MODEL_CATALOG: dict[str, dict] = {
     "kimi-k2.6":                 {"context_window": 256_000,   "supports_vision": True},
     "deepseek-flash":            {"context_window": 1_000_000, "supports_vision": True},
     "deepseek-v4-pro":           {"context_window": 1_000_000, "supports_vision": False},
-    "deepseek-v4-flash":         {"context_window": 1_000_000, "supports_vision": False},
+    # 校内服务实测窗口 327680(2026-09-16 用 model_probe 问出来的,旧值 1M 是错的)
+    "deepseek-v4-flash":         {"context_window": 327_680,   "supports_vision": False},
     "deepseek-v4-flash-0731":    {"context_window": 1_000_000, "supports_vision": False},
     "deepseek-v4-pro-0813":      {"context_window": 1_000_000, "supports_vision": False},
     "agnes-3.0-flash":           {"context_window": 512_000,   "supports_vision": True},
@@ -53,12 +54,49 @@ MODEL_CATALOG: dict[str, dict] = {
 }
 
 
+# 运行时探测结果(见 minicode/model_probe.py):键为小写模型名,按字段覆盖
+# 静态目录。静态目录是「人工维护的常见模型」,探测结果才是「这台服务上这个
+# 模型真实的窗口与多模态能力」。两者都有时探测优先 —— 学校换模型/换网关,
+# 面板与压缩阈值自动跟上,不用改代码。
+_DETECTED: dict[str, dict] = {}
+
+
+def set_detected(model: str, *, context_window: int | None = None,
+                 supports_vision: bool | None = None) -> None:
+    """登记一条探测结论;None 表示这一项没问到,不覆盖。"""
+    key = (model or "").strip().lower()
+    if not key:
+        return
+    entry = _DETECTED.setdefault(key, {})
+    if isinstance(context_window, int) and context_window > 0:
+        entry["context_window"] = context_window
+    if supports_vision is not None:
+        entry["supports_vision"] = bool(supports_vision)
+
+
+def clear_detected() -> None:
+    _DETECTED.clear()
+
+
+def detected_for(model: str) -> dict:
+    return dict(_DETECTED.get((model or "").strip().lower()) or {})
+
+
 def lookup(model: str) -> dict:
-    """查目录;键统一小写。未知模型返回 known=False,不猜数字。"""
-    info = MODEL_CATALOG.get((model or "").strip().lower())
-    if info is None:
-        return {"known": False, "context_window": None, "supports_vision": False}
-    return {"known": True, **info}
+    """查模型能力;键统一小写。探测结果优先,静态目录兜底,未知不猜数字。"""
+    key = (model or "").strip().lower()
+    base = MODEL_CATALOG.get(key)
+    det = _DETECTED.get(key) or {}
+    window = det.get("context_window") or (base or {}).get("context_window")
+    vision = det.get("supports_vision")
+    if vision is None:
+        vision = bool((base or {}).get("supports_vision", False))
+    return {
+        "known": base is not None or bool(det),
+        "context_window": window,
+        "supports_vision": bool(vision),
+        "detected": bool(det),
+    }
 
 
 def context_window_for(model: str, default: int) -> int:

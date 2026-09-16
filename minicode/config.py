@@ -177,7 +177,7 @@ BUILTIN_PROVIDER = Provider(
     name="广州应用科技学院",
     base_url="http://10.223.24.16:8080/v1",
     api_key="",
-    model="qwen3.8-27b",
+    model="deepseek-v4-flash",
 )
 
 
@@ -296,12 +296,20 @@ def ensure_config(path: Path = CONFIG_PATH,
 
 def save_config(path: Path, cfg: Config) -> None:
     """写配置文件:api_key 一律不落 config.json(它可能被上传 GitHub),
-    改存用户主目录 ~/.yinluxs/credentials.json。"""
+    改存用户主目录 ~/.yinluxs/credentials.json。
+
+    内置校园供应商连 base_url 也不落盘:内网地址是部署细节,不该出现在用户
+    能打开的文件里。它的 base_url/api_key/model 每次加载都由
+    _ensure_builtin_provider() 按代码补回,磁盘上那份纯属冗余。
+    """
+    def _safe(p: Provider) -> dict:
+        d = {**p.to_dict(), "api_key": ""}      # 保持无密钥、可安全上传
+        if p.id == BUILTIN_PROVIDER_ID:
+            d["base_url"] = ""                   # 内网地址同样不落盘
+        return d
+
     data = {
-        "providers": [
-            {**p.to_dict(), "api_key": ""}   # config.json 保持无密钥、可安全上传
-            for p in cfg.providers
-        ],
+        "providers": [_safe(p) for p in cfg.providers],
         "active_provider": cfg.provider.id if cfg.provider else "",
         "permission_mode": cfg.permission_mode,
         "shell": cfg.shell,

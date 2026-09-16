@@ -25,6 +25,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # 同目录的 e2e_probe
+
+from e2e_probe import is_probe_request, refuse_probe  # noqa: E402
+
 APP_DIR = ROOT / "dist" / "引路学长"
 CLI_EXE = APP_DIR / "引路学长-CLI.exe"
 DB_REL = Path("crawled") / "mfindgzyykj.libsp.cn" / "library.db"
@@ -87,6 +92,9 @@ def _final_sse() -> bytes:
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if is_probe_request(raw):
+            refuse_probe(self)          # 能力探测不占对话剧本
+            return
         try:
             req = json.loads(raw.decode("utf-8"))
             seen_tool_result = any(m.get("role") == "tool"

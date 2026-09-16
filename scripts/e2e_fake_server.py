@@ -20,6 +20,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # 同目录的 e2e_probe
+
+from e2e_probe import is_probe_request, refuse_probe  # noqa: E402
 
 REQ_COUNT = {"n": 0}
 # 剧本:默认 write_file 两步(历史行为);设成 browser 则跑"模型真调浏览器工具"那条链路。
@@ -134,6 +137,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if is_probe_request(raw):
+            refuse_probe(self)          # 探测不占剧本、不进 SEEN_REQUESTS
+            return
         script = _script()
         if script == "browser":
             try:                       # 记下请求体,后面断言工具结果真回了模型
@@ -148,10 +154,17 @@ class Handler(BaseHTTPRequestHandler):
                        else sse_response_2())
         else:
             payload = sse_response_1() if REQ_COUNT["n"] == 1 else sse_response_2()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.end_headers()
-        self.wfile.write(payload)
+        self._send_bytes(200, payload, "text/event-stream")
+
+    def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            pass          # 客户端提前断开是常态,不是验收失败
 
     def log_message(self, *args):
         pass

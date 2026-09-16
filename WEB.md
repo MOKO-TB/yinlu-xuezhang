@@ -72,7 +72,7 @@ minicode/web_profile.py  工具白名单 + 对外系统提示词 + PublicFacade
 
 - 每个浏览器访客一个 cookie 身份 → 一个 `WebBridge` 实例(私有 `sessions_dir`)→ 一份 `LLMClient`(很轻)。访客之间不共享任何内存状态。
 - 对外模式**不连 MCP**:不拉起任何第三方子进程。
-- 前端零改动靠 `bridge-web.js`:方法表按位置参数 → 具名参数映射,`open_url` 就地用 `window.open`(否则会在服务器上开浏览器),并用注入的 CSS 藏掉所有者专属控件(密钥/沙箱/撤销/附件/权限模式)。
+- 前端零改动靠 `bridge-web.js`:方法表按位置参数 → 具名参数映射,`open_url` 就地用 `window.open`(否则会在服务器上开浏览器),并用注入的 CSS 藏掉所有者专属控件(密钥/沙箱/撤销/附件/权限模式)。**工作区胶囊**不用 CSS 藏 —— 它自己看 `get_info().workspace` 是不是空,空就整个隐起来(这五个方法在对外门面已整组拒绝,见下节第 4 条)。
 
 ## 4. 安全不变式(改动时别破坏)
 
@@ -81,7 +81,7 @@ minicode/web_profile.py  工具白名单 + 对外系统提示词 + PublicFacade
 | 1 | 工具集来自 `PUBLIC_TOOLS` **显式白名单**,绝不用 `Tool.read_only` 过滤 | 该标志语义是"执行前不需要确认",不是"读不到敏感数据" —— `read_file`/`glob`/`grep` 都是 `read_only=True` |
 | 2 | 工作区里不能有密钥文件;内置 Key 走 `YINLUXS_BUILTIN_API_KEY` 环境变量注入 | `config.local.json`(含校园 Key)就在工作区根目录,第 1 条一旦写错,读文件类工具就能拿走它 |
 | 3 | `get_asset` 只放行图片扩展名 | 它本身是覆盖整个工作区的文件读取原语 |
-| 4 | 对外门面不开放:供应商/密钥、沙箱开关、权限模式、附件、记忆整理、`consolidate_memory` | 前两项会写 `config.json`;记忆里是所有者自己的笔记 |
+| 4 | 对外门面不开放:供应商/密钥、沙箱开关、权限模式、附件、记忆整理、`consolidate_memory`、**工作区管理（`get_workspaces`/`pick_workspace`/`switch_workspace`/`reset_workspace`/`forget_workspace` 五个方法整组拒绝）** | 前两项会写 `config.json`;记忆里是所有者自己的笔记;**工作区是服务器自己的目录选择 —— 访客既不能看见服务器路径也不能改它**(前端拿到空 `workspace` 就把胶囊整个隐起来) |
 | 5 | 对外系统提示词**不注入** `memory/MEMORY.md`,也不用编码 agent 那套工作准则 | 提示词写着"你能读写文件"而工具里没有,模型会胡言乱语并误导同学 |
 | 6 | 会话浏览只在自己访客目录内 | `list_sessions(sessions_dir)` 是按目录扫的,共用目录等于把所有者全部历史对话(可删)交给同学 |
 | 7 | `Origin`/`Referer` 与 `Host` 同源校验 | 否则你浏览器里任意网站都能 POST 本机端口来驱动这台服务器 |

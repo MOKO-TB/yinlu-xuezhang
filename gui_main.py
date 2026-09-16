@@ -9,6 +9,7 @@ import time
 import webview
 
 from minicode import APP_NAME
+from minicode import workspace as ws
 from minicode.config import ensure_config
 from minicode.gui_bridge import create_app
 from minicode.paths import app_path, resource_path
@@ -109,7 +110,9 @@ def _enable_native_context_menu() -> None:
 
 def main() -> None:
     config = ensure_config()  # 未配置也照常开窗,界面内给出警示
-    workspace = app_path()  # 双击启动时 cwd 即 exe 目录
+    # 工作区:上次选的那个(workspaces.json 里的 current)优先,没有/失效才用
+    # 默认工作区(= exe 目录,也就是改造前的写死值)
+    workspace = ws.startup_workspace(app_path())
     bridge, ui, agent, _session = create_app(config, workspace)
     # 前端是打包内置资源(_MEIPASS);缺失时在窗口内给出明确错误而不是 404
     frontend = resource_path("frontend", "index.html")

@@ -28,6 +28,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # 同目录的 e2e_probe
+
+from e2e_probe import is_probe_request, refuse_probe  # noqa: E402
 
 FAKE_MCP = ROOT / "tests" / "fake_mcp_server.py"
 DEFAULT_EXE = ROOT / "dist" / "引路学长" / "引路学长-CLI.exe"
@@ -74,9 +77,12 @@ def _turn_text() -> bytes:
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
-        REQ["n"] += 1
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
+        if is_probe_request(raw):
+            refuse_probe(self)          # 能力探测不占对话剧本
+            return
+        REQ["n"] += 1
         if REQ["n"] > 1 and raw:
             try:
                 payload = json.loads(raw.decode("utf-8", errors="replace"))

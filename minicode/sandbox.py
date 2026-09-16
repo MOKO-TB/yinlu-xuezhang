@@ -220,6 +220,15 @@ class SandboxState:
     def approve_path(self, p: Path) -> None:
         self.approved_paths.add(str(p))
 
+    def retarget(self, workspace: Path) -> None:
+        """切换工作区:换围栏根,并清掉本回合批准过的工作区外路径。
+
+        `approved_paths` 是按**绝对路径**攒的,换根以后旧授权不该继续生效 ——
+        否则用户在新工作区里会莫名继承上一个工作区的放行。
+        """
+        self.workspace = Path(workspace)
+        self.approved_paths.clear()
+
     def describe(self) -> str:
         if not self.policy.enabled:
             return "沙箱关闭(工作区外访问仍需逐次确认)"

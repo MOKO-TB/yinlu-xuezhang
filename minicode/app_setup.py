@@ -78,7 +78,8 @@ def build_runner_agent(config: Config, workspace: Path, ui, llm,
     # 子代理(task 工具):闭包持有 LLM/UI/配置,主循环可派发独立子任务
     registry.append(build_task_tool(ctx, llm, ui, config, registry))
     session = Session(system_prompt=build_system_prompt(workspace),
-                      log_dir=sessions_dir or SESSIONS_DIR)
+                      log_dir=sessions_dir or SESSIONS_DIR,
+                      workspace=workspace)
     agent = Agent(
         llm=llm,
         registry=registry,

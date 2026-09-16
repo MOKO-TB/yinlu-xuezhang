@@ -12,6 +12,7 @@ from pathlib import Path
 
 from minicode.compaction import compact, estimate_tokens
 from minicode.llm import LLMClient, ToolCall
+from minicode.model_catalog import context_window_for
 from minicode.permission import ALLOW, ASK, REJECT, PermissionGate
 from minicode.session import Session
 from minicode.tools.base import (
@@ -141,7 +142,10 @@ class Agent:
 
     def _maybe_compact(self, force: bool = False) -> bool:
         cfg = self.ctx.config
-        threshold = int(cfg.context_window * cfg.compact_at_ratio)
+        # 与任务面板同一把尺子:优先用运行时探测到的真实窗口(见 model_probe),
+        # 探测不到才退回 config.json 里的默认值。
+        window = context_window_for(cfg.model, cfg.context_window)
+        threshold = int(window * cfg.compact_at_ratio)
         if not force and estimate_tokens(self.session.messages) <= threshold:
             return False
         new_msgs, before = compact(self.session.messages, self.llm)

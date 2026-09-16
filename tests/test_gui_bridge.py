@@ -233,9 +233,10 @@ def test_provider_management(config, tmp_path, monkeypatch):
     assert [p["id"] for p in saved["providers"]] == ["gzasc", "x", "y"]
     assert saved["active_provider"] == "y"
     assert bridge.get_providers()["active_provider"] == "y"
-    # 内置供应商的 key 永不下发(界面不可见、也不可改)
+    # 内置供应商的 key 与服务地址(内网 IP)永不下发(界面不可见、也不可改)
     gp = bridge.get_providers()["providers"][0]
     assert gp["id"] == "gzasc" and gp["api_key"] == "" and gp.get("builtin") is True
+    assert gp["base_url"] == ""
 
     # 切换供应商并重建 LLM 客户端
     assert bridge.set_provider("x")["ok"]
@@ -263,6 +264,28 @@ def test_provider_management(config, tmp_path, monkeypatch):
     assert not bridge.save_providers("{bad", "x")["ok"]
     r = bridge.save_providers(json.dumps([{"name": "无地址"}]), "x")
     assert not r["ok"] and "base_url" in r["msg"]
+
+
+def test_builtin_endpoint_is_never_sent_to_frontend(tmp_path):
+    """内置校园服务的内网地址不下发给界面:用户只看得到模型名。
+
+    地址本身是内网 IP,对同学既没用也不该暴露;模型管理弹窗里那一行由此
+    留空,由「内置」标签承担说明。
+    """
+    from dataclasses import replace
+
+    from minicode.config import BUILTIN_PROVIDER, BUILTIN_PROVIDER_ID, Config
+
+    cfg = Config(providers=[replace(BUILTIN_PROVIDER)],
+                 active_provider_id=BUILTIN_PROVIDER_ID)
+    bridge, _window, _ = make(cfg, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+
+    assert cfg.base_url.startswith("http://10.")      # 后端自己照常用
+    assert bridge.get_info()["base_url"] == ""
+    assert bridge.get_info()["model"] == cfg.model    # 模型名照常展示
+    builtin = bridge.get_providers()["providers"][0]
+    assert builtin["builtin"] is True
+    assert builtin["base_url"] == "" and builtin["api_key"] == ""
 
 
 def test_session_model_switch_and_metrics(config, tmp_path):

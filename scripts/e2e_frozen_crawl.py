@@ -29,6 +29,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # 同目录的 e2e_probe
+
+from e2e_probe import is_probe_request, refuse_probe  # noqa: E402
 
 TARGET = "https://www.gzasc.edu.cn/xsc/info/1274/18391.htm"
 TITLE_KEY = "国家励志奖学金"
@@ -84,6 +87,9 @@ def _scenario(turn: int) -> bytes:
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if is_probe_request(raw):
+            refuse_probe(self)          # 能力探测不占对话剧本
+            return
         try:
             REQUESTS.append(json.loads(raw.decode("utf-8")))
         except Exception:

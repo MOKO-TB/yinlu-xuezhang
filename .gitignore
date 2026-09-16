@@ -24,6 +24,13 @@ config.local.json
 token-usage.db
 token-usage.db-*
 
+# 模型能力探测缓存(窗口 / 是否支持视觉;运行时生成)
+model_caps.json
+
+# 工作区记忆(用户选了哪个文件夹当工作台;运行时装态落在仓库根/exe 旁)
+workspaces.json
+workspaces.json.tmp
+
 # 浏览器能力运行时产物:Agent 截图与独立实例的 profile(开发态落仓库根)
 shots/
 browser-profile/

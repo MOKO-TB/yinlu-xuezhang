@@ -158,6 +158,9 @@ try {
             overflow:hidden; text-overflow:ellipsis; }
   .sess.current .t{ color:var(--primary-text); font-weight:800; }
   .sess .m{ font-size:11px; color:var(--text-3); margin-top:2px; }
+  .sess-empty{ color:var(--text-2); font-size:12.5px; padding:9px 12px;
+               background:var(--glass-lite); border:1px dashed var(--line);
+               border-radius:var(--r-m); line-height:1.6; }
   .sess{ position:relative; padding-right:26px; }
   .sess .sx{ display:none; position:absolute; top:7px; right:6px; width:20px; height:20px;
              border:none; border-radius:6px; background:transparent; color:var(--text-3);
@@ -170,9 +173,10 @@ try {
   .topbar{ display:flex; align-items:center; gap:8px; padding:10px 16px;
            border-bottom:1px solid var(--line-soft); background:var(--glass);
            backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
-  .topbar .ws{ color:var(--text-3); font-size:12px; flex:1;
-               white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-               text-shadow:0 1px 4px rgba(9,15,23,.12); }
+  /* 工作区标识:可点开工作区弹窗(Agent 在哪个文件夹里干活) */
+  .topbar .wspill{ max-width:34%; overflow:hidden; text-overflow:ellipsis;
+                   white-space:nowrap; }
+  .topbar .spacer{ flex:1; }
   .topbar .tok{ color:var(--text-3); font-size:11.5px; }
   /* 模型标识:可点开「添加模型」弹窗(内置模型 key 永不展示) */
   .topbar .modelpill{ background:var(--primary-light); color:var(--primary-text);
@@ -712,6 +716,34 @@ try {
 
   /* ---------------- 用量统计弹窗 ---------------- */
   #usageOverlay .dialog{ width:680px; max-width:94vw; }
+
+  /* ---------------- 工作区弹窗 ---------------- */
+  #wsOverlay .dialog{ width:560px; max-width:94vw; }
+  #wsOverlay .ws-note{ color:var(--text-2); font-size:12px; line-height:1.65;
+                       margin:0 0 12px; }
+  #wsOverlay .ws-cur{ background:var(--primary-light); border:1px solid var(--primary);
+                      border-radius:var(--r-m); padding:10px 12px; margin-bottom:10px; }
+  #wsOverlay .ws-cur b{ font-size:13px; color:var(--primary-text); }
+  #wsOverlay .ws-cur .p{ display:block; margin-top:4px; font-size:11.5px;
+                         color:var(--text-2); word-break:break-all; line-height:1.5; }
+  #wsOverlay .ws-sub{ font-size:12px; font-weight:800; color:var(--text-2);
+                      margin:12px 0 6px; }
+  #wsOverlay .ws-list{ max-height:230px; overflow-y:auto; }
+  #wsOverlay .ws-row{ display:flex; align-items:center; gap:10px; padding:8px 10px;
+                      border:1px solid var(--line-soft); border-radius:var(--r-m);
+                      margin-bottom:6px; cursor:pointer; transition:.15s; }
+  #wsOverlay .ws-row:hover{ border-color:var(--primary); background:var(--glass-lite); }
+  #wsOverlay .ws-row.on{ background:var(--primary-light); border-color:var(--primary); }
+  #wsOverlay .ws-row .n{ font-size:12.5px; font-weight:700; color:var(--text-1);
+                         flex:none; max-width:40%; overflow:hidden;
+                         text-overflow:ellipsis; white-space:nowrap; }
+  #wsOverlay .ws-row .p{ flex:1; min-width:0; font-size:11px; color:var(--text-3);
+                         overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+                         direction:rtl; text-align:left; }
+  #wsOverlay .ws-row .x{ flex:none; border:none; background:transparent; cursor:pointer;
+                         color:var(--text-3); font-size:12px; padding:2px 4px; }
+  #wsOverlay .ws-row .x:hover{ color:var(--danger); }
+  #wsOverlay .ws-empty{ color:var(--text-3); font-size:12px; padding:8px 10px; }
   .usage-head{ display:flex; align-items:center; gap:10px; margin-bottom:4px; }
   .usage-head h3{ flex:1; }
   .usage-range{ display:flex; gap:0; border:1px solid var(--line-soft);
@@ -769,7 +801,8 @@ try {
 
   <section class="main">
     <div class="topbar">
-      <span class="ws" id="ws"></span>
+      <button class="wspill" id="wsPill" title="当前工作区(点击切换)">📁 …</button>
+      <span class="spacer"></span>
       <span class="tok" id="tok"></span>
       <span class="modelpill" id="modelPill"></span>
       <button id="btnMap" title="打开/收起校园地图(肇庆校区)">🗺 地图</button>
@@ -798,7 +831,7 @@ try {
       <div class="attachbar" id="attachBar" style="display:none"></div>
       <div class="box">
         <button class="attach" id="btnAttach" title="上传文件或图片(会复制到工作区 uploads/)">📎</button>
-        <textarea id="input" rows="1" placeholder="描述任务,Enter 发送,Shift+Enter 换行"></textarea>
+        <textarea id="input" rows="1" placeholder="描述任务，Enter 发送，Shift+Enter 换行"></textarea>
         <button class="send" id="btnSend">发送</button>
         <button class="stop" id="btnStop">停止</button>
       </div>
@@ -909,6 +942,21 @@ try {
     </div>
     <div id="usageBody"></div>
     <div class="btns"><button class="b-no" id="btnUsageClose">关闭</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="wsOverlay">
+  <div class="dialog">
+    <h3>📁 工作区</h3>
+    <p class="ws-note">工作区是 Agent 的「工作台」：读写围栏、附件、计划、长期记忆都落在这个文件夹里。切到新工作区会开一个新会话（原会话留档不丢）。</p>
+    <div class="ws-cur" id="wsCurrent"></div>
+    <div class="ws-sub">最近用过（点一下切过去）</div>
+    <div class="ws-list" id="wsList"></div>
+    <div class="btns">
+      <button class="b-no" id="btnWsPick">选择文件夹…</button>
+      <button class="b-no" id="btnWsDefault">恢复默认</button>
+      <button class="b-no" id="btnWsClose">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -1356,7 +1404,8 @@ function resetMap() {
 window.__gcodeEvent = function (e) {
   // 后台会话的事件:不往当前视图里画(切回去时会用 resumed 重建)
   if (e.session && currentSessionKey && e.session !== currentSessionKey
-      && e.type !== "cleared" && e.type !== "resumed") {
+      && e.type !== "cleared" && e.type !== "resumed"
+      && e.type !== "workspace") {   // 工作区是全局状态,不属于某个会话
     if (e.type === "info" && e.text) toast(e.text);   // 后台的提示仍然要让用户看到
     return;
   }
@@ -1455,6 +1504,11 @@ window.__gcodeEvent = function (e) {
     case "busy":
       setBusy(e.value);
       break;
+    case "workspace":
+      // 工作区切换完成(后端已换围栏并开了新会话):先把顶栏的轷子改过来
+      renderWorkspacePill({ workspace: e.path, workspace_name: e.name,
+                            workspace_is_default: e.is_default });
+      break;
     case "cleared":
       if (e.session) currentSessionKey = e.session;   // 新建/切换会话
       cancelEdit(true);
@@ -1538,7 +1592,7 @@ function renderSessions(items) {
   const box = $("sessions");
   box.innerHTML = "";
   if (!items.length) {
-    box.innerHTML = `<div style="color:var(--text-3);padding:8px 10px">暂无</div>`;
+    box.innerHTML = `<div class="sess-empty">暂无历史会话<br>提一个问题就会自动存下来</div>`;
     return;
   }
   for (const s of items) {
@@ -1548,7 +1602,8 @@ function renderSessions(items) {
       + `<div class="m"></div><button class="sx" title="删除该会话">✕</button>`;
     el.querySelector(".tt").textContent = s.last_user_text || "(无用户消息)";
     el.querySelector(".m").textContent =
-      `${s.time} · ${s.n_messages} 条` + (s.running ? " · 运行中" : "");
+      `${s.time} · ${s.n_messages} 条` + (s.running ? " · 运行中" : "")
+      + (s.workspace ? ` · 📁 ${s.workspace}` : "");
     el.addEventListener("click", () => {
       if (s.current) return;
       // 切换会话不会打断任何任务:后台会话继续跑,切回去就能看到最新进度
@@ -1618,7 +1673,7 @@ function renderProvList() {
     row.innerHTML = `<input type="radio" name="prov" ${active && p.id === active.id ? "checked" : ""}>
       <span class="pn">${esc(p.name)}${isBuiltin ? '<span class="buitag">内置</span>' : ""}</span>
       <span class="pm">${esc(p.model || "")}</span>
-      <span class="pb">${esc(p.base_url || "")}</span>
+      <span class="pb">${isBuiltin ? "" : esc(p.base_url || "")}</span>
       <span class="k">${keyState}</span>
       ${isBuiltin ? "" : '<button class="del" data-id="' + esc(p.id) + '">删除</button>'}`;
     row.addEventListener("click", (e) => {
@@ -1966,6 +2021,94 @@ $("btnMemory").addEventListener("click", () => {
   }).catch(e => toast("整理失败:" + String(e).slice(0, 60), true));
 });
 
+/* ---------------- 工作区(Agent 在哪个文件夹里干活) ---------------- */
+let wsInfo = { path: "", name: "", is_default: true };
+
+function renderWorkspacePill(info) {
+  if (info && (info.workspace || info.path)) {
+    wsInfo = { path: info.workspace || info.path,
+               name: info.workspace_name || info.name || info.workspace || info.path,
+               is_default: !!(info.workspace_is_default ?? info.is_default) };
+  }
+  const pill = $("wsPill");
+  if (!wsInfo.path) {          // 网页版不给访客看服务器路径:整个轷子隐起来
+    pill.style.display = "none";
+    return;
+  }
+  pill.style.display = "";
+  pill.textContent = "📁 " + (wsInfo.name || "工作区");
+  pill.title = `当前工作区：${wsInfo.path}\n（Agent 的读写、附件、计划、记忆都在这里；点击切换）`;
+}
+
+function doSwitchWorkspace(path, viaReset) {
+  $("wsOverlay").classList.remove("show");
+  const call = viaReset ? pywebview.api.reset_workspace()
+                        : pywebview.api.switch_workspace(path);
+  call.then(r => {
+    if (!r || !r.ok) { toast((r && r.msg) || "切换失败", true); return; }
+    toast(r.msg || ("工作区已切换:" + (r.path || path)));
+    pywebview.api.get_info().then(renderWorkspacePill);
+  }).catch(e => toast("切换失败:" + String(e).slice(0, 60), true));
+}
+
+function renderWsDlg(d) {
+  const cur = d.current || {}, def = d.default || {};
+  $("wsCurrent").innerHTML = `<b>当前：${esc(cur.name || "工作区")}</b>`
+    + `<span class="p">${esc(cur.path || "")}</span>`;
+  const list = $("wsList");
+  list.innerHTML = "";
+  const rows = [];
+  if (def.path) rows.push({ path: def.path, name: def.name, keep: true });
+  for (const r of (d.recent || [])) {
+    if (!def.path || r.path !== def.path) rows.push(r);
+  }
+  if (!rows.length) {
+    list.innerHTML = '<div class="ws-empty">还没有其他工作区，点下面「选择文件夹…」挑一个</div>';
+    return;
+  }
+  for (const r of rows) {
+    const el = document.createElement("div");
+    el.className = "ws-row" + (r.path === cur.path ? " on" : "");
+    el.innerHTML = '<span class="n"></span><span class="p"></span>'
+      + (r.keep ? "" : '<button class="x" title="从列表移除（不会删文件夹）">✕</button>');
+    el.querySelector(".n").textContent = r.name || r.path;
+    el.querySelector(".p").textContent = r.path;
+    el.addEventListener("click", (ev) => {
+      if (ev.target.classList.contains("x")) return;
+      if (r.path === cur.path) { toast("已经在用这个工作区"); return; }
+      doSwitchWorkspace(r.path, false);
+    });
+    const x = el.querySelector(".x");
+    if (x) x.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      pywebview.api.forget_workspace(r.path).then(res => {
+        if (res && res.ok) renderWsDlg({ current: cur, default: def, recent: res.recent || [] });
+      }).catch(e => toast("移除失败:" + String(e).slice(0, 60), true));
+    });
+    list.appendChild(el);
+  }
+}
+
+function openWsDlg() {
+  pywebview.api.get_workspaces().then(d => {
+    renderWsDlg(d || {});
+    $("wsOverlay").classList.add("show");
+  }).catch(e => toast("读取工作区失败:" + String(e).slice(0, 60), true));
+}
+
+$("wsPill").addEventListener("click", openWsDlg);
+$("btnWsClose").addEventListener("click", () => $("wsOverlay").classList.remove("show"));
+$("btnWsDefault").addEventListener("click", () => doSwitchWorkspace("", true));
+$("btnWsPick").addEventListener("click", () => {
+  pywebview.api.pick_workspace().then(r => {
+    if (!r || !r.ok) {      // 用户点取消也会走到这里,别报错吓人
+      if (r && r.msg && r.msg !== "已取消") toast(r.msg, true);
+      return;
+    }
+    doSwitchWorkspace(r.path, false);
+  }).catch(e => toast("打开文件夹选择框失败:" + String(e).slice(0, 60), true));
+});
+
 /* ---------------- 初始化 ---------------- */
 window.addEventListener("DOMContentLoaded", () => {
   applyTheme(document.documentElement.classList.contains("dark"), false);
@@ -1973,7 +2116,7 @@ window.addEventListener("DOMContentLoaded", () => {
   function boot() {
     pywebview.api.get_info().then(info => {
     $("ver").textContent = "v" + info.version;
-    $("ws").textContent = " workspace " + info.workspace;
+    renderWorkspacePill(info);
     $("perm").value = info.permission_mode;
     if (info.session_key) currentSessionKey = info.session_key;
     currentProvActive = info.active_provider || "";

@@ -16,7 +16,9 @@ from pathlib import Path
 from minicode.app_setup import create_agent
 from minicode.compaction import estimate_tokens
 from minicode.config import load_config
+from minicode import model_probe
 from minicode.paths import SESSIONS_DIR
+from minicode import workspace as ws
 from minicode.session import Session, list_sessions
 from minicode.ui import TerminalUI
 
@@ -177,7 +179,7 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
 SLASH_NAMES = {"/help", "/clear", "/model", "/history", "/resume",
                "/undo", "/compact", "/sandbox", "/memory", "/remember",
                "/dream", "/skills", "/kb", "/plan", "/library", "/usage",
-               "/browser",
+               "/browser", "/workspace",
                "/exit", "/quit"}
 # Git Bash(MSYS)会把 "/cmd" 形式的参数转成 Git 安装目录下的路径,
 # 如 "D:/git/Git/history" 或 "C:/Program Files/Git/history"
@@ -204,6 +206,90 @@ def unmanagle_slash_command(argv: list[str]) -> str:
 
 def run_once(agent: Agent, ui: TerminalUI, task: str) -> None:
     agent.run_turn(task)
+
+
+WORKSPACE_FLAGS = ("--workspace", "-w")
+
+
+def pop_workspace_flag(argv: list[str]) -> tuple[str, list[str]]:
+    """摘出 `--workspace/-w` 的值,其余参数原样返回(给一次性任务用)。
+
+    两种写法都认:`--workspace D:\\资料` 与 `--workspace=D:\\资料`。路径可能含空格,
+    所以只吃掉紧跟其后的一个 token(带空格的路径请加引号)。
+    """
+    value, rest, i = "", [], 0
+    while i < len(argv):
+        item = argv[i]
+        if item in WORKSPACE_FLAGS and i + 1 < len(argv):
+            value = argv[i + 1]
+            i += 2
+            continue
+        if any(item.startswith(flag + "=") for flag in WORKSPACE_FLAGS):
+            value = item.split("=", 1)[1]
+            i += 1
+            continue
+        rest.append(item)
+        i += 1
+    return value, rest
+
+
+def startup_workspace(explicit: str) -> Path:
+    """启动工作区:命令行显式指定 > 记忆里的当前 > 当前目录。
+
+    显式指定的路径不合法时**直接报错退出**,不要默默跑到别的地方去干活。
+    """
+    if (explicit or "").strip():
+        target, err = ws.resolve_target(explicit)
+        if target is None:
+            print(f"错误: --workspace 不可用 —— {err}", file=sys.stderr)
+            raise SystemExit(2)
+        return target
+    return ws.startup_workspace(Path.cwd())
+
+
+def cmd_workspace(cmd: str, config, workspace: Path, ui: TerminalUI, agent,
+                  rebuild: bool = True):
+    """/workspace [路径|default]:查看或切换工作区。
+
+    切换要重建 Agent:system prompt 里的工作区路径、工具围栏、附件/计划/记忆
+    的落点全部绑定工作区;旧 Agent 的 MCP 子进程先关掉,不留孤儿。
+    返回新的 `(agent, session, workspace)`;只是查看/失败时返回 None。
+    """
+    arg = " ".join(cmd.split()[1:]).strip().strip('"').strip("'")
+    if not arg:
+        recent = ws.recent_entries(ws.load_state())
+        lines = [f"当前工作区: {workspace}",
+                 f"  默认工作区: {ws.default_workspace()}"]
+        if recent:
+            lines.append("  最近用过:")
+            lines += [f"    • {e['name']} —— {e['path']}" for e in recent]
+        lines.append("  用法: /workspace <文件夹路径> 切换;"
+                     "/workspace default 回到默认工作区")
+        ui.info("\n".join(lines))
+        return None
+
+    if arg.lower() in ("default", "默认"):
+        target = ws.default_workspace()
+    else:
+        target, err = ws.resolve_target(arg)
+        if target is None:
+            ui.error(err)
+            return None
+    if ws.key(target) == ws.key(workspace):
+        ui.info(f"已经在用这个工作区: {target}")
+        return None
+
+    ws.remember(target)
+    if not rebuild:      # 一次性模式:进程马上结束,只记下"下次用这个",不重建
+        ui.info(f"已记住工作区: {target}(下次启动生效)")
+        return None
+    agent.close()        # 旧工作区的 MCP 子进程先收掉
+    new_agent, new_session = create_agent(config, target, ui)
+    ui.workspace = target      # 横幅/权限确认框里的工作区跟着换
+    _warn_library_health(target, ui)
+    ui.info(f"工作区已切换: {target}\n"
+            "(记忆、计划、附件都落在这个文件夹里;对话从新会话开始)")
+    return new_agent, new_session, target
 
 
 def _fix_console_encoding() -> None:
@@ -237,7 +323,10 @@ def main() -> None:
         return
 
     config = load_config()
-    workspace = Path.cwd().resolve()
+    # 模型能力探测(窗口/是否支持视觉):有缓存立即生效,没有就后台问一次
+    model_probe.ensure_async(config.base_url, config.api_key, config.model)
+    explicit_ws, rest_argv = pop_workspace_flag(sys.argv[1:])
+    workspace = startup_workspace(explicit_ws)
     ui = TerminalUI(config, workspace)
     ui.banner(key_ok=config.api_key_configured)
     _warn_library_health(workspace, ui)
@@ -245,7 +334,7 @@ def main() -> None:
     agent, session = create_agent(config, workspace, ui)
 
     try:
-        _repl(config, workspace, ui, agent, session)
+        _repl(config, workspace, ui, agent, session, argv=rest_argv)
     finally:
         agent.close()      # 关掉 MCP 子进程,不留孤儿
 
@@ -264,13 +353,16 @@ def _warn_library_health(workspace: Path, ui: TerminalUI) -> None:
         ui.error(notice)
 
 
-def _repl(config, workspace, ui, agent, session) -> None:
+def _repl(config, workspace, ui, agent, session, argv=None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
     # 一次性模式:命令行参数或管道输入(斜杠命令同样支持)
-    task = unmanagle_slash_command(sys.argv[1:]) if len(sys.argv) > 1 else None
+    task = unmanagle_slash_command(argv) if argv else None
     if task is None and not sys.stdin.isatty():
         task = sys.stdin.read().strip() or None
     if task is not None:
-        if task.startswith("/"):
+        if task.startswith("/workspace"):
+            cmd_workspace(task, config, workspace, ui, agent, rebuild=False)
+        elif task.startswith("/"):
             handle_slash(task, session, config, ui, agent)
         else:
             run_once(agent, ui, task)
@@ -284,6 +376,11 @@ def _repl(config, workspace, ui, agent, session) -> None:
             break
         text = user_input.strip()
         if not text:
+            continue
+        if text.startswith("/workspace"):
+            switched = cmd_workspace(text, config, workspace, ui, agent)
+            if switched is not None:
+                agent, session, workspace = switched
             continue
         if text.startswith("/"):
             if handle_slash(text, session, config, ui, agent):

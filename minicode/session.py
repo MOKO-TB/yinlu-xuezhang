@@ -15,13 +15,18 @@ class SessionSummary:
     time: str
     n_messages: int
     last_user_text: str
+    workspace: str = ""      # 留档里记的工作区(老留档没这个字段,给空串)
 
 
 class Session:
-    def __init__(self, system_prompt: str, log_dir: Path | None = None):
+    def __init__(self, system_prompt: str, log_dir: Path | None = None,
+                 workspace: Path | None = None):
         self.messages: list[dict] = [{"role": "system", "content": system_prompt}]
         self._log_dir = Path(log_dir) if log_dir is not None else None
         self._log_path: Path | None = None   # 懒创建:发出第一条消息时才落盘
+        # 会话属于哪个工作区:留档里记一份,切换会话时界面能标出"这条不是当前
+        # 工作区的记录"。以前这里记的是 Path.cwd(),那是进程启动目录,不是工作区。
+        self.workspace = Path(workspace) if workspace is not None else None
 
     @property
     def log_path(self) -> Path | None:
@@ -40,7 +45,7 @@ class Session:
         self._log_only({
             "type": "session_start",
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "workspace": str(Path.cwd()),
+            "workspace": str(self.workspace) if self.workspace else "",
         })
 
     def fresh_start(self) -> None:
@@ -129,6 +134,7 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
     for p in files:
         n_messages = 0
         last_user_text = ""
+        workspace = ""
         started = time.strftime("%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime))
         for line in p.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -138,8 +144,10 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if obj.get("type") == "session_start" and obj.get("time"):
-                started = obj["time"]
+            if obj.get("type") == "session_start":
+                if obj.get("time"):
+                    started = obj["time"]
+                workspace = str(obj.get("workspace") or "")
             if obj.get("role") in ("user", "assistant", "tool"):
                 n_messages += 1
             if obj.get("role") == "user" and isinstance(obj.get("content"), str):
@@ -147,5 +155,6 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
         summaries.append(SessionSummary(
             path=p, time=started, n_messages=n_messages,
             last_user_text=last_user_text.replace("\n", " ")[:60],
+            workspace=workspace,
         ))
     return summaries

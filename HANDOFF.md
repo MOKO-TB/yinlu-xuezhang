@@ -1,6 +1,6 @@
 # 引路学长(Agent)开发交接文档
 
-> 更新:2026-09-15　用途:任何新会话(人或 Agent)读完本文档即可无缝接手。
+> 更新:2026-09-16　用途:任何新会话(人或 Agent)读完本文档即可无缝接手。
 > 项目代码:`D:\game\mini-code`(引路学长,原 mini-code/Gcode)。
 > 本轮参考实现:`https://gitee.com/feng-chenhao/xingyao-y-code`(星瑶 Y-Code,v1.2.26);
 > 开发记录见 `docs/roadmap-v0.9.01.md`。
@@ -9,7 +9,7 @@
 
 ## 1. 项目一句话现状
 
-对标星瑶 Y-Code 的自研编码智能体,**v0.9.05**,已完成:Agent 主循环 + 内置 23 工具与 MCP 外部工具 + 权限门与**沙箱边界**(敏感路径硬禁/工作区外逐次确认) + 内置校园模型(**顶栏「模型管理」可自助添加/切换模型,不填 key 时默认用校园模型**)+ **每日 token 用量统计**(真实 usage 落库,GUI 圆环图 + CLI `/usage`)+ **任务面板**(当前任务用哪个模型/能力标签/本次消耗 token/上下文占用,会话内可切模型) + **附件上传**(文件/图片,可选视觉多模态)+ **后台任务**(多会话并发:新建/切换不再打断正在跑的任务) + SKILL.md 技能 + 知识库检索(来源网址+可信度)+ 子代理(**只读类型并行派发**,上限 4)+ 计划模式(**含 `depends_on` 依赖图与可执行/卡住调度视图**)+ 长期记忆(含 Dream 整理与用户级全局记忆)+ **校园地图**(map_* 工具 + 手绘地图面板:框出建筑、出单栋标注图、歧义不猜)+ **浏览器能力(browser_*:CDP 直连真实浏览器,看 JS 渲染后的页面、页面内取数、截图直接进对话)** + 会话管理 + 上下文压缩 + GUI(**暮色玻璃**全屏校园黄昏背景,深浅主题,时间问候首页+动态校园建议 chips,**划词复制**/消息复制与编辑重发,**思考与工具调用收成一条可折叠的"工作过程"**,立方体图标+校名 logo)+ 三形态分发(安装包/单文件/便携 zip,另含内置 crawl4ai 的完整版)。
+对标星瑶 Y-Code 的自研编码智能体,**v0.9.08**,已完成:Agent 主循环 + 内置 23 工具与 MCP 外部工具 + 权限门与**沙箱边界**(敏感路径硬禁/工作区外逐次确认) + 内置校园模型(**顶栏「模型管理」可自助添加/切换模型,不填 key 时默认用校园模型**)+ **每日 token 用量统计**(真实 usage 落库,GUI 圆环图 + CLI `/usage`)+ **任务面板**(当前任务用哪个模型/能力标签/本次消耗 token/上下文占用,会话内可切模型) + **附件上传**(文件/图片,可选视觉多模态)+ **后台任务**(多会话并发:新建/切换不再打断正在跑的任务) + SKILL.md 技能 + 知识库检索(来源网址+可信度)+ 子代理(**只读类型并行派发**,上限 4)+ 计划模式(**含 `depends_on` 依赖图与可执行/卡住调度视图**)+ 长期记忆(含 Dream 整理与用户级全局记忆)+ **校园地图**(map_* 工具 + 手绘地图面板:框出建筑、出单栋标注图、歧义不猜)+ **浏览器能力(browser_*:CDP 直连真实浏览器,看 JS 渲染后的页面、页面内取数、截图直接进对话)** + 会话管理 + 上下文压缩 + GUI(**暮色玻璃**全屏校园黄昏背景,深浅主题,时间问候首页+动态校园建议 chips,**划词复制**/消息复制与编辑重发,**思考与工具调用收成一条可折叠的"工作过程"**,立方体图标+校名 logo)+ **工作区(自己选文件夹当工作台,读写围栏/附件/计划/记忆都跟着走)** + **模型能力运行时探测(窗口与视觉启动时问服务,结论落 `model_caps.json`)** + 三形态分发(安装包/单文件/便携 zip,另含内置 crawl4ai 的完整版)。
 
 ## 2. 已完成事项(按里程碑)
 
@@ -19,7 +19,7 @@
 | 标准版 | /resume 会话恢复、/undo 写前快照回滚、上下文自动压缩(token 估算+按完整轮切分摘要) |
 | GUI | pywebview + 免构建单页前端(暖橙手账设计令牌,html.dark 深浅主题,localStorage 记忆主题);系统托盘(pystray);X 键=最小化到托盘(pywebview closing 事件返回 False 拦截) |
 | v0.6.0 子代理 | task 工具:explore(只读侦察)/implement(动手)/review(审查);独立会话+受限工具集(sub_tool_registry,排除 task 防递归,工具名加 "类型·" 前缀)+ max_steps=20 |
-| v0.6.1 内置校园模型 | gzasc=广州应用科技学院(http://10.223.24.16:8080/v1,qwen3.8-27b,**key 不进仓库**:由本地未跟踪的 `config.local.json`(`builtin_api_key`)或环境变量 `YINLUXS_BUILTIN_API_KEY` 注入,`_builtin_api_key()` 运行时解析,打包时 spec 把它打进 exe),无 Key 用户默认使用;10.x 私网自动绕过系统代理 |
+| v0.6.1 内置校园模型 | gzasc=广州应用科技学院(内网 `10.223.24.16:8080/v1`,deepseek-v4-flash,**key 不进仓库**:由本地未跟踪的 `config.local.json`(`builtin_api_key`)或环境变量 `YINLUXS_BUILTIN_API_KEY` 注入,`_builtin_api_key()` 运行时解析,打包时 spec 把它打进 exe),无 Key 用户默认使用;10.x 私网自动绕过系统代理;**内网 base_url 与 key 都不下发前端**(`get_providers`/`get_info` 对内置项返回空串),**能力(窗口/视觉)由 `model_probe` 启动时自动问服务**(窗口 327680、不支持视觉),结论落 `model_caps.json` 并覆盖静态目录,压缩阈值随之生效 |
 | v0.7.0 计划模式 | plan 工具(action=write/read/update),2-8 步勾选清单落工作区 plans/plan.md(文件即状态可进 git);复杂任务先列计划→用户确认→逐步执行 |
 | v0.8.0 长期记忆 | memory 工具(save/list/search/forget),四类(user/feedback/project/reference),存工作区 memory/MEMORY.md(一条一行人工可编辑),系统提示词自动注入(截 4000 字) |
 | 校园语料爬虫 | scripts/crawl_school_topics.py:按主题爬学校官网栏目生成 kb/school-gzasc.json(24 主题,credibility=A)。除通知类栏目外覆盖宿舍与生活服务/校园活动与文体/社团/军训/学生故事/校园讲座/视频图文/服务大厅与办事入口。**正文为空的页面也建条目**:视频页给 `观看地址:`、二维码指引页(热水充值/报修/校园服务公众号)给 `查看地址:`、仅附件页列附件名——保证链接能送到学生手上;失效链接(官网 404 也返 200)靠标题识别拦掉 |
@@ -54,6 +54,8 @@
 | v0.9.04 任务面板 + 模型管理修复(提交 `0c9da36`) | ①修「存不进自己的模型」的死循环:`get_providers()` 把内置项一并回传前端、保存时原样提交回来又被「内置不可编辑」拒 → 改为**静默过滤内置行**、允许空自定义列表、内置项由后端按代码补回;`save_providers` 仍拒绝任何 `id == gzasc` 的改写。②新增 `minicode/model_catalog.py`:模型能力(文本/视觉/工具调用)与上下文窗口目录,前端标签直接读它。③**任务面板**(输入框下方):当前任务用的模型 + 能力标签 + 窗口大小、本次任务真实消耗 token、上下文占用/上限,支持**会话内切模型**(只影响这个会话的 LLMClient,不写回全局配置)。④`library.py` 一处 SQLite 跨线程问题(冻结版 GUI 里报 `ProgrammingError: SQLite objects created in a thread...`)一并修掉。 |
 | v0.9.06 页面交互三件套(snapshot/click/fill) | 浏览器从「能看」升级到「能操作」:`browser_snapshot`(列出可见可交互元素:链接/按钮/输入框/下拉框,带序号+文字+字段名+下拉选项,**只读不弹确认**)、`browser_click`(按快照序号/按钮文字/CSS 选择器点击,点击后自动等页面稳定并回报新标题与地址)、`browser_fill`(按字段名批量填表单:name/id/placeholder/aria/标签文字都认,下拉按选项文字或值匹配,勾选接受 true/false,可选 submit=true 自动提交)。**关键设计**:①snapshot 在页面元素上打 `data-ylx="N"` 临时标记,click 按标记定位——页面一变标记就失效,序号永远不会点错元素(失效时报错并让模型重新 snapshot,而不是猜);②文字定位遇到多个同名元素**拒绝盲点**(报错让模型先 snapshot);③fill 的文本框用 `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call()` 原生 setter + `input`/`change` 事件——直接 `el.value=` 的话 React/Vue 受控组件感知不到;④**任何字段失败都不点提交**(半张表单发出去比不提交更糟),下拉找不到选项时把现有选项列表带回给模型;⑤密码框只列字段名不回显值。权限与文案:`browser_snapshot` 标 read_only(只看不点);click/fill 走确认框,`explain.py`/`gui_bridge._permission_detail_text`/CLI 与 GUI 的 `_arg_summary` 都为它们写了专门文案(确认框直显「会点击『登录』,可能引起页面跳转」「会填表单(用户名、密码),填完自动点提交」);`web_profile.EXCLUDED_TOOLS` 显式排除三个新工具并写明理由。新增 `scripts/e2e_browser_interact.py`(真浏览器:表单填写/序号点击/失效序号拒点/文字歧义拒点/JS 反馈验证)。测试:`tests/test_browser.py` +9(快照列元素/序号点击走标记/文字歧义拒/失效序号拒/填表并提交/部分失败不提交/下拉选项带回/无页面引导/registry+reason);`test_registry.py` 名单同步 26 个工具。**验证**:全量 `pytest -q` **535 passed / 0 failed**(基线 526);`scripts/e2e_browser_interact.py` PASS(真 Edge 153,8 步全过)。**本轮未重新打包,`dist/` 里仍是 0.9.02 产物。** |
 | v0.9.05 浏览器能力(CDP 直连真实浏览器) | 给 agent 装上"眼睛":不再只能抓静态 HTML,能真的开浏览器看页面。**新增** `minicode/browser.py`(CDP 客户端 + 页面会话管理 + 自检)、`minicode/tools/browser.py`(5 个工具 handler)、`tests/test_browser.py`(32 项)、`scripts/e2e_browser.py`(真浏览器全链路)、`scripts/e2e_browser_shot.py`(前端回归)。**工具**:`browser_open`(导航 + 等 readyState/可选等 CSS 选择器 + 返回标题与渲染后正文)、`browser_eval`(页面里跑 JS 精确取数/点击/滚动)、`browser_screenshot`(存工作区并把图**直接推给对话显示**)、`browser_close`、`browser_status`(只读)。**两条路线**:launch(默认零配置——自动找 Edge→Chrome→playwright 内核,用独立 profile `app_path("browser-profile")` 起 headless 实例(加 `--disk-cache-size=1` 限住磁盘占用 —— 不限制时这个常驻 profile 会慢慢涨,实测开发机 79 MB/1100 文件))与 attach(探 9222/9333 端口与浏览器用户目录的 `DevToolsActivePort`,连用户自己的浏览器拿**登录态**)。**探测必须三级兜底**:`127.0.0.1:<port>/json/version` → `localhost:<port>` → **直接读 `DevToolsActivePort` 文件第二行的 ws 路径**:实测用户自己的 Edge 153 对 `/json/*` **全部返 404**(两种 Host 一样、换 Origin 也一样),只有文件里那条 ws 路径能连上——只依赖 HTTP 探测就永远报「没找到开着远程调试的浏览器」;而且**探到端口不等于能用**(残留文件/被别的程序占),拿到地址后要真跑一次 `Browser.getVersion` 握手才算 attach 成立。**默认策略是 launch 优先**(本轮定下又改过):最初写成"auto 先探 attach,探到就用",但这样会默认去自动化用户自己那个带真实登录态、开着一二十个标签页的浏览器 —— 对分发型程序太侵入,实测也脆(冻结版 e2e 因此白等 31.6 s 后失败)。现在 auto 先 launch;attach 只在**显式 `mode=attach`** 或用户设了 `YINLUXS_CDP_URL`(那是他的意图)时用;本机 launch 不起来才拿 attach 兜底。**显式 attach 失败不许静默改用 launch**(等于把用户要的登录态换成干净实例,只能看到登录页),必须报错;`YINLUXS_CDP_URL`/`YINLUXS_BROWSER`/`YINLUXS_BROWSER_PROFILE` 可覆盖。**并发**:每线程(= 会话/子代理)一份 `PageSession`,共用一条 WebSocket、命令靠连接内锁串行;标签页上限 6 超出关最旧;**已结束线程留下的页由 `_sweep_dead_sessions_locked()` 回收**(owner 用 weakref 记线程——不回收会越积越多,线程 ident 会被复用)。**安全**:只允许 http/https,`file://`/`javascript:`/`chrome://`/`data:`/`view-source:` 硬拒;截图落盘走 `resolve_path(for_write=True)` 受沙箱约束;4 个会驱动页面的工具**不标 read_only**(要确认,`reason` 进确认框),`explain.py` 给浏览器工具写了专门的影响面文案(launch/attach/auto **三种 mode 分别**说清登录态影响——auto 也可能落到用户自己的浏览器,不能只按字面参数说话);`_arg_summary`/`_permission_detail_text` 两处都专门处理(卡片直显网址、JS 片段可见)。**网页版**:`web_profile.EXCLUDED_TOOLS` 显式排除 5 个 browser 工具并写明理由(对外形态可被拿来打内网 + 在服务器上起浏览器)。**打包**:只多一个纯 Python 依赖 `websockets>=12`;`packaging/gcode.spec` 的 `hiddenimports` **必须显式列 websockets**(它在函数内才 import,静态分析看不见),playwright/crawl4ai 仍排除——这正是选 CDP 不用 playwright 的理由(轻量包不能背 270MB 内核)。**提示词**:`browser_prompt_section()` 固定段落追加在 system prompt 尾部(说清与 `web_crawl` 分工、截图要原样写 `![](路径)`),不带时间所以不破坏 KV Cache 前缀。**验证**:全量 `pytest -q` **526 passed**(基线 484;`tests/test_browser.py` 42 项);`e2e_browser.py` PASS(真 Edge 153:JS 渲染后的表格取到、14 KB 真 PNG、两线程并发各自独立 targetId、file:// 被拒、收尾 0 个标签页泄漏);**`e2e_browser.py --attach` 同样 PASS**(用用户自己开着远程调试的 Edge 跑完同一链路——上面那条三级兜底就是被它报出来的);`E2E_SCRIPT=browser` 的假 LLM 驱真浏览器 PASS(判据:第二轮请求体里必有只由 JS 生成的哨兵文本);`e2e_frozen.py --browser` PASS(打包 exe 里 `websockets` 真收进去了、能驱动浏览器);`e2e_browser_shot.py` PASS(真 Chromium:卡片出现、经 `get_asset` 换 data URL 且 `naturalWidth>0`、点图放大/还原、后台会话事件不画进当前视图)。**本轮踩的坑**:(1) 运行时的凭据脱敏会把脚本里 `api_key_configured: true` 这类字面量改写成 `[REDACTED]`,生成的 stub JS 因此语法坏掉(症状:`pageerror: Unexpected token ')'`、页面所有桥调用失败)——写要注入前端的文本时避开"像凭据"的字面量,字段名在 Python 侧拼、值用 `json.dumps`;(2) `_ensure_conn` 原来用 `contextlib.suppress` 包着建连,连不上时 `conn` 未定义直接 NameError 且把刚起的浏览器进程漏在那里 → 改显式 try/except 并 terminate;(3) 工具失败文案必须以 `错误:` 开头,否则 `ui.tool_done` 判不出失败(卡片照样绿勾);(4) `websockets` 17 的 `connect()` 要当上下文管理器用,否则 DeprecationWarning 且不释放连接。 |
+| v0.9.07 昼暮双景双主题 | 用户拿效果图指出「背景图和 UI 一直没按效果图实施」。根因:浅色/深色**共用同一张暮色照片**(`img/campus_dusk.jpg` 写死在 body 上),浅色模式 = 暮色照片 + 橘色玻璃,跟要的日景白玻璃完全对不上。本轮把单文件内联 CSS 的前端重做成**两套完整主题**:①**昼暮双景**:`--hero-img`/`--hero-dim` 挂在 `:root` 与 `html.dark` 两套里(浅=`campus_day.jpg`+轻提亮,深=`campus_dusk.jpg`+深蓝压暗),`body` 背景走 `var(--hero-img)` —— **切主题=换照片**,JS 零改动(只切 class),加 `.35s` 缓变;②浅色「晨光薄荷」(主色橘→薄荷青 `#3FBDAE`,`--primary-text:#1F7A70` 保对比,新建任务改白玻璃 pill,Send/用户气泡换实心薄荷青);③深色「暮色青辉」(主色 `#4FD8C8`,`--glass` 换深海蓝 `rgba(13,22,33,.58)`,chips 深底青描边+微光晕,输入框青色光晕,Send 青→蓝渐变,顶栏按钮加青调描边与 chips 同一语言);④首页「玻璃托盘」:视觉走查(真浏览器截图+视觉模型复核)发现小提示细字压在照片亮部两套主题都读不清,加 `.home-tray` 把建议区整体坐进一块玻璃托盘(深色再加实一档 `rgba(10,18,26,.78)`+青描边)并与问候卡同宽对齐。全文清零旧橘色(`#F97316/#F98B3D/#E07A3F/#FF9E5E` 及 rgba 系),用量圆环换青蓝紫金系。自检脚本 `scripts/_shot_themes.py`:本地 http.server 起前端 → CDP 真浏览器 → 切 dark 类各截一张。**验证**:全量 `pytest -q` **535 passed**(纯前端改动)。 |
+| v0.9.08 工作区 + 模型能力运行时探测 | ①**工作区**(新增 `minicode/workspace.py`):工作区以前是**写死**的(GUI = `paths.app_path()` 即 exe 目录,CLI = `Path.cwd()`),用户没法把 Agent 指到自己放资料的文件夹。现在做成可持久化的用户设置:状态存 `workspaces.json`(`{"current", "recent"[≤8]}`,跟 `APP_DIR` 走 —— 打包后是 exe 旁,开发态是仓库根),**GUI/CLI 共用同一份**「上次在哪干活」。入口:GUI 顶栏「📁 工作区」胶囊 → 弹窗(当前/默认/最近,点一行即切、「选择文件夹…」走原生对话框、✕ 移出列表只动记录不删文件夹);CLI `/workspace [<路径>|default]` 与启动参数 `--workspace/-w`(也认 `--workspace=`)。**边界与取舍**:只接受**已存在**的文件夹(不做隐式创建,免得在用户盘上凭空长出目录);敏感目录(`~/.yinluxs`/`~/.ssh`/系统凭据)走 `sandbox.sensitive_roots()` 同一套口径,**永远不能**当工作区;一律 `resolve` 后存盘、比较用 `normcase`;**默认工作区 = 程序目录**(= 改造前写死的那个,老用户无感);记忆中路径失效(文件夹被删/改名)静默回退,绝不拦启动。**切换语义**:旧会话运行器一律停掉(它的工具上下文与 system prompt 都按旧工作区装的),从新会话开始;**有任务在跑时直接拒绝**(不偷换正在运行的围栏);`SandboxState.retarget()` 换围栏根并**清空本回合已放行的工作区外路径**(按绝对路径攒的旧授权不该带给新工作区);`Session` 记 `workspace`(以前 `session_start` 里写的是 `Path.cwd()`,那是进程启动目录而不是工作区),`list_sessions` 回填,前端给非当前工作区的历史会话标 `📁 目录名`;**网页版不开放**:`web_profile` 五个方法整组拒绝、前端把胶囊整个藏掉(访客不该看见也不该改服务器路径)。②**模型能力运行时探测**(新增 `minicode/model_probe.py`):静态目录 `model_catalog.MODEL_CATALOG` 只能人工维护,学校换模型就得改代码且容易填错(校内服务实测窗口 **327680**,旧值写的 1M,压缩就不会及时触发)。改为**直接问服务**:窗口 = 发一条 `max_tokens` 明显超限的请求,服务端在参数校验阶段拒绝并把真实上限写进错误文本(`max_model_len=max_total_tokens=N` / `maximum context length is N tokens`),请求被拒 = 没真生成 token,探测几乎不花钱(候选值从小往大试 1M→4M→16M,不从「一个巨大值」起步 —— 部分网关会按 `max_tokens` 预扣费,太大直接报额度不足反而问不出);视觉 = 发一张 1x1 PNG,不支持的服务端明确回 `xxx is not a multimodal model`。结论落 `model_caps.json`(TTL 一周)并发布给 `model_catalog.set_detected()`——探测优先、静态目录兜底、**未知不猜数字**;任务面板能力标签、窗口上限与 `agent._maybe_compact` 的压缩阈值(**与任务面板同一把尺子**)自动跟上。`ensure_async` 有缓存就直接生效、没有就起后台线程问一次(同 (地址,模型) 一进程只问一次),失败只是「这次没测出来」,绝不阻塞对话。**安全**:缓存里只存服务地址的 `sha256` 前 16 位指纹(判断「同名模型换了服务」),**不把内网地址写进用户能打开的文件**;同时 `save_config` 让内置供应商连 `base_url` 也不落盘,加载时由 `_ensure_builtin_provider()` 按代码补回。内置模型从 `qwen3.8-27b` 换成 **`deepseek-v4-flash`**。③**打包**:`write_user_files` 删掉上次运行留下的 `model_caps.json`(内含本机模型服务指纹,不该随包发给别人),《使用说明.txt》补工作区用法。**验证**:全量 `pytest -q` **575 passed**(基线 535);`scripts/e2e_workspace.py` PASS(真 Chromium:胶囊文案/弹窗当前项/切换后胶囊与标题更新/恢复默认/原生选文件夹/移除最近/后端 `workspace` 事件/网页版胶囊隐藏);CLI 真进程冒烟(`--workspace` 指向不存在目录 → 报错退出码 2 且不写状态文件;合法目录 → 显示当前/默认/最近);`tests/test_workspace.py` 40 项、`tests/test_model_probe.py` 覆盖解析/探测/缓存/发布;`conftest` 新增 autouse 夹具把 `model_probe` 钉成不打真服务、并把 Bridge 的 `APP_DIR` 重定向到 `tmp_path`(否则切工作区的用例会把 `workspaces.json` 写进仓库根)。 |
 
 ## 3. 关键决策(不要推翻)
 
@@ -68,6 +70,8 @@
 9. **位置图不是导航图**:这份数据没有路网拓扑,所以只能回答「在哪、旁边是什么」,**任何路线/方向顺序/步行时间都是编的**——工具与系统提示词都写死了这条,谁想加回路线功能,先要到带路网的矢量数据。
 10. **拿不准的位置不许猜**:交付索引里没有的地点(问到的俗称对不上、或只有 `not_buildings` 的文字描述)一律如实说"地图上没有这个标注",**不要编位置、不要挪坐标**。给学生指错楼的代价远大于少答一个点。
 11. **版本号**:唯一来源是 `minicode/__init__.py` 的 `__version__`;用户要求**每次更新递增 0.0.1**(0.8.5 → 0.8.6 …),两个打包脚本都从它取名,安装包版本用 `/DAppVersion` 传入。
+12. **工作区是用户设置,不是开发者常量**(v0.9.08):默认值仍是程序目录(保持老行为),但**读写围栏、附件 `uploads/`、计划 `plans/`、长期记忆 `memory/` 都跟随工作区**,`config.json` 与会话留档 `sessions/` 留在程序目录(GUI 多会话的留档目录跨工作区共用)。状态只存**一份**(`workspaces.json`,GUI/CLI 共用)—— 不要把「当前工作区」写进 config.json,也不要给 web 形态开写入口(服务器自己的目录选择不该由访客决定)。
+13. **能力(窗口/视觉)以运行时探测为准**(v0.9.08):`model_catalog.MODEL_CATALOG` 只是**人工维护的兄底**,探测结论优先,两者都没有就不猜数字(`context_window=None` → 回退 `config.context_window`)。改模型目录前先确认 `model_caps.json` 里的实测值,别把实测改回“看起来对”的整数。
 
 ## 4. 踩过的坑(复现过,别再踩)
 
@@ -88,7 +92,7 @@
 
 ```bash
 cd /d/game/mini-code
-./.venv/Scripts/python.exe -m pytest -q                    # 535 个测试全绿(约 140 s)
+./.venv/Scripts/python.exe -m pytest -q                    # 575 个测试全绿(约 190 s)
 ./.venv/Scripts/python.exe scripts/e2e_fake_server.py      # CLI 端到端(假 SSE 服务器)
 ./.venv/Scripts/python.exe scripts/e2e_frozen.py           # 打包后 exe 验证:CLI + GUI 启动
 ./.venv/Scripts/python.exe scripts/e2e_frozen_library.py   # 打包后查书:用包内 1.3 GB 真库(书名号/版次标注回归)
@@ -97,6 +101,7 @@ cd /d/game/mini-code
 ./.venv/Scripts/python.exe scripts/e2e_browser_interact.py # 页面交互:真浏览器 snapshot/click/fill(表单/序号点击/失效序号/文字歧义)
 ./.venv/Scripts/python.exe scripts/e2e_browser.py --attach # 同上,改用已开远程调试的浏览器(登录态路线)
 ./.venv/Scripts/python.exe scripts/e2e_frozen.py --browser # 打包版浏览器:验 `websockets` 真收进包里了(函数内 import,静态分析看不见)
+./.venv/Scripts/python.exe scripts/e2e_workspace.py       # 前端:工作区胶囊/弹窗/切换/恢复默认/选文件夹/移除/网页版隐藏(真 Chromium)
 ./.venv/Scripts/python.exe scripts/e2e_browser_shot.py     # 前端:Agent 截的图真画进对话(取图/放大/后台会话不串台)
 ./.venv/Scripts/python.exe scripts/e2e_frozen_mcp.py       # 打包后 MCP:连服务器 → 调工具 → 回填模型
 ./.venv/Scripts/python.exe scripts/e2e_frozen_sandbox.py   # 打包后沙箱:工作区外触发确认且不泄露内容
@@ -128,7 +133,8 @@ cd /d/game/mini-code
 2. ~~**计划模式依赖图**:计划项加 `depends_on`,主代理按依赖顺序派发~~ → **v0.9.01 已完成**(`planning.py` 的 `depends_on` + `ready_steps`/`blocked_steps` + 调度视图)。
    剩:**依赖感知自动派发**——现在是模型看调度视图自己决定派哪几步,可以再做「一键把 ready 的步骤批量派给子代理」。
 3. **MCP 增强**:HTTP/SSE 传输、AI 自助配置(`mcp_add_server` 一类)、预设模板库。
-4. **沙箱增强**:项目级白名单(`permissions.json` 式的命令前缀/文件路径授权)、Git worktree 隔离工作区。
+4. **沙箱增强**:项目级白名单(`permissions.json` 式的命令前缀/文件路径授权)、Git worktree 隔离工作区
+   (工作区自选已于 **v0.9.08** 完成;worktree 式的「同一项目多分支并行」仍未做)。
 5. **附件增强**:拖拽上传(pywebview file_drop)、`fetch_image` 抓网页图片、附件在历史会话里的可视化。
 6. **计划模式可视化**:GUI 加计划面板(当前计划文件已在聊天中渲染勾选清单,足够 MVP)。
 7. **长期记忆增强**:记忆去重/整理(星瑶的 Dream 线程)、用户级全局记忆(跨项目)。
@@ -148,7 +154,7 @@ cd /d/game/mini-code
 ## 7. 新会话上手指南
 
 1. 读本文档 + `README.md`(能力/配置/命令全集)。
-2. 跑 `pytest -q` 确认基线(应为**全绿 535 项**;若并行会话在改,先跑全量再动手)。
+2. 跑 `pytest -q` 确认基线(应为**全绿 575 项**;若并行会话在改,先跑全量再动手)。
 3. 改代码前**重读要编辑的文件**——本仓库有多个会话并行开发(web_crawl、school-qa、koubei-extract 技能与校园语料爬虫均为并行会话所加),编辑前用当前实际内容做锚点,改完跑全量测试。
 4. 相关文档:产品侧 `D:\game\yinlu-xuezhang\PLAN.md`(v2.0 冻结)与 `AGENT-PLAN.md`(用本 Agent 开发该项目的计划);产品知识库 JSON 数据源在 `D:\yy\yinlu-master\yinlu-master\`(已拷贝到本仓库 kb/)。
 5. 远端两个:`origin` = GitHub `MOKO-TB/yinlu-xuezhang`(**私有**,2026-09-13 从 `MOKO-TB/momo` 改名而来),`gitee` = `gitee.com/inkzero/momo`(**公开**)。注意 `branch.main.remote` 指向 gitee,所以 `git push` 不带参数推的是 gitee,推 GitHub 要显式写 `git push origin main`。
