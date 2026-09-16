@@ -101,6 +101,11 @@ def write_user_files(dist: Path) -> None:
     # 上一次跑起来的程序会在 exe 旁留下能力探测缓存(内含本机模型服务指纹):
     # 那是运行时状态,不该随包发给别人。
     (dist / "model_caps.json").unlink(missing_ok=True)
+    # 同类运行时状态一并清掉:token 记账库(含构建机上的用量记录)与
+    # 工作区记忆(含本机文件夹路径) —— 分享出去既没用,又像在泄露什么。
+    for _name in ("token-usage.db", "token-usage.db-wal", "token-usage.db-shm",
+                  "workspaces.json", "workspaces.json.tmp"):
+        (dist / _name).unlink(missing_ok=True)
     shutil.copy(ROOT / "config.example.json", dist / "config.example.json")
     (dist / "使用说明.txt").write_text(
         "引路学长 —— 校园 AI 助手 / 编程引路智能体(GUI + CLI)\n"
