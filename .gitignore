@@ -38,3 +38,17 @@ _build_*.log
 
 # 交付材料压缩包(内容与 引入学长/ 目录重复,只留目录)
 /引入学长.zip
+
+# GitHub 发版一次性调试脚本(含明文 token,已失效;统一挪到仓库外 tools/ 留档,
+# 这里再兜一道,防止谁把它们拷回来误提交 —— gitee 那个远端是公开的)
+/check_release.py
+/check_upload.py
+/create_release.py
+/test_api.bat
+/test_api.py
+/test_github.bat
+/test_token.ps1
+/upload_asset.py
+/upload_zip.py
+/upload_output.log
+
