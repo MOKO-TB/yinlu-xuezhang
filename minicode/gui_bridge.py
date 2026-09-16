@@ -975,18 +975,23 @@ class Bridge:
         cur_path = self.session.log_path
         cur_key = ws.key(self.workspace)
         items = []
-        for i, s in enumerate(list_sessions(self.sessions_dir), start=1):
-            # 不是当前工作区的留档:带上名字,界面标出来(它是切工作区前留下的)
-            other = ""
-            if s.workspace and ws.key(s.workspace) != cur_key:
-                other = ws.display_name(s.workspace, self.app_dir)
+        for i, s in enumerate(list_sessions(self.sessions_dir, limit=50), start=1):
+            # 每条会话都带工作区名:前端按它分组(当前工作区的组不额外标名)。
+            # 老留档没有 workspace 字段 → 归进"(未记录)"组,不与当前混在一起。
+            if s.workspace:
+                in_current = ws.key(s.workspace) == cur_key
+                ws_name = "" if in_current else ws.display_name(s.workspace, self.app_dir)
+            else:
+                in_current = False
+                ws_name = "未记录"
             items.append({
                 "index": i, "time": s.time, "n_messages": s.n_messages,
                 "last_user_text": s.last_user_text,
                 "current": s.path == cur_path,
-                "workspace": other,
+                "workspace": ws_name,
+                "ws_current": in_current,
                 "running": str(s.path) in running_paths})
-        self.ui.push("sessions", items=items[:12])
+        self.ui.push("sessions", items=items)
 
     def _history_for_frontend(self) -> list[dict]:
         out = []

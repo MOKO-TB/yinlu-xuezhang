@@ -76,6 +76,7 @@ class Agent:
             self.session.add_assistant(turn)
             self._record_usage(turn)
             self._bump_turn_tokens(turn)
+            self._push_turn_stats(turn)
             self._narration = str(turn.text or "")   # 供本步工具确认框解释"为什么要做"
 
             if not turn.tool_calls:
@@ -118,6 +119,33 @@ class Agent:
         try:
             from minicode.model_catalog import push_turn_usage
             push_turn_usage(self, self.session, self.ctx.config, turn)
+        except Exception:
+            pass
+
+    def _push_turn_stats(self, turn) -> None:
+        """给前端推本段输出的实测数据(耗时/每秒 token),纯展示,失败静默。
+
+        elapsed_ms 由 LLM 屄记录(流式收包的真实耗时);tokens 优先
+        turn.completion_tokens(_stream_once 已按 usage>估算兜底),再从
+        usage 直取兜底(兼容不经过 _stream_once 的适配器)。
+        TerminalUI 没有 push 属性,getattr 兜底(CLI 零影响)。
+        """
+        push = getattr(self.ui, "push", None)
+        if not callable(push):
+            return
+        if not (isinstance(turn.elapsed_ms, int) and turn.elapsed_ms > 0):
+            return
+        seconds = turn.elapsed_ms / 1000.0
+        tokens = turn.completion_tokens
+        if not (isinstance(tokens, int) and tokens > 0):
+            u = turn.usage if isinstance(turn.usage, dict) else {}
+            maybe = u.get("completion_tokens")
+            tokens = maybe if isinstance(maybe, int) and maybe > 0 else None
+        tps = round(tokens / seconds, 1) if tokens else None
+        try:
+            push("turn_stats", elapsed_ms=turn.elapsed_ms,
+                 tokens=tokens, tps=tps,
+                 reasoning=bool(turn.reasoning))
         except Exception:
             pass
 

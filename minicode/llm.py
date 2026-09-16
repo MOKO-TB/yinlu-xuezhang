@@ -59,6 +59,11 @@ class AssistantTurn:
     reasoning: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: dict | None = None
+    # 本次请求的实测数据(流式收包耗时,不是挂钟回合时长):
+    # elapsed_ms 由 _stream_once 记(从发请求到流结束);completion_tokens 优先
+    # 用服务端 usage,缺了退回文本粗估(只用于展示"每秒 token",不进记账)。
+    elapsed_ms: int | None = None
+    completion_tokens: int | None = None
 
 
 class LLMClient:
@@ -144,6 +149,7 @@ class LLMClient:
         turn = AssistantTurn()
         fragments: dict[int, dict] = {}
         received_any = False  # 收到首个 chunk 之后的网络错误不再重试,避免输出重复
+        started = time.perf_counter()
 
         for chunk in self._create_stream(kwargs):
             received_any = True
@@ -184,4 +190,15 @@ class LLMClient:
                      arguments=f["arguments"] or "{}")
             for i, f in sorted(fragments.items())
         ]
+        # 实测耗时与输出 token 数(展示用,失败/缺失不挡流程):
+        turn.elapsed_ms = int((time.perf_counter() - started) * 1000)
+        u = turn.usage or {}
+        ct = u.get("completion_tokens")
+        if isinstance(ct, int) and ct >= 0:
+            turn.completion_tokens = ct
+        elif turn.text:
+            # 服务端没给 usage:按"1 token ≈ 0.6 个非 ASCII 字符或 4 个 ASCII 字符"粗估,
+            # 只用于"每秒 token"展示,绝不进 token 记账/上下文占用口径。
+            wide = sum(1 for ch in turn.text if ord(ch) > 0x2E7F)
+            turn.completion_tokens = int(wide / 0.6 + (len(turn.text) - wide) / 4)
         return turn
