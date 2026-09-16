@@ -168,6 +168,29 @@ try {
   .sess:hover .sx{ display:block; }
   .sess .sx:hover{ background:var(--danger-bg); color:var(--danger); }
 
+  /* ---------------- 侧栏项目面板(最近工作区,点一下切过去) ---------------- */
+  .projects{ flex:none; max-height:38%; overflow-y:auto; padding:0 8px 6px;
+             border-bottom:1px solid var(--line-soft); }
+  .proj{ display:flex; align-items:center; gap:8px; padding:7px 10px;
+         border-radius:var(--r-m); cursor:pointer; margin-bottom:2px;
+         border:1.5px solid transparent; transition:.15s; }
+  .proj:hover{ background:var(--glass-lite); }
+  .proj.current{ background:var(--primary-light); border-color:var(--primary); }
+  .proj .ic{ flex:none; width:16px; text-align:center; font-size:13px; }
+  .proj .n{ flex:1; min-width:0; font-size:12.5px; font-weight:700; color:var(--text-2);
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .proj.current .n{ color:var(--primary-text); }
+  .proj .go{ display:none; flex:none; width:22px; height:20px; border:none;
+             border-radius:6px; background:transparent; color:var(--text-3);
+             cursor:pointer; font-size:11px; line-height:1; }
+  .proj:hover .go{ display:block; }
+  .proj .go:hover{ background:var(--danger-bg); color:var(--danger); }
+  .proj-add{ width:calc(100% - 4px); margin:2px 0 4px; padding:6px;
+             border:1.5px dashed var(--line); border-radius:var(--r-m);
+             background:transparent; color:var(--text-3); font-size:12px;
+             font-weight:700; cursor:pointer; transition:.15s; }
+  .proj-add:hover{ border-color:var(--primary); color:var(--primary-text); }
+
   /* ---------------- 主区 ---------------- */
   .main{ display:flex; flex-direction:column; min-width:0; min-height:0; }
   .topbar{ display:flex; align-items:center; gap:8px; padding:10px 16px;
@@ -795,6 +818,8 @@ try {
     <div class="logo"><img class="m" src="img/cube.png" alt="引路学长">引路学长<small id="ver"></small></div>
     <div class="school"><img src="img/school.png" alt="广州应用科技学院"></div>
     <button class="newtask" id="btnNew">＋ 新建任务</button>
+    <div class="side-title">项目</div>
+    <div class="projects" id="projects"></div>
     <div class="side-title">历史会话</div>
     <div class="sessions" id="sessions"><div style="color:var(--text-3);padding:8px 10px">暂无</div></div>
   </aside>
@@ -812,10 +837,7 @@ try {
       <button id="btnTheme" title="切换深色/浅色主题">🌙 深色</button>
       <button id="btnUndo" title="撤销最近一次文件改动">撤销</button>
       <button id="btnCompact" title="立即压缩上下文">压缩</button>
-      <select id="perm" title="权限模式">
-        <option value="confirm">确认模式</option>
-        <option value="accept_all">自动放行</option>
-      </select>
+      <select id="perm" title="权限模式:变更前确认 / 自动编辑 / 自动放行 / 完全访问"></select>
     </div>
 
     <div class="chat-wrap">
@@ -841,6 +863,11 @@ try {
           <span id="tmName">…</span><span class="task-caps" id="tmCaps"></span><span class="tm-caret">▾</span>
         </button>
         <div class="task-menu" id="taskModelMenu"></div>
+        <button class="task-model" id="thinkBtn" title="思考档位:控制模型的思考开关与深度"
+                style="display:none">
+          <span>🧠</span><span id="thinkLabel">思考</span><span class="tm-caret">▾</span>
+        </button>
+        <div class="task-menu" id="thinkMenu" style="min-width:180px"></div>
         <span class="task-sep"></span>
         <span class="task-metric" id="tmConsumed" title="本次任务累计消耗的真实 token(服务端返回才计,绝不估算)">任务消耗 <b>—</b></span>
         <span class="task-metric" id="tmContext" title="当前对话占用 / 模型上下文窗口">上下文 <b>—</b></span>
@@ -1508,6 +1535,7 @@ window.__gcodeEvent = function (e) {
       // 工作区切换完成(后端已换围栏并开了新会话):先把顶栏的轷子改过来
       renderWorkspacePill({ workspace: e.path, workspace_name: e.name,
                             workspace_is_default: e.is_default });
+      loadProjects();               // 侧栏项目面板同步(当前项高亮/置顶)
       break;
     case "cleared":
       if (e.session) currentSessionKey = e.session;   // 新建/切换会话
@@ -1539,6 +1567,10 @@ window.__gcodeEvent = function (e) {
       break;
     case "session_metrics":       // 会话切换模型后立即刷新整块面板
       taskMetrics = e; renderTaskMetrics(e);
+      loadReasoning();            // 模型换了,思考能力可能不同
+      break;
+    case "reasoning":             // 思考档位变化(本地切换/切模型归默认)
+      renderReasoning(e);
       break;
     case "compacted":
       toast(`上下文已压缩:${e.before} → ${e.after} 条消息`);
@@ -1813,9 +1845,118 @@ function loadTaskMetrics() {
 }
 $("taskModelBtn").addEventListener("click", (ev) => {
   ev.stopPropagation();
+  $("thinkMenu").classList.remove("show");
   $("taskModelMenu").classList.toggle("show");
 });
-document.addEventListener("click", () => $("taskModelMenu").classList.remove("show"));
+document.addEventListener("click", () => {
+  $("taskModelMenu").classList.remove("show");
+  $("thinkMenu").classList.remove("show");
+});
+
+/* ---------------- 思考档位(输入框下方 🧠 按钮) ---------------- */
+let reasoningState = null;
+function renderReasoning(r) {
+  reasoningState = r;
+  const btn = $("thinkBtn"), menu = $("thinkMenu");
+  if (!r || !r.visible) {           // 能力表没有的模型:不显示按钮
+    btn.style.display = "none";
+    menu.classList.remove("show");
+    return;
+  }
+  btn.style.display = "";
+  btn.disabled = !!r.disabled;
+  const labels = { default: "默认", off: "关闭", low: "低", high: "高", max: "最高", on: "开启" };
+  const cur = r.disabled ? "开启"
+    : (labels[r.choice] || r.choice || "默认");
+  $("thinkLabel").textContent = "思考 · " + cur;
+  btn.title = r.disabled ? "该模型固定开启思考"
+    : "思考档位:默认=跟随服务端;关闭=直接回答;低/高=思考深度";
+  menu.innerHTML = r.disabled
+    ? '<div class="tmenu-hint">该模型固定开启思考,不可调节</div>'
+    : (r.options || []).map(o =>
+      `<div class="trow${o.value === r.choice ? " on" : ""}" data-v="${o.value}">
+         <span class="tname">${esc(o.label)}</span>
+         <span class="twin">${o.value === "default" ? "跟随服务" :
+                              o.value === "off" ? "不思考" : "思考深度 " + o.label}</span>
+       </div>`).join("");
+  if (!r.disabled) {
+    menu.querySelectorAll(".trow").forEach(row => {
+      row.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        menu.classList.remove("show");
+        pywebview.api.set_reasoning_choice(row.dataset.v).then(res => {
+          if (res && res.ok === false) toast(res.msg || "切换失败", true);
+        }).catch(e => toast("切换失败:" + String(e).slice(0, 60), true));
+      });
+    });
+  }
+}
+function loadReasoning() {
+  if (!window.pywebview || !pywebview.api || !pywebview.api.get_reasoning) return;
+  pywebview.api.get_reasoning().then(renderReasoning).catch(() => {});
+}
+$("thinkBtn").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  $("taskModelMenu").classList.remove("show");
+  $("thinkMenu").classList.toggle("show");
+});
+
+/* ---------------- 侧栏项目面板(最近工作区) ---------------- */
+let wsCache = null;
+function renderProjects(d) {
+  wsCache = d;
+  const box = $("projects");
+  box.innerHTML = "";
+  const cur = d.current || {};
+  const rows = [];
+  const seen = new Set();
+  const addRow = (p) => {
+    if (!p || !p.path || seen.has(p.path)) return;
+    seen.add(p.path);
+    rows.push(p);
+  };
+  addRow(cur);
+  for (const r of (d.recent || [])) addRow(r);
+  for (const r of rows) {
+    const el = document.createElement("div");
+    el.className = "proj" + (r.path === cur.path ? " current" : "");
+    el.innerHTML = `<span class="ic">${r.is_default ? "🏠" : "📁"}</span>
+      <span class="n"></span>
+      ${r.path === cur.path ? "" : '<button class="go" title="从列表移除(不删文件夹)">✕</button>'}`;
+    el.querySelector(".n").textContent = r.name || r.path;
+    el.title = r.path + (r.path === cur.path ? "\n(当前工作区)" : "\n点击切换");
+    el.addEventListener("click", (ev) => {
+      if (ev.target.classList.contains("go")) return;
+      if (r.path === cur.path) return;
+      doSwitchWorkspace(r.path, false);
+    });
+    const x = el.querySelector(".go");
+    if (x) x.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      pywebview.api.forget_workspace(r.path).then(res => {
+        if (res && res.ok) renderProjects({ current: cur, default: d.default, recent: res.recent || [] });
+      }).catch(e => toast("移除失败:" + String(e).slice(0, 60), true));
+    });
+    box.appendChild(el);
+  }
+  const add = document.createElement("button");
+  add.className = "proj-add";
+  add.textContent = "＋ 选择文件夹…";
+  add.addEventListener("click", () => {
+    pywebview.api.pick_workspace().then(r => {
+      if (!r || !r.ok) {
+        if (r && r.msg && r.msg !== "已取消") toast(r.msg, true);
+        return;
+      }
+      doSwitchWorkspace(r.path, false);
+    }).catch(e => toast("打开文件夹选择框失败:" + String(e).slice(0, 60), true));
+  });
+  box.appendChild(add);
+}
+function loadProjects() {
+  if (!window.pywebview || !pywebview.api || !pywebview.api.get_recent_projects) return;
+  pywebview.api.get_recent_projects().then(renderProjects).catch(() => {});
+}
 
 let usageDays = 7;
 function openUsageDlg(days) {
@@ -1922,6 +2063,18 @@ $("mapLightbox").addEventListener("click", (e) => {
 });
 $("btnUndo").addEventListener("click", () => pywebview.api.undo());
 $("btnCompact").addEventListener("click", () => pywebview.api.compact_now());
+function renderPermOptions(info) {
+  const sel = $("perm");
+  const modes = info.permission_modes && info.permission_modes.length
+    ? info.permission_modes
+    : [{ value: "confirm", label: "变更前确认" }, { value: "accept_all", label: "自动放行" }];
+  sel.innerHTML = modes.map(m =>
+    `<option value="${esc(m.value)}">${esc(m.label)}</option>`).join("");
+  sel.value = info.permission_mode;
+  sel.title = "权限档位:" + modes.map(m => `${m.label}(${m.value})`).join(" / ")
+    + "\n变更前确认=变更要逐次确认;自动编辑=工作区内普通编辑放行;"
+    + "完全访问=沙箱内全放(敏感路径仍硬拒)";
+}
 $("perm").addEventListener("change", (e) => pywebview.api.set_permission_mode(e.target.value));
 
 $("input").addEventListener("keydown", (e) => {
@@ -2048,6 +2201,7 @@ function doSwitchWorkspace(path, viaReset) {
     if (!r || !r.ok) { toast((r && r.msg) || "切换失败", true); return; }
     toast(r.msg || ("工作区已切换:" + (r.path || path)));
     pywebview.api.get_info().then(renderWorkspacePill);
+    loadProjects();               // 切完刷新侧栏项目面板
   }).catch(e => toast("切换失败:" + String(e).slice(0, 60), true));
 }
 
@@ -2117,7 +2271,7 @@ window.addEventListener("DOMContentLoaded", () => {
     pywebview.api.get_info().then(info => {
     $("ver").textContent = "v" + info.version;
     renderWorkspacePill(info);
-    $("perm").value = info.permission_mode;
+    renderPermOptions(info);
     if (info.session_key) currentSessionKey = info.session_key;
     currentProvActive = info.active_provider || "";
     renderModelPill(info);
@@ -2134,6 +2288,8 @@ window.addEventListener("DOMContentLoaded", () => {
       $("hint").classList.remove("warn");
       pywebview.api.refresh_sessions();
       refreshHomeSuggestions();
+      loadProjects();      // 侧栏项目面板(最近工作区)
+      loadReasoning();     // 思考档位按钮
     }).catch(e => {
       $("hint").textContent = "界面初始化失败:" + String(e).slice(0, 80);
     });

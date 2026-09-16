@@ -123,7 +123,9 @@ class Provider:
 class Config:
     providers: list = field(default_factory=list)  # list[Provider]
     active_provider_id: str = ""
-    permission_mode: str = "confirm"    # confirm: 变更类工具逐次确认; accept_all: 自动放行
+    # confirm:变更前确认(查询放行、变更询问) / accept_edits:自动编辑(普通变更放行、敏感变更询问)
+    # accept_all:自动放行(兼容旧配置) / full:完全访问(沙箱内非灾难性操作全放)
+    permission_mode: str = "confirm"
     shell: str = "auto"                 # auto | bash | cmd | powershell
     max_output_chars: int = 20000       # 工具输出回填给模型前的截断长度
     request_timeout_seconds: int = 300  # 单次 LLM 请求超时
@@ -221,10 +223,11 @@ def _providers_from_raw(raw: dict) -> list[Provider]:
 def _config_from_raw(raw: dict) -> Config:
     providers = _providers_from_raw(raw)
     active = str(raw.get("active_provider") or "")
+    from minicode.permission import normalize_mode
     cfg = Config(
         providers=providers,
         active_provider_id=active,
-        permission_mode=raw.get("permission_mode", "confirm"),
+        permission_mode=normalize_mode(raw.get("permission_mode", "confirm")),
         shell=raw.get("shell", "auto"),
         max_output_chars=int(raw.get("max_output_chars", 20000)),
         request_timeout_seconds=int(raw.get("request_timeout_seconds", 300)),

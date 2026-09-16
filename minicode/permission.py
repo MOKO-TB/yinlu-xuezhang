@@ -2,9 +2,17 @@
 
 沙箱联动(参考星瑶 Y-Code 的边界模型):
 - 敏感路径(凭据/密钥目录)一律硬拒绝,任何权限模式都不能越过;
-- 工作区外的路径即便在 accept_all 模式下也要用户确认一次,
+- 工作区外的路径即便在 full 模式下也要用户确认一次,
   确认后本回合内该路径放行(allow_outside_workspace 打开则直接放行);
 - 沙箱禁配规则/禁网命令同样硬拒绝。
+
+四档权限模式(对齐星瑶 Y-Code 的 app_context,2026-09-16 起):
+- confirm      变更前确认 —— 查询自动放行;任何变更类工具都要确认(默认);
+- accept_edits 自动编辑 —— 工作区内的写文件/改文件/构建类命令自动放行;
+               删除、跨区写、敏感命令等仍要确认(写子代理批量干活的主力档);
+- accept_all   自动放行 —— 沙箱边界外的仍逐次确认(老档位,保留兼容旧 config);
+- full         完全访问 —— 沙箱内放行所有非灾难性操作;敏感路径/灾难命令/
+               沙箱红线依然硬拒绝,档位再高也越不过安全底线。
 """
 from __future__ import annotations
 
@@ -26,6 +34,30 @@ WRITE_TOOLS = ("write_file", "edit_file")
 
 # 用户确认后需要记住"这个路径可以访问"的工具
 PATH_TOOLS = ("read_file", "write_file", "edit_file")
+
+# accept_edits(自动编辑)档放行的构建类命令首词。只放"跑测试/装依赖/编译"
+# 这类可重复执行、不直接破坏数据的动作;删改类(rm/del/Remove-Item/git push…)
+# 一律不进表 —— 宁可多问一次,不放走一个破坏性动词。
+BUILD_COMMANDS = frozenset({
+    "python", "python3", "py", "pytest", "pip", "pip3",
+    "node", "npm", "npx", "yarn", "pnpm",
+    "make", "cargo", "go",
+})
+
+# 权限档位全集(前端下拉、CLI /permission 都按这个顺序展示)
+PERMISSION_MODES = ("confirm", "accept_edits", "accept_all", "full")
+
+MODE_LABELS = {
+    "confirm": "变更前确认",
+    "accept_edits": "自动编辑",
+    "accept_all": "自动放行",
+    "full": "完全访问",
+}
+
+
+def normalize_mode(mode: str) -> str:
+    """未知/空档位一律归回 confirm(旧配置里只会有 confirm/accept_all)。"""
+    return mode if mode in PERMISSION_MODES else "confirm"
 
 
 def _check_rm(segment: str) -> str | None:
@@ -135,24 +167,56 @@ class PermissionGate:
                 if level == BLOCKED:
                     return REJECT
                 if level == OUTSIDE and not self.sandbox.path_allowed(path):
-                    return ASK          # 沙箱边界不因 accept_all 而放开
+                    return ASK          # 沙箱边界不因权限档位而放开
             if name == "bash":
                 level, why = check_command(self.sandbox.policy,
                                            args.get("command", ""))
                 if level == SB_REJECT:
                     return REJECT
-                if level == SB_ASK:
+                if level == SB_ASK and self.config.permission_mode != "full":
                     return ASK
+                if level == SB_ASK and self.config.permission_mode == "full":
+                    pass                # full 档:沙箱内可配命令放行(见下)
                 if not self.sandbox.policy.enabled:
                     pass                # 沙箱关闭:命令仍走下面的常规确认
 
         if tool.read_only:
             return ALLOW
-        if self.config.permission_mode == "accept_all":
+        mode = self.config.permission_mode
+        if mode == "full":
+            # 完全访问:沙箱内的操作全部放行(敏感路径/灾难命令在上面已被硬拒)。
+            # 工作区外路径已在前面 ASK 过一次,这里只放行剩余情况。
             return ALLOW
+        if mode == "accept_all":
+            return ALLOW
+        if mode == "accept_edits":
+            # 自动编辑:工作区内的写文件/改文件自动放行;删除、跨区、
+            # 敏感命令(上面 SB_ASK 已 return)仍走确认。浏览器打开网页这类
+            # 会产生页面跳转的操作不算"编辑",维持逐次确认。
+            if name in WRITE_TOOLS:
+                return ALLOW
+            if name == "bash" and self._is_workspace_build_command(args):
+                return ALLOW
+            return ASK
         if name in self._turn_allowed:
             return ALLOW
         return ASK
+
+    @staticmethod
+    def _is_workspace_build_command(args: dict) -> bool:
+        """accept_edits 档放行的"构建类"命令:python/pytest/pip 等无破坏性前缀。
+
+        只认命令的**第一个词**(venv 包装器也算),避免 `-rf` 这类参数混进来;
+        删除/格式化/强制类命令不在这里,维持逐次确认。
+        """
+        cmd = str(args.get("command", "")).strip()
+        if not cmd:
+            return False
+        head = re.split(r"[\s|;&]", cmd, 1)[0].strip("\"'").lower()
+        if head.endswith(".exe"):
+            head = head[:-4]
+        head = head.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        return head in BUILD_COMMANDS
 
     def approve_for_turn(self, tool_name: str) -> None:
         self._turn_allowed.add(tool_name)

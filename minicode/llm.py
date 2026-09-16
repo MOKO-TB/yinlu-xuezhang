@@ -73,6 +73,10 @@ class LLMClient:
             max_retries=0,  # 重试由本层自己做,以便向 UI 汇报
             **kwargs,
         )
+        # 思考档位:界面上选的 default/off/low/high/max。会话级状态
+        # (跟着 LLMClient 走 —— 每个会话切模型时会重建,所以新会话回到
+        # "默认";Bridge 切档位时只重建共享客户端,不影响别的会话)。
+        self.reasoning_choice = "default"
 
     def stream_chat(self, messages: list[dict], tools: list,
                     on_text: TextCallback | None = None,
@@ -132,6 +136,10 @@ class LLMClient:
         }
         if schemas:
             kwargs["tools"] = schemas
+        # 思考档位 → 真实请求参数(见 minicode/reasoning.py)。
+        # default 时一个参数都不加:请求字节与旧版完全一致。
+        from minicode.reasoning import apply_reasoning_choice
+        apply_reasoning_choice(kwargs, self.config.model, self.reasoning_choice)
 
         turn = AssistantTurn()
         fragments: dict[int, dict] = {}

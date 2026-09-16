@@ -169,17 +169,56 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
         ui.info(agent.undo())
     elif name == "/compact":
         agent.compact_now()
+    elif name == "/permission":
+        from minicode.permission import MODE_LABELS, PERMISSION_MODES, normalize_mode
+        if arg:
+            mode = arg.strip().lower()
+            if mode in PERMISSION_MODES:
+                config.permission_mode = mode
+                ui.info(f"权限模式已切换为「{MODE_LABELS[mode]}」(仅本次运行;持久化请改 config.json)")
+            else:
+                ui.error(f"未知档位 {arg}。可用: " + "/".join(PERMISSION_MODES))
+        else:
+            mode = config.permission_mode
+            lines = ["当前权限档位: " + f"「{MODE_LABELS[mode]}」({mode})"]
+            for m in PERMISSION_MODES:
+                mark = "●" if m == mode else "○"
+                lines.append(f"  {mark} {m:<13} {MODE_LABELS[m]}")
+            lines.append("切换: /permission <档位>(GUI 在顶栏下拉)")
+            ui.info("\n".join(lines))
+    elif name == "/think":
+        from minicode.reasoning import LABELS, get_capability, normalize_choice
+        model = config.model
+        cap = get_capability(model)
+        llm = getattr(agent, "llm", None)
+        current = getattr(llm, "reasoning_choice", "default") if llm else "default"
+        if cap.kind == "hidden":
+            ui.info(f"模型 {model} 未登记思考能力,暂不支持思考档位设置。")
+        elif cap.kind == "fixed":
+            ui.info(f"模型 {model} 固定开启思考,不可调节。")
+        elif arg:
+            choice = normalize_choice(model, arg.strip().lower())
+            llm.reasoning_choice = choice
+            ui.info(f"思考档位已切换为「{LABELS[choice]}」({model},下一个请求生效)")
+        else:
+            lines = [f"当前思考档位: 「{LABELS[current]}」 · 模型 {model}"]
+            for o in cap.options:
+                mark = "●" if o == current else "○"
+                lines.append(f"  {mark} {o:<8} {LABELS[o]}")
+            lines.append("切换: /think <档位>(GUI 在输入框下方按钮)")
+            ui.info("\n".join(lines))
     else:
             ui.error(f"未知命令 {name}。可用: /help /clear /model /history "
-                     f"/resume /undo /compact /sandbox /memory /remember /dream "
-                     f"/plan /skills /kb /library /usage /browser /exit")
+                     f"/resume /undo /compact /sandbox /permission /think "
+                     f"/memory /remember /dream /plan /skills /kb /library "
+                     f"/usage /browser /exit")
     return False
 
 
 SLASH_NAMES = {"/help", "/clear", "/model", "/history", "/resume",
                "/undo", "/compact", "/sandbox", "/memory", "/remember",
                "/dream", "/skills", "/kb", "/plan", "/library", "/usage",
-               "/browser", "/workspace",
+               "/browser", "/workspace", "/permission", "/think",
                "/exit", "/quit"}
 # Git Bash(MSYS)会把 "/cmd" 形式的参数转成 Git 安装目录下的路径,
 # 如 "D:/git/Git/history" 或 "C:/Program Files/Git/history"

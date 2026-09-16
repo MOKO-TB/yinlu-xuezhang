@@ -36,6 +36,7 @@ from minicode.llm import LLMClient
 from minicode.library import catalog_health, health_notice
 from minicode.model_catalog import session_metrics
 from minicode.paths import APP_DIR, SESSIONS_DIR, resource_path
+from minicode.permission import MODE_LABELS, PERMISSION_MODES
 from minicode.sandbox import SandboxState, classify_path, policy_from_raw, policy_to_raw
 from minicode.session import Session, list_sessions
 from minicode.skills import load_skills, skill_dirs
@@ -129,6 +130,18 @@ class PublicApi:
     def set_session_model(self, provider_id: str) -> dict:
         """任务面板:把当前会话的模型切到指定供应商(不影响全局默认)。"""
         return self._b.set_session_model(provider_id)
+
+    def get_reasoning(self) -> dict:
+        """思考档位面板:当前模型能力 + 档位列表 + 当前选择。"""
+        return self._b.get_reasoning()
+
+    def set_reasoning_choice(self, choice: str) -> dict:
+        """切换当前会话的思考档位(默认/关闭/低/高)。"""
+        return self._b.set_reasoning_choice(choice)
+
+    def get_recent_projects(self) -> dict:
+        """侧栏「项目」面板:最近工作区 + 当前(给任务栏下面那块工作区面板)。"""
+        return self._b.get_workspaces()
 
     def get_session_metrics(self) -> dict:
         """任务面板:当前会话模型/能力/消耗/上下文占用/可切列表。"""
@@ -326,6 +339,10 @@ class Bridge:
             "workspace_name": ws.display_name(self.workspace, self.app_dir),
             "workspace_is_default": ws.is_default(self.workspace, self.app_dir),
             "permission_mode": self.config.permission_mode,
+            "permission_modes": [
+                {"value": m, "label": MODE_LABELS[m]}
+                for m in PERMISSION_MODES
+            ],
             "api_key_configured": self.config.api_key_configured,
             "messages": len(self.session.messages),
             "tokens": estimate_tokens(self.session.messages),
@@ -547,10 +564,83 @@ class Bridge:
             return {"ok": False, "msg": f"「{target.name}」还没配 API Key,先在模型管理里配好"}
         runner.llm_override = {"provider_id": target.id, "model": target.model}
         runner.agent.llm = LLMClient(replace(self.config, active_provider_id=target.id))
+        # 模型换了,思考能力表也换了:档位归回 default,并把新能力推给界面
+        runner.agent.llm.reasoning_choice = "default"
+        self._push_reasoning(runner)
         self.ui.push("info", text=f"本会话已切换到 {target.name} · {target.model}(不影响其他会话与默认模型)")
         self.ui.push("session_metrics", **session_metrics(
             runner.agent, runner.session, self.config, runner.llm_override))
         return {"ok": True}
+
+    # ------------------------------------------------------------ 思考档位
+
+    def _active_model_name(self, runner: SessionRunner | None = None) -> str:
+        """当前会话实际在用的模型名(会话级覆盖优先)。"""
+        r = runner or self._current
+        if r is not None and r.llm_override:
+            return str(r.llm_override.get("model") or self.config.model)
+        return self.config.model
+
+    def _session_llm(self, runner: SessionRunner | None = None):
+        """当前会话真正发请求的 LLMClient。"""
+        r = runner or self._current
+        return r.agent.llm if r is not None else None
+
+    def _push_reasoning(self, runner: SessionRunner | None = None) -> None:
+        """把思考能力快照推给前端(按钮显隐/档位列表/当前选择)。"""
+        from minicode.reasoning import reasoning_snapshot
+        r = runner or self._current
+        if r is None:
+            return
+        llm = self._session_llm(r)
+        snap = reasoning_snapshot(
+            self._active_model_name(r),
+            getattr(llm, "reasoning_choice", "default") if llm else "default")
+        self.ui.push("reasoning", session=r.key, **snap)
+
+    def get_reasoning(self) -> dict:
+        """思考档位面板一屏数据:能力 + 当前选择(初始化/切模型后拉取)。"""
+        from minicode.reasoning import reasoning_snapshot
+        llm = self._session_llm()
+        snap = reasoning_snapshot(
+            self._active_model_name(),
+            getattr(llm, "reasoning_choice", "default") if llm else "default")
+        snap["ok"] = True
+        return snap
+
+    def set_reasoning_choice(self, choice: str) -> dict:
+        """切换当前会话的思考档位,下一个请求立即生效(不影响其他会话)。
+
+        与切模型一样走"重建会话 LLM 客户端"的路:LLMClient 是每会话一份的,
+        重建只动 self._current.agent.llm,后台会话的思考档位不受影响。
+        """
+        from minicode.reasoning import get_capability, normalize_choice
+        runner = self._current
+        if runner is None:
+            return {"ok": False, "msg": "没有活动会话"}
+        if runner.busy:
+            return {"ok": False, "msg": "任务进行中,等这轮跑完再切思考档位"}
+        model = self._active_model_name(runner)
+        cap = get_capability(model)
+        if cap.kind == "hidden":
+            return {"ok": False, "msg": f"模型 {model} 暂不支持思考档位设置"}
+        if cap.kind == "fixed":
+            return {"ok": False, "msg": f"模型 {model} 固定开启思考,不可调节"}
+        choice = normalize_choice(model, choice)
+        keep = getattr(runner.agent.llm, "reasoning_choice", "default")
+        runner.agent.llm = LLMClient(replace(
+            self.config, active_provider_id=self.config.provider.id
+            if self.config.provider else "")) if runner.llm_override is None \
+            else LLMClient(replace(self.config,
+                                   active_provider_id=runner.llm_override["provider_id"]))
+        runner.agent.llm.reasoning_choice = choice
+        if choice != keep:
+            labels = {"default": "默认", "off": "关闭", "low": "低",
+                      "high": "高", "max": "最高"}
+            self.ui.push("info", text=f"思考档位:{labels.get(choice, choice)}"
+                         f"({model},下一个请求生效)")
+        self._push_reasoning(runner)
+        return {"ok": True, "choice": choice}
 
     def get_session_metrics(self) -> dict:
         """任务面板一屏数据:模型/能力/消耗/上下文占用/可切列表。"""
@@ -760,10 +850,17 @@ class Bridge:
         return {"ok": True}
 
     def set_permission_mode(self, mode: str) -> dict:
-        if mode in ("confirm", "accept_all"):
+        """切换权限档位(confirm/accept_edits/accept_all/full),写回 config.json。
+
+        档位语义见 minicode/permission.py 模块头;未知档位拒绝,不静默归档。
+        """
+        from minicode.permission import MODE_LABELS, PERMISSION_MODES
+        if mode in PERMISSION_MODES:
             self.config.permission_mode = mode
-            self.ui.push("info", text=f"权限模式已切换为 {mode}")
-            return {"ok": True}
+            save_config(self.config_path, self.config)
+            self.ui.push("info",
+                         text=f"权限模式已切换为「{MODE_LABELS[mode]}」({mode})")
+            return {"ok": True, "permission_mode": mode}
         return {"ok": False, "msg": "未知权限模式"}
 
     def refresh_sessions(self) -> dict:

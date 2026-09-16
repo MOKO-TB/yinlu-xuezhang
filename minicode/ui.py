@@ -233,8 +233,12 @@ class TerminalUI:
 
     def banner(self, key_ok: bool) -> None:
         mode = self.config.permission_mode
-        mode_hint = ("变更类操作会先请求确认" if mode == "confirm"
-                     else "变更类操作自动执行,请谨慎使用")
+        mode_hint = {
+            "confirm": "变更类操作会先请求确认",
+            "accept_edits": "工作区内普通编辑与构建命令自动执行",
+            "accept_all": "变更类操作自动执行(沙箱边界外仍确认)",
+            "full": "完全访问(敏感路径与灾难命令仍硬拒绝)",
+        }.get(mode, "变更类操作会先请求确认")
         lines = [
             f"[bold]引路学长[/bold] [dim]v{__version__} · 编程引路智能体[/dim]",
             f"模型  {self.config.model}  [dim]@ {self.config.base_url}[/dim]",
@@ -263,6 +267,8 @@ class TerminalUI:
             "  /undo         撤销最近一次文件改动(可连续;bash 改动不在跟踪范围)\n"
             "  /compact      立即压缩上下文(平时到达阈值会自动压缩)\n"
             "  /sandbox [on|off] 查看/临时切换沙箱(持久化改 config.json)\n"
+            "  /permission [档位] 查看/切换权限档位(confirm/accept_edits/accept_all/full)\n"
+            "  /think [档位]     查看/切换思考档位(default/off/low/high/max,按模型能力)\n"
             "  /memory [user] 查看长期记忆(默认本项目;user=用户级)\n"
             "  /remember <内容> 记一条用户级偏好(跨项目)\n"
             "  /dream [project|user|all] 整理记忆:去重合并(自动备份)\n"
