@@ -1,4 +1,4 @@
-"""校验打包产物里编译进去的 minicode 代码确实是 v0.9.12 新版。
+"""校验打包产物里编译进去的 minicode 代码确实是 v0.9.13 新版。
 
 PyInstaller 把纯 Python 模块压进 PYZ 归档(嵌在 exe 里),磁盘上看不到 .py 文件,
 所以走 PyInstaller 自己的读取器把模块字节码取出来,核对新增符号是否存在。
@@ -10,12 +10,17 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# 每个模块要求存在的新增符号(v0.9.12)
+# 每个模块要求存在的新增符号(v0.9.13:模型清单 / 测试拉取 / 导出搜索)
 TARGETS: dict[str, tuple[str, ...]] = {
-    "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill",
-                        "app_skills_dir", "app_path"),
-    "minicode.gui_bridge": ("get_skill_channels", "add_skill", "get_skill_body"),
-    "minicode.web_profile": ("网页版不开放技能面板",),
+    "minicode.config": ("model_entries", "enabled_models", "sync_model",
+                        "_dedupe_models", "_models_from_raw", "PROVIDER_PRESETS"),
+    "minicode.gui_bridge": ("test_model", "fetch_models", "get_provider_presets",
+                            "export_session", "search_sessions",
+                            "_provider_credentials"),
+    "minicode.model_probe": ("list_models", "explain_status", "remember"),
+    "minicode.session": ("to_markdown", "search_logs", "export_filename"),
+    "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill"),
+    "minicode.web_profile": ("网页版不开放会话导出", "search_sessions"),
 }
 
 
@@ -62,9 +67,9 @@ def main() -> int:
                 failures.append(f"{mod}:{needle}")
     print()
     if failures:
-        print("FAIL: 包内不是 v0.9.12 代码 →", failures)
+        print("FAIL: 包内不是 v0.9.13 代码 →", failures)
         return 1
-    print("PASS: 包内后端代码包含 v0.9.12 全部新增符号")
+    print("PASS: 包内后端代码包含 v0.9.13 全部新增符号")
     return 0
 
 

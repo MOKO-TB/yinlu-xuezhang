@@ -806,6 +806,10 @@ try {
                      padding:8px 9px; color:var(--text-1); font:inherit; font-size:12px;
                      outline:none; }
   .prov-main{ flex:1; min-width:0; display:flex; flex-direction:column; gap:9px; }
+  /* 名称行:输入框 + 供应商启停开关 + 删除。
+     这一行必须是 flex —— .sw 是 label(inline),宽高只对块级/弹性子项生效,
+     放在块级父元素里会退化成 0 宽(开关直接看不见)。 */
+  .prov-main .pm-head{ display:flex; align-items:center; gap:8px; }
   .prov-main .pm-head input{ flex:1; background:var(--glass-lite);
                              border:1px solid var(--line-soft); border-radius:var(--r-s);
                              padding:8px 11px; color:var(--text-1); font:inherit;

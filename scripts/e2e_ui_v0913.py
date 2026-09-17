@@ -216,6 +216,23 @@ def main() -> int:
                   "点眼睛后明文显示")
             page.click("#btnKeyEye")
 
+            # 供应商级开关与删除按钮必须真占位置:.sw 是 label(inline),
+            # 父元素忘了 display:flex 时宽高会失效、开关被压成 0 宽(曾复现)
+            geo = page.evaluate("""() => {
+              const head = document.querySelector('#provMain .pm-head');
+              const box = (el) => { const b = el.getBoundingClientRect();
+                                    return {w: b.width, h: b.height}; };
+              return {head: getComputedStyle(head).display,
+                      sw: box(head.querySelector('.sw')),
+                      name: box(document.getElementById('pvName')),
+                      panel: box(document.getElementById('provMain'))};
+            }""")
+            check(geo["head"] == "flex", f"名称行是 flex 布局({geo['head']})")
+            check(geo["sw"]["w"] > 20 and geo["sw"]["h"] > 10,
+                  f"供应商启停开关有实际尺寸({geo['sw']})")
+            check(geo["name"]["w"] > geo["panel"]["w"] * 0.5,
+                  f"名称输入框撑满该行({geo['name']['w']:.0f}/{geo['panel']['w']:.0f})")
+
             # 供应商里的模型清单
             rows = page.locator("#mmList .mm-row")
             check(rows.count() == 2, "模型清单列出该供应商的 2 个模型")
