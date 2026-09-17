@@ -13,6 +13,27 @@ from minicode.paths import app_path
 
 SKILL_BODY_LIMIT = 8000  # 技能全文回填给模型的截断长度
 
+# 用户自建技能的入口渠道(渠道页会按这几个目录展示/落盘):
+#   builtin  = 打包进应用的只读技能(随应用分发,升级不丢但不可写)
+#   app      = exe/源码旁的 skills/ 目录(共享给所有工作区,推荐写这里)
+#   workspace= 当前工作区 skills/(项目级,同名时先到先得,优先级最低)
+SKILL_CHANNELS = (
+    ("builtin", "内置技能", "随应用分发的只读技能,升级应用后仍在"),
+    ("app", "应用目录", "exe/源码旁边的 skills/,所有工作区共用,推荐放这里"),
+    ("workspace", "当前工作区", "工作区里的 skills/,只在当前项目生效"),
+)
+
+
+def app_skills_dir(app_dir: Path | None = None) -> Path:
+    """「应用目录」渠道的落点:app_dir/skills;不传 app_dir 用全局 APP_DIR。
+
+    Bridge 传自己的 app_dir(测试里被钉到临时目录,与 workspaces.json 同级),
+    直接调 describe_channels/create_skill 的旧代码路径仍走全局 APP_DIR。
+    """
+    if app_dir is not None:
+        return Path(app_dir) / "skills"
+    return app_path("skills")
+
 
 @dataclass
 class Skill:
@@ -114,3 +135,75 @@ def use_skill(ctx, name: str) -> str:
     body = skill.body[:SKILL_BODY_LIMIT]
     tail = "\n…(技能内容过长,已截断)" if len(skill.body) > SKILL_BODY_LIMIT else ""
     return f"# 技能: {skill.name}\n\n{body}{tail}"
+
+
+# ------------------------------------------------------------ 技能面板(渠道)
+
+def _channel_slug(text: str) -> str:
+    """技能名/目录名清洗:只留文件名安全字符;清空后给空串(由调用方拒绝)。"""
+    return re.sub(r"[^A-Za-z0-9_\-]+", "-", text.strip()).strip("-")
+
+
+def describe_channels(workspace: Path | None = None,
+                      app_dir: Path | None = None) -> list[dict]:
+    """渠道页「渠道」tab 的数据源:三个技能目录的存在状态与技能数。"""
+    from minicode.paths import resource_path
+    dirs = {"app": app_skills_dir(app_dir), "builtin": resource_path("skills")}
+    if workspace:
+        dirs["workspace"] = Path(workspace) / "skills"
+    out: list[dict] = []
+    for key, label, note in SKILL_CHANNELS:
+        d = dirs.get(key)
+        if d is None:
+            out.append({"key": key, "label": label, "note": note,
+                        "path": "", "exists": False, "count": 0})
+            continue
+        count = _count_skill_files(d)
+        out.append({"key": key, "label": label, "note": note,
+                    "path": str(d), "exists": d.is_dir(), "count": count})
+    return out
+
+
+def _count_skill_files(d: Path) -> int:
+    """数一个技能目录里有几个技能(SKILL.md 目录布局 + 单 .md 文件布局)。"""
+    if not d.is_dir():
+        return 0
+    count = 0
+    for entry in d.iterdir():
+        md = entry / "SKILL.md" if entry.is_dir() else (
+            entry if entry.suffix == ".md" else None)
+        if md is not None and md.exists():
+            count += 1
+    return count
+
+
+def create_skill(workspace: Path | None, name: str, description: str = "",
+                 body: str = "", channel: str = "app",
+                 app_dir: Path | None = None) -> dict:
+    """面板「添加技能」:把用户填的 name/description/body 写成 SKILL.md。
+
+    builtin 渠道只读(打包资源里写不进去),一律拒绝;同名技能已存在时拒绝
+    (load_skills 是先到先得,静默覆盖会让用户以为自己改了内置技能)。
+    返回 {"ok", "msg", "name", "path"}。
+    """
+    name = _channel_slug(name or "")
+    if not name:
+        return {"ok": False, "msg": "技能名不能为空"}
+    if channel == "builtin" or channel not in {c[0] for c in SKILL_CHANNELS}:
+        return {"ok": False, "msg": "内置技能目录只读:请选择「应用目录」或「当前工作区」"}
+    target_dir = (Path(workspace) / "skills" if channel == "workspace"
+                  else app_skills_dir(app_dir))
+    d = target_dir / name
+    if d.exists():
+        return {"ok": False, "msg": f"同名技能目录已存在:{name}(换个名字,或先删掉旧的)"}
+    try:
+        d.mkdir(parents=True, exist_ok=False)
+        desc = (description or "").strip().replace("\n", " ")
+        front = f"---\nname: {name}\ndescription: {desc}\n---\n"
+        (d / "SKILL.md").write_text(front + (body or "").strip() + "\n",
+                                    encoding="utf-8")
+    except OSError as exc:
+        return {"ok": False,
+                "msg": f"写入技能目录失败:{type(exc).__name__}: {exc}"}
+    return {"ok": True, "name": name, "path": str(d),
+            "msg": f"技能「{name}」已添加到{dict((c[0], c[1]) for c in SKILL_CHANNELS)[channel]},新任务即可使用"}

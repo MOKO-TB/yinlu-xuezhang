@@ -113,7 +113,7 @@
 
   /* ---------------- 隐藏所有者专属控件 ---------------- */
   var css = [
-    "#btnMemory", "#btnSandbox", "#btnUndo", "#btnAttach", "#perm",
+    "#btnMemory", "#btnSandbox", "#btnUndo", "#btnAttach", "#perm", "#btnSkills",
   ].join(",") + "{display:none !important}";
   function injectCss() {
     var style = document.createElement("style");

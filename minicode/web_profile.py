@@ -193,6 +193,11 @@ class PublicFacade:
             "save_providers": lambda **k: _refuse("网页版不提供密钥管理"),
             "set_provider": lambda **k: _refuse("网页版不提供密钥管理"),
             "get_token_usage": lambda **k: _refuse("网页版不开放用量统计"),
+            # 技能面板读技能全文 = 一个文件读取原语,且技能目录在应用侧,不对外开放
+            "get_skills": lambda **k: _refuse("网页版不开放技能面板"),
+            "get_skill_body": lambda **k: _refuse("网页版不开放技能面板"),
+            "get_skill_channels": lambda **k: _refuse("网页版不开放技能面板"),
+            "add_skill": lambda **k: _refuse("网页版不开放技能面板"),
             # 工作区是服务器自己的目录选择:访客不能改(5 个方法整组拒绝)
             "get_workspaces": lambda **k: _refuse("网页版不开放工作区管理"),
             "pick_workspace": lambda **k: _refuse("网页版不开放工作区管理"),

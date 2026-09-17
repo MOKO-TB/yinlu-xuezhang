@@ -253,6 +253,13 @@ try {
              background:transparent; color:var(--text-3); font-size:12px;
              font-weight:700; cursor:pointer; transition:.15s; }
   .proj-add:hover{ border-color:var(--primary); color:var(--primary-text); }
+  /* p2(v0.9.12):独立「＋ 新建任务」入口回到侧栏(项目卡片里那个保留);
+     用户反馈首页找不着新建任务,所以全局入口也要有一份 */
+  .side-newtask{ width:calc(100% - 8px); margin:4px 0 6px; padding:7px;
+                 border:1.5px dashed var(--primary); border-radius:var(--r-m);
+                 background:var(--primary-light); color:var(--primary-text);
+                 font-size:12.5px; font-weight:800; cursor:pointer; transition:.15s; }
+  .side-newtask:hover{ filter:brightness(1.05); border-style:solid; }
 
   /* ---------------- 主区 ---------------- */
   .main{ display:flex; flex-direction:column; min-width:0; min-height:0; }
@@ -807,6 +814,70 @@ try {
 
   /* ---------------- 用量统计弹窗 ---------------- */
   #usageOverlay .dialog{ width:680px; max-width:94vw; }
+  /* p1(v0.9.12):近30天时内容很长,不能把整个弹窗拉到屏幕外 ——
+     弹窗限高,内部自行滚动(头部/按钮常驻,中间的圆环列表滚动) */
+  #usageOverlay .dialog{ max-height:86vh; display:flex; flex-direction:column; }
+  #usageOverlay .dialog #usageBody{ flex:1; min-height:0; overflow-y:auto;
+                                   padding-right:4px; }
+
+  /* ---------------- 技能与渠道弹窗(p3/p4,v0.9.12) ---------------- */
+  /* 同 p1:弹窗限高、中间内容滚动,头部 tab 与底部按钮常驻 */
+  #skillsOverlay .dialog{ width:720px; max-width:94vw; max-height:86vh;
+                          display:flex; flex-direction:column; }
+  #skillsOverlay #skillsBody{ flex:1; min-height:0; overflow-y:auto;
+                              padding-right:4px; }
+  .skills-head{ display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+  .skills-head h3{ margin-bottom:0; }
+  .skill-tabs{ display:flex; gap:0; border:1px solid var(--line-soft);
+               border-radius:var(--r-full); overflow:hidden; }
+  .skill-tabs button{ background:transparent; border:none; padding:6px 16px;
+                      font-size:12.5px; font-weight:700; color:var(--text-2);
+                      cursor:pointer; }
+  .skill-tabs button.on{ background:var(--primary); color:#fff; }
+  /* 技能卡片网格:一屏两列,卡片悬停浮起 */
+  .skill-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .skill-grid .skillcard{ background:var(--glass-lite); border:1px solid var(--line-soft);
+                          border-radius:var(--r-m); padding:11px 13px; cursor:pointer;
+                          transition:.15s; text-align:left; }
+  .skill-grid .skillcard:hover{ border-color:var(--primary);
+                                background:var(--primary-light);
+                                transform:translateY(-1px); }
+  .skillcard .sname{ display:flex; align-items:center; gap:7px; font-size:13px;
+                     font-weight:800; color:var(--text-1); }
+  .skillcard .sname .chtag{ flex:none; font-size:9.5px; font-weight:700;
+                            color:var(--text-3); border:1px solid var(--line-soft);
+                            border-radius:var(--r-full); padding:0 7px; }
+  .skillcard .sdesc{ margin-top:5px; font-size:11.5px; line-height:1.6;
+                     color:var(--text-2); display:-webkit-box;
+                     -webkit-line-clamp:2; -webkit-box-orient:vertical;
+                     overflow:hidden; }
+  .skillcard .snodesc{ margin-top:5px; font-size:11.5px; color:var(--text-3); }
+  /* 渠道行:图标 + 名称/说明 + 徽标(技能数/只读) */
+  .skch{ display:flex; align-items:center; gap:12px; padding:11px 13px;
+         border:1px solid var(--line-soft); border-radius:var(--r-m);
+         margin-bottom:9px; background:var(--glass-lite); }
+  .skch .ic{ flex:none; width:34px; height:34px; border-radius:10px;
+             display:flex; align-items:center; justify-content:center;
+             background:var(--primary-light); font-size:16px; }
+  .skch .info{ flex:1; min-width:0; }
+  .skch .info b{ font-size:13px; color:var(--text-1); }
+  .skch .info .note{ display:block; margin-top:2px; font-size:11.5px;
+                     color:var(--text-2); }
+  .skch .info .path{ display:block; margin-top:3px; font-size:10.5px;
+                     color:var(--text-3); word-break:break-all; }
+  .skch .cnt{ flex:none; font-size:10.5px; font-weight:800; color:var(--primary-text);
+              background:var(--primary-light); border:1px solid var(--primary);
+              border-radius:var(--r-full); padding:2px 10px; }
+  .skch .ro{ flex:none; font-size:10px; color:var(--text-3); }
+  /* 技能详情与添加表单:字段行,与模型管理弹窗同款节奏 */
+  .skform{ border-top:1px solid var(--line-soft); margin-top:12px; padding-top:12px; }
+  .skform .frow label{ width:64px; }
+  .skform textarea{ flex:1; background:var(--glass-lite); border:1px solid var(--line-soft);
+                    border-radius:var(--r-m); color:var(--text-1); padding:8px 10px;
+                    font:inherit; font-size:12.5px; resize:vertical; min-height:64px; }
+  .skform textarea:focus{ border-color:var(--primary); outline:none; }
+  .skform textarea::placeholder{ color:var(--text-3); }
+  .sktip{ color:var(--text-3); font-size:11.5px; line-height:1.7; margin:6px 0 0; }
 
   /* ---------------- 工作区弹窗 ---------------- */
   #wsOverlay .dialog{ width:560px; max-width:94vw; }
@@ -885,8 +956,10 @@ try {
   <aside class="sidebar">
     <div class="logo"><img class="m" src="img/cube.png" alt="引路学长">引路学长<small id="ver"></small></div>
     <div class="school"><img src="img/school.png" alt="广州应用科技学院"></div>
-    <!-- v0.9.11:「+ 新建任务」搬进当前项目卡片(p4);这里不再放全局按钮 -->
+    <!-- v0.9.11:「+ 新建任务」搬进当前项目卡片(p4);v0.9.12 按用户反馈加回
+         侧栏独立入口(p2:首页要一眼看到新建任务),两处并存 -->
     <div class="side-title">项目</div>
+    <button class="side-newtask" id="btnNewTask">＋ 新建任务</button>
     <div class="projects" id="projects"></div>
     <div class="side-title">历史会话</div>
     <div class="sessions" id="sessions"><div style="color:var(--text-3);padding:8px 10px">暂无</div></div>
@@ -899,6 +972,7 @@ try {
       <span class="tok" id="tok"></span>
       <span class="modelpill" id="modelPill"></span>
       <button id="btnMap" title="打开/收起校园地图(肇庆校区)">🗺 地图</button>
+      <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐ 技能</button>
       <button id="btnUsage" title="查看每日 token 消耗">📊 用量</button>
       <button id="btnSandbox" style="display:none" title="沙箱状态">🛡 沙箱</button>
       <button id="btnMemory" title="整理长期记忆">🧠 记忆</button>
@@ -1048,6 +1122,47 @@ try {
     </div>
     <div id="usageBody"></div>
     <div class="btns"><button class="b-no" id="btnUsageClose">关闭</button></div>
+  </div>
+</div>
+
+<!-- p3/p4(v0.9.12):技能与渠道 —— 浏览内置技能、看渠道目录、自己加技能 -->
+<div class="overlay" id="skillsOverlay">
+  <div class="dialog">
+    <div class="skills-head">
+      <h3>⭐ 技能与渠道</h3>
+      <div class="skill-tabs" id="skillTabs">
+        <button data-tab="skills" class="on">技能</button>
+        <button data-tab="channels">渠道</button>
+      </div>
+    </div>
+    <div id="skillsBody"></div>
+    <div class="skform" id="skillForm" style="display:none">
+      <div class="frow">
+        <label>技能名</label>
+        <input id="skName" type="text" maxlength="40" placeholder="例如 paper-polish(英文/数字/连字符)">
+      </div>
+      <div class="frow">
+        <label>一句话简介</label>
+        <input id="skDesc" type="text" maxlength="120" placeholder="这个技能教 Agent 做什么(会显示在列表里)">
+      </div>
+      <div class="frow">
+        <label>指导内容</label>
+        <textarea id="skBody" rows="5" placeholder="技能正文:把这个技能的使用方法、步骤、注意事项写给 Agent(支持 Markdown)"></textarea>
+      </div>
+      <div class="frow">
+        <label>存放渠道</label>
+        <select id="skChannel" title="内置技能目录只读;应用目录所有项目共用;工作区仅当前项目">
+          <option value="app">应用目录(推荐,所有项目共用)</option>
+          <option value="workspace">当前工作区(仅本项目)</option>
+        </select>
+      </div>
+      <p class="sktip">添加后新开的任务即可使用该技能;Agent 会在合适时机用 use_skill 工具读取它。</p>
+    </div>
+    <div class="btns">
+      <button class="b-no" id="btnSkillAdd">＋ 添加技能</button>
+      <button class="b-no" id="btnSkillsClose">关闭</button>
+      <button class="b-yes" id="btnSkillSave" style="display:none">保存技能</button>
+    </div>
   </div>
 </div>
 
@@ -1284,6 +1399,14 @@ document.addEventListener("keydown", ev => {
   // 先关灯箱,再收地图(确认框开着时先让用户处理确认框)
   const lb = $("mapLightbox");
   if (lb && lb.classList.contains("show")) { lb.classList.remove("show"); return; }
+  // 技能弹窗:详情/表单先退回列表,再关弹窗
+  const sk = $("skillsOverlay");
+  if (sk && sk.classList.contains("show")) {
+    if ($("skBodyPre")) { loadSkills(); return; }        // 详情 → 回列表
+    if (skillFormOpen) { skillFormOpen = false; renderSkillTab(); return; }
+    sk.classList.remove("show");
+    return;
+  }
   if (!document.querySelector(".overlay.show") && window.CampusMap) window.CampusMap.close();
 });
 chat.addEventListener("scroll", hideSelBar);
@@ -1536,6 +1659,11 @@ function resetMap() {
   }
 }
 window.__gcodeEvent = function (e) {
+  // 全局刷新信号(不属于任何会话):技能增删后所有窗口都要刷新技能面板
+  if (e.type === "skills_changed") {
+    if (document.getElementById("skillsOverlay").classList.contains("show")) loadSkills();
+    return;
+  }
   // 后台会话的事件:不往当前视图里画(切回去时会用 resumed 重建)
   if (e.session && currentSessionKey && e.session !== currentSessionKey
       && e.type !== "cleared" && e.type !== "resumed"
@@ -2322,6 +2450,112 @@ $("usageRange").addEventListener("click", (e) => {
   loadUsage();
 });
 
+/* ---------------- 技能与渠道(p3/p4,v0.9.12) ---------------- */
+let skillTab = "skills";          // 当前 tab:skills=技能列表 / channels=渠道目录
+let skillFormOpen = false;        // 「添加技能」表单是否展开
+function openSkillsDlg() {
+  $("skillsOverlay").classList.add("show");
+  loadSkills();
+}
+function loadSkills() {
+  skillFormOpen = false;          // 重新打开时收起表单(数据也重置)
+  $("skName").value = ""; $("skDesc").value = ""; $("skBody").value = "";
+  $("skChannel").value = "app";
+  renderSkillTab();
+  pywebview.api.get_skills().then(s => {
+    if (!s.ok) { $("skillsBody").innerHTML =
+      `<div class="usage-empty">${esc(s.msg || "读取技能失败")}</div>`; return; }
+    renderSkillCards(s.skills || []);
+  }).catch(e => {
+    $("skillsBody").innerHTML =
+      `<div class="usage-empty">读取技能失败:${esc(String(e).slice(0, 80))}</div>`;
+  });
+}
+function renderSkillTab() {
+  // tab 高亮 + 底部按钮/表单显隐:skills=浏览技能,channels=看目录,表单两态共用
+  document.querySelectorAll("#skillTabs button").forEach(b =>
+    b.classList.toggle("on", b.dataset.tab === skillTab));
+  $("skillForm").style.display = (skillFormOpen && skillTab === "skills") ? "block" : "none";
+  $("btnSkillAdd").style.display = (skillTab === "skills" && !skillFormOpen) ? "inline-block" : "none";
+  $("btnSkillSave").style.display = (skillFormOpen && skillTab === "skills") ? "inline-block" : "none";
+}
+function renderSkillCards(skills) {
+  if (skillTab !== "skills") return;   // 用户已切走 tab:不覆盖渠道列表
+  if (!skills.length) {
+    $("skillsBody").innerHTML =
+      '<div class="usage-empty">还没有任何技能 —— 点右下角「＋ 添加技能」创建第一个。</div>';
+    return;
+  }
+  $("skillsBody").innerHTML = `<div class="skill-grid">${skills.map(s => `
+    <button class="skillcard" data-name="${esc(s.name)}" title="点开查看技能全文">
+      <div class="sname">⭐ ${esc(s.name)}
+        ${s.channel ? `<span class="chtag">${esc(s.channel)}</span>` : ""}</div>
+      ${s.description ? `<div class="sdesc">${esc(s.description)}</div>`
+                      : '<div class="snodesc">(没有简介)</div>'}
+    </button>`).join("")}</div>`;
+  $("skillsBody").querySelectorAll(".skillcard").forEach(el =>
+    el.addEventListener("click", () => openSkillDetail(el.dataset.name)));
+}
+function openSkillDetail(name) {
+  pywebview.api.get_skill_body(name).then(r => {
+    if (!r.ok) { toast(r.msg || "读取技能失败", true); return; }
+    $("skillsBody").innerHTML = `
+      <div class="fcrumb"><a id="skBack">← 返回技能列表</a> / ⭐ ${esc(name)}</div>
+      <pre id="skBodyPre" style="margin-top:10px"></pre>`;
+    $("skBodyPre").textContent = r.body || "(空技能)";
+    $("skBack").addEventListener("click", loadSkills);
+  }).catch(e => toast("读取技能失败:" + String(e).slice(0, 60), true));
+}
+function renderChannels(channels) {
+  if (skillTab !== "channels") return;
+  if (!channels || !channels.length) {
+    $("skillsBody").innerHTML = '<div class="usage-empty">读取渠道失败。</div>';
+    return;
+  }
+  const icons = { builtin: "📦", app: "🗂", workspace: "📁" };
+  $("skillsBody").innerHTML = channels.map(c => `
+    <div class="skch">
+      <div class="ic">${icons[c.key] || "🗂"}</div>
+      <div class="info">
+        <b>${esc(c.label)}</b>
+        <span class="note">${esc(c.note)}</span>
+        ${c.path ? `<span class="path">${esc(c.path)}</span>` : ""}
+      </div>
+      ${c.key === "builtin" ? '<span class="ro">只读</span>' : ""}
+      <span class="cnt">${c.count} 个技能</span>
+    </div>`).join("");
+}
+$("btnSkills").addEventListener("click", openSkillsDlg);
+$("btnSkillsClose").addEventListener("click", () => $("skillsOverlay").classList.remove("show"));
+$("skillTabs").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-tab]");
+  if (!btn) return;
+  skillTab = btn.dataset.tab;
+  renderSkillTab();
+  if (skillTab === "skills") { loadSkills(); return; }
+  $("skillsBody").innerHTML = '<div class="usage-empty">正在读取渠道目录…</div>';
+  pywebview.api.get_skill_channels().then(r => {
+    if (!r.ok) { $("skillsBody").innerHTML =
+      `<div class="usage-empty">${esc(r.msg || "读取渠道失败")}</div>`; return; }
+    renderChannels(r.channels || []);
+  }).catch(e => {
+    $("skillsBody").innerHTML =
+      `<div class="usage-empty">读取渠道失败:${esc(String(e).slice(0, 80))}</div>`;
+  });
+});
+$("btnSkillAdd").addEventListener("click", () => { skillFormOpen = true; renderSkillTab(); });
+$("btnSkillSave").addEventListener("click", () => {
+  const name = $("skName").value.trim();
+  const desc = $("skDesc").value.trim();
+  const body = $("skBody").value;
+  const channel = $("skChannel").value;
+  if (!name) { toast("先给技能起个名字", true); return; }
+  pywebview.api.add_skill(name, desc, body, channel).then(r => {
+    if (!r || r.ok === false) { toast((r && r.msg) || "保存失败", true); return; }
+    loadSkills();     // 成功:清表单、收起表单、刷新列表(后端还会广播 skills_changed)
+  }).catch(e => toast("保存技能失败:" + String(e).slice(0, 60), true));
+});
+
 /* ---------------- 输入与按钮 ---------------- */
 function send() {
   const text = $("input").value.trim();
@@ -2352,6 +2586,8 @@ $("btnStop").addEventListener("click", () => pywebview.api.stop_task());
 $("btnNo").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("no"); });
 $("btnYes").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("yes"); });
 $("btnAlways").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("always"); });
+// v0.9.12:p2 侧栏独立「＋ 新建任务」回归(项目卡片内那个保留,两处等价)
+$("btnNewTask").addEventListener("click", () => newTaskInProject());
 // v0.9.11:「＋ 新建任务」搬进当前项目卡片(newTaskInProject);不再有全局按钮
 $("btnMap").addEventListener("click", () => window.CampusMap && window.CampusMap.toggle(true));
 $("mapClose").addEventListener("click", () => window.CampusMap && window.CampusMap.close());

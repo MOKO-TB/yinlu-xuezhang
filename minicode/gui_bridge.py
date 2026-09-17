@@ -151,6 +151,19 @@ class PublicApi:
         """每日 token 用量统计(弹窗圆环图数据源)。"""
         return self._b.get_token_usage(days)
 
+    def get_skills(self) -> dict:
+        """技能面板:内置/应用/工作区三个渠道里的技能清单。"""
+        return self._b.get_skills()
+
+    def get_skill_channels(self) -> dict:
+        """技能面板「渠道」tab:技能目录的存在状态与各自技能数。"""
+        return self._b.get_skill_channels()
+
+    def add_skill(self, name: str, description: str = "", body: str = "",
+                  channel: str = "app") -> dict:
+        """技能面板「添加技能」:写一个 skills/<name>/SKILL.md。"""
+        return self._b.add_skill(name, description, body, channel)
+
     def get_workspaces(self) -> dict:
         """工作区弹窗:当前 / 默认 / 最近。"""
         return self._b.get_workspaces()
@@ -419,6 +432,63 @@ class Bridge:
         """每日/按模型聚合的 token 用量统计(前端弹窗圆环图)。"""
         from minicode import usage
         return usage.statistics(int(days))
+
+    # ------------------------------------------------------------ 技能面板
+
+    def get_skills(self) -> dict:
+        """技能页数据:当前生效的技能清单,带渠道归属与 frontmatter 简介。
+
+        load_skills 是先到先得(应用目录压过工作区同名),所以渠道归属按
+        skill_dirs 的顺序反推;正文不回传(点开详情时按路径读,保持轻量)。
+        """
+        from minicode.skills import describe_channels, find_skill
+        dirs = skill_dirs(self.workspace)
+        labels = {c["key"]: c["label"] for c in describe_channels(self.workspace)}
+        skills: list[dict] = []
+        for s in load_skills(dirs):
+            channel = ""
+            for key, d in zip(("app", "builtin", "workspace"), dirs):
+                try:
+                    s.path.resolve().relative_to(Path(d).resolve())
+                    channel = labels.get(key, key)
+                    break
+                except (ValueError, OSError):
+                    continue
+            skills.append({"name": s.name, "description": s.description,
+                           "channel": channel, "path": str(s.path),
+                           "is_builtin": channel == labels.get("builtin", "内置技能")})
+        return {"ok": True, "skills": skills}
+
+    def get_skill_body(self, name: str) -> dict:
+        """技能详情:读单个技能的 SKILL.md 全文(前端点开时才取,默认截断)。"""
+        from minicode.skills import SKILL_BODY_LIMIT, find_skill
+        skill = find_skill(load_skills(skill_dirs(self.workspace)), str(name or ""))
+        if skill is None:
+            return {"ok": False, "msg": f"未找到技能:{name}"}
+        try:
+            body = skill.path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return {"ok": False, "msg": f"读取技能失败:{type(exc).__name__}: {exc}"}
+        if len(body) > SKILL_BODY_LIMIT:
+            body = body[:SKILL_BODY_LIMIT] + "\n…(内容过长,已截断)"
+        return {"ok": True, "name": skill.name, "body": body}
+
+    def get_skill_channels(self) -> dict:
+        """渠道页「渠道」tab 的数据源(目录路径/存在状态/技能数)。"""
+        from minicode.skills import describe_channels
+        return {"ok": True,
+                "channels": describe_channels(self.workspace, app_dir=self.app_dir)}
+
+    def add_skill(self, name: str, description: str = "", body: str = "",
+                  channel: str = "app") -> dict:
+        """把用户在面板上填的技能落盘成 SKILL.md;成功后广播刷新。"""
+        from minicode.skills import create_skill
+        result = create_skill(self.workspace, name, description, body, channel,
+                              app_dir=self.app_dir)
+        if result.get("ok"):
+            self.ui.push("skills_changed", session=self._current.key)
+            self.ui.push("info", text=result.get("msg") or "技能已添加")
+        return result
 
     # ------------------------------------------------------------ 工作区
 

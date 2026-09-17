@@ -202,6 +202,7 @@ def test_owner_only_methods_refused(server):
     make_frontend_ready(client)
     for name in ("get_providers", "save_providers", "set_provider",
                  "get_token_usage",
+                 "get_skills", "get_skill_body", "get_skill_channels", "add_skill",
                  "set_sandbox", "set_permission_mode", "consolidate_memory",
                  "pick_attachments"):
         status, payload = client.post(name, {})
