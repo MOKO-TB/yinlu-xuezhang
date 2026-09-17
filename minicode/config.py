@@ -27,6 +27,32 @@ ENV_API_KEY = "YINLUXS_LLM_API_KEY"
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 DEFAULT_MODEL = "glm-4.6"
 
+# 「常用供应商」预设:一键把地址与几个常见模型名填进表单。
+#
+# 刻意保持克制 —— 这只是省打字,不是权威清单:各家模型名几个月就换一茬,
+# 写成"唯一正确答案"只会过期误导。面板上的「从服务获取」会去问服务端要
+# 真实列表(GET /models),那才是准的;这里的名字用户可改可删。
+PROVIDER_PRESETS: list[dict] = [
+    {"label": "DeepSeek", "name": "DeepSeek",
+     "base_url": "https://api.deepseek.com/v1",
+     "models": ["deepseek-chat", "deepseek-reasoner"]},
+    {"label": "智谱 GLM", "name": "智谱 GLM",
+     "base_url": "https://open.bigmodel.cn/api/paas/v4",
+     "models": ["glm-4.6", "glm-4-flash"]},
+    {"label": "通义千问(阿里云百炼)", "name": "通义千问",
+     "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+     "models": ["qwen-plus", "qwen-max", "qwen-turbo"]},
+    {"label": "Kimi(月之暗面)", "name": "Kimi",
+     "base_url": "https://api.moonshot.cn/v1",
+     "models": ["moonshot-v1-32k", "moonshot-v1-128k"]},
+    {"label": "硅基流动 SiliconFlow", "name": "硅基流动",
+     "base_url": "https://api.siliconflow.cn/v1",
+     "models": ["deepseek-ai/DeepSeek-V3"]},
+    {"label": "OpenAI", "name": "OpenAI",
+     "base_url": "https://api.openai.com/v1",
+     "models": ["gpt-4o-mini", "gpt-4o"]},
+]
+
 # API Key 不写进 config.json(它可能被上传 GitHub),单独存放在用户主目录
 CREDENTIALS_PATH = Path.home() / ".yinluxs" / "credentials.json"
 
@@ -78,8 +104,16 @@ def _ensure_builtin_provider(cfg: Config) -> None:
             p.base_url = BUILTIN_PROVIDER.base_url
             p.api_key = _builtin_api_key()   # 每次解析,本地换 Key 无需改配置
             p.model = BUILTIN_PROVIDER.model
+            p.models = []            # 模型清单同样以代码为准(单条兜底)
+            p.enabled = True
     active = cfg.provider
     if active is None or active.id == BUILTIN_PROVIDER_ID:
+        cfg.active_provider_id = BUILTIN_PROVIDER_ID
+    elif not active.enabled:
+        # 供应商被停用:回落到内置校园模型(配置保留,重新启用后可再切)
+        cfg.active_provider_id = BUILTIN_PROVIDER_ID
+    elif not active.enabled_models():
+        # 一个模型都没启用:同样回落,否则会把空模型名发给服务端
         cfg.active_provider_id = BUILTIN_PROVIDER_ID
     elif active.api_key.strip() in API_KEY_PLACEHOLDERS:
         # 选中了但没填 key:只能用回内置校园模型(配置保留,填 key 后可再切)
@@ -108,15 +142,55 @@ def _apply_env_overrides(cfg: Config) -> None:
 
 @dataclass
 class Provider:
+    """一个供应商(接口地址 + 密钥),以及它底下可用的模型清单。
+
+    v0.9.13 起支持"一个供应商挂多个模型"(对齐星瑶的模型管理面板):
+    `models` 是清单,每项 `{"name": 模型名, "enabled": 是否启用}`;
+    `model` 保留为"当前用的那个"= 清单里第一个启用项,于是所有读 `p.model`
+    的旧代码(base_url/api_key 那套属性、CLI /model、任务面板)零改动。
+
+    老配置没有 `models` 字段:按"单条启用项"呈现,行为与改版前完全一致。
+    """
+
     id: str
     name: str
     base_url: str
     api_key: str
-    model: str
+    model: str = ""
+    models: list = field(default_factory=list)   # [{"name": str, "enabled": bool}]
+    enabled: bool = True                         # 供应商级启停(停用后不出现在可切列表)
+
+    def model_entries(self) -> list[dict]:
+        """规范化后的模型清单(老配置兜底成单条)。"""
+        if self.models:
+            return [dict(m) for m in self.models]
+        return [{"name": self.model, "enabled": True}] if self.model.strip() else []
+
+    def enabled_models(self) -> list[str]:
+        return [str(e.get("name") or "").strip()
+                for e in self.model_entries() if e.get("enabled", True)
+                and str(e.get("name") or "").strip()]
+
+    def sync_model(self) -> str:
+        """把 `model` 同步成第一个启用模型;一个都没启用时保持原值。
+
+        保持原值是有意的:模型名凭空消失会让用户在界面上"看不懂自己删了什么",
+        而"没有启用模型"这件事由前端和保存校验各自提示。
+        """
+        names = self.enabled_models()
+        if names:
+            self.model = names[0]
+        return self.model
+
+    @property
+    def has_key(self) -> bool:
+        return bool(self.api_key.strip()) and \
+            self.api_key.strip() not in API_KEY_PLACEHOLDERS
 
     def to_dict(self) -> dict:
         return {"id": self.id, "name": self.name, "base_url": self.base_url,
-                "api_key": self.api_key, "model": self.model}
+                "api_key": self.api_key, "model": self.model,
+                "models": self.model_entries(), "enabled": self.enabled}
 
 
 @dataclass
@@ -169,6 +243,11 @@ class Config:
             return True
         return False
 
+    def enabled_providers(self) -> list:
+        """可用于切换的供应商:被停用的、一个模型都没启用的都不算。"""
+        return [p for p in self.providers
+                if p.id == BUILTIN_PROVIDER_ID or (p.enabled and p.enabled_models())]
+
 
 # 内置供应商:学校部署的本地模型服务,该服务仅限校园网内使用。
 # api_key 留空,运行时由 _builtin_api_key() 从本地注入(见上);打包时把
@@ -209,6 +288,8 @@ def _providers_from_raw(raw: dict) -> list[Provider]:
             base_url=base.rstrip("/"),
             api_key=str(item.get("api_key") or ""),
             model=str(item.get("model") or DEFAULT_MODEL),
+            models=_models_from_raw(item.get("models")),
+            enabled=item.get("enabled", True) is not False,
         ))
     if not out:
         base = str(raw.get("base_url") or "").strip()
@@ -216,7 +297,51 @@ def _providers_from_raw(raw: dict) -> list[Provider]:
             out.append(Provider(id="default", name="默认",
                                 base_url=base.rstrip("/"),
                                 api_key=str(raw.get("api_key") or ""),
-                                model=str(raw.get("model") or DEFAULT_MODEL)))
+                                model=str(raw.get("model") or DEFAULT_MODEL),
+                                models=_models_from_raw(raw.get("models"))))
+    return out
+
+
+def _models_from_raw(raw) -> list[dict]:
+    """解析供应商的模型清单(容错:字符串/字典混着来都能吃)。
+
+    只做结构清洗,不在这里判重 —— 去重交给保存路径(save_providers),那里
+    才有"告诉用户为什么要拒绝"的位置。
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw:
+        if isinstance(item, str):
+            name, enabled = item, True
+        elif isinstance(item, dict):
+            name = str(item.get("name") or item.get("model") or "").strip()
+            enabled = item.get("enabled", True) is not False
+        else:
+            continue
+        name = name.strip()
+        if name:
+            out.append({"name": name, "enabled": enabled})
+    return out
+
+
+def _dedupe_models(entries: list[dict]) -> list[dict]:
+    """按模型名去重(忽略大小写),保留先出现的那条。
+
+    重名模型会让"启用了哪个"无法判断(切过去到底发哪个名字),所以在保存入口
+    一律合并 —— 界面上的"＋ 添加模型"也可能被连点两次。
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    for entry in entries:
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": name, "enabled": bool(entry.get("enabled", True))})
     return out
 
 
@@ -310,6 +435,11 @@ def save_config(path: Path, cfg: Config) -> None:
         if p.id == BUILTIN_PROVIDER_ID:
             d["base_url"] = ""                   # 内网地址同样不落盘
         return d
+
+    # 落盘前把 model 归位到"第一个启用模型",保证磁盘上的 model 与 models 自洽
+    # (界面勾选/取消勾选后,只改 models 不改 model 的话,重开就会串味)
+    for p in cfg.providers:
+        p.sync_model()
 
     data = {
         "providers": [_safe(p) for p in cfg.providers],

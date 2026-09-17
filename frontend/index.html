@@ -776,41 +776,107 @@ try {
                        border:1px solid var(--line-soft); border-radius:var(--r-full);
                        padding:1px 9px; margin:2px 6px 0 0; }
 
-  /* ---------------- API Key 管理 ---------------- */
-  .prov-row{ display:flex; align-items:center; gap:10px; background:var(--glass-lite);
-             border:1px solid var(--line-soft); border-radius:var(--r-m); padding:9px 13px;
-             margin-bottom:8px; font-size:13px; }
-  .prov-row.on{ border:1px solid var(--primary); background:var(--primary-light); }
-  .prov-row input[type=radio]{ accent-color:var(--primary); }
-  .prov-row .pn{ font-weight:800; }
-  .prov-row .pm{ color:var(--text-2); font-family:Consolas,monospace; font-size:12px; }
-  .prov-row .pb{ color:var(--text-3); font-size:11.5px; flex:1; white-space:nowrap;
-                 overflow:hidden; text-overflow:ellipsis; }
-  .prov-row .k{ font-size:11.5px; font-weight:800; }
-  .prov-row button{ background:var(--glass-strong); border:1px solid var(--line-soft);
-                    border-radius:var(--r-full); padding:3px 12px; font-size:11.5px;
-                    cursor:pointer; color:var(--text-2); }
-  .prov-row button:hover{ border-color:var(--primary); color:var(--primary-text); }
-  .prov-row button.del:hover{ border-color:var(--danger); color:var(--danger); }
+  /* ---------------- 模型管理:供应商 + 模型清单(v0.9.13) ---------------- */
+  /* 旧版是"一行一个供应商、一个供应商只有一个模型";现在改成左栏供应商、
+     右栏该供应商的模型清单,可以对着一栏慢慢加模型,不用来回弹窗。 */
+  .prov-dlg{ width:880px; max-width:95vw; display:flex; flex-direction:column; }
+  .prov-wrap{ display:flex; gap:14px; min-height:330px; }
+  .prov-side{ flex:none; width:236px; display:flex; flex-direction:column;
+              border-right:1px solid var(--line-soft); padding-right:12px; }
+  .prov-side-head{ font-size:12px; font-weight:800; color:var(--text-2);
+                   margin-bottom:8px; letter-spacing:.5px; }
+  .prov-list{ flex:1; min-height:0; overflow-y:auto; max-height:340px;
+              display:flex; flex-direction:column; gap:6px; }
+  .prov-item{ display:flex; align-items:center; gap:8px; padding:8px 9px; cursor:pointer;
+              background:var(--glass-lite); border:1px solid var(--line-soft);
+              border-radius:var(--r-m); transition:.15s; }
+  .prov-item:hover{ background:var(--glass-strong); }
+  .prov-item.on{ border-color:var(--primary); background:var(--primary-light); }
+  .prov-item .pi-name{ flex:1; min-width:0; font-weight:700; font-size:12.5px;
+                       white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .prov-item .pi-n{ flex:none; font-size:10.5px; color:var(--text-3); }
+  /* 「默认」与「正在编辑」是两件事:行高亮 = 正在编辑,这个徽标 = 全局默认 */
+  .prov-item .pi-default{ flex:none; font-size:10px; font-weight:800;
+                          color:var(--primary-text); background:var(--primary-light);
+                          border:1px solid var(--primary); border-radius:var(--r-full);
+                          padding:0 6px; }
+  .prov-item .pi-off{ flex:none; font-size:10px; font-weight:800; color:var(--danger); }
+  .prov-side select{ margin-top:10px; width:100%; background:var(--glass-lite);
+                     border:1px solid var(--line-soft); border-radius:var(--r-m);
+                     padding:8px 9px; color:var(--text-1); font:inherit; font-size:12px;
+                     outline:none; }
+  .prov-main{ flex:1; min-width:0; display:flex; flex-direction:column; gap:9px; }
+  .prov-main .pm-head input{ flex:1; background:var(--glass-lite);
+                             border:1px solid var(--line-soft); border-radius:var(--r-s);
+                             padding:8px 11px; color:var(--text-1); font:inherit;
+                             font-size:13px; font-weight:700; outline:none; }
+  .keywrap{ flex:1; display:flex; gap:6px; align-items:center; }
+  .keywrap .eye{ flex:none; background:var(--glass-strong); border:1px solid var(--line-soft);
+                 border-radius:var(--r-s); padding:7px 10px; cursor:pointer;
+                 color:var(--text-2); font-size:12px; }
+  .keywrap .eye:hover{ border-color:var(--primary); }
+  .mm-head{ display:flex; align-items:center; gap:8px; }
+  .mm-head .mh-t{ flex:1; font-size:12px; font-weight:800; color:var(--text-2); }
+  .mm-head .mh-t b{ color:var(--text-1); }
+  .mm-head button{ background:var(--glass-strong); border:1px solid var(--line-soft);
+                   color:var(--text-1); border-radius:var(--r-full); padding:5px 11px;
+                   font:inherit; font-size:11.5px; cursor:pointer; }
+  .mm-head button:hover{ border-color:var(--primary); color:var(--primary-text); }
+  .mm-list{ display:flex; flex-direction:column; gap:6px; max-height:206px;
+            overflow-y:auto; }
+  .mm-row{ display:flex; align-items:center; gap:7px; }
+  .mm-row .mmname{ flex:1; min-width:0; background:var(--glass-lite);
+                   border:1px solid var(--line-soft); border-radius:var(--r-s);
+                   padding:6px 9px; color:var(--text-1); outline:none;
+                   font-family:Consolas,monospace; font-size:12px; }
+  .mm-row .mmname:focus{ border-color:var(--primary); }
+  .mm-cap{ flex:none; min-width:92px; text-align:right; font-size:10.5px;
+           color:var(--text-3); }
+  .mm-row button{ flex:none; background:var(--glass-strong); border:1px solid var(--line-soft);
+                  color:var(--text-2); border-radius:var(--r-s); padding:5px 9px;
+                  font:inherit; font-size:11px; cursor:pointer; }
+  .mm-row button:hover{ border-color:var(--primary); color:var(--primary-text); }
+  .mm-row button.mmdel:hover{ border-color:var(--danger); color:var(--danger); }
+  .mm-row.off .mmname{ opacity:.5; }
+  .mm-note{ font-size:11px; color:var(--text-2); line-height:1.6; min-height:16px; }
+  .mm-note.bad{ color:var(--danger); }
+  .mm-note.good{ color:var(--ok,#2f9e6e); }
+  .mm-empty{ color:var(--text-3); font-size:12px; padding:8px 2px; line-height:1.7; }
+  .prov-ro{ color:var(--text-2); font-size:12.5px; line-height:1.9; }
+  .prov-ro code{ background:var(--glass-lite); border:1px solid var(--line-soft);
+                 border-radius:var(--r-s); padding:1px 6px; font-family:Consolas,monospace; }
+  /* 开关(供应商级/模型级共用) */
+  .sw{ flex:none; position:relative; width:34px; height:19px; cursor:pointer; }
+  .sw input{ position:absolute; opacity:0; width:0; height:0; }
+  .sw span{ position:absolute; inset:0; background:var(--line-soft);
+            border-radius:var(--r-full); transition:background .15s; }
+  .sw span::after{ content:""; position:absolute; top:2px; left:2px; width:15px; height:15px;
+                   border-radius:50%; background:#fff; transition:transform .15s; }
+  .sw input:checked + span{ background:var(--primary); }
+  .sw input:checked + span::after{ transform:translateX(15px); }
   .frow{ display:flex; align-items:center; gap:12px; margin-bottom:9px; }
-  .frow label{ width:76px; flex:none; color:var(--text-2); font-size:12.5px; font-weight:700; }
+  .frow label{ width:64px; flex:none; color:var(--text-2); font-size:12.5px; font-weight:700; }
   .frow input{ flex:1; background:var(--glass-lite); border:1px solid var(--line-soft);
                border-radius:var(--r-s); padding:7px 11px; color:var(--text-1);
                font:inherit; outline:none; }
   .frow input:focus{ border-color:var(--primary); }
+  .prov-main .frow{ margin-bottom:0; }   /* 右栏是 flex 纵向布局,行距由父级 gap 管 */
   .prov-empty{ color:var(--text-3); text-align:center; padding:14px 0; font-size:12.5px; }
 
-  /* ---------------- 添加模型弹窗 ---------------- */
-  #provOverlay .prov-list{ max-height:220px; overflow-y:auto; margin-bottom:12px; }
-  .prov-row .k .nokey{ color:var(--text-3); font-weight:600; }
-  .prov-row .k .haskey{ color:var(--ok,#2f9e6e); font-weight:700; }
-  .prov-row .buitag{ font-size:10.5px; color:var(--primary-text); background:var(--primary-light);
-                     border:1px solid var(--primary); border-radius:var(--r-full);
-                     padding:1px 8px; font-weight:800; margin-left:6px; }
-  .prov-form{ border-top:1px solid var(--line-soft); padding-top:12px; }
-  .prov-form .frow label{ width:64px; }
-  .prov-form input::placeholder{ color:var(--text-3); }
-  .prov-tip{ color:var(--text-3); font-size:11.5px; line-height:1.7; margin:6px 0 0; }
+  /* ---------------- 会话搜索 ---------------- */
+  .sess-search{ display:flex; gap:6px; padding:4px 8px 8px; }
+  .sess-search input{ flex:1; min-width:0; background:var(--glass-lite);
+                      border:1px solid var(--line-soft); border-radius:var(--r-s);
+                      padding:6px 9px; color:var(--text-1); font:inherit; font-size:12px;
+                      outline:none; }
+  .sess-search input:focus{ border-color:var(--primary); }
+  .sess-search button{ flex:none; background:var(--glass-strong);
+                       border:1px solid var(--line-soft); color:var(--text-2);
+                       border-radius:var(--r-s); padding:5px 9px; font:inherit;
+                       font-size:11.5px; cursor:pointer; }
+  .sess-search button:hover{ border-color:var(--primary); color:var(--primary-text); }
+  .sess-hit{ font-size:10.5px; color:var(--text-3); margin-top:3px; line-height:1.5; }
+  .sess-hit b{ color:var(--primary-text); }
 
   /* ---------------- 用量统计弹窗 ---------------- */
   #usageOverlay .dialog{ width:680px; max-width:94vw; }
@@ -962,6 +1028,11 @@ try {
     <button class="side-newtask" id="btnNewTask">＋ 新建任务</button>
     <div class="projects" id="projects"></div>
     <div class="side-title">历史会话</div>
+    <div class="sess-search">
+      <input id="sessSearch" placeholder="搜索历史会话…"
+             title="在所有历史会话的内容里搜关键词(Enter 搜索)">
+      <button id="btnSessSearch" title="搜索">🔍</button>
+    </div>
     <div class="sessions" id="sessions"><div style="color:var(--text-3);padding:8px 10px">暂无</div></div>
   </aside>
 
@@ -974,6 +1045,7 @@ try {
       <button id="btnMap" title="打开/收起校园地图(肇庆校区)">🗺 地图</button>
       <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐ 技能</button>
       <button id="btnUsage" title="查看每日 token 消耗">📊 用量</button>
+      <button id="btnExport" title="把当前会话导出成 Markdown(方便贴进文档或发给同学)">⬇ 导出</button>
       <button id="btnSandbox" style="display:none" title="沙箱状态">🛡 沙箱</button>
       <button id="btnMemory" title="整理长期记忆">🧠 记忆</button>
       <button id="btnTheme" title="切换深色/浅色主题">🌙 深色</button>
@@ -1082,15 +1154,17 @@ try {
 <div class="toasts" id="toasts"></div>
 
 <div class="overlay" id="provOverlay">
-  <div class="dialog" style="width:520px">
+  <div class="dialog prov-dlg">
     <h3>模型管理</h3>
-    <div class="prov-list" id="provList"></div>
-    <div class="prov-form">
-      <div class="frow"><label>名称</label><input id="pvName" placeholder="如:DeepSeek"></div>
-      <div class="frow"><label>接口地址</label><input id="pvBase" placeholder="https://api.deepseek.com/v1"></div>
-      <div class="frow"><label>API Key</label><input id="pvKey" type="password" placeholder="供应商控制台申请的密钥"></div>
-      <div class="frow"><label>模型名</label><input id="pvModel" placeholder="如:deepseek-chat"></div>
-      <p class="prov-tip">内置的「广州应用科技学院」开箱即用、密钥由学校侧提供;上表选中即可切换。自己添加的模型支持任意 OpenAI 兼容接口,密钥只存在本机,不会出现在 config.json 里。</p>
+    <div class="prov-wrap">
+      <aside class="prov-side">
+        <div class="prov-side-head">供应商</div>
+        <div class="prov-list" id="provList"></div>
+        <select id="pvPreset" title="一键填入常用供应商的地址与模型名">
+          <option value="">＋ 常用供应商…</option>
+        </select>
+      </aside>
+      <section class="prov-main" id="provMain"></section>
     </div>
     <div class="btns">
       <button class="b-no" id="btnProvClose">关闭</button>
@@ -1394,6 +1468,12 @@ document.addEventListener("pointerup", () => { mouseDown = false; scheduleSelBar
 document.addEventListener("dblclick", () => scheduleSelBar(0));       // 双击选词
 document.addEventListener("selectionchange", () => { if (!mouseDown) scheduleSelBar(90); });
 document.addEventListener("keydown", ev => {
+  // 快捷键(v0.9.13):Ctrl+K 打开模型管理、Ctrl+N 新建任务
+  if (ev.ctrlKey && !ev.altKey && !ev.shiftKey) {
+    const k = String(ev.key || "").toLowerCase();
+    if (k === "k") { ev.preventDefault(); openProvDlg(); return; }
+    if (k === "n") { ev.preventDefault(); $("btnNewTask").click(); return; }
+  }
   if (ev.key !== "Escape") return;
   hideSelBar();
   // 先关灯箱,再收地图(确认框开着时先让用户处理确认框)
@@ -1801,7 +1881,8 @@ window.__gcodeEvent = function (e) {
       setTimeout(() => toBottom(), 80);      // 异步布局后再补一次,确保看到最新回答
       break;
     case "sessions":
-      renderSessions(e.items || []);
+      // 搜索态下不覆盖结果列表:否则后台推一次会话清单,用户搜到的东西就没了
+      if (!sessQuery) renderSessions(e.items || []);
       break;
     case "turn_usage":            // 任务面板:每回合刷新消耗/上下文占用
       renderTaskMetrics({ ...taskMetrics, consumed: e.consumed,
@@ -1928,6 +2009,68 @@ function renderSessions(items) {
   }
 }
 
+/* ---------------- 会话搜索与导出(v0.9.13) ---------------- */
+let sessQuery = "";
+function runSessionSearch() {
+  const q = $("sessSearch").value.trim();
+  sessQuery = q;
+  if (!q) { pywebview.api.refresh_sessions(); return; }
+  pywebview.api.search_sessions(q).then(r => {
+    if (!r || !r.ok) { toast((r && r.msg) || "搜索失败", true); return; }
+    renderSessionHits(r);
+  }).catch(e => toast("搜索失败:" + String(e).slice(0, 60), true));
+}
+
+function renderSessionHits(r) {
+  const box = $("sessions");
+  const hits = r.results || [];
+  box.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "sess-empty";
+  head.innerHTML = hits.length
+    ? `「${esc(r.query)}」命中 <b>${hits.length}</b> 个会话(点进去就切过去)`
+    : `没有会话包含「${esc(r.query)}」`;
+  box.appendChild(head);
+  for (const h of hits) {
+    const el = document.createElement("div");
+    el.className = "sess";
+    el.innerHTML = `<div class="t"></div><div class="m"></div><div class="sess-hit"></div>`;
+    el.querySelector(".t").textContent = h.file || "(会话)";
+    el.querySelector(".m").textContent = `命中 ${h.hits} 处`;
+    el.querySelector(".sess-hit").textContent = "…" + (h.snippet || "") + "…";
+    el.title = "点一下切到这个会话";
+    el.addEventListener("click", () => {
+      pywebview.api.resume_session(h.index).then(r2 => {
+        if (r2 && r2.ok === false) { toast(r2.msg, true); return; }
+        clearSessionSearch();
+      });
+    });
+    box.appendChild(el);
+  }
+}
+
+function clearSessionSearch() {
+  sessQuery = "";
+  $("sessSearch").value = "";
+  pywebview.api.refresh_sessions();
+}
+
+$("btnSessSearch").addEventListener("click", runSessionSearch);
+$("sessSearch").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); runSessionSearch(); }
+  else if (e.key === "Escape") { e.preventDefault(); clearSessionSearch(); }
+});
+
+$("btnExport").addEventListener("click", () => {
+  pywebview.api.export_session().then(r => {
+    if (!r || !r.ok) {
+      if (!r || r.msg !== "已取消导出") toast((r && r.msg) || "导出失败", true);
+      return;
+    }
+    toast(`已导出会话:${r.name}`);
+  }).catch(e => toast("导出失败:" + String(e).slice(0, 60), true));
+});
+
 /* ---------------- 通用确认弹窗(替代浏览器原生 confirm) ---------------- */
 let appConfirmCb = null;
 function appConfirm(msg, onOk, title) {
@@ -1946,97 +2089,336 @@ $("btnAppCancel").addEventListener("click", () => {
   appConfirmCb = null;
 });
 
-/* ---------------- 模型管理(添加模型/切换;内置 key 不下发) ---------------- */
-let provData = [];
+/* ---------------- 模型管理:供应商 + 供应商里的模型清单(v0.9.13) ---------------- */
+/* 一个供应商 = 一个接口地址 + 一个密钥 + 一串模型(每个可单独启停)。
+   左栏供应商、右栏它的模型清单 —— 加模型不用再开新弹窗,也不用一个模型建一个供应商。 */
+let provData = [];         // 供应商清单(含各自的 models)
+let provActive = "";       // 左侧单选:设为全局默认的那个(_k)
+let provEdit = "";         // 右栏正在编辑的那个(_k)
+let provPresets = [];
+let provSeq = 0;           // 新增供应商的本地唯一标识
+
+function slugish(s) {
+  return String(s || "").trim().toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
 function renderModelPill(info) {
   const active = (info.providers || []).find(p => p.id === info.active_provider);
   const name = active ? active.name : "广州应用科技学院";
   $("modelPill").textContent = `${name} · ${info.model}`;
-  $("modelPill").title = `当前模型:${name} · ${info.model}(点击管理/添加模型)`;
+  $("modelPill").title = `当前模型:${name} · ${info.model}(点击管理模型)`;
 }
 
 function openProvDlg() {
   pywebview.api.get_providers().then(r => {
-    provData = r.providers || [];
-    currentProvActive = r.active_provider || (provData[0] && provData[0].id) || "";
-    renderProvList();
+    provData = (r.providers || []).map(p => ({ ...p, _k: p.id || ("k" + (++provSeq)) }));
+    provPresets = r.presets || [];
+    provActive = r.active_provider || (provData[0] && provData[0]._k) || "";
+    if (!provData.some(p => p._k === provEdit))
+      provEdit = provActive || (provData[0] && provData[0]._k) || "";
+    fillPresetSelect();
+    renderProvAll();
     $("provOverlay").classList.add("show");
   }).catch(e => toast("读取模型配置失败:" + String(e).slice(0, 60), true));
 }
 
+function fillPresetSelect() {
+  $("pvPreset").innerHTML = '<option value="">＋ 常用供应商…</option>'
+    + provPresets.map((p, i) => `<option value="${i}">${esc(p.label)}</option>`).join("");
+}
+
+function renderProvAll() { renderProvList(); renderProvMain(); }
+function curProv() { return provData.find(p => p._k === provEdit) || null; }
+
+function newProvider(preset) {
+  const p = { _k: "k" + (++provSeq), id: "", name: (preset && preset.name) || "",
+              base_url: (preset && preset.base_url) || "", api_key: "",
+              models: ((preset && preset.models) || []).map(n => ({ name: n, enabled: true })),
+              enabled: true, _autoId: true };
+  provData.push(p);
+  return p;
+}
+
 function renderProvList() {
   const box = $("provList");
-  const active = provData.find(p => p.id === currentProvActive) || provData[0];
   box.innerHTML = "";
   if (!provData.length) {
-    box.innerHTML = '<div class="prov-empty">还没有模型,在下方添加一个</div>';
+    box.innerHTML = '<div class="mm-empty">还没有供应商,用下面「常用供应商」加一个</div>';
     return;
   }
   for (const p of provData) {
+    const models = p.models || [];
+    const on = models.filter(m => m.enabled !== false).length;
     const row = document.createElement("div");
-    row.className = "prov-row" + (active && p.id === active.id ? " on" : "");
-    const isBuiltin = !!p.builtin;
-    const keyState = isBuiltin
-      ? '<span class="buitag">已内置</span>'
-      : (p.api_key ? '<span class="haskey">已配 Key</span>' : '<span class="nokey">未配 Key</span>');
-    row.innerHTML = `<input type="radio" name="prov" ${active && p.id === active.id ? "checked" : ""}>
-      <span class="pn">${esc(p.name)}${isBuiltin ? '<span class="buitag">内置</span>' : ""}</span>
-      <span class="pm">${esc(p.model || "")}</span>
-      <span class="pb">${isBuiltin ? "" : esc(p.base_url || "")}</span>
-      <span class="k">${keyState}</span>
-      ${isBuiltin ? "" : '<button class="del" data-id="' + esc(p.id) + '">删除</button>'}`;
+    row.className = "prov-item" + (p._k === provEdit ? " on" : "");
+    row.innerHTML = `<input type="radio" name="provActive"`
+      + ` ${p._k === provActive ? "checked" : ""} title="设为默认供应商(保存后生效)">`
+      + `<span class="pi-name"></span>`
+      + (p._k === provActive ? '<span class="pi-default">默认</span>' : "")
+      + `<span class="pi-n"></span>`
+      + (p.enabled === false ? '<span class="pi-off">停用</span>' : "");
+    row.querySelector(".pi-name").textContent = p.name || (p.builtin ? p.id : "未命名供应商");
+    row.querySelector(".pi-n").textContent = p.builtin ? "内置" : `${on}/${models.length} 模型`;
+    row.title = p.builtin ? "内置校园模型(只读)" : (p.base_url || "还没填接口地址");
     row.addEventListener("click", (e) => {
-      if (e.target.classList.contains("del")) return;
-      currentProvActive = p.id;
-      renderProvList();
-    });
-    row.querySelector(".del")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      appConfirm(`删除模型「${p.name}」?`, () => {
-        // 确认后立即落盘:只把“确认框后面那层弹窗关掉”还不够,内存里删了
-        // 不保存的话重开弹窗它又回来,用户就会觉得“点了删除还在”。
-        provData = provData.filter(x => x.id !== p.id);
-        if (currentProvActive === p.id)
-          currentProvActive = provData.find(x => !x.builtin)?.id || "gzasc";
-        renderProvList();
-        saveProvItems(true);
-      }, "删除模型");
+      if (e.target.matches("input[type=radio]")) { provActive = p._k; renderProvAll(); return; }
+      provEdit = p._k; renderProvAll();
     });
     box.appendChild(row);
   }
 }
 
-let currentProvActive = "";
+function renderProvMain() {
+  const box = $("provMain");
+  const p = curProv();
+  if (!p) { box.innerHTML = '<div class="mm-empty">先在左边选一个供应商</div>'; return; }
+  if (p.builtin) {
+    box.innerHTML = `<div class="prov-ro">
+        <b>广州应用科技学院 · 内置模型</b><br>
+        校园网内开箱即用,密钥由学校侧提供,这里不用配也改不了。<br>
+        可用模型:<code></code>
+      </div>
+      <p class="mm-note">想换成自己的模型?用左边「＋ 常用供应商」加一个,在它里面添加模型,
+      再把左边的圆点选到它上面(保存后生效)。</p>`;
+    box.querySelector("code").textContent = p.model || "";
+    return;
+  }
+  box.innerHTML = `
+    <div class="pm-head">
+      <input id="pvName" placeholder="供应商名称,如 DeepSeek">
+      <label class="sw" title="停用后不出现在可切列表里(配置保留,随时可再开)">
+        <input type="checkbox" id="pvEnabled"><span></span></label>
+      <button class="eye" id="btnDelProv" title="删除这个供应商">🗑</button>
+    </div>
+    <div class="frow"><label>接口地址</label>
+      <input id="pvBase" placeholder="https://api.deepseek.com/v1"></div>
+    <div class="frow"><label>API Key</label>
+      <div class="keywrap">
+        <input id="pvKey" type="password" placeholder="供应商控制台申请的密钥">
+        <button class="eye" id="btnKeyEye" title="显示/隐藏密钥">👁</button>
+      </div>
+    </div>
+    <div class="mm-head">
+      <span class="mh-t">模型 <b id="mmCount">0</b></span>
+      <button id="btnFetchModels" title="问服务端要模型清单(GET /models)">从服务获取</button>
+      <button id="btnAddModel">＋ 添加模型</button>
+    </div>
+    <div class="mm-list" id="mmList"></div>
+    <div class="mm-note" id="mmNote">填好接口地址与 Key 后,点模型右边的「测试」能当场验证连通。</div>`;
+  $("pvName").value = p.name || "";
+  $("pvBase").value = p.base_url || "";
+  $("pvKey").value = p.api_key || "";
+  $("pvEnabled").checked = p.enabled !== false;
+  $("pvName").addEventListener("input", (e) => {
+    p.name = e.target.value;
+    if (p._autoId) p.id = slugish(p.name);   // 新供应商:名称即标识,免得起两遍名字
+    renderProvList();
+  });
+  $("pvBase").addEventListener("input", (e) => { p.base_url = e.target.value; });
+  $("pvKey").addEventListener("input", (e) => { p.api_key = e.target.value; });
+  $("pvEnabled").addEventListener("change", (e) => {
+    p.enabled = e.target.checked; renderProvList();
+  });
+  $("btnKeyEye").addEventListener("click", () => {
+    const k = $("pvKey");
+    k.type = k.type === "password" ? "text" : "password";
+  });
+  $("btnAddModel").addEventListener("click", () => {
+    p.models = p.models || [];
+    p.models.push({ name: "", enabled: true });
+    renderModelRows(p);
+    const rows = $("mmList").querySelectorAll(".mmname");
+    if (rows.length) rows[rows.length - 1].focus();
+  });
+  $("btnFetchModels").addEventListener("click", () => fetchModelsInto(p));
+  $("btnDelProv").addEventListener("click", () => {
+    appConfirm(`删除供应商「${p.name || "未命名"}」?它下面的 ${(p.models || []).length} 个模型会一起删掉。`,
+               () => {
+                 provData = provData.filter(x => x._k !== p._k);
+                 if (provActive === p._k) provActive = "gzasc";
+                 provEdit = (provData.find(x => !x.builtin) || provData[0] || {})._k || "";
+                 renderProvAll();
+                 saveProvItems(true);     // 删除即时落盘,免得重开弹窗又冒出来
+               }, "删除供应商");
+  });
+  renderModelRows(p);
+}
+
+function capText(m) {
+  if (!m.known) return "未探测";
+  const parts = [];
+  if (m.context_window) parts.push(fmtCtx(m.context_window));
+  parts.push(m.supports_vision ? "多模态" : "纯文本");
+  return parts.join(" · ");
+}
+
+function refreshCount(p) {
+  const el = $("mmCount");
+  if (!el) return;
+  const list = p.models || [];
+  el.textContent = list.filter(m => m.enabled !== false).length + "/" + list.length;
+}
+
+function renderModelRows(p) {
+  const box = $("mmList");
+  const list = p.models || [];
+  box.innerHTML = "";
+  refreshCount(p);
+  if (!list.length) {
+    box.innerHTML = '<div class="mm-empty">还没有模型。手填一个,或点「从服务获取」拉服务端的清单</div>';
+    return;
+  }
+  list.forEach((m, i) => {
+    const row = document.createElement("div");
+    row.className = "mm-row" + (m.enabled === false ? " off" : "");
+    row.innerHTML = `<input class="mmname" spellcheck="false" placeholder="模型名,如 deepseek-chat">
+      <span class="mm-cap"></span>
+      <label class="sw" title="启用/停用这个模型"><input type="checkbox" class="mmon"><span></span></label>
+      <button class="mmtest" title="发一条最小请求:验证连通,并问出上下文窗口">测试</button>
+      <button class="mmdel" title="删除这个模型">✕</button>`;
+    const nameEl = row.querySelector(".mmname");
+    nameEl.value = m.name || "";
+    row.querySelector(".mmon").checked = m.enabled !== false;
+    row.querySelector(".mm-cap").textContent = capText(m);
+    nameEl.addEventListener("input", (e) => { m.name = e.target.value; });
+    nameEl.addEventListener("blur", () => refreshCount(p));
+    row.querySelector(".mmon").addEventListener("change", (e) => {
+      m.enabled = e.target.checked;
+      row.classList.toggle("off", !e.target.checked);
+      refreshCount(p);
+      renderProvList();
+    });
+    row.querySelector(".mmdel").addEventListener("click", () => {
+      p.models.splice(i, 1);
+      renderModelRows(p);
+      renderProvList();
+    });
+    row.querySelector(".mmtest").addEventListener("click", () => testOneModel(p, m, row));
+    box.appendChild(row);
+  });
+}
+
+function testOneModel(p, m, row) {
+  const name = (m.name || "").trim();
+  const note = $("mmNote");
+  if (!name) { toast("先填模型名再测试", true); return; }
+  note.className = "mm-note";
+  note.textContent = `正在测试 ${name} …(会发一条真实请求,可能要几秒)`;
+  pywebview.api.test_model(p.id || "", name, p.base_url || "", p.api_key || "").then(r => {
+    if (r && r.ok) {
+      note.className = "mm-note good";
+      note.textContent = `✓ ${name}:${r.msg}`;
+      if (r.context_window) { m.context_window = r.context_window; m.known = true; }
+      if (typeof r.supports_vision === "boolean") {
+        m.supports_vision = r.supports_vision; m.known = true;
+      }
+      row.querySelector(".mm-cap").textContent = capText(m);
+    } else {
+      note.className = "mm-note bad";
+      note.textContent = `✗ ${name}:${(r && r.msg) || "测试失败"}`;
+    }
+  }).catch(e => {
+    note.className = "mm-note bad";
+    note.textContent = "测试失败:" + String(e).slice(0, 80);
+  });
+}
+
+function fetchModelsInto(p) {
+  const note = $("mmNote");
+  if (!String(p.base_url || "").trim()) { toast("先填接口地址", true); return; }
+  note.className = "mm-note";
+  note.textContent = "正在读取服务端模型清单 …";
+  pywebview.api.fetch_models(p.id || "", p.base_url || "", p.api_key || "").then(r => {
+    if (!r || !r.ok) {
+      note.className = "mm-note bad";
+      note.textContent = "✗ " + ((r && r.msg) || "读取失败");
+      return;
+    }
+    p.models = p.models || [];
+    const has = new Set(p.models.map(x => String(x.name || "").toLowerCase()));
+    let added = 0;
+    for (const n of r.models) {
+      if (has.has(String(n).toLowerCase())) continue;
+      p.models.push({ name: n, enabled: true });
+      added += 1;
+    }
+    note.className = "mm-note good";
+    note.textContent = `✓ 服务端共 ${r.models.length} 个模型,新增 ${added} 个(记得点「保存」)`;
+    renderModelRows(p);
+    renderProvList();
+  }).catch(e => {
+    note.className = "mm-note bad";
+    note.textContent = "读取失败:" + String(e).slice(0, 80);
+  });
+}
+
 $("modelPill").addEventListener("click", openProvDlg);
 $("btnProvClose").addEventListener("click", () => $("provOverlay").classList.remove("show"));
+$("pvPreset").addEventListener("change", (e) => {
+  const idx = e.target.value;
+  e.target.value = "";
+  if (idx === "") return;
+  const preset = provPresets[Number(idx)];
+  if (!preset) return;
+  const p = newProvider(preset);
+  p.id = slugish(p.name);
+  provEdit = p._k;
+  provActive = provActive || p._k;
+  renderProvAll();
+  toast(`已填入「${preset.label}」,补上 API Key 就能用`);
+});
+
+// 保存时后端认的 id:和 config._slug 同规则(空 id 由后端兜底成 provider_i)
+function activeIdForSave() {
+  const src = provData.filter(p => !p.builtin);
+  for (let i = 0; i < src.length; i++) {
+    if (src[i]._k === provActive)
+      return String(src[i].id || "").trim() || ("provider_" + (i + 1));
+  }
+  return "gzasc";
+}
 
 // 把前端列表提交后端保存(已剔除内置项,内置由后端按代码补回)
 function saveProvItems(silent) {
-  const items = provData.filter(p => !p.builtin).map(p => ({ id: p.id || "",
-    name: p.name, base_url: p.base_url, api_key: p.api_key || "", model: p.model }));
-  return pywebview.api.save_providers(JSON.stringify(items), currentProvActive).then(r => {
-    if (!r.ok) { toast(r.msg, true); return false; }
+  const src = provData.filter(p => !p.builtin);
+  const items = src.map((p, i) => ({
+    id: String(p.id || "").trim() || ("provider_" + (i + 1)),
+    name: p.name || "",
+    base_url: p.base_url || "",
+    api_key: p.api_key || "",
+    models: (p.models || [])
+      .map(m => ({ name: String(m.name || "").trim(), enabled: m.enabled !== false }))
+      .filter(m => m.name),
+    enabled: p.enabled !== false,
+  }));
+  const bad = items.find(it => !it.base_url.trim());
+  if (bad) {
+    toast(`「${bad.name || "未命名供应商"}」还没填接口地址`, true);
+    return Promise.resolve(false);
+  }
+  const ids = items.map(it => it.id);
+  const dup = ids.find((x, i) => ids.indexOf(x) !== i);
+  if (dup) {
+    toast(`两个供应商的标识都是「${dup}」,改一下名称区分开`, true);
+    return Promise.resolve(false);
+  }
+  return pywebview.api.save_providers(JSON.stringify(items), activeIdForSave()).then(r => {
+    if (!r || !r.ok) { toast((r && r.msg) || "保存失败", true); return false; }
     if (!silent) {
       $("provOverlay").classList.remove("show");
-      ["pvName", "pvBase", "pvKey", "pvModel"].forEach(id => $(id).value = "");
-      toast("模型配置已保存");
+      const notes = [];
+      if (r.auto_disabled && r.auto_disabled.length)
+        notes.push(`没勾选模型的供应商已停用:${r.auto_disabled.join("、")}`);
+      if (r.fell_back) notes.push(`已切回内置校园模型(「${r.fell_back}」不可用)`);
+      toast(notes.length ? notes.join(";") : "模型配置已保存");
+      pywebview.api.get_info().then(renderModelPill);
     }
-    pywebview.api.get_info().then(renderModelPill);
     return true;
   }).catch(e => { toast("保存失败:" + String(e).slice(0, 60), true); return false; });
 }
 
-$("btnProvSave").addEventListener("click", () => {
-  const name = $("pvName").value.trim(), base = $("pvBase").value.trim(),
-        key = $("pvKey").value, model = $("pvModel").value.trim();
-  if (name || base || key || model) {
-    if (!base) { toast("接口地址必填", true); return; }
-    provData.push({ id: "", name: name || base.replace(/^https?:\/\//, "").split("/")[0],
-                    base_url: base, api_key: key,
-                    model: model || "deepseek-chat" });
-  }
-  saveProvItems(false);
-});
+$("btnProvSave").addEventListener("click", () => saveProvItems(false));
 
 /* ---------------- 每日 token 用量统计(圆环图) ---------------- */
 const USAGE_COLORS = ["#3FBDAE", "#5A8FD8", "#B79CFF", "#E8B86D", "#7FD1C8",
@@ -2096,7 +2478,7 @@ function renderTaskMetrics(m) {
   menu.innerHTML = '<div class="tmenu-hint">切换本任务使用的模型(不影响默认模型)</div>';
   for (const p of m.selectable || []) {
     const row = document.createElement("div");
-    row.className = "trow" + (p.id === m.provider_id ? " on" : "");
+    row.className = "trow" + (p.key === m.selected_key ? " on" : "");
     if (!p.has_key) row.classList.add("tnokey");
     row.innerHTML = `<span class="tname">${esc(p.name)}</span>`
       + `<span class="tmodel">${esc(p.model)}</span>`
@@ -2106,8 +2488,8 @@ function renderTaskMetrics(m) {
     row.addEventListener("click", () => {
       menu.classList.remove("show");
       if (!p.has_key) { toast(`「${p.name}」还没配 API Key,先在模型管理里配好`, true); return; }
-      if (p.id === m.provider_id) return;
-      pywebview.api.set_session_model(p.id).then(r => {
+      if (p.key === m.selected_key) return;
+      pywebview.api.set_session_model(p.id, p.model).then(r => {
         if (!r.ok) toast(r.msg, true);
       }).catch(e => toast("切换失败:" + String(e).slice(0, 60), true));
     });
@@ -2810,7 +3192,6 @@ window.addEventListener("DOMContentLoaded", () => {
     renderWorkspacePill(info);
     renderPermOptions(info);
     if (info.session_key) currentSessionKey = info.session_key;
-    currentProvActive = info.active_provider || "";
     renderModelPill(info);
     renderTaskMetrics(info.session_metrics);   // 任务面板首屏数据
       renderSandbox(info.sandbox);

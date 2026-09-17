@@ -182,6 +182,7 @@ class PublicFacade:
             "refresh_sessions": self._refresh_sessions,
             "resume_session": self._resume_session,
             "delete_session": self._delete_session,
+            "search_sessions": self._search_sessions,
             "get_asset": self._get_asset,
             "undo": self._undo,
             # 以下方法前端会调,但对外模式不开放:返回可读的拒绝原因而不是静默失败
@@ -192,6 +193,12 @@ class PublicFacade:
             "get_providers": lambda **k: _refuse("网页版不提供密钥管理"),
             "save_providers": lambda **k: _refuse("网页版不提供密钥管理"),
             "set_provider": lambda **k: _refuse("网页版不提供密钥管理"),
+            "test_model": lambda **k: _refuse("网页版不提供密钥管理"),
+            "fetch_models": lambda **k: _refuse("网页版不提供密钥管理"),
+            "get_provider_presets": lambda **k: _refuse("网页版不提供密钥管理"),
+            "set_session_model": lambda **k: _refuse("网页版不开放模型切换"),
+            # 导出会在服务器上落文件(访客看不见也管不着),不开放
+            "export_session": lambda **k: _refuse("网页版不开放会话导出"),
             "get_token_usage": lambda **k: _refuse("网页版不开放用量统计"),
             # 技能面板读技能全文 = 一个文件读取原语,且技能目录在应用侧,不对外开放
             "get_skills": lambda **k: _refuse("网页版不开放技能面板"),
@@ -308,6 +315,14 @@ class PublicFacade:
     def _refresh_sessions(self) -> dict:
         self._b._push_sessions()                     # noqa: SLF001
         return {"ok": True}
+
+    def _search_sessions(self, query: str = "") -> dict:
+        """只在访客**自己**的留档里搜。
+
+        WebBridge 每个访客一个实例、自带私有 sessions 目录,所以这里搜不到
+        别人的对话;序号也来自同一份列表,不会跨访客串号。
+        """
+        return self._b.search_sessions(query)
 
     def _resume_session(self, index: int = 0) -> dict:
         return self._b.resume_session(index)

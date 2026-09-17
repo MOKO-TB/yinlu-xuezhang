@@ -38,7 +38,10 @@ from minicode.model_catalog import session_metrics
 from minicode.paths import APP_DIR, SESSIONS_DIR, resource_path
 from minicode.permission import MODE_LABELS, PERMISSION_MODES
 from minicode.sandbox import SandboxState, classify_path, policy_from_raw, policy_to_raw
-from minicode.session import Session, list_sessions
+from minicode.session import (Session, export_filename as session_export_name,
+                              list_sessions,
+                              search_logs as search_session_logs,
+                              to_markdown as session_to_markdown)
 from minicode.skills import load_skills, skill_dirs
 from minicode.suggestions import build_suggestions, collect_user_texts
 from minicode.tools.base import Tool
@@ -127,9 +130,31 @@ class PublicApi:
     def set_provider(self, provider_id: str) -> dict:
         return self._b.set_provider(provider_id)
 
-    def set_session_model(self, provider_id: str) -> dict:
-        """任务面板:把当前会话的模型切到指定供应商(不影响全局默认)。"""
-        return self._b.set_session_model(provider_id)
+    def set_session_model(self, provider_id: str, model: str = "") -> dict:
+        """任务面板:把当前会话切到「供应商 · 模型」(不影响全局默认)。"""
+        return self._b.set_session_model(provider_id, model)
+
+    def test_model(self, provider_id: str, model: str = "", base_url: str = "",
+                   api_key: str = "") -> dict:
+        """模型管理「测试」:真发一条请求,回报连通/窗口/是否支持看图。"""
+        return self._b.test_model(provider_id, model, base_url, api_key)
+
+    def fetch_models(self, provider_id: str, base_url: str = "",
+                     api_key: str = "") -> dict:
+        """模型管理「从服务获取」:拉服务端的模型列表(GET /models)。"""
+        return self._b.fetch_models(provider_id, base_url, api_key)
+
+    def get_provider_presets(self) -> dict:
+        """模型管理「常用供应商」预设清单。"""
+        return self._b.get_provider_presets()
+
+    def export_session(self) -> dict:
+        """把当前会话导出成 Markdown 文件。"""
+        return self._b.export_session()
+
+    def search_sessions(self, query: str = "") -> dict:
+        """侧栏搜索:在所有历史会话留档里找关键词。"""
+        return self._b.search_sessions(query)
 
     def get_reasoning(self) -> dict:
         """思考档位面板:当前模型能力 + 档位列表 + 当前选择。"""
@@ -416,16 +441,35 @@ class Bridge:
         return mcp.tools_summary() if mcp is not None else []
 
     def get_providers(self) -> dict:
-        """「添加模型」弹窗用。内置校园供应商的 key 与服务地址(内网 IP)都
-        永不回传 —— 对用户只呈现为一个「内置」条目;其他供应商本机单用户,
-        key 原样返回便于修改。"""
+        """模型管理弹窗的数据源:每个供应商 + 它底下的模型清单。
+
+        内置校园供应商的 key 与服务地址(内网 IP)都永不回传 —— 对用户只呈现为
+        一个只读的「内置」条目;其他供应商本机单用户,key 原样返回便于修改。
+
+        每个模型条目附带能力结论(窗口/是否支持看图,来自 model_catalog),
+        界面上就是"328K · 纯文本"这类徽标;预设模板一并回传,省一次往返。
+        """
+        from minicode.config import PROVIDER_PRESETS
+        from minicode.model_catalog import lookup
+        out = []
+        for p in self.config.providers:
+            if p.id == BUILTIN_PROVIDER_ID:
+                item = {**p.to_dict(), "api_key": "", "base_url": "",
+                        "builtin": True, "enabled": True}
+            else:
+                item = p.to_dict()
+            item["has_key"] = p.has_key
+            item["models"] = [
+                {**entry, **lookup(entry["name"]), "name": entry["name"],
+                 "enabled": bool(entry.get("enabled", True))}
+                for entry in p.model_entries()
+            ]
+            out.append(item)
         return {
-            "providers": [
-                p.to_dict() if p.id != BUILTIN_PROVIDER_ID
-                else {**p.to_dict(), "api_key": "", "base_url": "", "builtin": True}
-                for p in self.config.providers
-            ],
+            "providers": out,
             "active_provider": self.config.provider.id if self.config.provider else "",
+            "active_model": self.config.model,
+            "presets": PROVIDER_PRESETS,
         }
 
     def get_token_usage(self, days: int = 7) -> dict:
@@ -621,7 +665,12 @@ class Bridge:
         self._current = None
 
     def save_providers(self, providers_json: str, active_id: str) -> dict:
-        """整体保存供应商列表(前端编辑后提交),并切换到 active_id。"""
+        """整体保存供应商列表(前端编辑后提交),并切换到 active_id。
+
+        v0.9.13 起每个供应商带自己的**模型清单**(`models`)与启停开关
+        (`enabled`)。一个模型都没启用的供应商会被自动停用 —— 与其让它留在
+        可切列表里、选中后把空模型名发给服务端,不如明确标成"停用"并说一声。
+        """
         try:
             items = json.loads(providers_json)
         except json.JSONDecodeError as e:
@@ -631,11 +680,12 @@ class Bridge:
 
         from minicode.config import (BUILTIN_PROVIDER, BUILTIN_PROVIDER_ID,
                                      DEFAULT_MODEL, Provider, _builtin_api_key,
-                                     _slug)
+                                     _dedupe_models, _models_from_raw, _slug)
         # 内置校园供应商不随前端提交走:v0.9.03 的提交里混进了它,导致任何保存
         # 都被「内置不可编辑」挡死(自定义模型存不进去)。这里一律跳过,由下方
         # 统一按代码补回;提交列表为空 = 只用内置,也允许。
         providers, seen = [], set()
+        auto_disabled: list[str] = []
         for i, item in enumerate(items, start=1):
             if not isinstance(item, dict):
                 return {"ok": False, "msg": f"第 {i} 项格式错误"}
@@ -648,12 +698,26 @@ class Bridge:
             if pid in seen:
                 return {"ok": False, "msg": f"供应商 id 重复: {pid}"}
             seen.add(pid)
+            entries = _dedupe_models(_models_from_raw(item.get("models")))
             providers.append(Provider(
-                id=pid, name=str(item.get("name") or pid),
+                id=pid, name=str(item.get("name") or pid).strip() or pid,
                 base_url=base.rstrip("/"),
                 api_key=str(item.get("api_key") or ""),
                 model=str(item.get("model") or DEFAULT_MODEL),
             ))
+            # 模型清单与启停开关:v0.9.13 的界面提交里带 models;老前端(或手改
+            # 配置)只给单个 model 字段时,兜底成"清单里的一条",行为与改版前一致。
+            provider = providers[-1]
+            if not entries and provider.model.strip():
+                # 老前端(或手改配置)只给单个 model 字段:补成清单里的一条,
+                # 让磁盘上的配置始终自洽(有 models 就一定能看出"启用了哪些")
+                entries = [{"name": provider.model.strip(), "enabled": True}]
+            provider.models = entries
+            provider.enabled = item.get("enabled", True) is not False
+            provider.sync_model()
+            if not provider.enabled_models() and provider.enabled:
+                provider.enabled = False          # 没勾任何模型:停用而不是留个坑
+                auto_disabled.append(provider.name)
         ids = {p.id for p in providers}
         if active_id == BUILTIN_PROVIDER_ID or not providers:
             active = BUILTIN_PROVIDER_ID      # 内置/空列表:激活内置,绝不悄悄换
@@ -667,6 +731,16 @@ class Bridge:
         builtin.api_key = _builtin_api_key()
         self.config.providers = [builtin] + providers
         self.config.active_provider_id = active
+
+        # 当前激活的那个供应商正好被停用/没有启用模型:回落内置,并把原因说出来
+        # (静默回落最糟:用户会以为"我刚加好的模型怎么没生效")
+        fell_back = ""
+        chosen = next((p for p in providers if p.id == active), None)
+        if chosen is not None and (not chosen.enabled
+                                   or not chosen.enabled_models()):
+            fell_back = chosen.name
+            self.config.active_provider_id = BUILTIN_PROVIDER_ID
+
         save_config(self.config_path, self.config)
         self._apply_active_provider()
         # 实时同步(v0.9.11):任务面板的可切列表/能力标签直接吃这份配置,
@@ -674,12 +748,26 @@ class Bridge:
         for r in self._runners.values():
             self.ui.push("session_metrics", session=r.key, **session_metrics(
                 r.agent, r.session, self.config, r.llm_override))
-        self.ui.push("info", text=f"已保存 {len(providers)} 个供应商,当前: {self.config.provider.name}")
-        return {"ok": True}
+        notes = []
+        if auto_disabled:
+            notes.append("没勾选任何模型的供应商已自动停用:" + "、".join(auto_disabled))
+        if fell_back:
+            notes.append(f"「{fell_back}」不可用,已切回内置校园模型")
+        tail = ("(" + ";".join(notes) + ")") if notes else ""
+        self.ui.push("info", text=f"已保存 {len(providers)} 个供应商,当前: "
+                                  f"{self.config.provider.name} · {self.config.model}{tail}")
+        return {"ok": True, "auto_disabled": auto_disabled, "fell_back": fell_back}
 
     def set_provider(self, provider_id: str) -> dict:
-        if not self.config.set_active_provider(provider_id):
+        target = next((p for p in self.config.providers if p.id == provider_id), None)
+        if target is None:
             return {"ok": False, "msg": f"供应商不存在: {provider_id}"}
+        if target.id != BUILTIN_PROVIDER_ID:
+            if not target.enabled:
+                return {"ok": False, "msg": f"「{target.name}」已停用,先在模型管理里启用"}
+            if not target.enabled_models():
+                return {"ok": False, "msg": f"「{target.name}」没有启用的模型"}
+        self.config.set_active_provider(provider_id)
         save_config(self.config_path, self.config)
         self._apply_active_provider()
         # 跟 save_providers 同理:面板立刻跟上新的全局模型(p1/p2 实时同步)
@@ -690,11 +778,14 @@ class Bridge:
         self.ui.push("info", text=f"已切换到 {self.config.provider.name} · {self.config.model}")
         return {"ok": True}
 
-    def set_session_model(self, provider_id: str) -> dict:
-        """把当前会话的模型切到指定供应商(不写回全局配置)。
+    def set_session_model(self, provider_id: str, model: str = "") -> dict:
+        """把当前会话的模型切到指定供应商(可指定它下面的某个模型)。
 
         给这个会话的 Agent 重建一个 LLMClient;后续回合立即用新模型。
-        切回「全局当前模型」时清掉会话级覆盖 = 重新跟随全局(p1/p2 同步语义)。
+        仅当"同一个供应商 + 同一个模型"时才清掉会话级覆盖 = 重新跟随全局
+        (p1/p2 同步语义)。
+
+        `model` 留空 = 用该供应商的第一个启用模型(兼容老前端只传供应商 id)。
         """
         runner = self._current
         if runner is None:
@@ -704,21 +795,115 @@ class Bridge:
         target = next((p for p in self.config.providers if p.id == provider_id), None)
         if target is None:
             return {"ok": False, "msg": f"供应商不存在: {provider_id}"}
+        if target.id != BUILTIN_PROVIDER_ID and not target.enabled:
+            return {"ok": False, "msg": f"「{target.name}」已停用,先在模型管理里启用"}
+        usable = target.enabled_models()
+        picked_name = str(model or "").strip()
+        if picked_name and picked_name not in usable:
+            return {"ok": False, "msg": f"「{target.name}」下没有启用中的模型:{picked_name}"}
+        picked_name = picked_name or (usable[0] if usable else target.model)
+        if not picked_name:
+            return {"ok": False, "msg": f"「{target.name}」没有可用的模型"}
         if not target.api_key.strip() or target.api_key.strip() in API_KEY_PLACEHOLDERS:
             return {"ok": False, "msg": f"「{target.name}」还没配 API Key,先在模型管理里配好"}
-        follows_global = target.id == self.config.active_provider_id
+        follows_global = (target.id == self.config.active_provider_id
+                          and picked_name == self.config.model)
         runner.llm_override = None if follows_global else \
-            {"provider_id": target.id, "model": target.model}
-        runner.agent.llm = LLMClient(replace(self.config, active_provider_id=target.id))
+            {"provider_id": target.id, "model": picked_name}
+        # 具体到"哪个模型":把该供应商的 model 换成用户选的那个,再交给
+        # LLMClient —— LLMClient 只认 config.model,不认"供应商 + 模型"二元组。
+        scoped = replace(self.config,
+                         providers=[replace(target, model=picked_name)
+                                    if p.id == target.id else p
+                                    for p in self.config.providers],
+                         active_provider_id=target.id)
+        runner.agent.llm = LLMClient(scoped)
         # 模型换了,思考能力表也换了:档位归回 default,并把新能力推给界面
         runner.agent.llm.reasoning_choice = "default"
         self._push_reasoning(runner)
         note = "(重新跟随全局默认模型)" if follows_global \
             else "(不影响其他会话与默认模型)"
-        self.ui.push("info", text=f"本会话已切换到 {target.name} · {target.model}{note}")
+        self.ui.push("info", text=f"本会话已切换到 {target.name} · {picked_name}{note}")
         self.ui.push("session_metrics", **session_metrics(
             runner.agent, runner.session, self.config, runner.llm_override))
         return {"ok": True}
+
+    # ------------------------------------------------------------ 模型测试 / 拉取
+
+    def get_provider_presets(self) -> dict:
+        """「常用供应商」预设:一键把地址与常见模型名填进表单。"""
+        from minicode.config import PROVIDER_PRESETS
+        return {"ok": True, "presets": PROVIDER_PRESETS}
+
+    def _provider_credentials(self, provider_id: str, base_url: str = "",
+                              api_key: str = "") -> tuple[str, str]:
+        """取"要拿去请求的那个地址与密钥"。
+
+        测试与拉取要用**界面上正在编辑的那份**:用户在表单里刚敲进地址和 Key、
+        还没保存就点「测试」是最常见的用法 —— 只读磁盘配置的话,他会撞上
+        "还没填接口地址"(而地址明明就在眼前)。所以:传了就用传的,没传才回落
+        到已保存的配置。
+
+        内置校园供应商是例外:它的地址与 Key 一律以代码为准,**前端传什么都不认**
+        —— 否则"给界面传个自定义地址"就能把内置请求劫持到别处。
+        """
+        if provider_id == BUILTIN_PROVIDER_ID:
+            saved = next((p for p in self.config.providers
+                          if p.id == BUILTIN_PROVIDER_ID), None)
+            if saved is not None:
+                return saved.base_url, saved.api_key
+            from minicode.config import BUILTIN_PROVIDER, _builtin_api_key
+            return BUILTIN_PROVIDER.base_url, _builtin_api_key()
+        saved = next((p for p in self.config.providers if p.id == provider_id), None)
+        return (str(base_url or "").strip() or (saved.base_url if saved else ""),
+                str(api_key or "").strip() or (saved.api_key if saved else ""))
+
+    def test_model(self, provider_id: str, model: str = "", base_url: str = "",
+                   api_key: str = "") -> dict:
+        """「测试」按钮:真发一条最小请求,把连通/鉴权/窗口/视觉一次问清。
+
+        结论会记进能力表(缓存 + 任务面板徽标):用户点过一次测试,面板上就该
+        显示真实窗口,而不是继续写着"未知"。
+        """
+        name = str(model or "").strip()
+        if not name:
+            return {"ok": False, "msg": "还没填模型名"}
+        base, key = self._provider_credentials(provider_id, base_url, api_key)
+        try:
+            result = model_probe.test_model(base, key, name)
+        except Exception as exc:      # 测试按钮绝不能把窗口带崩
+            return {"ok": False, "msg": f"测试失败:{type(exc).__name__}: {exc}"}
+        if result.get("ok"):
+            model_probe.remember(name, {
+                "context_window": result.get("context_window"),
+                "supports_vision": result.get("supports_vision"),
+                "endpoint": model_probe.endpoint_fingerprint(base),
+                "checked_at": time.time(),
+            })
+            for r in self._runners.values():      # 面板徽标吃新结论
+                self.ui.push("session_metrics", session=r.key, **session_metrics(
+                    r.agent, r.session, self.config, r.llm_override))
+        return {**result, "model": name}
+
+    def fetch_models(self, provider_id: str, base_url: str = "",
+                     api_key: str = "") -> dict:
+        """「从服务获取」:拉服务端的模型列表(GET /models)。
+
+        比预设名单准得多 —— 各家模型名几个月换一茬,只有服务端自己知道现在有什么。
+        """
+        base, key = self._provider_credentials(provider_id, base_url, api_key)
+        if not base:
+            return {"ok": False, "msg": "还没填接口地址"}
+        try:
+            status, names = model_probe.list_models(base, key)
+        except Exception as exc:
+            return {"ok": False, "msg": f"读取失败:{type(exc).__name__}: {exc}"}
+        if not names:
+            if status == 200:
+                return {"ok": False,
+                        "msg": "服务端没返回模型列表(这个服务可能不实现 /models,手填模型名即可)"}
+            return {"ok": False, "msg": model_probe.explain_status(status, "")}
+        return {"ok": True, "models": names}
 
     # ------------------------------------------------------------ 思考档位
 
@@ -1101,6 +1286,79 @@ class Bridge:
                      text=f"已恢复 {n} 条消息(来自 {chosen.path.name})")
         self._push_sessions()
         return {"ok": True, "session": key}
+
+    # ------------------------------------------------------------ 会话导出 / 搜索
+
+    def export_session(self) -> dict:
+        """把当前会话导出成 Markdown(先弹"另存为")。
+
+        只导出用户与助手的正文:工具往返不进文件,那是过程噪音,发给同学时
+        只会把重点淹没。没有窗口(网页版/测试)时落到工作区 exports/。
+        """
+        runner = self._current
+        if runner is None:
+            return {"ok": False, "msg": "没有活动会话"}
+        if len(runner.session.messages) <= 1:
+            return {"ok": False, "msg": "这个会话还没有对话内容可导出"}
+        body = session_to_markdown(runner.session)
+        name = session_export_name(runner.session)
+
+        window = getattr(self.ui, "window", None)
+        if window is not None:
+            target = self._ask_save_path(name)
+            if target is None:
+                return {"ok": False, "msg": "已取消导出"}
+        else:
+            out_dir = Path(self.workspace) / "exports"
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                return {"ok": False, "msg": f"创建导出目录失败:{exc}"}
+            target = out_dir / name
+        try:
+            Path(target).write_text(body, encoding="utf-8")
+        except OSError as exc:
+            return {"ok": False, "msg": f"写入失败:{exc}"}
+        self.ui.push("info", text=f"会话已导出:{target}")
+        return {"ok": True, "path": str(target), "name": Path(target).name}
+
+    def _ask_save_path(self, default_name: str):
+        """弹系统"另存为"框;窗口没就绪、或用户取消,都返回 None。"""
+        window = getattr(self.ui, "window", None)
+        if window is None:
+            return None
+        try:
+            import webview
+            picked = window.create_file_dialog(
+                webview.SAVE_DIALOG, save_filename=default_name,
+                file_types=("Markdown 文件 (*.md)", "所有文件 (*.*)"))
+        except Exception:
+            return None
+        if isinstance(picked, (list, tuple)):
+            picked = picked[0] if picked else None
+        return Path(picked) if picked else None
+
+    def search_sessions(self, query: str = "") -> dict:
+        """侧栏搜索:在所有历史会话留档里找关键词。
+
+        返回的 `index` 与侧栏列表同一套序号(都来自 `list_sessions` 的先后顺序),
+        前端拿到就能直接调 `resume_session` 切过去,不必再引入路径维度
+        (路径也不该下发给网页版访客)。
+        """
+        q = (query or "").strip()
+        if not q:
+            return {"ok": True, "query": "", "total": 0, "results": []}
+        hits = search_session_logs(self.sessions_dir, q)
+        order = {s.path: i for i, s in
+                 enumerate(list_sessions(self.sessions_dir, limit=50), start=1)}
+        results = []
+        for hit in hits:
+            idx = order.get(hit["path"])
+            if not idx:
+                continue        # 超出侧栏条数上限的老会话:搜得到,但列表里没有它
+            results.append({"index": idx, "hits": hit["hits"],
+                            "snippet": hit["snippet"], "file": hit["path"].name})
+        return {"ok": True, "query": q, "total": len(results), "results": results}
 
     # ------------------------------------------------------------ 内部
 

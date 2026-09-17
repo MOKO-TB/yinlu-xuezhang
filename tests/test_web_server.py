@@ -201,6 +201,8 @@ def test_owner_only_methods_refused(server):
     client = Client(server)
     make_frontend_ready(client)
     for name in ("get_providers", "save_providers", "set_provider",
+                 "test_model", "fetch_models", "get_provider_presets",
+                 "set_session_model", "export_session",
                  "get_token_usage",
                  "get_skills", "get_skill_body", "get_skill_channels", "add_skill",
                  "set_sandbox", "set_permission_mode", "consolidate_memory",
@@ -209,6 +211,17 @@ def test_owner_only_methods_refused(server):
         assert status == 200, name
         assert payload.get("ok") is False, f"{name} 竟然放行了:{payload}"
         assert payload.get("msg"), f"{name} 应该给出可读的拒绝原因"
+
+
+def test_session_search_only_sees_own_logs(server):
+    """访客可以搜自己的会话(WebBridge 每人一份私有 sessions 目录),搜不到别人的。"""
+    client = Client(server)
+    make_frontend_ready(client)
+    status, payload = client.post("search_sessions", {"query": "三体"})
+    assert status == 200
+    assert payload.get("ok") is True
+    assert payload["total"] == 0        # 新访客没有历史会话
+    assert payload["results"] == []
 
 
 def test_unknown_method_refused(server):

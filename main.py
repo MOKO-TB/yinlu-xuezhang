@@ -38,15 +38,20 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
         session.clear()
         ui.info("会话已清空。")
     elif name == "/model":
-        from minicode.config import API_KEY_PLACEHOLDERS
         p = config.provider
-        lines = ["当前模型(校内分发版固定使用,界面不提供切换)"]
+        lines = ["当前模型(切换在界面顶栏「模型管理」;这里只做展示)"]
         if p:
-            key = "已配置" if p.api_key.strip() not in API_KEY_PLACEHOLDERS else "未配置 key"
-            lines.append(f"  ● {p.name}({p.id}) · {p.model} · {key} · {p.base_url}")
-        others = [q for q in config.providers if p is None or q.id != p.id]
-        if others:
-            lines.append(f"  (config.json 里另有 {len(others)} 个供应商配置,保留但不激活)")
+            key = "已配 Key" if p.has_key else "未配 Key"
+            lines.append(f"  ▶ {p.name}({p.id}) · {p.model} · {key} · {p.base_url}")
+            for entry in p.model_entries():
+                mark = "✓" if entry.get("enabled", True) else "✗"
+                lines.append(f"      {mark} {entry.get('name', '')}")
+        for q in config.providers:
+            if p is not None and q.id == p.id:
+                continue
+            state = "" if q.enabled else " · 已停用"
+            lines.append(f"  ● {q.name}({q.id}) · {q.model} · "
+                         f"{len(q.enabled_models())} 个启用模型{state}")
         ui.info("\n".join(lines))
     elif name == "/sandbox":
         state = getattr(agent.ctx, "sandbox", None)

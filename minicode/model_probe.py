@@ -65,9 +65,9 @@ _ABORT_HINTS = ("insufficient_user_quota", "预扣费", "unauthorized", "invalid
 
 # --------------------------------------------------------------- HTTP
 
-def _post(base_url: str, path: str, payload: dict, api_key: str,
-          timeout: float) -> tuple[int, str]:
-    """POST 一次,返回 (status, text)。任何网络异常都收成 (0, 描述)。
+def _request(method: str, base_url: str, path: str, payload: dict | None,
+             api_key: str, timeout: float) -> tuple[int, str]:
+    """发一次请求,返回 (status, text)。任何网络异常都收成 (0, 描述)。
 
     内网地址必须直连:系统代理(Clash 等)会拦成 502 —— 与 llm.py 同款处理。
     """
@@ -75,7 +75,7 @@ def _post(base_url: str, path: str, payload: dict, api_key: str,
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = "Bearer " + api_key
-    body = json.dumps(payload).encode("utf-8")
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
     try:
         from minicode.llm import _is_direct_host
         from urllib.parse import urlparse
@@ -89,10 +89,45 @@ def _post(base_url: str, path: str, payload: dict, api_key: str,
             import httpx
         with httpx.Client(trust_env=trust_env,
                           timeout=httpx.Timeout(timeout, connect=min(timeout, 10.0))) as c:
-            r = c.post(url, content=body, headers=headers)
+            r = c.request(method, url, content=body, headers=headers)
             return r.status_code, r.text
     except Exception as e:          # 网络不通/超时/没装 httpx:都不该影响调用方
         return 0, f"{type(e).__name__}: {e}"
+
+
+def _post(base_url: str, path: str, payload: dict, api_key: str,
+          timeout: float) -> tuple[int, str]:
+    """POST 一次,返回 (status, text)。"""
+    return _request("POST", base_url, path, payload, api_key, timeout)
+
+
+def list_models(base_url: str, api_key: str, timeout: float = 15.0) -> tuple[int, list[str]]:
+    """问服务端"你有哪些模型"(GET /models)。
+
+    返回 (status, 模型名列表)。**故意不猜**:只有真拿到 `data[].id` 才回列表,
+    鉴权失败/超时/格式不对一律回空列表,由调用方把 status 讲给用户听。
+    """
+    if not base_url:
+        return 0, []
+    status, text = _request("GET", base_url, "/models", None, api_key, timeout)
+    if status != 200:
+        return status, []
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        return status, []
+    items = raw.get("data") if isinstance(raw, dict) else None
+    if not isinstance(items, list):
+        return status, []
+    names: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            name = str(item.get("id") or item.get("name") or "").strip()
+        else:
+            name = str(item or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return status, names
 
 
 # --------------------------------------------------------------- 解析
@@ -168,6 +203,93 @@ def detect(base_url: str, api_key: str, model: str,
         "endpoint": endpoint_fingerprint(base_url),
         "checked_at": time.time(),
     }
+
+
+# 把服务端的 HTTP 状态翻成用户看得懂的一句话。前端「测试」按钮直接展示它。
+def explain_status(status: int, text: str) -> str:
+    if status == 0:
+        return "连不上服务:请检查接口地址与网络(内网地址需要连着校园网)"
+    if status in (401, 403):
+        return f"API Key 无效或没有权限(HTTP {status})"
+    if status == 404:
+        return "接口路径不对(HTTP 404):确认地址末尾要不要带 /v1"
+    if status == 429:
+        return "被限流了(HTTP 429):稍后再试,或检查账户额度"
+    if 400 <= status < 500:
+        return f"服务端拒绝了这次请求(HTTP {status}):{_snippet(text)}"
+    if status >= 500:
+        return f"服务端报错(HTTP {status}):{_snippet(text)}"
+    return f"服务端返回 HTTP {status}:{_snippet(text)}"
+
+
+def _snippet(text: str, limit: int = 120) -> str:
+    """从错误正文里抠一句能看的(优先取 JSON 的 message 字段)。"""
+    raw = (text or "").strip()
+    if not raw:
+        return "(无内容)"
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict) and err.get("message"):
+                raw = str(err["message"])
+            elif isinstance(data.get("message"), str):
+                raw = data["message"]
+            elif isinstance(data.get("detail"), str):
+                raw = data["detail"]
+    except json.JSONDecodeError:
+        pass
+    return raw.replace("\n", " ")[:limit]
+
+
+def test_model(base_url: str, api_key: str, model: str,
+               timeout: float = 20.0) -> dict:
+    """「测试」按钮:真发一条最小请求,顺便问出窗口与视觉能力。
+
+    和 `detect()` 的区别是**先确认连通与鉴权**,再把结论讲成一句话 —— 只回
+    "窗口 None" 的话,用户根本分不清是 key 错了、地址错了还是模型名写错了。
+
+    返回 {"ok", "msg", "status", "context_window", "supports_vision"}。
+    只探测、不落盘(要不要把结论记下来由调用方决定)。
+    """
+    if not base_url:
+        return {"ok": False, "msg": "还没填接口地址", "status": 0,
+                "context_window": None, "supports_vision": None}
+    if not model:
+        return {"ok": False, "msg": "还没填模型名", "status": 0,
+                "context_window": None, "supports_vision": None}
+    status, text = _post(base_url, "/chat/completions", {
+        "model": model, "max_tokens": 8,
+        "messages": [{"role": "user", "content": "hi"}],
+    }, api_key, timeout)
+    if status != 200:
+        return {"ok": False, "msg": explain_status(status, text), "status": status,
+                "context_window": None, "supports_vision": None}
+    window = probe_context_window(base_url, api_key, model, timeout)
+    vision = probe_vision(base_url, api_key, model, timeout)
+    parts = ["已连通"]
+    if window:
+        parts.append(f"窗口 {window:,} tokens")
+    if vision is not None:
+        parts.append("支持看图" if vision else "纯文本")
+    return {"ok": True, "msg": " · ".join(parts), "status": status,
+            "context_window": window, "supports_vision": vision}
+
+
+def remember(model: str, entry: dict) -> None:
+    """把一次手动测试的结论记下来(缓存 + 模型能力表)。
+
+    与 `ensure_async` 同款规则:什么都没问出来就不落盘,免得把一次失败
+    当成长期结论。
+    """
+    if not isinstance(entry, dict):
+        return
+    if entry.get("context_window") is None and entry.get("supports_vision") is None:
+        return
+    cache = load_cache()
+    cache[_key(model)] = entry
+    save_cache(cache)
+    publish(model, entry)
 
 
 def endpoint_fingerprint(base_url: str) -> str:

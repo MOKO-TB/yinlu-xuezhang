@@ -147,6 +147,11 @@ def session_metrics(agent, session, config, llm_override: dict | None) -> dict:
     """任务面板一屏数据:当前会话的模型/能力/消耗/上下文占用/可切列表。
 
     llm_override 非 None 表示这个会话单独切过模型(不影响全局配置)。
+
+    `selectable` 是**供应商 × 模型**的展开(v0.9.13):一个供应商挂多个模型时,
+    用户能在任务面板里直接选到具体那个模型,而不是只能选到供应商。每项带
+    `key`("供应商::模型")给前端做选中判断 —— 光比 provider_id 会让同一供应商
+    下的两个模型都显示成"选中"。
     """
     model = llm_override["model"] if llm_override else config.model
     window = context_window_for(model, config.context_window)
@@ -155,17 +160,29 @@ def session_metrics(agent, session, config, llm_override: dict | None) -> dict:
     info = lookup(model)
     selectable = []
     for p in config.providers:
-        selectable.append({
-            "id": p.id, "name": p.name, "model": p.model,
-            "has_key": _has_key(p.api_key),
-            "builtin": p.id == "gzasc",
-            "supports_vision": lookup(p.model)["supports_vision"],
-            "context_window": lookup(p.model)["context_window"],
-            "capabilities": capabilities(p.model),
-        })
+        if p.id != "gzasc" and not getattr(p, "enabled", True):
+            continue                       # 停用的供应商不进可切列表
+        for entry in p.model_entries():
+            if not entry.get("enabled", True):
+                continue                   # 停用的模型也不进(但管理面板里还看得到)
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                continue
+            caps = lookup(name)
+            selectable.append({
+                "key": f"{p.id}::{name}",
+                "id": p.id, "name": p.name, "model": name,
+                "has_key": _has_key(p.api_key),
+                "builtin": p.id == "gzasc",
+                "supports_vision": caps["supports_vision"],
+                "context_window": caps["context_window"],
+                "capabilities": capabilities(name),
+            })
+    active_id = (llm_override["provider_id"] if llm_override
+                 else (config.provider.id if config.provider else ""))
     return {
-        "provider_id": llm_override["provider_id"] if llm_override
-        else (config.provider.id if config.provider else ""),
+        "provider_id": active_id,
+        "selected_key": f"{active_id}::{model}" if active_id and model else "",
         "model": model,
         "capabilities": capabilities(model),
         "supports_vision": info["supports_vision"],

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -122,6 +123,101 @@ class Session:
             return
         with self._log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
+def _content_text(content) -> str:
+    """把一条消息的 content 摊平成纯文本(多模态消息只取文字部分)。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text" and item.get("text"):
+                parts.append(str(item["text"]))
+            elif item.get("type") == "image_url":
+                parts.append("[图片]")
+        return "\n".join(parts)
+    return ""
+
+
+def to_markdown(sess: "Session", title: str = "") -> str:
+    """把会话导出成 Markdown:只留用户与助手的正文。
+
+    工具调用与工具结果**不进文件** —— 那是过程噪音,分享给同学时只会淹没重点
+    (一次搜索就几屏 JSON)。要复盘过程的话,留档 JSONL 本来就在。
+    """
+    lines = [f"# {title or '引路学长 · 会话记录'}", ""]
+    if sess.workspace:
+        lines += [f"**工作区**:{sess.workspace}", ""]
+    if sess.log_path:
+        lines += [f"**留档**:{sess.log_path.name}", ""]
+    for msg in sess.messages:
+        role = msg.get("role")
+        if role not in ("user", "assistant"):
+            continue                      # 系统提示词与工具往返都跳过
+        body = _content_text(msg.get("content")).strip()
+        if not body:
+            continue
+        lines += [("## 我" if role == "user" else "## 引路学长"), "", body, ""]
+    return "\n".join(lines).strip() + "\n"
+
+
+def export_filename(sess: "Session", prefix: str = "引路学长会话") -> str:
+    """导出文件名。借用留档名里的时间戳,让导出件与留档一一对得上。"""
+    stamp = time.strftime("%Y%m%d-%H%M")
+    if sess.log_path is not None:
+        m = re.match(r"session_(\d{8})_(\d{4})", sess.log_path.stem)
+        if m:
+            stamp = f"{m.group(1)}-{m.group(2)}"
+    return f"{prefix}-{stamp}.md"
+
+
+def search_logs(log_dir: Path, query: str, limit: int = 50) -> list[dict]:
+    """在所有会话留档里搜关键词,返回 [{"path", "hits", "snippet"}]。
+
+    大小写不敏感的子串匹配 —— 留档以中文为主,上分词器纯属负担,而且会让
+    "搜不到"变得无法解释。每条命中给一段上下文片段:界面上要能看见
+    "为什么这条算命中",否则用户只能挨个点开试。
+    """
+    query = (query or "").strip()
+    if not query or not log_dir.exists():
+        return []
+    needle = query.lower()
+    out: list[dict] = []
+    files = sorted(log_dir.glob("session_*.jsonl"),
+                   key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+    for path in files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        hits, snippet = 0, ""
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict) or obj.get("role") not in ("user", "assistant"):
+                continue
+            content = _content_text(obj.get("content"))
+            low = content.lower()
+            at = low.find(needle)
+            if at < 0:
+                continue
+            hits += low.count(needle)
+            if not snippet:
+                start = max(0, at - 24)
+                snippet = ("…" if start else "") + \
+                    content[start:at + len(query) + 56].replace("\n", " ")
+        if hits:
+            out.append({"path": path, "hits": hits, "snippet": snippet.strip()})
+    out.sort(key=lambda h: h["hits"], reverse=True)
+    return out
 
 
 def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
