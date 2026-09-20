@@ -12,7 +12,7 @@ def test_registry_contents():
                      "use_skill", "plan",
                      "search_knowledge", "campus_calendar", "gpa_calc",
                      "kb_suggest", "library_search", "library_guide", "memory",
-                     "reminder",
+                     "reminder", "schedule", "get_weather",
                      "map_find_place", "map_show_list", "map_highlight_building",
                      "map_drop_pin", "map_clear"]
     assert len(set(names)) == len(names)
@@ -50,6 +50,8 @@ def test_read_only_flags():
         "plan": False,
         "memory": False,
         "reminder": False,           # 待办提醒写本机清单文件,要确认
+        "schedule": False,           # 课表存本机文件,同上(保存动作本身即用户授意)
+        "get_weather": True,         # 只读天气数据(固定数据源),不驱动任何东西
         # 地图工具只改界面显示、不动文件:标只读,免得每次定位都弹确认框
         "map_find_place": True,
         "map_show_list": True,

@@ -120,6 +120,28 @@ def save_attachments(workspace: Path, paths: list[str]) -> tuple[list[Attachment
     return ok, errors
 
 
+def save_dropped_bytes(workspace: Path, name: str, data: bytes) -> Attachment:
+    """把拖进对话框的文件(前端用 FileReader 读到的字节)写进 uploads/。
+
+    WebView2 里 JS 拿不到本地绝对路径(file.path 是 Electron 专有),所以走字节;
+    上限、同名加后缀、图片判定与 save_attachment 完全一致。
+    """
+    safe = Path(str(name or "")).name or "attachment"
+    size = len(data or b"")
+    if size > MAX_ATTACHMENT_BYTES:
+        raise ValueError(
+            f"{safe} 超过单附件上限 {human_size(MAX_ATTACHMENT_BYTES)}"
+            f"(实际 {human_size(size)})")
+    directory = Path(workspace) / UPLOAD_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    target = unique_target(directory, safe)
+    target.write_bytes(data)
+    p = Path(safe)
+    return Attachment(name=safe, path=target.relative_to(Path(workspace)).as_posix(),
+                      size=size, kind="image" if is_image(p) else "file",
+                      mime=_mime_for(p), local=str(target.resolve()))
+
+
 # --------------------------------------------------------------------- 图片
 
 def compress_image(path: Path, max_edge: int = IMAGE_MAX_EDGE,

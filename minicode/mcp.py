@@ -55,6 +55,9 @@ class McpServerConfig:
     env: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
     read_only: bool = False
+    # 信任级(注入防御 M1):MCP 是第三方服务器,返回值默认当外部内容围栏。
+    # 确实信任的自建服务器可在 config 里写 "trusted": true 降为 local。
+    trusted: bool = False
     start_timeout: float = DEFAULT_START_TIMEOUT
     call_timeout: float = DEFAULT_CALL_TIMEOUT
     description: str = ""
@@ -101,6 +104,7 @@ def parse_servers(raw) -> list[McpServerConfig]:
             env=env,
             enabled=bool(item.get("enabled", True)),
             read_only=bool(item.get("read_only", False)),
+            trusted=bool(item.get("trusted", False)),
             start_timeout=float(item.get("start_timeout", DEFAULT_START_TIMEOUT)),
             call_timeout=float(item.get("call_timeout", DEFAULT_CALL_TIMEOUT)),
             description=str(item.get("description") or ""),
@@ -121,6 +125,8 @@ def servers_to_raw(servers: list[McpServerConfig]) -> list[dict]:
             item["enabled"] = False
         if s.read_only:
             item["read_only"] = True
+        if s.trusted:
+            item["trusted"] = True
         if s.description:
             item["description"] = s.description
         out.append(item)
@@ -386,6 +392,7 @@ class McpManager:
                     parameters=_input_schema(spec),
                     handler=_make_handler(client, remote),
                     read_only=client.cfg.read_only,
+                    trust="local" if client.cfg.trusted else "external",
                 ))
         return out
 

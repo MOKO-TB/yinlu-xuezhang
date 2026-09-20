@@ -16,6 +16,7 @@
     ["get_info"],
     ["get_suggestions"],
     ["get_countdowns"],
+    ["get_weather_card"],
     ["rate_message", "rating", "question", "answer"],
     ["send_task", "text", "attachments"],
     ["stop_task"],
@@ -116,6 +117,7 @@
   /* ---------------- 隐藏所有者专属控件 ---------------- */
   var css = [
     "#btnMemory", "#btnSandbox", "#btnUndo", "#btnAttach", "#perm", "#btnSkills",
+    "#btnSchedule",
   ].join(",") + "{display:none !important}";
   function injectCss() {
     var style = document.createElement("style");

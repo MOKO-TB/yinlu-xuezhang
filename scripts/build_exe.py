@@ -106,8 +106,14 @@ def write_user_files(dist: Path) -> None:
     for _name in ("token-usage.db", "token-usage.db-wal", "token-usage.db-shm",
                   "workspaces.json", "workspaces.json.tmp",
                   # v0.9.14 知识库成长闭环的运行时日志(含本机问答/反馈,不该外发)
-                  "kb-gaps.jsonl", "kb-candidates.jsonl", "message-feedback.jsonl"):
+                  "kb-gaps.jsonl", "kb-candidates.jsonl", "message-feedback.jsonl",
+                  # v0.9.18 个人数据与本机缓存:课表属于使用者本人,天气缓存是构建机坐标的
+                  "schedule.json", "weather-cache.json", "reminders.json",
+                  "notice-watch.json", "injection-events.log"):
         (dist / _name).unlink(missing_ok=True)
+    # v0.9.21:候选审核把人工核实的知识写进 app_path('kb')/reviewed.json;
+    # 构建机上若试用过「并入」,那份文件含本机问答,不能随包发给别人。
+    (dist / "kb" / "reviewed.json").unlink(missing_ok=True)
     shutil.copy(ROOT / "config.example.json", dist / "config.example.json")
     (dist / "使用说明.txt").write_text(
         "引路学长 —— 校园 AI 助手 / 编程引路智能体(GUI + CLI)\n"
@@ -134,19 +140,23 @@ def write_user_files(dist: Path) -> None:
         "   kb/school-calendar.json,拿到教务处校历后可直接编辑补充);\n"
         "   问绩点/加权平均,把成绩直接贴给它就算;每条回复右侧有 👍/👎,\n"
         "   点了会记进本机反馈日志,帮助学长把回答越改越准。\n"
-        "6. 图书馆搜书用的是包内的离线馆藏库 crawled/mfindgzyykj.libsp.cn/library.db\n"
+        "6. 首页还有「今天要不要带伞」天气 chip(数据源 Open-Meteo,免注册免 Key,\n"
+        "   出校园网/断网时不显示,不碍事);把课表截图或文字发给学长,它会问你\n"
+        "   「开学第一周周一是几号」后存成个人课表(存在本机 schedule.json,不上传)——\n"
+        "   之后问「今天/明天有什么课」不用再发图,启动时还会主动提示第一节课。\n"
+        "7. 图书馆搜书用的是包内的离线馆藏库 crawled/mfindgzyykj.libsp.cn/library.db\n"
         "   (约 1.31 GB / 133 万条书目)。\n"
         "   - 需要至少 2 GB 空闲磁盘;库没拷全时界面会当场提示「馆藏数据不完整」;\n"
         "   - 单文件版(引路学长-单文件版.exe)**不带**这个馆藏库,单独用无法搜书;\n"
         "     要能搜书请用安装包,或把整个便携文件夹一起拷过去。\n"
         "   - 自检:引路学长-CLI.exe 里输入 /library 看库状态。\n"
-        "7. 想接 MCP 服务器:编辑 config.json 的 mcp_servers 数组\n"
+        "8. 想接 MCP 服务器:编辑 config.json 的 mcp_servers 数组\n"
         "   (格式见 config.example.json,支持 npx/uvx/python 启动的任意 MCP 服务器);\n"
-        "8. 问网页内容时它可以用真实浏览器看页面(靠 JS 渲染的站点、自己写的本地\n"
+        "9. 问网页内容时它可以用真实浏览器看页面(靠 JS 渲染的站点、自己写的本地\n"
         "   页面都能看,还能截图给你)。默认自己起一个干净的后台实例,不会动你\n"
         "   正在用的浏览器,也不带你的登录态;只有要看必须登录才看得到的页面时,\n"
         "   它会先问你才能用你自己的浏览器。终端里输 /browser 可看当前状态。\n"
-        "9. 会话留档在 sessions/;技能放 skills/(SKILL.md 格式);知识库放 kb/;\n"
+        "10. 会话留档在 sessions/;技能放 skills/(SKILL.md 格式);知识库放 kb/;\n"
         "   长期记忆在 memory/MEMORY.md。\n"
         "   注:选了别处的工作区后,上面这些(以及附件、计划)都跟随工作区走,\n"
         "   只有 config.json 与会话留档 sessions/ 留在程序目录。\n",

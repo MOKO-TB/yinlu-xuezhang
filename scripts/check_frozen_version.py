@@ -23,7 +23,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill"),
     "minicode.web_profile": ("网页版不开放会话导出", "search_sessions"),
     # ---- v0.9.14:知识库成长闭环 + 校园场景小工具 ----
-    "minicode.growth": ("log_kb_gap", "save_candidate", "log_feedback", "kb_suggest"),
+    # v0.9.21:候选审核面板(list_candidates/review_candidate/_merge_into_kb)
+    "minicode.growth": ("log_kb_gap", "save_candidate", "log_feedback", "kb_suggest",
+                        "list_candidates", "review_candidate", "_merge_into_kb",
+                        "REVIEWED_KB_FILE"),
     "minicode.calendar": ("campus_calendar", "calendar_payload",
                           "calendar_prompt_section"),
     "minicode.gpa": ("gpa_calc",),
@@ -31,11 +34,34 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # ---- v0.9.15:上下文面板 + py_script ----
     "minicode.tools.shell": ("py_script", "_py_runtime_command"),
     "minicode.model_catalog": ("_context_breakdown",),
-    # ---- v0.9.16:主动推荐 ----
-    "minicode.proactive": ("check_once", "fetch_latest", "start_loop", "clean_title"),
-    # ---- v0.9.17:截止提醒 + 新版本检查 ----
+    # ---- v0.9.17:截止提醒 ----
     "minicode.reminders": ("reminder", "add", "due_soon", "parse_due"),
-    "minicode.proactive": ("check_update",),
+    # ---- v0.9.18:注入防御(provenance 是函数内 import,必须核它真进包了) ----
+    "minicode.provenance": ("wrap", "strip_marks", "is_external",
+                            "contains_external", "log_escalation"),
+    "minicode.sandbox": ("SECRET", "is_credential_filename",
+                         "command_hits_credential", "command_hits_network"),
+    "minicode.permission": ("note_external", "_is_sensitive_action",
+                            "_credential_hit", "_same_site"),
+    "minicode.kb": ("crawl_credibility", "host_is_trusted",
+                    "CRAWLED_UNVERIFIED"),
+    # ---- v0.9.18:课表持久化 + 天气 chip ----
+    "minicode.schedule": ("parse_weeks", "classes_on", "next_class_note",
+                          "schedule_prompt_section",
+                          # v0.9.19:面板视图 + 课前到点提醒
+                          "view", "upcoming_class", "_parse_hm"),
+    "minicode.weather": ("weather_card", "umbrella_tip", "refresh_async",
+                         "get_weather"),
+    # ---- v0.9.19:拖拽上传(字节落盘,绕开 WebView2 拿不到本地路径) ----
+    "minicode.attachments": ("save_dropped_bytes", "unique_target"),
+    # ---- v0.9.20:今日简报聚合 + 推送去重 ----
+    "minicode.briefing": ("build", "_schedule_bits", "_weather_bits",
+                          "_reminders_bits", "_calendar_bits"),
+    # ---- v0.9.16/17/20:主动推荐 + 新版本检查 + 今日简报(合并成一个键,
+    #      避免 dict 重复键 last-wins 让早先的 needle 悄悄漏检) ----
+    "minicode.proactive": ("check_once", "fetch_latest", "start_loop", "clean_title",
+                           "check_update", "push_briefing", "start_class_loop",
+                           "calendar_alerts"),
 }
 
 
@@ -84,7 +110,7 @@ def main() -> int:
     if failures:
         print("FAIL: 包内不是最新版代码 →", failures)
         return 1
-    print("PASS: 包内后端代码包含 最新版(v0.9.16)全部新增符号")
+    print("PASS: 包内后端代码包含 最新版(v0.9.21)全部新增符号")
     return 0
 
 

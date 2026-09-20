@@ -365,6 +365,42 @@ def test_get_info_and_history_roundtrip(config, tmp_path):
     assert resumed and any(m["text"] == "任务一" for m in resumed[0]["messages"])
 
 
+def test_resume_and_delete_by_filename(config, tmp_path):
+    """会话切换/删除按**文件名**定位(不受序号错位影响,路线图 #11)。"""
+    from minicode.session import list_sessions
+    llm = FakeLLM([AssistantTurn(text="回复一")])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("任务一")
+    assert wait_until(lambda: not bridge._busy)
+
+    bridge2, ui2, _a2, _s2 = create_app(
+        config, tmp_path, llm=FakeLLM([AssistantTurn(text="x")]),
+        sessions_dir=tmp_path / "sessions")
+    window2 = FakeWindow()
+    ui2.attach(window2)
+    summaries2 = list_sessions(tmp_path / "sessions")
+    target = next(s for s in summaries2 if s.n_messages > 0)
+
+    # 用文件名恢复:命中同一条,与序号无关
+    assert bridge2.resume_session(target.path.name)["ok"]
+    roles = [m["role"] for m in bridge2.session.messages]
+    assert "user" in roles and "assistant" in roles
+
+    # 侧栏推送里每条都带 file 字段(前端据此回传)
+    sess_events = [e for e in window2.events if e["type"] == "sessions"]
+    assert sess_events and all("file" in it for it in sess_events[-1]["items"])
+
+    # 带路径分隔符也只按 basename 匹配;乱名/穿越一律判不存在
+    assert bridge2.resume_session("sessions/" + target.path.name.replace("\\", "/"))["ok"] \
+        or bridge2.resume_session(target.path.name)["ok"]
+    assert bridge2.resume_session("../../etc/passwd")["ok"] is False
+    assert bridge2.resume_session("不存在的会话.jsonl")["ok"] is False
+    assert bridge2.delete_session("不存在的会话.jsonl")["ok"] is False
+    # 按文件名删除真的删掉那条留档
+    assert bridge2.delete_session(target.path.name)["ok"]
+    assert target.path.name not in {s.path.name for s in list_sessions(tmp_path / "sessions")}
+
+
 def test_delete_current_session(config, tmp_path):
     bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="done")]))
     bridge.send_task("任务")

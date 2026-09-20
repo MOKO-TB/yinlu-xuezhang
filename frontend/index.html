@@ -247,6 +247,60 @@ try {
   .fcrumb{ font-size:11.5px; color:var(--text-3); word-break:break-all; }
   .fcrumb a{ color:var(--primary-text); cursor:pointer; text-decoration:none; }
   .fcrumb a:hover{ text-decoration:underline; }
+
+  /* ---------------- 课表面板(v0.9.19) ---------------- */
+  .sc-head{ display:flex; align-items:baseline; gap:10px; }
+  .sc-week{ font-size:11.5px; color:var(--text-3); }
+  .sc-tabs{ display:flex; gap:8px; margin:12px 0 4px; }
+  .sc-tabs button{ padding:5px 14px; border-radius:999px; font-size:12.5px;
+                   border:1px solid var(--line-soft); background:var(--glass-strong);
+                   color:var(--text-2); cursor:pointer; }
+  .sc-tabs button.on{ border-color:var(--primary); color:var(--primary-text);
+                      background:var(--primary-light); }
+  .sc-body{ max-height:52vh; overflow-y:auto; margin:8px 0; }
+  .sc-empty{ padding:26px 10px; text-align:center; color:var(--text-3); font-size:13px; line-height:1.9; }
+  .sc-dayhead{ font-size:12px; color:var(--text-3); margin:6px 0 4px; }
+  .sc-item{ display:flex; align-items:center; gap:10px; padding:9px 11px; margin-bottom:7px;
+            border-radius:11px; background:var(--glass-lite); border:1px solid var(--line-soft); }
+  .sc-item .sc-time{ flex:none; min-width:52px; font-size:13px; font-weight:600;
+                     color:var(--primary-text); }
+  .sc-item .sc-time .sc-pd{ display:block; font-size:10.5px; font-weight:400; color:var(--text-3); }
+  .sc-item .sc-nm{ flex:1; min-width:0; font-size:13.5px; color:var(--text-1);
+                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sc-item .sc-loc{ flex:none; font-size:11.5px; color:var(--text-3); max-width:40%;
+                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sc-item .sc-map{ flex:none; border:1px solid var(--line-soft); background:transparent;
+                    color:var(--text-3); font-size:11px; line-height:1; padding:4px 6px;
+                    border-radius:8px; cursor:pointer; }
+  .sc-item .sc-map:hover{ color:var(--primary-text); border-color:var(--primary); }
+  .sc-grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:6px; }
+  .sc-col{ border-radius:10px; padding:6px 5px; background:var(--glass-lite);
+           border:1px solid var(--line-soft); min-height:120px; }
+  .sc-col.today{ border-color:var(--primary); background:var(--primary-light); }
+  .sc-col h5{ margin:0 0 6px; font-size:11.5px; text-align:center; color:var(--text-2); font-weight:600; }
+  .sc-cell{ font-size:10.5px; line-height:1.35; padding:4px 5px; margin-bottom:4px;
+            border-radius:6px; background:var(--glass-strong); color:var(--text-1); }
+  .sc-cell .t{ color:var(--primary-text); font-weight:600; }
+  .sc-note{ font-size:11px; color:var(--text-3); margin-top:8px; line-height:1.7; }
+
+  /* ---------------- 输入框右键菜单 + 拖拽高亮(v0.9.19) ---------------- */
+  .ctx-menu{ position:fixed; z-index:9999; min-width:172px; padding:5px;
+             display:none; flex-direction:column; gap:1px;
+             background:var(--glass-strong); border:1px solid var(--line-soft);
+             border-radius:11px; box-shadow:0 10px 30px rgba(0,0,0,.22);
+             backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
+  .ctx-menu[aria-hidden="false"]{ display:flex; }
+  .ctx-menu button{ display:flex; align-items:center; gap:9px; width:100%;
+                    padding:7px 10px; border:none; background:transparent;
+                    border-radius:7px; font-size:12.5px; color:var(--text-1); cursor:pointer;
+                    text-align:left; }
+  .ctx-menu button:hover{ background:var(--primary-light); color:var(--primary-text); }
+  .ctx-menu button>span{ flex:none; width:16px; text-align:center; opacity:.85; }
+  .ctx-menu button kbd{ margin-left:auto; font-size:10.5px; color:var(--text-3);
+                        font-family:inherit; }
+  .ctx-menu hr{ border:none; border-top:1px solid var(--line-soft); margin:3px 6px; }
+  .box.dragover{ outline:2px dashed var(--primary); outline-offset:2px;
+                 border-radius:14px; background:var(--primary-light); }
   .fempty{ color:var(--text-3); text-align:center; padding:16px 0; font-size:12.5px; }
   .proj-add{ width:calc(100% - 4px); margin:2px 0 4px; padding:6px;
              border:1.5px dashed var(--line); border-radius:var(--r-m);
@@ -532,7 +586,15 @@ try {
   .toolcard.fold .sum{ display:none; }
   .toolcard .tg{ color:var(--text-2); font-size:10px; transition:transform .15s; }
   .toolcard.fold .tg{ transform:rotate(-90deg); }
-
+  /* 外部内容徒标(注入防御 M1):让学生看见"这段来自网页/抓取/MCP" */
+  .toolcard .ext{ flex:none; font-size:10px; font-weight:700; line-height:1.5;
+                  color:var(--text-2); background:rgba(120,120,130,.14);
+                  border:1px solid rgba(120,120,130,.28); border-radius:999px;
+                  padding:0 7px; margin-left:6px; }
+  /* 升级门/凭据门的警示行:选器必须盖过上面 `.why-box .wy-r span`,故带上同一段链 */
+  .why-box .wy-r span.confirm-risk{ color:var(--danger); font-weight:700;
+                       background:rgba(255,236,234,.92); border-color:var(--danger); }
+  html.dark .why-box .wy-r span.confirm-risk{ background:rgba(66,28,30,.92); }
   /* ---------------- 浏览器截图卡片 ---------------- */
   /* Agent 用真实浏览器看过的页面:直接把画面贴进对话,点图放大 */
   .shotcard{ margin:8px 0 4px; background:rgba(247,250,249,.96);
@@ -1007,6 +1069,36 @@ try {
               background:var(--primary-light); border:1px solid var(--primary);
               border-radius:var(--r-full); padding:2px 10px; }
   .skch .ro{ flex:none; font-size:10px; color:var(--text-3); }
+  /* 知识候选审核(v0.9.21) */
+  .cand-note{ font-size:11.5px; line-height:1.7; color:var(--text-3);
+              margin:0 0 10px; padding:8px 11px; background:var(--glass-lite);
+              border:1px solid var(--line-soft); border-radius:var(--r-m); }
+  .cand-list{ display:flex; flex-direction:column; gap:10px; }
+  .cand{ border:1px solid var(--line-soft); border-radius:var(--r-m);
+         padding:11px 13px; background:var(--glass-lite); }
+  .cand.merged{ opacity:.72; }
+  .cand.rejected{ opacity:.55; }
+  .cand-q{ font-size:13px; font-weight:600; color:var(--text-1); line-height:1.6;
+           display:flex; align-items:flex-start; gap:8px; }
+  .cand-badge{ flex:none; font-size:9.5px; font-weight:700; border-radius:var(--r-full);
+               padding:2px 9px; border:1px solid var(--line-soft); color:var(--text-3); }
+  .cand-badge.b-pending{ color:var(--primary-text); background:var(--primary-light);
+                         border-color:var(--primary); }
+  .cand-badge.b-merged{ color:#127a3d; background:#e6f6ec; border-color:#8fd6ac; }
+  .cand-badge.b-rejected{ color:#a33; background:#fbeaea; border-color:#e6b3b3; }
+  .cand-a{ margin-top:6px; font-size:12px; line-height:1.7; color:var(--text-2);
+           white-space:pre-wrap; max-height:120px; overflow:auto; }
+  .cand-meta{ margin-top:7px; display:flex; align-items:center; gap:10px;
+              flex-wrap:wrap; font-size:10.5px; color:var(--text-3); }
+  .cand-src{ color:var(--primary-text); text-decoration:none; overflow:hidden;
+             text-overflow:ellipsis; white-space:nowrap; max-width:60%; }
+  .cand-src:hover{ text-decoration:underline; }
+  .cand-ts{ flex:none; }
+  .cand-acts{ margin-top:9px; display:flex; gap:8px; }
+  .cand-acts button{ font-size:11.5px; padding:5px 13px; border-radius:var(--r-full);
+                     border:1px solid var(--line-soft); cursor:pointer; }
+  .cand-acts button:disabled{ opacity:.5; cursor:default; }
+  .cand-acts .cand-merge{ background:var(--primary); color:#fff; border-color:var(--primary); }
   /* 技能详情与添加表单:字段行,与模型管理弹窗同款节奏 */
   .skform{ border-top:1px solid var(--line-soft); margin-top:12px; padding-top:12px; }
   .skform .frow label{ width:64px; }
@@ -1115,6 +1207,7 @@ try {
       <span class="tok" id="tok"></span>
       <span class="modelpill" id="modelPill"></span>
       <button id="btnMap" title="打开/收起校园地图(肇庆校区)">🗺 地图</button>
+      <button id="btnSchedule" title="查看/导入我的课表(本机存储)">📅 课表</button>
       <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐ 技能</button>
       <button id="btnUsage" title="查看每日 token 消耗">📊 用量</button>
       <button id="btnExport" title="把当前会话导出成 Markdown(方便贴进文档或发给同学)">⬇ 导出</button>
@@ -1264,6 +1357,39 @@ try {
   </div>
 </div>
 
+<!-- v0.9.19:课表面板 —— 查今日/本周课程 + 一键导入引导 -->
+<div class="overlay" id="scheduleOverlay">
+  <div class="dialog" style="width:600px">
+    <div class="sc-head">
+      <h3>📅 我的课表</h3>
+      <span class="sc-week" id="scWeek"></span>
+    </div>
+    <div class="sc-tabs" id="scTabs">
+      <button data-tab="today" class="on">今天</button>
+      <button data-tab="tomorrow">明天</button>
+      <button data-tab="week">本周</button>
+    </div>
+    <div class="sc-body" id="scBody"></div>
+    <div class="btns">
+      <button class="b-yes" id="btnScheduleImport">导入 / 更新课表</button>
+      <button class="b-no" id="btnScheduleClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- v0.9.19:输入框自定义右键菜单(WebView2 原生菜单不生效时的兜底) -->
+<div class="ctx-menu" id="ctxMenu" aria-hidden="true">
+  <button data-act="undo"><span>↶</span>撤销<kbd>Ctrl+Z</kbd></button>
+  <button data-act="redo"><span>↷</span>重做<kbd>Ctrl+Y</kbd></button>
+  <hr>
+  <button data-act="cut"><span>✂</span>剪切<kbd>Ctrl+X</kbd></button>
+  <button data-act="copy"><span>⧉</span>复制<kbd>Ctrl+C</kbd></button>
+  <button data-act="paste"><span>📋</span>粘贴<kbd>Ctrl+V</kbd></button>
+  <hr>
+  <button data-act="all"><span>☑</span>全选<kbd>Ctrl+A</kbd></button>
+</div>
+
+
 <div class="overlay" id="usageOverlay">
   <div class="dialog">
     <div class="usage-head">
@@ -1287,6 +1413,7 @@ try {
       <div class="skill-tabs" id="skillTabs">
         <button data-tab="skills" class="on">技能</button>
         <button data-tab="channels">渠道</button>
+        <button data-tab="candidates">候选</button>
       </div>
     </div>
     <div id="skillsBody"></div>
@@ -1403,14 +1530,20 @@ const HOME_SUGGESTIONS = [
 ];
 let homeSuggestions = HOME_SUGGESTIONS;   // 启动后由后端按聊天记录动态刷新
 let homeCountdowns = [];                  // 校历倒计时(后端下发,空则整行不显示)
+let homeWeather = null;                   // 首页天气 chip(只读缓存,拿不到就不显示)
 function renderHome() {
   const chips = homeSuggestions.map(t => `<button class="chip">${esc(t)}</button>`).join("");
-  // 校历倒计时:有数据才出这一行(距中秋/四六级还有 N 天),点一下直接问它的安排
-  const cdRow = homeCountdowns.length
-    ? `<div class="chips cd-chips"><span>倒计时：</span>${homeCountdowns.map(c =>
-        `<button class="chip chip-cd" data-ask="${esc("「" + c.name + "」的具体时间和注意事项有哪些?")}"
-           title="${esc((c.start || "") + (c.note ? " · " + c.note : ""))}">${esc(c.name)} · 还有 ${c.days_left} 天</button>`).join("")}</div>`
+  // 天气 chip:一句话实况 + 带伞建议进 title,点击直接问学长;拿不到(断网)整枚不出现
+  const wxChip = homeWeather
+    ? `<button class="chip chip-wx" title="${esc(homeWeather.tip || "点击问天气")}">${esc(homeWeather.icon + " " + homeWeather.text)}</button>`
     : "";
+  // 校历倒计时:有数据才出这一行(距中秋/四六级还有 N 天),点一下直接问它的安排
+  const cdHtml = homeCountdowns.length
+    ? `<span>倒计时：</span>${homeCountdowns.map(c =>
+        `<button class="chip chip-cd" data-ask="${esc("「" + c.name + "」的具体时间和注意事项有哪些?")}"
+           title="${esc((c.start || "") + (c.note ? " · " + c.note : ""))}">${esc(c.name)} · 还有 ${c.days_left} 天</button>`).join("")}`
+    : "";
+  const cdRow = (wxChip || cdHtml) ? `<div class="chips cd-chips">${wxChip}${cdHtml}</div>` : "";
   // 地图入口放在首位:不用先学会怎么问,点一下就能自己找楼
   const mapChip = `<button class="chip chip-map" title="打开手绘校园地图,可以搜楼名/俗称,或按类别看">🗺 打开校园地图</button>`;
   // 图书馆固定功能模块入口:点一下直接进图书馆导览(查书/找书/借还流程)
@@ -1435,6 +1568,13 @@ function renderHome() {
       // 固定模块:填好首轮任务直接发,用户不用想怎么问
       const input = $("input");
       input.value = "图书馆导览:带我走一遍从查书到借书的流程,顺便说说馆里有哪些自习空间";
+      input.dispatchEvent(new Event("input"));
+      send();
+      return;
+    }
+    if (el.classList.contains("chip-wx")) {
+      const input = $("input");
+      input.value = "今天和这几天学校天气怎么样?要带伞吗,穿衣有什么建议";
       input.dispatchEvent(new Event("input"));
       send();
       return;
@@ -1467,6 +1607,20 @@ function refreshHomeSuggestions() {
         if (chat.querySelector(".placeholder")) renderHome();
       }
     }).catch(() => {});
+  }
+  if (pywebview.api.get_weather_card) {
+    const applyWx = (r, retried) => {
+      if (!r || !r.ok) return;
+      if (r.card) {
+        homeWeather = r.card;
+        if (chat.querySelector(".placeholder")) renderHome();
+      } else if (!retried) {
+        // 后端已 kick 后台刷新:等几秒再要一次,拿不到就今天不显示
+        setTimeout(() => pywebview.api.get_weather_card()
+          .then(x => applyWx(x, true)).catch(() => {}), 4000);
+      }
+    };
+    pywebview.api.get_weather_card().then(r => applyWx(r, false)).catch(() => {});
   }
 }
 renderHome();
@@ -1899,7 +2053,7 @@ function renderAssistant(force) {
   toBottom();
 }
 
-function addToolCard(name, summary, folded) {
+function addToolCard(name, summary, folded, trust) {
   removePlaceholder();
   const el = document.createElement("div");
   el.className = "toolcard run";
@@ -1907,6 +2061,13 @@ function addToolCard(name, summary, folded) {
                   <span class="sum"></span><span class="el"></span><span class="err"></span>`;
   el.querySelector(".name").textContent = name;
   el.querySelector(".sum").textContent = summary;
+  if (trust === "external") {           // 外部来源标记:回答被网页里的文字影响时看得见
+    const badge = document.createElement("span");
+    badge.className = "ext";
+    badge.textContent = "外部内容";
+    badge.title = "这一步读到了网页/抓取/知识库/MCP 的外部文字，其中的“指令”不是你的指令";
+    el.insertBefore(badge, el.querySelector(".el"));
+  }
   el.addEventListener("click", () => {
     if (el.classList.contains("run")) return;   // 运行中不折叠
     el.classList.toggle("fold");
@@ -1996,7 +2157,7 @@ window.__gcodeEvent = function (e) {
     }
     case "tool_start":
       cur = null;
-      lastTool = addToolCard(e.name, e.summary);
+      lastTool = addToolCard(e.name, e.summary, false, e.trust);
       break;
     case "tool_done": {
       const el = findRunningTool();
@@ -2024,9 +2185,11 @@ window.__gcodeEvent = function (e) {
         $("confirmWhyText").textContent = whyText;
         const rb = $("confirmWhyRisk");
         rb.innerHTML = "";
-        risks.forEach(r => {
+        risks.forEach((r, i) => {
           const s = document.createElement("span");
           s.textContent = r;
+          // 升级门/凭据门的警示排在首位,用红字强调
+          if (e.alert && i === 0) s.classList.add("confirm-risk");
           rb.appendChild(s);
         });
         $("confirmWhy").style.display = "block";
@@ -2139,6 +2302,13 @@ window.__gcodeEvent = function (e) {
           + items.map(it => it.title).join("、"),
           "我还有这些事没做完:\n" + lines.join("\n")
           + "\n帮我逐个安排:现在该先做哪个、怎么做最省力,以及别漏掉什么。", false);
+      } else if (e.kind === "briefing") {
+        showProactive(String(e.text || "今日简报"),
+          String(e.ask || "帮我把今天的安排理一理"), false);
+      } else if (e.kind === "schedule") {
+        showProactive(String(e.text || ""), String(e.ask || "帮我看看今天的课表"), false);
+      } else if (e.kind === "class") {
+        showProactive(String(e.text || "快上课了"), String(e.ask || "这节课我要提前带什么?"), false);
       } else if (e.kind === "update") {
         showProactive(`发现新版本 v${e.version}!` + (e.notes
           ? String(e.notes).slice(0, 60) : ""),
@@ -2240,13 +2410,14 @@ function renderSessions(items) {
       el.addEventListener("click", () => {
         if (s.current) return;
         // 切换会话不会打断任何任务:后台会话继续跑,切回去就能看到最新进度
-        pywebview.api.resume_session(s.index).then(r => {
+        // 回传文件名(不是序号):渲染到点击之间若有新会话落盘,序号会错位
+        pywebview.api.resume_session(s.file || s.index).then(r => {
           if (r && r.ok === false) toast(r.msg, true);
         });
       });
       el.querySelector(".sx").addEventListener("click", (ev) => {
         ev.stopPropagation();
-        appConfirm(`删除该会话记录?`, () => pywebview.api.delete_session(s.index), "删除会话");
+        appConfirm(`删除该会话记录?`, () => pywebview.api.delete_session(s.file || s.index), "删除会话");
       });
       wrap.appendChild(el);
     }
@@ -2286,7 +2457,7 @@ function renderSessionHits(r) {
     el.querySelector(".sess-hit").textContent = "…" + (h.snippet || "") + "…";
     el.title = "点一下切到这个会话";
     el.addEventListener("click", () => {
-      pywebview.api.resume_session(h.index).then(r2 => {
+      pywebview.api.resume_session(h.file || h.index).then(r2 => {
         if (r2 && r2.ok === false) { toast(r2.msg, true); return; }
         clearSessionSearch();
       });
@@ -3207,6 +3378,62 @@ function renderChannels(channels) {
       <span class="cnt">${c.count} 个技能</span>
     </div>`).join("");
 }
+/* ---- 候选审核(v0.9.21):kb_suggest 攒下的知识候选,在这里并入正式库或拒绝 ---- */
+function loadCandidates() {
+  $("skillsBody").innerHTML = '<div class="usage-empty">正在读取知识候选…</div>';
+  pywebview.api.get_kb_candidates().then(r => {
+    if (skillTab !== "candidates") return;   // 用户已切走:不覆盖
+    if (!r.ok) { $("skillsBody").innerHTML =
+      `<div class="usage-empty">${esc(r.msg || "读取候选失败")}</div>`; return; }
+    renderCandidates(r.items || [], r.pending || 0);
+  }).catch(e => {
+    $("skillsBody").innerHTML =
+      `<div class="usage-empty">读取候选失败:${esc(String(e).slice(0, 80))}</div>`;
+  });
+}
+function renderCandidates(items, pending) {
+  if (skillTab !== "candidates") return;
+  if (!items.length) {
+    $("skillsBody").innerHTML =
+      '<div class="usage-empty">还没有知识候选。<br>当 Agent 用 kb_suggest 存下「值得进知识库」的问答时,会出现在这里等你审核。</div>';
+    return;
+  }
+  const badge = { pending: "待审核", merged: "已并入", rejected: "已拒绝" };
+  $("skillsBody").innerHTML =
+    `<div class="cand-note">共 ${items.length} 条,其中 ${pending} 条待审核。并入后会写进知识库(标记「A-已审核」),新会话检索即可命中。</div>` +
+    `<div class="cand-list">${items.map(it => {
+      const st = String(it.status || "pending");
+      const url = String(it.source_url || "");
+      return `
+      <div class="cand ${st}">
+        <div class="cand-q">❓ ${esc(it.question || "(无问题)")}
+          <span class="cand-badge b-${st}">${badge[st] || st}</span></div>
+        <div class="cand-a">${esc(it.answer || "")}</div>
+        <div class="cand-meta">
+          ${url ? `<a class="cand-src" href="${esc(url)}" target="_blank" rel="noopener">🔗 ${esc(it.source_title || url)}</a>`
+                : `<span class="cand-src">(无来源)</span>`}
+          <span class="cand-ts">#${esc(String(it.index ?? ""))} · ${esc(it.ts || "")}</span>
+        </div>
+        ${st === "pending" ? `
+        <div class="cand-acts">
+          <button class="b-yes cand-merge" data-idx="${esc(String(it.index))}">并入知识库</button>
+          <button class="b-no cand-reject" data-idx="${esc(String(it.index))}">拒绝</button>
+        </div>` : ""}
+      </div>`;
+    }).join("")}</div>`;
+  $("skillsBody").querySelectorAll(".cand-merge").forEach(b =>
+    b.addEventListener("click", () => reviewCandidate(b.dataset.idx, "merge", b)));
+  $("skillsBody").querySelectorAll(".cand-reject").forEach(b =>
+    b.addEventListener("click", () => reviewCandidate(b.dataset.idx, "reject", b)));
+}
+function reviewCandidate(idx, action, btn) {
+  if (btn) btn.disabled = true;
+  pywebview.api.review_kb_candidate(idx, action).then(r => {
+    if (!r || !r.ok) { toast((r && r.msg) || "审核失败", true); if (btn) btn.disabled = false; return; }
+    toast(r.msg || "已处理");
+    loadCandidates();     // 刷新列表:该条状态变更、按钮消失
+  }).catch(e => { toast("审核失败:" + String(e).slice(0, 60), true); if (btn) btn.disabled = false; });
+}
 $("btnSkills").addEventListener("click", openSkillsDlg);
 $("btnSkillsClose").addEventListener("click", () => $("skillsOverlay").classList.remove("show"));
 $("skillTabs").addEventListener("click", (e) => {
@@ -3215,6 +3442,7 @@ $("skillTabs").addEventListener("click", (e) => {
   skillTab = btn.dataset.tab;
   renderSkillTab();
   if (skillTab === "skills") { loadSkills(); return; }
+  if (skillTab === "candidates") { loadCandidates(); return; }
   $("skillsBody").innerHTML = '<div class="usage-empty">正在读取渠道目录…</div>';
   pywebview.api.get_skill_channels().then(r => {
     if (!r.ok) { $("skillsBody").innerHTML =
@@ -3282,6 +3510,207 @@ $("mapLightbox").addEventListener("click", (e) => {
 });
 $("btnUndo").addEventListener("click", () => pywebview.api.undo());
 $("btnCompact").addEventListener("click", () => pywebview.api.compact_now());
+
+/* ---------------- 课表面板(v0.9.19) ----------------
+   只读本机 schedule.json 的视图;没登记时给引导。「导入/更新」不自己解析,
+   而是把输入框预填成引导语并聚焦,交给已上线的 schedule-helper 技能 + 模型。 */
+let scheduleData = null;
+let scheduleTab = "today";
+
+function scTimeCell(c) {
+  // 有钟点显示钟点,没钟点只说第几节 —— 绝不编时间
+  const t = c.start_time ? `<span class="t">${esc(c.start_time)}</span>` : "";
+  const pd = c.periods ? `<span class="sc-pd">${esc(c.periods)}节</span>` : "";
+  return `<div class="sc-time">${t || "—"}${pd}</div>`;
+}
+function scList(classes, emptyText) {
+  if (!classes || !classes.length)
+    return `<div class="sc-empty">${esc(emptyText)}</div>`;
+  return classes.map(c => `<div class="sc-item">${scTimeCell(c)}
+      <span class="sc-nm">${esc(c.name)}</span>
+      <span class="sc-loc" title="${esc(c.location || "")}">${esc(c.location || "")}</span>
+      ${c.location ? `<button class="sc-map" data-loc="${esc(c.location)}"
+        title="在校园地图上看看">🗺</button>` : ""}
+    </div>`).join("");
+}
+function renderSchedule() {
+  const body = $("scBody");
+  if (!scheduleData || !scheduleData.registered) {
+    $("scWeek").textContent = "";
+    body.innerHTML = `<div class="sc-empty">还没有登记课表。<br>
+      点下面「导入 / 更新课表」,把课表**文字**贴进来(或发课表截图),
+      学长会问你开学第一周周一是几号,存好后随时能查、快上课还会提醒你。</div>`;
+    return;
+  }
+  $("scWeek").textContent = (scheduleData.week ? `第 ${scheduleData.week} 周 · ` : "")
+    + "开学周一 " + (scheduleData.term_start || "");
+  if (scheduleTab === "week") {
+    const g = scheduleData.week_grid || {};
+    const todayIso = (scheduleData.today || {}).date;
+    body.innerHTML = `<div class="sc-grid">` + [1, 2, 3, 4, 5, 6, 7].map(k => {
+      const col = g[k] || { classes: [], weekday: "一二三四五六日"[k - 1] };
+      const cells = (col.classes || []).map(c =>
+        `<div class="sc-cell">${c.start_time ? `<span class="t">${esc(c.start_time)}</span> ` : ""}${esc(c.name)}</div>`
+      ).join("") || `<div class="sc-cell" style="opacity:.5">—</div>`;
+      return `<div class="sc-col${col.date === todayIso ? " today" : ""}">
+        <h5>周${esc(col.weekday)}</h5>${cells}</div>`;
+    }).join("") + `</div>
+      <div class="sc-note">本周按第 ${scheduleData.week || "?"} 周排课(单双周已过滤);
+      没写钟点的课只显示节次。数据存本机,不上传。</div>`;
+    return;
+  }
+  const day = scheduleTab === "tomorrow" ? scheduleData.tomorrow : scheduleData.today;
+  if (!day) { body.innerHTML = ""; return; }
+  body.innerHTML = `<div class="sc-dayhead">周${esc(day.weekday)} · ${esc(day.date)}
+      ${day.week ? ` · 第 ${day.week} 周` : ""}</div>`
+    + scList(day.classes, day.date === (scheduleData.today || {}).date
+        ? "今天没有课 🎈" : "那天没有课");
+}
+function openScheduleDlg() {
+  pywebview.api.get_schedule_view().then(r => {
+    scheduleData = (r && r.ok) ? r.schedule : { registered: false };
+    scheduleTab = "today";
+    $("scTabs").querySelectorAll("button").forEach(b =>
+      b.classList.toggle("on", b.dataset.tab === "today"));
+    renderSchedule();
+    $("scheduleOverlay").classList.add("show");
+  });
+}
+$("btnSchedule").addEventListener("click", openScheduleDlg);
+$("btnScheduleClose").addEventListener("click", () => $("scheduleOverlay").classList.remove("show"));
+$("scheduleOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "scheduleOverlay") $("scheduleOverlay").classList.remove("show");
+});
+$("scTabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-tab]");
+  if (!b) return;
+  scheduleTab = b.dataset.tab;
+  $("scTabs").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  renderSchedule();
+});
+$("scBody").addEventListener("click", (e) => {
+  // v0.9.21 课表↔地图:有地点的课一键在校园地图上定位(搜不到会如实说明,不猜)
+  const b = e.target.closest(".sc-map");
+  if (!b) return;
+  if (!window.CampusMap || !CampusMap.findPlace) { toast("地图不可用"); return; }
+  $("scheduleOverlay").classList.remove("show");
+  CampusMap.findPlace(b.dataset.loc || "");
+});
+$("btnScheduleImport").addEventListener("click", () => {
+  $("scheduleOverlay").classList.remove("show");
+  const has = scheduleData && scheduleData.registered;
+  $("input").value = has
+    ? "我的课表有变动,这是最新课表(下面贴给你),帮我更新一下:\n"
+    : "这是我的课表,帮我存下来(以后问今天/明天有什么课就不用再发图了):\n";
+  $("input").focus();
+  $("input").style.height = "auto";
+  toast("把课表文字接在后面发给我;截图也可以,但文字更准(内置模型不一定能看图)");
+});
+
+/* ---------------- 输入框右键菜单(v0.9.19) ----------------
+   WebView2 的原生右键菜单在输入框里不生效,这里用页面自绘菜单兜底。
+   动作全在 #input 上就地执行(execCommand),不碰系统剪贴板以外的东西。 */
+const ctxMenu = $("ctxMenu");
+let ctxSel = [0, 0];
+function hideCtxMenu() { ctxMenu.setAttribute("aria-hidden", "true"); }
+function showCtxMenu(x, y) {
+  ctxMenu.setAttribute("aria-hidden", "false");
+  const w = ctxMenu.offsetWidth, h = ctxMenu.offsetHeight;
+  ctxMenu.style.left = Math.max(6, Math.min(x, innerWidth - w - 6)) + "px";
+  ctxMenu.style.top = Math.max(6, Math.min(y, innerHeight - h - 6)) + "px";
+}
+$("input").addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  const el = $("input");
+  ctxSel = [el.selectionStart || 0, el.selectionEnd || 0];
+  showCtxMenu(e.clientX, e.clientY);
+});
+["click", "keydown", "blur", "wheel"].forEach(ev =>
+  document.addEventListener(ev, (e) => {
+    if (ev === "click" && ctxMenu.contains(e.target)) return;
+    hideCtxMenu();
+  }));
+ctxMenu.addEventListener("mousedown", (e) => e.preventDefault());  // 别抢输入框焦点/选区
+ctxMenu.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-act]");
+  if (!b) return;
+  const act = b.dataset.act, el = $("input");
+  el.focus();
+  try { el.setSelectionRange(ctxSel[0], ctxSel[1]); } catch (_) {}
+  const ok = () => { toast("已粘贴", false); };
+  if (act === "all") el.setSelectionRange(0, el.value.length);
+  else if (act === "copy") document.execCommand("copy");
+  else if (act === "cut") document.execCommand("cut");
+  else if (act === "undo") document.execCommand("undo");
+  else if (act === "redo") document.execCommand("redo");
+  else if (act === "paste") {
+    // 优先异步剪贴板读文本;拿不到(权限/环境)再退回 execCommand("paste")
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText().then(txt => {
+        if (txt) {
+          const s = el.selectionStart || 0, en = el.selectionEnd || 0;
+          el.value = el.value.slice(0, s) + txt + el.value.slice(en);
+          el.setSelectionRange(s + txt.length, s + txt.length);
+          el.dispatchEvent(new Event("input"));
+          ok();
+        }
+      }).catch(() => document.execCommand("paste"));
+    } else document.execCommand("paste");
+  }
+  hideCtxMenu();
+});
+
+/* ---------------- 拖拽文件进对话框(v0.9.19) ----------------
+   取本地绝对路径在 WebView2 里不可靠,改用 FileReader 读字节交给后端落 uploads/。 */
+(function () {
+  const box = document.querySelector(".box");
+  if (!box) return;
+  let depth = 0;
+  const hasFiles = (e) => e.dataTransfer &&
+    Array.from(e.dataTransfer.types || []).includes("Files");
+  box.addEventListener("dragenter", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); depth++; box.classList.add("dragover");
+  });
+  box.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
+  box.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; box.classList.remove("dragover"); } });
+  box.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); depth = 0; box.classList.remove("dragover");
+    if (!pywebview.api.add_dropped_attachments) return;  // 网页版不开放拖拽上传
+    if (busy) { toast("有任务正在进行中", true); return; }
+    if (editing) { toast("编辑重发时不支持新增附件,请先取消编辑", true); return; }
+    const files = Array.from(e.dataTransfer.files || []);
+    if (!files.length) return;
+    const read = (f) => new Promise((res) => {
+      const fr = new FileReader();
+      fr.onload = () => {
+        const buf = fr.result; const u8 = new Uint8Array(buf); let bin = "";
+        for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+        res({ name: f.name, b64: btoa(bin) });
+      };
+      fr.onerror = () => res(null);
+      fr.readAsArrayBuffer(f);
+    });
+    toast("正在读取拖入的文件…");
+    Promise.all(files.map(read)).then(list => {
+      const items = list.filter(Boolean);
+      if (!items.length) { toast("文件读取失败", true); return; }
+      pywebview.api.add_dropped_attachments(JSON.stringify(items)).then(r => {
+        if (!r.ok) { toast(r.msg, true); return; }
+        if (r.errors && r.errors.length) toast(r.errors.join("; "), true);
+        const got = r.items || [];
+        if (!got.length) return;
+        attachments = attachments.concat(got);
+        renderAttachments();
+        if (!visionOn && got.some(a => a.kind === "image"))
+          toast("当前模型不支持直接看图,图片会以文件路径提供给模型");
+      });
+    });
+  });
+})();
+
+
 function renderPermOptions(info) {
   const sel = $("perm");
   const modes = info.permission_modes && info.permission_modes.length

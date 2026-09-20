@@ -414,6 +414,9 @@ def _write_kb(workspace, host: str, pages: list[dict], kb_source: str,
         if not p.get("keep") and _plain_text_len(p["content"]) < min_content:
             skipped += 1
             continue
+        # 可信度按域名白名单定(注入防御 M4):以前这里无条件标 A,
+        # 等于把"任何爬回来的页面"当权威资料,且会被之后每次检索召回。
+        from minicode.kb import crawl_credibility
         entry = {
             "id": f"crawl-{host}-{hashlib.md5(p['url'].encode()).hexdigest()[:8]}",
             "title": p["title"],
@@ -421,7 +424,7 @@ def _write_kb(workspace, host: str, pages: list[dict], kb_source: str,
             "url": p["url"],
             "source": kb_source or host,
             "tags": tags,
-            "credibility": "A",
+            "credibility": crawl_credibility(host),
         }
         if p.get("publish_at"):
             entry["publish_at"] = p["publish_at"]

@@ -21,8 +21,9 @@ from pathlib import Path
 
 from minicode.config import Config
 from minicode.sandbox import (
-    ASK as SB_ASK, BLOCKED, OUTSIDE, REJECT as SB_REJECT,
+    ASK as SB_ASK, BLOCKED, OUTSIDE, REJECT as SB_REJECT, SECRET,
     check_command, classify_for_write, classify_path,
+    command_hits_credential, command_hits_network,
 )
 from minicode.tools.base import Tool
 
@@ -117,18 +118,62 @@ def check_disaster_command(command: str) -> str | None:
     return None
 
 
+def _same_site(origin: str, target: str) -> bool:
+    """两个 URL/域名的站点是否相同(只看 host,忽略大小写与 www 前缀)。"""
+    def host_of(text: str) -> str:
+        t = str(text or "").strip().lower()
+        if "://" in t:
+            t = t.split("://", 1)[1]
+        t = t.split("/", 1)[0].split("?", 1)[0]
+        t = t.split("@")[-1].split(":")[0]
+        return t[4:] if t.startswith("www.") else t
+    a, b = host_of(origin), host_of(target)
+    return bool(a) and bool(b) and (a == b or a.endswith("." + b) or b.endswith("." + a))
+
+
 class PermissionGate:
-    """每回合开始时清空"本轮已放行"集合;确认时用户可选只放行一次或本轮全放。"""
+    """每回合开始时清空"本轮已放行"集合;确认时用户可选只放行一次或本轮全放。
+
+    除四档权限/沙箱路径/灾难黑名单之外,本类还管两个**高于档位**的门
+    (注入防御 M3):工作区内凭据文件永远要确认、以及"本回合接触过外部内容后
+    的敏感动作"强制确认。设计按的是"档位越高越信任**用户**,不更信任**外部内容**"。
+    """
 
     def __init__(self, config: Config, sandbox=None):
         self.config = config
         self.sandbox = sandbox          # minicode.sandbox.SandboxState
         self._turn_allowed: set[str] = set()
+        # 回合内的"外部接触"标志(注入防御 M3.2);Agent._execute 调 note_external 置位
+        self._touched_external = False
+        self._external_source = ""
+        self._ask_note = ""
 
     def new_turn(self) -> None:
         self._turn_allowed.clear()
+        self._touched_external = False
+        self._external_source = ""
+        self._ask_note = ""
         if self.sandbox is not None:
             self.sandbox.new_turn()
+
+    # -------------------------------------------------- 外部内容接触标志
+
+    def note_external(self, tool_name: str = "", args: dict | None = None) -> None:
+        """标记"本回合刚接触过外部内容"(由 Agent 在围栏处同一个方调用)。"""
+        self._touched_external = True
+        self._external_source = str(tool_name or "external")
+
+    @property
+    def touched_external(self) -> bool:
+        return self._touched_external
+
+    @property
+    def ask_note(self) -> str:
+        """上一次 check() 为什么强制确认(给确认框多打一行用)。"""
+        return self._ask_note
+
+    def _note(self, text: str) -> None:
+        self._ask_note = text
 
     # ------------------------------------------------------------ 沙箱判定
 
@@ -149,11 +194,102 @@ class PermissionGate:
         if kind and kind[0] == OUTSIDE:
             self.sandbox.approve_path(kind[1])
 
+    # ------------------------------------------------------------ 升级门判定
+
+    # 会污染后续会话信任源的目录:写进去的内容下次会被当可信资料读回来
+    TRUST_SOURCE_DIRS = ("kb", "skills")
+
+    def _is_sensitive_action(self, name: str, args: dict) -> str | None:
+        """这个动作是否属于"外部接触后要升级确认"的范围;返回 None 表示不算。
+
+        宁窄勿宽:误报一次用户就会把功能关掉(方案 §3.3.2)。只收三类出口:
+        联网外传、往信任源目录写、跳域提交表单。
+        """
+        if name == "bash":
+            cmd = str(args.get("command", "") or "")
+            hit = command_hits_network(cmd)
+            if hit:
+                return f"这条命令会联网访问外部服务({hit}),是内容外传的出口"
+            if re.search(r"https?://", cmd) and re.search(
+                    r"\b(python|py|node|curl|wget)\b", cmd):
+                return "这条命令会带着本地内容访问一个网址"
+            return None
+        if name in WRITE_TOOLS:
+            rel = self._rel_to_trust_source(args.get("path"))
+            if rel:
+                return (f"这一步会写入 {rel} —— 那个目录的内容会被以后的会话"
+                        "当可信资料读回来")
+            return None
+        # 跳域提交表单检测属 M5(P2):要看 form action 得先查 DOM,
+        # 在权限门里做会阻塞主流程。本期不落,不留永不触发的死分支。
+        if name == "browser_fill" and args.get("submit"):
+            off = self._cross_domain_fill(args)
+            if off:
+                return ("这一步要往**另一个站点**提交表单(刚看的页面是 "
+                        f"{off})——跨域提交是表单钓鱼的常见出路")
+        return None
+
+    def _rel_to_trust_source(self, raw) -> str | None:
+        """路径是否落在工作区的 kb/ 或 skills/ 下(返回相对路径供文案用)。"""
+        if self.sandbox is None or not isinstance(raw, str) or not raw.strip():
+            return None
+        ws = Path(self.sandbox.workspace).resolve()
+        p = Path(raw)
+        if not p.is_absolute():
+            p = ws / p
+        try:
+            rel = p.resolve().relative_to(ws)
+        except (ValueError, OSError):
+            return None
+        parts = [str(x) for x in rel.parts[:-1]]
+        if parts and parts[0].lower() in self.TRUST_SOURCE_DIRS:
+            return rel.as_posix()
+        return None
+
+    def _cross_domain_fill(self, args: dict) -> str | None:
+        """提交目标域 ≠ 本回合最近一次打开的域时返回那个域。"""
+        origin = getattr(self, "_browser_origin", "") or ""
+        target = getattr(self, "_fill_target_origin", "") or ""
+        if not target:
+            return None
+        if not origin:
+            return None          # 没见过页面,没有比较基准
+        if _same_site(origin, target):
+            return None
+        return target
+
+    def _credential_hit(self, name: str, args: dict):
+        """本次动作是否碰到工作区内的凭据类文件(注入防御 M3.1)。
+
+        文件工具/grep 看 path 参数;bash 扫命令里的路径 token。
+        返回绝对路径或 None。
+        """
+        if self.sandbox is None:
+            return None
+        raw = args.get("path")
+        if isinstance(raw, str) and raw.strip():
+            try:
+                kind, path = classify_path(self.sandbox.workspace, raw)
+            except Exception:
+                return None
+            if kind == SECRET:
+                return path
+            kind_w, path_w = classify_for_write(self.sandbox.workspace, raw)
+            if kind_w == SECRET:
+                return path_w
+        if name == "bash":
+            hit = command_hits_credential(
+                self.sandbox.workspace, str(args.get("command", "")))
+            if hit:
+                return hit
+        return None
+
     # ------------------------------------------------------------ 主判定
 
     def check(self, tool: Tool, args: dict) -> str:
         # 子代理的工具名带类型前缀(如 "explore·bash"),取末段判断
         name = tool.name.rsplit("·", 1)[-1]
+        self._ask_note = ""
         if name == "bash":
             reason = check_disaster_command(args.get("command", ""))
             if reason:
@@ -168,6 +304,13 @@ class PermissionGate:
                     return REJECT
                 if level == OUTSIDE and not self.sandbox.path_allowed(path):
                     return ASK          # 沙箱边界不因权限档位而放开
+            # 凭据文件:工作区内也不免确认(full 档同样拦),而且不因
+            # "本轮总是允许"而连续静默放行 —— 每个动作都重新确认。
+            cred = self._credential_hit(name, args)
+            if cred is not None:
+                self._note("⚠ 这是一个含密钥/凭据的文件——模型读它,能带出去的只有"
+                           "密钥本身。如果这一步不是你要求的,请点拒绝。")
+                return ASK
             if name == "bash":
                 level, why = check_command(self.sandbox.policy,
                                            args.get("command", ""))
@@ -182,6 +325,14 @@ class PermissionGate:
 
         if tool.read_only:
             return ALLOW
+        # 外部内容升级门:优先级高于权限档位(与沙箱红线同一心智模型)。
+        # 只在**本回合接触过外部内容**后生效,没接触时行为与基线逐字节一致。
+        if self._touched_external:
+            why = self._is_sensitive_action(name, args)
+            if why:
+                self._note(f"⚠ 本回合此前接触过外部内容({self._external_source}),"
+                           f"{why}。这一步可能是外部内容诱导的,请确认它确实是你要的。")
+                return ASK
         mode = self.config.permission_mode
         if mode == "full":
             # 完全访问:沙箱内的操作全部放行(敏感路径/灾难命令在上面已被硬拒)。

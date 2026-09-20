@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from minicode.config import Config
+from minicode.sandbox import INSIDE
 
 
 class PathOutsideWorkspace(Exception):
@@ -37,6 +38,9 @@ class Tool:
     parameters: dict[str, Any]  # JSON Schema,类型必须是 object
     handler: Handler
     read_only: bool = False
+    # 信任级:local 本机产生 / external 外部内容(结果要套溯源围栏,见 provenance.py)
+    # / principal 用户意志。子代理工具沿用父工具的值。
+    trust: str = "local"
 
     def to_openai_schema(self) -> dict[str, Any]:
         return {
@@ -75,15 +79,19 @@ def resolve_path(ctx: ToolContext, raw_path: str, *, for_write: bool = False) ->
     raw = (raw_path or "").strip() or "."
 
     if for_write:
-        from minicode.sandbox import BLOCKED, classify_for_write as classify
+        from minicode.sandbox import BLOCKED, SECRET, classify_for_write as classify
     else:
-        from minicode.sandbox import BLOCKED, classify_path as classify
+        from minicode.sandbox import BLOCKED, SECRET, classify_path as classify
     kind, p = classify(state.workspace, raw)
     if kind == BLOCKED:
         raise PathBlocked(
             f"路径属于敏感目录(凭据/密钥),始终禁止访问: {raw_path}"
         )
-    if kind != "inside" and not state.path_allowed(p):
+    # SECRET = 工作区**内**的凭据文件:权限门已经让用户确认过(或在 full 档前
+    # 就拦下),到这一步不能再拿"不是 inside"当越界拒掉 —— 否则用户点了允许还是读不到。
+    if kind in (INSIDE, SECRET):
+        return p
+    if not state.path_allowed(p):
         raise PathOutsideWorkspace(
             f"路径超出工作区范围: {raw_path}(工作区: {state.workspace})。"
             "访问工作区外需要用户在确认框里放行本次操作,"

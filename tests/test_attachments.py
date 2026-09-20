@@ -64,6 +64,42 @@ def test_save_attachment_rejects_oversize(tmp_path, monkeypatch):
         save_attachment(tmp_path / "ws", src)
 
 
+# ---------------------------------------------------------------- 拖拽(按字节落盘)
+
+def test_save_dropped_bytes_writes_and_dedupes(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    a1 = att.save_dropped_bytes(ws, "笔记.txt", "内容".encode("utf-8"))
+    a2 = att.save_dropped_bytes(ws, "笔记.txt", b"x")
+    assert a1.path == "uploads/笔记.txt"
+    assert a2.path == "uploads/笔记-1.txt"
+    assert (ws / a1.path).read_text(encoding="utf-8") == "内容"
+    assert a1.kind == "file"
+
+
+def test_save_dropped_bytes_detects_image(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    png = _img(tmp_path / "a.png").read_bytes()
+    a = att.save_dropped_bytes(ws, "截图.png", png)
+    assert a.kind == "image" and a.mime == "image/png"
+
+
+def test_save_dropped_bytes_rejects_oversize(tmp_path, monkeypatch):
+    monkeypatch.setattr(att, "MAX_ATTACHMENT_BYTES", 4)
+    with pytest.raises(ValueError, match="上限"):
+        att.save_dropped_bytes(tmp_path / "ws", "big.bin", b"0123456789")
+
+
+def test_save_dropped_bytes_sanitizes_name(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    a = att.save_dropped_bytes(ws, r"..\..\evil.txt", b"hi")
+    assert a.name == "evil.txt"                       # 只取文件名,路径成分被剥掉
+    assert (ws / "uploads" / "evil.txt").is_file()
+
+
+
 def test_save_attachments_collects_errors(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()

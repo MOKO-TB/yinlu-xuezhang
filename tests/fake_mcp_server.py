@@ -9,6 +9,15 @@ import json
 import sys
 import time
 
+# MCP 规定 stdio 上跑 UTF-8;父进程(McpClient)正是按 utf-8 解码子进程 stdout。
+# Windows 上子进程的 sys.stdout/stdin 默认用 GBK,不钉死编码会让「故意失败」
+# 「未知工具」这类中文回包被父进程按 utf-8 解出乱码 —— 这里强制 UTF-8 对齐协议。
+for _stream in (sys.stdout, sys.stdin, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 TOOLS = [
     {
         "name": "echo",

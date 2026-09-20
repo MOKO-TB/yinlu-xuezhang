@@ -20,6 +20,78 @@ SNIPPET_MAX = 1200
 MAX_CONTENT_LIMIT = 1500
 KB_RESULT_LIMIT = 5
 
+# ------------------------------------------------------------------ 来源可信度
+#
+# credibility 管"内容真不真",围栏管"话听不听"(见 provenance.py),两轴正交。
+# A 级的语义是"按栏目白名单抓取的学校官网",不是"任何爬回来的东西"。
+# 抓取入库时只有下面这些域名能标 A,其余一律降 B-抓取 —— 否则一条投毒页面
+# 入库后会被之后**每一次** search_knowledge 当权威内容召回(注入防御 M4)。
+
+# 兼容打包后没有 scripts/ 目录的情况,兼作兵库:学校官网及其子系统
+DEFAULT_TRUSTED_SCHOOL_HOSTS = (
+    "www.gzasc.edu.cn",
+    "gzasc.edu.cn",
+    "jwc.gzasc.edu.cn",        # 教务处
+    "tsg.gzasc.edu.cn",        # 图书馆
+    "xsc.gzasc.edu.cn",        # 学生处
+    "zsw.gzasc.edu.cn",        # 招生办
+    "dw.gzasc.edu.cn",         # 党建网
+    "tw.gzasc.edu.cn",         # 团委
+    "cxcy.gzasc.edu.cn",       # 创新创业学院
+)
+
+
+def trusted_school_hosts() -> tuple[str, ...]:
+    """学校可信域名白名单:常量 + scripts/school_topics.json 里的 host。
+
+    读不到配置文件不报错——降级为纯常量白名单,安全侧偏保守。
+    """
+    hosts = {h.lower() for h in DEFAULT_TRUSTED_SCHOOL_HOSTS}
+    try:
+        import json
+        from minicode.paths import resource_path
+        for base in (Path("scripts") / "school_topics.json",
+                     resource_path("scripts") / "school_topics.json"):
+            try:
+                if base.exists():
+                    raw = json.loads(base.read_text(encoding="utf-8"))
+                    for key in ("host", "hosts"):
+                        val = raw.get(key) if isinstance(raw, dict) else None
+                        if isinstance(val, str):
+                            hosts.add(val.strip().lower())
+                        elif isinstance(val, list):
+                            hosts.update(str(x).strip().lower() for x in val if x)
+            except (OSError, ValueError):
+                continue
+    except Exception:
+        pass
+    return tuple(sorted(h for h in hosts if h))
+
+
+def _clean_host(host: str) -> str:
+    """容忍传进来的是完整 URL:只取其中的域名部分。"""
+    h = str(host or "").strip().lower().rstrip(".")
+    if "://" in h:
+        h = h.split("://", 1)[1]
+    h = h.split("/", 1)[0].split("?", 1)[0]
+    return h.split("@")[-1].split(":")[0]
+
+
+def host_is_trusted(host: str) -> bool:
+    """抓取来源域名是否在学校白名单内(子域也算)。"""
+    h = _clean_host(host)
+    if not h:
+        return False
+    return any(h == t or h.endswith("." + t) for t in trusted_school_hosts())
+
+
+def crawl_credibility(host: str) -> str:
+    """抓取入库时的可信度:白名单校官网标 A,其余降为 B-抓取(未核实)。"""
+    return "A" if host_is_trusted(host) else CRAWLED_UNVERIFIED
+
+
+CRAWLED_UNVERIFIED = "B-抓取(未核实)"
+
 
 @dataclass
 class KbEntry:
@@ -151,7 +223,14 @@ def format_results(results: list[KbEntry],
     blocks = []
     for i, e in enumerate(results, start=1):
         cred = e.credibility or "未标注"
-        mark = "" if e.credible else "⚠ 此条为演示/待核实数据,引用时必须向用户注明"
+        # 抓取降级条目不是"学长学姐经验",不能套 reply-tone 的"亲测有效"话术(那会把
+        # 一个未核实的网页说成实地经过的推荐)。
+        if e.credible:
+            mark = ""
+        elif "抓取" in cred:
+            mark = "⚠ 此条是网页抓取内容且来源不在学校白名单,引用时必须说明「未核实,以链接原文为准」"
+        else:
+            mark = "⚠ 此条为演示/待核实数据,引用时必须向用户注明"
         lines = [f"[{i}] {e.title}  (可信度: {cred}){(' ' + mark) if mark else ''}"]
         meta = []
         if e.tags:

@@ -409,6 +409,50 @@
   }
 
   /* ------------------------------------------------------------ 对外接口 */
+  /* 课表面板等外部入口:按地点/教室号在地图上定位(v0.9.21)。
+     教室号带房间后缀时剥掉重试("思齐楼B203"→"思齐楼");都搜不到就如实
+     说没有,绝不挑一个相近的猜(与后端"歧义不猜"同一口径)。 */
+  function stripRoom(q) {
+    return String(q || "").trim()
+      .replace(/[A-Za-z0-9]{0,4}\d{1,4}[室号楼层房]?$/, "").trim();
+  }
+
+  function findPlace(query) {
+    const q = String(query || "").trim();
+    if (!q || !svg) return false;
+    openPanel();
+    activeCat = "";
+    renderLegend();
+    $("mapSearch").value = q;
+    let hits = searchItems(q);
+    if (!hits.length) {
+      const bare = stripRoom(q);
+      if (bare && bare !== q) {
+        hits = searchItems(bare);
+        if (hits.length) $("mapSearch").value = bare;
+      }
+    }
+    if (!hits.length) {
+      boxes = [];
+      drawBoxes();
+      $("mapSearchInfo").textContent = `没搜到「${q}」`;
+      renderNotice({ level: "warn", title: "没有这个地方",
+        text: `地图上没登记「${q}」——教室号可能只录到楼栋,或手绘图上没有这个地点。别猜位置,可以直接问学长。` });
+      return false;
+    }
+    $("mapSearchInfo").textContent = "";
+    if (hits.length === 1) { focusItem(hits[0]); return true; }
+    boxes = hits;
+    boxColor = "orange";
+    drawBoxes();
+    const bb = bboxOfItems(hits);
+    if (bb) fitTo(bb);
+    $("mapSub").textContent = `${hits.length} 处:${hits.map((h) => h.name).join("、")}`;
+    renderCard(hits.slice(0, 6), true);
+    renderNotice(null);
+    return true;
+  }
+
   function apply(ev) {
     if (!ev || !svg) return;
     openPanel();
@@ -581,7 +625,7 @@
 
   window.CampusMap = {
     setData, apply, open: openPanel, close: closePanel, toggle: togglePanel,
-    isOpen, fitAll, closeLightbox, reset,
+    isOpen, fitAll, closeLightbox, reset, findPlace,
     zoom: (f) => { view.k = Math.max(0.5, Math.min(8, view.k * f)); applyView(); },
   };
 })();

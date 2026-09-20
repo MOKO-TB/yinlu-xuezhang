@@ -140,7 +140,8 @@ class TerminalUI:
 
     # ------------------------------------------------------------ 权限确认
 
-    def confirm_tool(self, tool: Tool, args: dict, reason: str = "") -> str:
+    def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
+                     note: str = "") -> str:
         """返回 'yes' | 'no' | 'always'。reason=模型说明的"这一步为什么做"。
 
         非交互场景(stdin 关闭、管道输入、Ctrl+C)一律按"拒绝"处理并说明原因,
@@ -152,8 +153,10 @@ class TerminalUI:
         self.console.print(Panel(
             self._permission_detail(tool, args, why),
             title=f"[yellow]⚠ 权限确认 · {tool.name}[/yellow]",
-            border_style="yellow",
+            border_style="red" if note else "yellow",
         ))
+        if note:
+            self.console.print(f"  [bold red]{escape(note)}[/bold red]")
         while True:
             try:
                 ans = self.console.input(

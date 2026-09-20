@@ -49,7 +49,8 @@ class WebUI(GuiUI):
 
     # ------------------------------------------------------------ 确认
 
-    def confirm_tool(self, tool: Tool, args: dict, reason: str = "") -> str:
+    def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
+                     note: str = "") -> str:
         """对外模式一律拒绝。
 
         确认通道是「单例 Event + 前端点击唤醒」,在无登录的多访客场景里既没法

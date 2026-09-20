@@ -222,6 +222,23 @@ def _push_proactive(bridge, kind: str, **payload) -> None:
         pass
 
 
+def push_briefing(bridge) -> bool:
+    """推一次今日简报;返回是否推成功(调用方据此跳过重复的单条推送)。
+
+    聚合失败/无内容一律 False,主循环照旧单条推 —— 简报是加分项,不能
+    因为它的异常把原有提醒全吞掉。
+    """
+    try:
+        from minicode import briefing as _briefing
+        b = _briefing.build()
+    except Exception:
+        return False
+    if not b:
+        return False
+    _push_proactive(bridge, "briefing", **b)
+    return True
+
+
 def start_loop(bridge, interval_hours: float | None = None) -> None:
     """启动后台看门狗线程(gui_main 调一次;测试/CLI 不调它就不存在)。"""
 
@@ -229,12 +246,21 @@ def start_loop(bridge, interval_hours: float | None = None) -> None:
         time.sleep(FIRST_DELAY_SECONDS)
         calendar_done = False
         reminders_done = False
+        schedule_done = False
         update_done = False
+        briefing_done = False
+        briefing_pushed = False
         while True:
             try:
+                # 今日简报:一轮循环里最先跑。推成功则 课表/待办/校历 三条
+                # 单条推送本轮不再打扰(内容已在简报里);事件类(新通知/
+                # 新版本/课前到点)不受影响。
+                if not briefing_done:
+                    briefing_pushed = push_briefing(bridge)
+                    briefing_done = True
                 state = load_state()
                 if state.get("enabled", True):
-                    if not calendar_done:
+                    if not calendar_done and not briefing_pushed:
                         for alert in calendar_alerts():
                             _push_proactive(
                                 bridge, "calendar", name=alert["name"],
@@ -253,15 +279,23 @@ def start_loop(bridge, interval_hours: float | None = None) -> None:
                         _push_proactive(bridge, "update", **update)
                     update_done = True
                 if not reminders_done:             # 临期/逾期待办:每次运行一回
-                    from minicode import reminders as _reminders
-                    near = _reminders.due_soon()
-                    if near:
-                        _push_proactive(bridge, "reminders", items=[
-                            {"id": i["id"], "title": i["title"],
-                             "due": i.get("due", ""),
-                             "days_left": i["days_left"],
-                             "note": i.get("note", "")} for i in near[:5]])
+                    if not briefing_pushed:
+                        from minicode import reminders as _reminders
+                        near = _reminders.due_soon()
+                        if near:
+                            _push_proactive(bridge, "reminders", items=[
+                                {"id": i["id"], "title": i["title"],
+                                 "due": i.get("due", ""),
+                                 "days_left": i["days_left"],
+                                 "note": i.get("note", "")} for i in near[:5]])
                     reminders_done = True
+                if not schedule_done:              # 今天/明天第一节课:每次运行一回
+                    if not briefing_pushed:
+                        from minicode import schedule as _schedule
+                        note = _schedule.next_class_note()
+                        if note:
+                            _push_proactive(bridge, "schedule", **note)
+                    schedule_done = True
             except Exception:
                 pass                        # 看门狗的任何意外都不许冒出来
             hours = interval_hours or DEFAULT_INTERVAL_HOURS
@@ -270,3 +304,37 @@ def start_loop(bridge, interval_hours: float | None = None) -> None:
     thread = threading.Thread(target=run, daemon=True,
                               name="yinluxs-proactive")
     thread.start()
+
+
+CLASS_TICK_SECONDS = 5 * 60         # 课前提醒单独一条细粒度轮询,不打扰 6 小时主循环节奏
+CLASS_LEAD_MINUTES = 20             # 开课前多久提醒(一节课通常 40-45 分钟,20 分钟够从宿舍出门)
+
+
+def start_class_loop(bridge) -> None:
+    """课前到点提醒线程:每 ~5 分钟看一次有没有课在 20 分钟内开课。
+
+    与 start_loop 分开跑(主循环 6 小时一次,太粗做不到"快上课了")。
+    同一节课用 key 去重、只提醒一次;跨天清空去重集。任何异常一律吞掉。
+    """
+    reminded: set[str] = set()
+    last_day = None
+
+    def run() -> None:
+        nonlocal last_day
+        time.sleep(FIRST_DELAY_SECONDS)
+        while True:
+            try:
+                from minicode import schedule as _schedule
+                note = _schedule.upcoming_class(lead_minutes=CLASS_LEAD_MINUTES)
+                today = date.today().isoformat()
+                if last_day != today:
+                    reminded.clear()
+                    last_day = today
+                if note and note["key"] not in reminded:
+                    _push_proactive(bridge, "class", **note)
+                    reminded.add(note["key"])
+            except Exception:
+                pass
+            time.sleep(CLASS_TICK_SECONDS)
+
+    threading.Thread(target=run, daemon=True, name="yinluxs-class").start()

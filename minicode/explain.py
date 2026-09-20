@@ -125,6 +125,9 @@ def risk_notes(tool_name: str, args: dict) -> list[str]:
         notes.append("会把一条问答追加到应用目录的候选文件(不改动正式知识库)")
     elif name == "reminder":
         notes.append("会改动本机的提醒清单文件(reminders.json)")
+    elif name == "schedule":
+        notes.append("action=save 会把课表写进应用目录的 schedule.json(只存本机,不上传);"
+                     "action=clear 会删掉它")
     elif name == "py_script":
         notes.append("会用内置 Python 运行时执行这个脚本(能读写工作区文件、可能联网)")
         notes.append("脚本产生的改动不在「撤销」的跟踪范围内")

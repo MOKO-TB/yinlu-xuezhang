@@ -60,3 +60,15 @@ _build_*.log
 
 # v0.9.17 截止日期提醒的运行时状态(本机待办,不进仓库)
 /reminders.json
+
+# ע����� M6 �İ�ȫ��������־(�����º�����,�����ֿ�)
+/injection-events.log
+
+# v0.9.18+ 本机运行时状态(课表/天气缓存/公告轮询),跟着使用者走,不进仓库
+/schedule.json
+/weather-cache.json
+/notice-watch.json
+
+# v0.9.21 候选审核并入的人工知识库(含本机问答,应用级数据,不进仓库)
+/kb/reviewed.json
+/kb/reviewed.tmp

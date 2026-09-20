@@ -55,7 +55,8 @@ class GuiUI:
         self.push("finish_stream")
 
     def tool_start(self, tool: Tool, args: dict) -> None:
-        self.push("tool_start", name=tool.name, summary=self._arg_summary(tool, args))
+        self.push("tool_start", name=tool.name, summary=self._arg_summary(tool, args),
+                  trust=getattr(tool, "trust", "local"))
 
     def tool_done(self, tool: Tool, result: str) -> None:
         failed = result.startswith(("错误", "工具执行出错", "用户拒绝"))
@@ -89,11 +90,21 @@ class GuiUI:
     def error(self, text: str) -> None:
         self.push("error", text=text)
 
-    def confirm_tool(self, tool: Tool, args: dict, reason: str = "") -> str:
+    def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
+                     note: str = "") -> str:
         """弹确认框并等待用户选择;由 Bridge 注入实现。reason=为什么要做这一步。"""
         if self.confirm_handler is None:
             self.push("error", text="确认通道未就绪,已自动拒绝")
             return "no"
+        # 旧版注入的 handler 只有三个参数;按签名判断,不能靠 try/except TypeError
+        # ——handler 自己抛 TypeError 时会被误吞,然后重复弹一次确认框。
+        import inspect
+        try:
+            arity = len(inspect.signature(self.confirm_handler).parameters)
+        except (TypeError, ValueError):
+            arity = 3
+        if arity >= 4:
+            return self.confirm_handler(tool, args, reason, note)
         return self.confirm_handler(tool, args, reason)
 
     @staticmethod

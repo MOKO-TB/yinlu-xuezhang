@@ -28,6 +28,7 @@ from pathlib import Path
 INSIDE = "inside"      # 工作区内:直接放行
 OUTSIDE = "outside"    # 工作区外:看策略(允许 / 需确认)
 BLOCKED = "blocked"    # 敏感路径:永远拒绝
+SECRET = "secret"      # 工作区内的凭据文件:不禁止,但永远要用户确认(注入防御 M3.1)
 
 ALLOW = "allow"
 ASK = "ask"
@@ -46,6 +47,23 @@ SENSITIVE_DIRS = (
     ".azure",
     "appdata/roaming/microsoft/credentials",
 )
+
+# 工作区内的凭据类文件名(注入防御 M3.1)。
+# 语义:它们**不**像 SENSITIVE_DIRS 那样硬禁(用户确实可能要让 agent 改配置),
+# 但 read_file / grep / bash cat 这类"免确认只读"路径必须被升级为 ASK ——
+# 否则一条网页里的指令就能让模型在工作区内无声读走密钥。
+# 比对只看路径最后一段的文件名,大小写不敏感。
+CREDENTIAL_FILENAMES = (
+    "config.local.json",    # 本应用工作区配置(可能含用户自填 key)
+    "credentials.json",
+    "token-usage.db",       # 用量库不含密钥,但属于本机运行数据
+    ".env",
+    "id_rsa", "id_ed25519", "id_dsa", "id_ecdsa",
+    "servers.config",
+)
+CREDENTIAL_SUFFIXES = (".pem", ".p12", ".pfx", ".key", ".kdbx")
+# 任何分级下都直接拒绝对话模型读写的目录名(工作区里出现这些目录也当敏感目录)
+CREDENTIAL_DIRS = (".ssh", ".aws", ".gnupg", ".azure", ".yinluxs")
 
 # 只在沙箱开启且 allow_network=false 时拦截
 NETWORK_COMMANDS = (
@@ -115,8 +133,32 @@ def _is_under(path: Path, root: Path) -> bool:
         return False
 
 
+def is_credential_filename(name: str) -> bool:
+    """单个文件名是否属于凭据类(大小写不敏感)。"""
+    low = str(name or "").strip().lower()
+    if not low:
+        return False
+    if low in CREDENTIAL_FILENAMES:
+        return True
+    if any(low.endswith(suf) for suf in CREDENTIAL_SUFFIXES):
+        return True
+    # .env.local / .env.production 这类变体
+    if low.startswith(".env") and low != ".env.example":
+        return True
+    return False
+
+
+def _has_credential_dir(p: Path) -> bool:
+    parts = {str(x).lower() for x in p.parts}
+    return bool(parts & set(CREDENTIAL_DIRS))
+
+
 def classify_path(workspace: Path, raw: str, home: Path | None = None) -> tuple[str, Path]:
-    """返回 (分级, 绝对路径)。路径解析失败时按工作区外处理。"""
+    """返回 (分级, 绝对路径)。路径解析失败时按工作区外处理。
+
+    工作区内的凭据类文件返回 SECRET(比 INSIDE 严:只读也要确认);
+    真正的敏感目录(~/​.ssh 等)照旧 BLOCKED。
+    """
     text = (raw or "").strip() or "."
     p = Path(text)
     if not p.is_absolute():
@@ -130,6 +172,9 @@ def classify_path(workspace: Path, raw: str, home: Path | None = None) -> tuple[
         if _is_under(p, root):
             return BLOCKED, p
     if _is_under(p, Path(workspace).resolve()):
+        if is_credential_filename(p.name) or _has_credential_dir(
+                p.relative_to(Path(workspace).resolve())):
+            return SECRET, p
         return INSIDE, p
     return OUTSIDE, p
 
@@ -180,6 +225,42 @@ def check_command(policy: SandboxPolicy, command: str) -> tuple[str, str]:
             return REJECT, (f"沙箱已关闭网络访问,禁止执行 {found}"
                             f"(需要联网请在 config.json 把 sandbox.allow_network 设为 true)")
     return ALLOW, ""
+
+
+def command_hits_credential(workspace: Path, command: str) -> Path | None:
+    """命令里提到的路径 token 是否指向凭据类文件(注入防御 M3.1 的 bash 一头)。
+
+    `read_file` 看参数就能拦住,但 `bash("type config.local.json")` 同样能读到内容,
+    所以命令里的路径也得扫。只把"真正像文件引用"的 token 算进来(带路径分隔符,
+    或本身就是已知凭据名/凭据后缀)。
+
+    **注意一个已知的保守面**:只看 token 不看引号,所以
+    `echo "别读 config.local.json"` 这种"只是提到"也会要确认一次。宁多问一次、
+    不无声放行(真误伤到日常用法再按命令前缀收窄,而不是关掉整个门)。
+    """
+    ws = Path(workspace).resolve()
+    for token in re.findall(r"[^\s\"';|&]+", command or ""):
+        cleaned = token.strip("\"'(),").replace("\\", "/")
+        if not cleaned or cleaned.startswith("-"):
+            continue
+        # 只认真正像文件引用的:路径分隔符,或已知凭据名/后缀
+        name = cleaned.rsplit("/", 1)[-1]
+        if not is_credential_filename(name):
+            continue
+        if ("/" not in cleaned and "\\" not in cleaned
+                and name not in CREDENTIAL_FILENAMES
+                and not cleaned.startswith(".")):
+            continue
+        p = Path(cleaned)
+        if not p.is_absolute():
+            p = ws / p
+        try:
+            p = p.resolve()
+        except OSError:
+            continue
+        if _is_under(p, ws):
+            return p
+    return None
 
 
 def command_touches_outside_path(policy: SandboxPolicy, workspace: Path,

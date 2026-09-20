@@ -19,7 +19,7 @@ from minicode import workspace as ws
 from minicode.app_setup import build_runner_agent, mcp_log
 from minicode.attachments import (
     Attachment, build_content, display_text, is_image, mime_for,
-    preview_data_url, save_attachments,
+    preview_data_url, save_attachments, save_dropped_bytes,
 )
 from minicode.campus import frontend_payload as campus_map_data
 from minicode.compaction import estimate_tokens
@@ -96,6 +96,18 @@ class PublicApi:
         """首页倒计时 chips:校历里最近的安排。"""
         return self._b.get_countdowns()
 
+    def get_weather_card(self) -> dict:
+        """首页天气 chip:只读缓存,当场返回,绝不等网络。"""
+        return self._b.get_weather_card()
+
+    def get_schedule_view(self) -> dict:
+        """课表面板:今日/明日/本周网格(只读本机课表)。"""
+        return self._b.get_schedule_view()
+
+    def add_dropped_attachments(self, files_json: str = "[]") -> dict:
+        """把拖进对话框的文件收进 uploads/(与 📎 选文件同一条落盘路径)。"""
+        return self._b.add_dropped_attachments(files_json)
+
     def set_notice_watch(self, enabled: bool) -> dict:
         """主动推荐开关:官网新通知看门狗。"""
         return self._b.set_notice_watch(enabled)
@@ -121,10 +133,10 @@ class PublicApi:
     def refresh_sessions(self) -> dict:
         return self._b.refresh_sessions()
 
-    def resume_session(self, index: int) -> dict:
+    def resume_session(self, index) -> dict:
         return self._b.resume_session(index)
 
-    def delete_session(self, index: int) -> dict:
+    def delete_session(self, index) -> dict:
         return self._b.delete_session(index)
 
     def get_asset(self, rel_path: str) -> dict:
@@ -200,6 +212,14 @@ class PublicApi:
                   channel: str = "app") -> dict:
         """技能面板「添加技能」:写一个 skills/<name>/SKILL.md。"""
         return self._b.add_skill(name, description, body, channel)
+
+    def get_kb_candidates(self, status: str = "") -> dict:
+        """技能面板「候选」tab:知识库候选清单(待审核在前)。"""
+        return self._b.get_kb_candidates(status)
+
+    def review_kb_candidate(self, index, action: str) -> dict:
+        """候选审核:并入正式知识库(merge)或拒绝(reject)。"""
+        return self._b.review_kb_candidate(index, action)
 
     def get_workspaces(self) -> dict:
         """工作区弹窗:当前 / 默认 / 最近。"""
@@ -545,6 +565,38 @@ class Bridge:
             self.ui.push("skills_changed", session=self._current.key)
             self.ui.push("info", text=result.get("msg") or "技能已添加")
         return result
+
+    # ------------------------------------------------------------ 知识库候选审核
+
+    def get_kb_candidates(self, status: str = "") -> dict:
+        """技能面板「候选」tab:kb_suggest 落的知识候选清单(待审核在前)。
+
+        只读展示;真正的并入/拒绝走 review_kb_candidate。status 可传
+        pending/merged/rejected 过滤,默认全部。
+        """
+        from minicode import growth
+        try:
+            items = growth.list_candidates(str(status or ""))
+        except Exception as exc:      # 文件坏了也不该拖垮面板
+            return {"ok": False, "msg": f"读取候选失败:{type(exc).__name__}: {exc}"}
+        pending = sum(1 for it in items
+                      if str(it.get("status") or "pending") == "pending")
+        return {"ok": True, "items": items, "pending": pending}
+
+    def review_kb_candidate(self, index, action: str) -> dict:
+        """候选审核:action=merge 并入正式知识库 / reject 拒绝。
+
+        merge 会把候选写进 app_path('kb')/reviewed.json(人工核实过,credibility
+        标 A-已审核),下次检索即可命中;绝不改爬虫生成的 kb/*.json。
+        """
+        from minicode import growth
+        try:
+            ok, msg = growth.review_candidate(index, action)
+        except Exception as exc:
+            return {"ok": False, "msg": f"审核失败:{type(exc).__name__}: {exc}"}
+        if ok:
+            self.ui.push("info", text=msg)
+        return {"ok": ok, "msg": msg}
 
     # ------------------------------------------------------------ 工作区
 
@@ -1187,6 +1239,48 @@ class Bridge:
             items = []
         return {"ok": True, "countdowns": items}
 
+    def get_weather_card(self) -> dict:
+        """首页天气 chip(肇庆·鼎湖,缓存 30 分钟;断网时 card=None 让前端隐掉)。"""
+        from minicode import weather
+        try:
+            return {"ok": True, "card": weather.weather_card()}
+        except Exception:
+            return {"ok": False}
+
+    def get_schedule_view(self) -> dict:
+        """课表面板数据:今日/明日/本周网格(本机 schedule.json;没登记时 registered=False)。"""
+        from minicode import schedule
+        try:
+            return {"ok": True, "schedule": schedule.view()}
+        except Exception:
+            return {"ok": False}
+
+    def add_dropped_attachments(self, files_json: str = "[]") -> dict:
+        """把拖进对话框的文件落进工作区 uploads/(与点 📎 选文件同一条路径)。
+
+        前端用 FileReader 读到字节后传 [{name, b64}, ...]:WebView2 里 JS 拿不到
+        本地绝对路径,走字节最稳。复制/上限/图片判定全部复用 save_dropped_bytes。
+        """
+        import base64
+        try:
+            raw = json.loads(files_json) if isinstance(files_json, str) else files_json
+        except (json.JSONDecodeError, TypeError):
+            return {"ok": False, "msg": "拖拽附件参数不合法"}
+        items = [x for x in (raw or []) if isinstance(x, dict)]
+        if not items:
+            return {"ok": True, "items": [], "errors": []}
+        out, errors = [], []
+        for it in items:
+            name = str(it.get("name") or "").strip()
+            try:
+                data = base64.b64decode(str(it.get("b64") or ""), validate=True)
+                att = save_dropped_bytes(self.workspace, name, data)
+            except (ValueError, OSError) as e:
+                errors.append(f"{name or '文件'}: {e}")
+                continue
+            out.append(self._attachment_item(att))
+        return {"ok": True, "items": out, "errors": errors}
+
     def set_notice_watch(self, enabled: bool) -> dict:
         """主动推荐:开/关官网新通知看门狗(落在 notice-watch.json)。"""
         from minicode import proactive
@@ -1264,12 +1358,14 @@ class Bridge:
         self._push_sessions()
         return {"ok": True}
 
-    def delete_session(self, index: int) -> dict:
-        """删除一条历史会话留档;若该会话正在后台跑,先停掉它。"""
-        summaries = list_sessions(self.sessions_dir)
-        if not 1 <= int(index) <= len(summaries):
+    def delete_session(self, index) -> dict:
+        """删除一条历史会话留档;若该会话正在后台跑,先停掉它。
+
+        index 同 resume_session:留档文件名(首选)或序号(兼容)。
+        """
+        chosen, _summaries = self._resolve_session_summary(index)
+        if chosen is None:
             return {"ok": False, "msg": "会话不存在"}
-        chosen = summaries[int(index) - 1]
         live = self._runner_for_log(chosen.path)
         if live is not None:
             live.ui.request_stop()
@@ -1328,15 +1424,40 @@ class Bridge:
                 return {"ok": True, "data_url": data_url}
         return {"ok": False, "msg": "未找到该图片文件"}
 
-    def resume_session(self, index: int) -> dict:
+    def _resolve_session_summary(self, target):
+        """按**留档文件名**(str,首选)或序号(int,兼容)定位一条会话。
+
+        返回 (SessionSummary | None, summaries)。前端点侧栏时回传文件名而非
+        序号 —— 渲染到点击之间若有新会话落盘,序号会错位到另一条(路线图 #11),
+        文件名是稳定的。只拿输入比对 basename,绝不据它拼路径(防目录穿越)。
+        """
+        summaries = list_sessions(self.sessions_dir)
+        if isinstance(target, str):
+            name = target.strip().replace("\\", "/").rsplit("/", 1)[-1]
+            if not name:
+                return None, summaries
+            for s in summaries:
+                if s.path.name == name:
+                    return s, summaries
+            return None, summaries
+        try:
+            idx = int(target)
+        except (TypeError, ValueError):
+            return None, summaries
+        if 1 <= idx <= len(summaries):
+            return summaries[idx - 1], summaries
+        return None, summaries
+
+    def resume_session(self, index) -> dict:
         """切换到某个会话:它正在后台跑就直接接上,否则从留档恢复。
 
         以前这里会先打断当前任务,现在切换就是纯粹"换视角"。
+        index 可以是**留档文件名**(前端首选,稳定)或序号(int,兼容旧调用):
+        渲染到点击之间若有新会话落盘,序号会错位到另一条,文件名不会。
         """
-        summaries = list_sessions(self.sessions_dir)
-        if not 1 <= int(index) <= len(summaries):
+        chosen, _summaries = self._resolve_session_summary(index)
+        if chosen is None:
             return {"ok": False, "msg": "会话不存在"}
-        chosen = summaries[int(index) - 1]
         live = self._runner_for_log(chosen.path)
         if live is not None:
             self.switch_to(live)                 # 后台任务:接上它当前的内存上下文
@@ -1455,7 +1576,8 @@ class Bridge:
                 in_current = False
                 ws_name = "未记录"
             items.append({
-                "index": i, "time": s.time, "n_messages": s.n_messages,
+                "index": i, "file": s.path.name, "time": s.time,
+                "n_messages": s.n_messages,
                 "last_user_text": s.last_user_text,
                 "current": s.path == cur_path,
                 "workspace": ws_name,
@@ -1481,16 +1603,20 @@ class Bridge:
         return out
 
     # 确认握手:Agent 线程阻塞在此,前端点按钮后返回
-    def confirm_tool(self, tool: Tool, args: dict, reason: str = "") -> str:
+    def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
+                     note: str = "") -> str:
         from minicode.explain import permission_why
         why = permission_why(tool.name, args, reason)
+        risks = list(why.get("risks") or [])
+        if note:
+            risks.insert(0, note)      # 升级警示排在第一行,确认框里红字强调
         with self._confirm_lock:             # 一次只处理一个确认请求
             self._confirm_event.clear()
             self._confirm_choice = "no"
             self.ui.push("confirm_request", tool=tool.name,
                          detail=self._permission_detail_text(tool, args),
                          why=why.get("why", ""), digest=why.get("digest", ""),
-                         risks=why.get("risks", []))
+                         risks=risks, alert=bool(note))
             self._confirm_event.wait()
             return self._confirm_choice
 

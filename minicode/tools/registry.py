@@ -4,7 +4,7 @@ from __future__ import annotations
 from minicode import growth
 from minicode import calendar as school_calendar
 from minicode import reminders
-from minicode import campus, gpa, kb, library, library_guide, memory, planning, skills
+from minicode import campus, gpa, kb, library, library_guide, memory, planning, schedule, skills, weather
 from minicode.tools import browser as browser_tools
 from minicode.tools import crawl, fs, search, shell
 from minicode.tools.base import Tool
@@ -131,7 +131,8 @@ def build_default_registry() -> list[Tool]:
             name="web_crawl",
             description="抓取网页或整站为 markdown(基于 crawl4ai)。从 url 出发同域 BFS 跟链,"
                         "可限页数/深度/限速;结果存到工作区 crawled/<域名>/ 下,可选 to_kb=True "
-                        "同时写入本地知识库(credibility=A,附来源网址)供 search_knowledge 检索。",
+                        "同时写入本地知识库(学校官网白名单域名标 A,其余域名自动降为 "
+                        "B-抓取(未核实),附来源网址)供 search_knowledge 检索。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -150,6 +151,7 @@ def build_default_registry() -> list[Tool]:
                 "required": ["url"],
             },
             handler=crawl.crawl_web,
+            trust="external",
         ),
         Tool(
             name="web_search",
@@ -170,6 +172,7 @@ def build_default_registry() -> list[Tool]:
                 "required": ["query"],
             },
             handler=crawl.web_search,
+            trust="external",
         ),
         # ---------------- 浏览器(browser_*)----------------
         # 与 web_crawl 的分工:crawl 抓静态正文入库;browser 是「真的开一个浏览器」——
@@ -207,6 +210,7 @@ def build_default_registry() -> list[Tool]:
                 "required": ["url"],
             },
             handler=browser_tools.browser_open,
+            trust="external",
         ),
         Tool(
             name="browser_eval",
@@ -229,6 +233,7 @@ def build_default_registry() -> list[Tool]:
                 "required": ["js"],
             },
             handler=browser_tools.browser_eval,
+            trust="external",
         ),
         Tool(
             name="browser_snapshot",
@@ -247,6 +252,7 @@ def build_default_registry() -> list[Tool]:
                 },
             },
             handler=browser_tools.browser_snapshot,
+            trust="external",
             read_only=True,
         ),
         Tool(
@@ -273,6 +279,7 @@ def build_default_registry() -> list[Tool]:
                 "required": ["target"],
             },
             handler=browser_tools.browser_click,
+            trust="external",
         ),
         Tool(
             name="browser_fill",
@@ -300,6 +307,7 @@ def build_default_registry() -> list[Tool]:
                 "required": ["fields"],
             },
             handler=browser_tools.browser_fill,
+            trust="external",
         ),
         Tool(
             name="browser_screenshot",
@@ -319,6 +327,7 @@ def build_default_registry() -> list[Tool]:
                 },
             },
             handler=browser_tools.browser_screenshot,
+            trust="external",
         ),
         Tool(
             name="browser_close",
@@ -330,6 +339,7 @@ def build_default_registry() -> list[Tool]:
                 },
             },
             handler=browser_tools.browser_close,
+            trust="external",
         ),
         Tool(
             name="browser_status",
@@ -341,6 +351,7 @@ def build_default_registry() -> list[Tool]:
                 },
             },
             handler=browser_tools.browser_status,
+            trust="external",
             read_only=True,
         ),
         Tool(
@@ -354,6 +365,7 @@ def build_default_registry() -> list[Tool]:
                 "required": ["name"],
             },
             handler=skills.use_skill,
+            trust="principal",
             read_only=True,
         ),
         Tool(
@@ -404,6 +416,7 @@ def build_default_registry() -> list[Tool]:
                 "required": ["query"],
             },
             handler=kb.search_knowledge,
+            trust="external",
             read_only=True,
         ),
         Tool(
@@ -502,6 +515,7 @@ def build_default_registry() -> list[Tool]:
                 "required": ["query"],
             },
             handler=library.library_search,
+            trust="external",
             read_only=True,
         ),
         Tool(
@@ -527,6 +541,7 @@ def build_default_registry() -> list[Tool]:
                 },
             },
             handler=library_guide.guide,
+            trust="external",
             read_only=True,
         ),
         Tool(
@@ -589,6 +604,60 @@ def build_default_registry() -> list[Tool]:
                 "required": ["action"],
             },
             handler=reminders.reminder,
+        ),
+        Tool(
+            name="schedule",
+            description=(
+                "个人课表的登记/查看(存本机 schedule.json,启动时学长主动提示今天/明天课程)。"
+                "配合 schedule-helper 技能:把同学贴来的课表解析成条目后,问清「第 1 周周一是几月几号」"
+                "再 action=save 存下来(classes 每项 {name,day(1-7),periods,weeks(如 1-16 或 1-16(单周)),"
+                "start_time(课表里有才填),location,teacher});之后问「今天有什么课」直接照登记回答。"
+                "action=show 看某天课(when 传日期,默认今天);action=clear 清空。"
+                "课表里没写钟点的课只报第几节,绝不编具体时间。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["save", "show", "clear"],
+                               "description": "save=存/覆盖课表;show=看某天;clear=清空"},
+                    "term_start": {"type": "string",
+                                   "description": "save 用:第 1 周周一的日期(2026-09-07),向同学问清,不要猜"},
+                    "classes": {"type": "array",
+                                "description": "save 用:课程条目列表,每项含 name/day/weeks,可选 periods/start_time/location/teacher",
+                                "items": {"type": "object", "properties": {
+                                    "name": {"type": "string"},
+                                    "day": {"description": "1-7(周一=1),也认「周三」"},
+                                    "weeks": {"type": "string", "description": "如 1-16 / 1-8,11-16 / 1-16(单周)"},
+                                    "periods": {"type": "string", "description": "节次,如 1-2"},
+                                    "start_time": {"type": "string", "description": "上课钟点(课表里有才填,如 08:00)"},
+                                    "location": {"type": "string"},
+                                    "teacher": {"type": "string"},
+                                }}},
+                    "when": {"type": "string", "description": "show 用:日期(2026-09-22),默认今天"},
+                    "reason": {"type": "string",
+                               "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
+                },
+                "required": ["action"],
+            },
+            handler=schedule.schedule,
+        ),
+        Tool(
+            name="get_weather",
+            description=(
+                "查学校所在地(肇庆鼎湖)的实况与未来几天天气预报(Open-Meteo,免费数据源)。"
+                "用户问「今天/这周末下不下雨、要不要带伞、降温吗」时用;days=今天起往后几天(0-3)。"
+                "查不到就如实说查不到,绝不编数字;首页已有天气 chip,日常一句话不必总调本工具。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "days": {"type": "integer",
+                             "description": "连同今天往后报几天(0-3,默认 1)"},
+                },
+            },
+            handler=weather.get_weather,
+            trust="external",
+            read_only=True,
         ),
         # ---------------- 校园地图(map_*)----------------
         # 数据是线下交付包(手绘地图 + 36 张单栋标注图)的索引:是「位置图」,

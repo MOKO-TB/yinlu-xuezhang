@@ -100,3 +100,81 @@ def test_search_knowledge_miss_logs_gap(tmp_path, config, monkeypatch):
 
     assert "奖学金" in kb.search_knowledge(target, "奖学金")
     assert len(_read_lines(growth.GAPS_FILE)) == 1           # 命中不再新增
+
+
+# ------------------------------------------------------------ 候选审核(v0.9.21)
+
+def test_list_candidates_order_and_filter():
+    growth.save_candidate("热水几点停", answer="22:30", source_url="https://x.cn/a")
+    growth.save_candidate("校园卡挂失", answer="服务大厅", source_url="https://x.cn/b")
+    allc = growth.list_candidates()
+    assert [c["index"] for c in allc] == [2, 1]              # 新的在前
+    assert len(growth.list_candidates("pending")) == 2
+    assert growth.list_candidates("merged") == []
+
+
+def test_review_merge_writes_kb_discoverable(monkeypatch, tmp_path):
+    from minicode import kb
+    growth.save_candidate("图书馆几点闭馆", answer="22:00 闭馆",
+                          source_url="https://x.cn/lib", source_title="图书馆公告",
+                          note="期末延长到 23:00")
+    ok, msg = growth.review_candidate(1, "merge")
+    assert ok and "并入知识库" in msg
+
+    # 候选状态改成 merged,不再出现在 pending
+    assert growth.list_candidates("pending") == []
+    merged = growth.list_candidates("merged")
+    assert len(merged) == 1 and merged[0]["reviewed_at"]
+
+    # 并入写进了 app_path('kb')/reviewed.json,且能被 kb.load_kb 扫到
+    reviewed = app_path("kb") / growth.REVIEWED_KB_FILE
+    assert reviewed.exists()
+    entries = kb.load_kb([app_path("kb")])
+    hit = [e for e in entries if e.title == "图书馆几点闭馆"]
+    assert len(hit) == 1
+    assert hit[0].credible is True                           # credibility A-已审核
+    assert "22:00" in hit[0].content and "期末延长" in hit[0].content
+    assert hit[0].url == "https://x.cn/lib"
+
+
+def test_review_merge_is_idempotent_on_remerge():
+    growth.save_candidate("问题A", answer="答案A", source_url="https://x.cn/a")
+    growth.review_candidate(1, "merge")
+    # 已处理:不重复动作
+    ok, msg = growth.review_candidate(1, "merge")
+    assert ok is False and "已经是 merged" in msg
+
+
+def test_review_reject_marks_status():
+    growth.save_candidate("低质量候选", answer="x", source_url="https://x.cn/z")
+    ok, msg = growth.review_candidate(1, "reject")
+    assert ok and "拒绝" in msg
+    assert growth.list_candidates("rejected")[0]["index"] == 1
+    assert growth.list_candidates("pending") == []
+
+
+def test_review_bad_index_and_action():
+    growth.save_candidate("问题", answer="答案", source_url="https://x.cn/a")
+    assert growth.review_candidate(999, "merge")[0] is False   # 不存在的编号
+    assert growth.review_candidate("abc", "merge")[0] is False # 非数字
+    assert growth.review_candidate(1, "explode")[0] is False   # 非法 action
+    # 上述失败都没改动状态
+    assert len(growth.list_candidates("pending")) == 1
+
+
+def test_review_survives_broken_line(monkeypatch):
+    """候选文件里混进坏行也能正常读取与审核(容错)。"""
+    path = app_path(growth.CANDIDATES_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"index": 1, "question": "好行", "answer": "a",
+                    "source_url": "https://x.cn", "status": "pending"},
+                   ensure_ascii=False) + "\n"
+        + "这不是 JSON\n",
+        encoding="utf-8")
+    assert [c["index"] for c in growth.list_candidates()] == [1]
+    ok, _ = growth.review_candidate(1, "reject")
+    assert ok is True
+    # 重写后坏行被丢弃,只剩合法记录
+    rows = _read_lines(growth.CANDIDATES_FILE)
+    assert len(rows) == 1 and rows[0]["status"] == "rejected"

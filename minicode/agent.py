@@ -212,7 +212,14 @@ class Agent:
             return ("错误: 该操作被安全策略硬拒绝(可能造成不可恢复的破坏),"
                     "已阻止执行,请勿重试。")
         if decision == ASK:
-            choice = self.ui.confirm_tool(tool, args, reason or self._narration)
+            note = getattr(self.gate, "ask_note", "") or ""
+            # 无升级警示时按原调用路径走(不传 note):既有三参数实现/测试代理
+            # 不受影响,而且这是"未接触外部内容时行为与基线一致"的前提。
+            if note:
+                choice = self.ui.confirm_tool(tool, args, reason or self._narration, note)
+                self._log_security_ask(tool, args, note, choice)
+            else:
+                choice = self.ui.confirm_tool(tool, args, reason or self._narration)
             if choice == "always":
                 self.gate.approve_for_turn(tool.name)
             elif choice != "yes":
@@ -229,7 +236,47 @@ class Agent:
         except Exception as e:
             result = f"工具执行出错: {type(e).__name__}: {e}"
         self.ui.tool_done(tool, result)
-        return self._truncate(result)
+        result = self._truncate(result)
+        # 外部内容围栏:在 _truncate **之后**包壳,否则长内容会把结束标记裁掉。
+        # 收口只在这里,禁止各 handler 自行拼壳(方案 §8 决策 1)。
+        if self._is_external_result(tool, args):
+            from minicode import provenance
+            result = provenance.wrap(tool.name, args, result)
+            # 本回合接触过外部内容 —— 升级门(M3)据此对敏感动作强制确认
+            note = getattr(self.gate, "note_external", None)
+            if callable(note):
+                note(tool.name, args)
+        return result
+
+    def _log_security_ask(self, tool: Tool, args: dict, note: str, choice: str) -> None:
+        """安全门(凭据/升级)开口就留一行痕(方案 M6)。失败静默。"""
+        try:
+            from minicode import provenance
+            gate = "credential" if ("密钥" in note or "凭据" in note) else "escalation"
+            provenance.log_escalation(gate, tool.name, args, note, choice)
+        except Exception:
+            pass
+
+    def _is_external_result(self, tool: Tool, args: dict) -> bool:
+        """这次工具结果是否算"外部内容"(注入防御 M1 的两个特殊判定之一)。
+
+        - 工具自身标了 trust=external(web_crawl / browser_* / search_knowledge /
+          library_* / 全部 MCP 工具);
+        - `bash` 的条件升格:命令命中沙箱已有的联网识别(curl/wget/ssh/git fetch…)
+          时,输出可能就是网页内容,按 external 处理 —— 复用现成解析,不另写一套。
+
+        `read_file` **不**升格:文件是本地字节,不做污点传播(方案 §7 局限 2),
+        靠 M4 堵住 to_kb 入库这条最现实的"外部内容本地化"路径。
+        """
+        from minicode import provenance
+        if provenance.is_external(getattr(tool, "trust", "local")):
+            return True
+        name = tool.name.rsplit("·", 1)[-1]
+        if name == "bash":
+            from minicode.sandbox import command_hits_network
+            if command_hits_network(str(args.get("command", ""))):
+                return True
+        return False
 
     def _snapshot_before_mutation(self, tool: Tool, args: dict) -> None:
         if tool.name not in SNAPSHOT_TOOLS:
