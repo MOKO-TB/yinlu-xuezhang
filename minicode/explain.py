@@ -119,6 +119,15 @@ def risk_notes(tool_name: str, args: dict) -> list[str]:
         notes.append("会往工作区写入截图文件(需手动删,「撤销」不跟踪它)")
     elif name == "browser_close":
         notes.append("只关掉引路学长自己打开的标签页,不会动你其他的页面")
+    elif name == "web_search":
+        notes.append("会联网访问搜索引擎并抓取结果页")
+    elif name == "kb_suggest":
+        notes.append("会把一条问答追加到应用目录的候选文件(不改动正式知识库)")
+    elif name == "reminder":
+        notes.append("会改动本机的提醒清单文件(reminders.json)")
+    elif name == "py_script":
+        notes.append("会用内置 Python 运行时执行这个脚本(能读写工作区文件、可能联网)")
+        notes.append("脚本产生的改动不在「撤销」的跟踪范围内")
     return notes
 
 

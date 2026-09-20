@@ -180,6 +180,7 @@ def session_metrics(agent, session, config, llm_override: dict | None) -> dict:
             })
     active_id = (llm_override["provider_id"] if llm_override
                  else (config.provider.id if config.provider else ""))
+    breakdown = _context_breakdown(agent, session, config, window, used)
     return {
         "provider_id": active_id,
         "selected_key": f"{active_id}::{model}" if active_id and model else "",
@@ -191,5 +192,50 @@ def session_metrics(agent, session, config, llm_override: dict | None) -> dict:
         "context_tokens": used,
         "consumed": consumed,
         "compact_ratio": config.compact_at_ratio,
+        "context_breakdown": breakdown,
         "selectable": selectable,
+    }
+
+
+def _context_breakdown(agent, session, config, window: int,
+                       used: int) -> dict | None:
+    """上下文窗口面板的明细(v0.9.15):占用拆成 系统提示词/工具定义/Skill/消息。
+
+    数字全部来自与任务面板同一把尺子(estimate_tokens 粗估),四项之和
+    ≈ used;服务端真实计费可能有出入,面板只做量级参考,不做精确记账。
+    agent 没有 ctx(个别测试桩)时返回 None,前端就不渲染明细。
+    """
+    ctx = getattr(agent, "ctx", None)
+    workspace = getattr(ctx, "workspace", None)
+    if workspace is None:
+        return None
+    import json as _json
+
+    from minicode.skills import load_skills, skill_dirs, skills_prompt_section
+
+    def _tok(text: str) -> int:
+        return max(0, estimate_tokens([{"role": "system", "content": text}]) - 8)
+
+    sys_msg = next((m for m in session.messages if m.get("role") == "system"), None)
+    system_total = _tok(str(sys_msg.get("content") or "")) if sys_msg else 0
+    skills = load_skills(skill_dirs(workspace))
+    skills_sec = skills_prompt_section(skills)
+    skills_tokens = _tok(skills_sec) if skills_sec else 0
+    tools_tokens = sum(_tok(_json.dumps(t.to_openai_schema(), ensure_ascii=False))
+                       for t in getattr(agent, "registry", []) or [])
+    messages_tokens = max(0, used - system_total)
+    # 面板占用基数 = 消息(含系统提示词)+ 工具定义:工具 schema 不在消息里,
+    # 但同样占模型的上下文窗口;p1 的占比分母就是它,四项之和才能闭合。
+    return {
+        "window": window,
+        "used": used + tools_tokens,
+        "compact_at": config.compact_at_ratio,
+        "buckets": [
+            {"key": "system", "label": "系统提示词",
+             "tokens": max(0, system_total - skills_tokens)},
+            {"key": "tools", "label": "工具定义", "tokens": tools_tokens},
+            {"key": "skills", "label": "Skill", "tokens": skills_tokens,
+             "count": len(skills)},
+            {"key": "messages", "label": "对话消息", "tokens": messages_tokens},
+        ],
     }

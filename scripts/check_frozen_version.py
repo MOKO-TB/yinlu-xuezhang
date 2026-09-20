@@ -1,4 +1,4 @@
-"""校验打包产物里编译进去的 minicode 代码确实是 v0.9.13 新版。
+"""校验打包产物里编译进去的 minicode 代码确实是最新版(当前 v0.9.14)。
 
 PyInstaller 把纯 Python 模块压进 PYZ 归档(嵌在 exe 里),磁盘上看不到 .py 文件,
 所以走 PyInstaller 自己的读取器把模块字节码取出来,核对新增符号是否存在。
@@ -10,17 +10,32 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# 每个模块要求存在的新增符号(v0.9.13:模型清单 / 测试拉取 / 导出搜索)
+# 每个模块要求存在的新增符号(v0.9.13:模型清单/导出搜索;v0.9.14:成长闭环/校历/绩点/搜索)
 TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.config": ("model_entries", "enabled_models", "sync_model",
                         "_dedupe_models", "_models_from_raw", "PROVIDER_PRESETS"),
     "minicode.gui_bridge": ("test_model", "fetch_models", "get_provider_presets",
                             "export_session", "search_sessions",
+                            "rate_message", "get_countdowns",
                             "_provider_credentials"),
     "minicode.model_probe": ("list_models", "explain_status", "remember"),
     "minicode.session": ("to_markdown", "search_logs", "export_filename"),
     "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill"),
     "minicode.web_profile": ("网页版不开放会话导出", "search_sessions"),
+    # ---- v0.9.14:知识库成长闭环 + 校园场景小工具 ----
+    "minicode.growth": ("log_kb_gap", "save_candidate", "log_feedback", "kb_suggest"),
+    "minicode.calendar": ("campus_calendar", "calendar_payload",
+                          "calendar_prompt_section"),
+    "minicode.gpa": ("gpa_calc",),
+    "minicode.tools.crawl": ("web_search", "_resolve_redirect"),
+    # ---- v0.9.15:上下文面板 + py_script ----
+    "minicode.tools.shell": ("py_script", "_py_runtime_command"),
+    "minicode.model_catalog": ("_context_breakdown",),
+    # ---- v0.9.16:主动推荐 ----
+    "minicode.proactive": ("check_once", "fetch_latest", "start_loop", "clean_title"),
+    # ---- v0.9.17:截止提醒 + 新版本检查 ----
+    "minicode.reminders": ("reminder", "add", "due_soon", "parse_due"),
+    "minicode.proactive": ("check_update",),
 }
 
 
@@ -67,9 +82,9 @@ def main() -> int:
                 failures.append(f"{mod}:{needle}")
     print()
     if failures:
-        print("FAIL: 包内不是 v0.9.13 代码 →", failures)
+        print("FAIL: 包内不是最新版代码 →", failures)
         return 1
-    print("PASS: 包内后端代码包含 v0.9.13 全部新增符号")
+    print("PASS: 包内后端代码包含 最新版(v0.9.16)全部新增符号")
     return 0
 
 

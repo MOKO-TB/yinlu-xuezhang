@@ -353,6 +353,14 @@ try {
   /* 图书馆入口 chip:固定功能模块,点一下直接进图书馆导览 */
   #chat .placeholder .chip-lib{ border-color:var(--primary); color:var(--primary-text);
                                 background:var(--primary-light); font-weight:800; }
+  /* 校历倒计时 chips:与建议 chips 同语言,金色调区分"日期"语义 */
+  #chat .placeholder .cd-chips{ margin-bottom:8px; }
+  #chat .placeholder .chip-cd{ border-color:rgba(224,164,45,.6); color:#8a5b00;
+                               background:rgba(255,214,130,.25); font-weight:800; }
+  html.dark #chat .placeholder .chip-cd{ color:#FFD9A8;
+                                         background:rgba(255,190,90,.10);
+                                         border-color:rgba(255,200,110,.45);
+                                         box-shadow:0 0 14px rgba(255,190,90,.14); }
   /* 深色(p2 暮色青辉):chips 用青色描边玻璃,像霓虹灯管浮在暮色上 */
   html.dark #chat .placeholder .chip{ background:rgba(13,24,34,.6);
                                       border:1px solid rgba(79,216,200,.45);
@@ -421,6 +429,12 @@ try {
                 width:28px; height:24px; cursor:pointer; color:var(--text-3);
                 font-size:13px; line-height:1; transition:.12s; }
   .acts button:hover{ border-color:var(--primary); color:var(--primary-text); }
+  /* 消息级反馈:评过整组置灰,选中的那颗恢复主题色描边 */
+  .acts .rate{ display:flex; gap:2px; pointer-events:none; }
+  .acts .rate button{ pointer-events:auto; }
+  .msg.rated .acts button.rt-up, .msg.rated .acts button.rt-dn{
+    opacity:.35; pointer-events:none; }
+  .msg.rated .acts button.picked{ opacity:1; border-color:var(--primary); color:var(--primary-text); }
   .reasoning{ display:none; }
 
   /* 可读性:消息相关表面一律实底(覆盖半透明),深浅两套都给足对比 */
@@ -598,6 +612,60 @@ try {
   .task-menu .twin{ margin-left:auto; color:var(--text-3); font-size:10.5px; }
   .task-menu .tnokey{ color:var(--warning); font-size:10.5px; }
   .task-menu .tmenu-hint{ padding:4px 8px 6px; font-size:10.5px; color:var(--text-3); }
+  /* 上下文窗口面板(p1):点任务栏「上下文」弹出,进度条 + 分类占比 + 真压缩按钮 */
+  .task-menu.ctx-panel{ left:auto; right:0; min-width:380px; padding:12px 14px; }
+  .ctx-head{ display:flex; align-items:baseline; justify-content:space-between; }
+  .ctx-head b{ font-size:13px; color:var(--text-1); }
+  .ctx-pct{ font-size:20px; font-weight:900; color:var(--primary-text); }
+  .ctx-desc{ margin-top:4px; font-size:11px; line-height:1.6; color:var(--text-3); }
+  .ctx-bar{ position:relative; height:8px; margin:10px 0 10px;
+            background:var(--glass-lite); border:1px solid var(--line-soft);
+            border-radius:999px; overflow:hidden; }
+  .ctx-fill{ height:100%; border-radius:999px;
+             background:linear-gradient(90deg,#3FBDAE,#4C74C9); transition:width .3s; }
+  .ctx-fill.hot{ background:linear-gradient(90deg,#E0A42D,#E06A3F); }
+  .ctx-mark{ position:absolute; top:-2px; bottom:-2px; width:2px;
+             background:var(--warning); opacity:.8; }
+  .ctx-row{ display:flex; align-items:center; gap:8px; padding:3px 2px; font-size:12px; }
+  .ctx-row .dot{ width:8px; height:8px; border-radius:50%; flex:none; }
+  .dot.system{ background:#334155; } .dot.tools{ background:#3FBDAE; }
+  .dot.skills{ background:#7BC96A; } .dot.messages{ background:#94A3B8; }
+  .ctx-row .lb{ color:var(--text-2); font-weight:700; }
+  .ctx-row .tk{ margin-left:auto; color:var(--text-3); font-variant-numeric:tabular-nums; }
+  .ctx-row .pc{ width:44px; text-align:right; color:var(--text-2); font-weight:800;
+                font-variant-numeric:tabular-nums; }
+  .ctx-btn{ width:100%; margin-top:10px; border:1px solid var(--primary);
+            background:var(--primary-light); color:var(--primary-text);
+            border-radius:var(--r-full); padding:8px 0; font-size:12.5px;
+            font-weight:800; cursor:pointer; transition:.15s; }
+  .ctx-btn:hover{ background:var(--primary); color:#fff; }
+  .ctx-btn:disabled{ opacity:.6; cursor:default; }
+  .task-metric-click{ cursor:pointer; }
+  .task-metric-click:hover b{ color:var(--primary-text); }
+  /* 主动推荐条:看门狗发现新通知/校历临近时出现在输入框上方,金色同倒计时语言 */
+  .proactivebar{ display:flex; align-items:center; gap:8px; margin-bottom:6px;
+                 padding:7px 10px; border:1px solid rgba(224,164,45,.5);
+                 background:rgba(255,214,130,.16); border-radius:var(--r-m);
+                 font-size:12px; color:var(--text-1); }
+  html.dark .proactivebar{ background:rgba(255,190,90,.08);
+                           border-color:rgba(255,200,110,.4); }
+  .proactivebar .pi-ico{ flex:none; }
+  .proactivebar .pi-text{ flex:1; min-width:0; overflow:hidden;
+                          text-overflow:ellipsis; white-space:nowrap; }
+  .proactivebar .pi-btn{ flex:none; border:1px solid rgba(224,164,45,.6);
+                         background:rgba(255,214,130,.3); color:inherit;
+                         border-radius:999px; padding:3px 12px; font-size:11.5px;
+                         font-weight:800; cursor:pointer; }
+  html.dark .proactivebar .pi-btn{ color:#FFD9A8; background:rgba(255,190,90,.14); }
+  .proactivebar .pi-btn:hover{ background:rgba(224,164,45,.4); }
+  .proactivebar .pi-mute{ flex:none; border:none; background:none; cursor:pointer;
+                          font-size:11px; color:var(--text-3); text-decoration:underline; }
+  .proactivebar .pi-x{ flex:none; border:none; background:none; cursor:pointer;
+                       color:var(--text-3); font-size:13px; padding:0 2px; }
+  /* mermaid 图表块:浅底居中,失败时回退成原代码块 */
+  .mermaid{ background:var(--glass-strong); border:1px solid var(--line-soft);
+            border-radius:var(--r-m); padding:10px; margin:6px 0;
+            overflow-x:auto; text-align:center; }
 
   /* ---------------- 弹窗 & 提示 ---------------- */
   .overlay{ position:fixed; inset:0; background:rgba(9,15,23,.5);
@@ -1064,6 +1132,13 @@ try {
     </div>
 
     <div class="composer">
+      <div class="proactivebar" id="proactiveBar" style="display:none">
+        <span class="pi-ico">🔔</span>
+        <span class="pi-text" id="proactiveText"></span>
+        <button class="pi-btn" id="proactiveGo">去看看</button>
+        <button class="pi-mute" id="proactiveMute" title="不再检查官网新通知">不再提醒</button>
+        <button class="pi-x" id="proactiveClose" title="本次忽略">✕</button>
+      </div>
       <div class="editbar" id="editBar" style="display:none">
         ✎ 编辑重发:发送后将替换该条消息及其后的全部对话
         <button id="btnEditCancel">取消编辑</button>
@@ -1088,7 +1163,8 @@ try {
         <div class="task-menu" id="thinkMenu" style="min-width:180px"></div>
         <span class="task-sep"></span>
         <span class="task-metric" id="tmConsumed" title="本次任务累计消耗的真实 token(服务端返回才计,绝不估算)">任务消耗 <b>—</b></span>
-        <span class="task-metric" id="tmContext" title="当前对话占用 / 模型上下文窗口">上下文 <b>—</b></span>
+        <span class="task-metric task-metric-click" id="tmContext" title="当前对话占用 / 模型上下文窗口(点击看明细与压缩)">上下文 <b>—</b><span class="tm-caret">▾</span></span>
+        <div class="task-menu ctx-panel" id="ctxPanel"></div>
       </div>
       <div class="hint" id="hint"></div>
     </div>
@@ -1326,8 +1402,15 @@ const HOME_SUGGESTIONS = [
   "宿舍生活指南",
 ];
 let homeSuggestions = HOME_SUGGESTIONS;   // 启动后由后端按聊天记录动态刷新
+let homeCountdowns = [];                  // 校历倒计时(后端下发,空则整行不显示)
 function renderHome() {
   const chips = homeSuggestions.map(t => `<button class="chip">${esc(t)}</button>`).join("");
+  // 校历倒计时:有数据才出这一行(距中秋/四六级还有 N 天),点一下直接问它的安排
+  const cdRow = homeCountdowns.length
+    ? `<div class="chips cd-chips"><span>倒计时：</span>${homeCountdowns.map(c =>
+        `<button class="chip chip-cd" data-ask="${esc("「" + c.name + "」的具体时间和注意事项有哪些?")}"
+           title="${esc((c.start || "") + (c.note ? " · " + c.note : ""))}">${esc(c.name)} · 还有 ${c.days_left} 天</button>`).join("")}</div>`
+    : "";
   // 地图入口放在首位:不用先学会怎么问,点一下就能自己找楼
   const mapChip = `<button class="chip chip-map" title="打开手绘校园地图,可以搜楼名/俗称,或按类别看">🗺 打开校园地图</button>`;
   // 图书馆固定功能模块入口:点一下直接进图书馆导览(查书/找书/借还流程)
@@ -1338,6 +1421,7 @@ function renderHome() {
       <div class="sub">我是引路学长，你的校园 AI 助手 —— 学习、考试、活动、校园生活，都可以问我。</div>
     </div>
     <div class="home-tray">
+      ${cdRow}
       <div class="chips"><span>试试这些：</span>${mapChip}${libChip}${chips}</div>
       <div class="tip">小提示：找楼可以直接问我「图书馆在哪」，也可以点上面的地图自己搜（支持 E栋、s5 这类俗称）；聊天里用鼠标选中文字会出现「复制选区」按钮；思考过程与工具卡片在最终回复给出后会自动收起，点击可重新展开。</div>
     </div>
@@ -1355,6 +1439,13 @@ function renderHome() {
       send();
       return;
     }
+    if (el.classList.contains("chip-cd")) {
+      const input = $("input");
+      input.value = el.dataset.ask || el.textContent;
+      input.focus();
+      input.dispatchEvent(new Event("input"));
+      return;
+    }
     const input = $("input");
     input.value = el.textContent;
     input.focus();
@@ -1369,8 +1460,50 @@ function refreshHomeSuggestions() {
       if (chat.querySelector(".placeholder")) renderHome();   // 仅在首页还开着时刷新
     }
   }).catch(() => {});
+  if (pywebview.api.get_countdowns) {
+    pywebview.api.get_countdowns().then(r => {
+      if (r && r.ok !== false && Array.isArray(r.countdowns)) {
+        homeCountdowns = r.countdowns;
+        if (chat.querySelector(".placeholder")) renderHome();
+      }
+    }).catch(() => {});
+  }
 }
 renderHome();
+
+/* ---------------- 主动推荐条(看门狗:新通知 / 校历 / 待办 / 新版本) ---------------- */
+let proactiveAsk = "";
+let proactiveMode = "fill";        // fill=回填输入框;open=直接开链接(新版本下载)
+function showProactive(text, ask, canMute, mode) {
+  $("proactiveText").textContent = text;
+  proactiveAsk = ask;
+  proactiveMode = mode || "fill";
+  $("proactiveMute").style.display = canMute ? "inline" : "none";
+  $("proactiveGo").textContent = proactiveMode === "open" ? "去下载" : "去看看";
+  $("proactiveBar").style.display = "flex";
+}
+$("proactiveGo").addEventListener("click", () => {
+  $("proactiveBar").style.display = "none";
+  if (proactiveMode === "open") {
+    if (/^https?:\/\//i.test(proactiveAsk) && pywebview.api.open_url) {
+      pywebview.api.open_url(proactiveAsk).catch(() => {});
+    }
+    return;
+  }
+  const input = $("input");
+  input.value = proactiveAsk;
+  input.focus();
+  input.dispatchEvent(new Event("input"));
+});
+$("proactiveClose").addEventListener("click", () => {
+  $("proactiveBar").style.display = "none";
+});
+$("proactiveMute").addEventListener("click", () => {
+  $("proactiveBar").style.display = "none";
+  if (pywebview.api && pywebview.api.set_notice_watch) {
+    pywebview.api.set_notice_watch(false).catch(() => {});
+  }
+});
 
 function toast(text, isError) {
   const box = $("toasts");
@@ -1405,6 +1538,7 @@ $("btnTheme").addEventListener("click", () => {
 /* ---------------- 复制 / 编辑重发 ---------------- */
 let userSeq = 0;      // 已渲染用户消息序号,与后端 session 内 user 消息一一对应
 let editing = null;   // {ord, text} 正在编辑重发的原消息
+let lastUserQ = "";   // 最近一条用户消息(给 👍/👎 反馈标注"这条回答对应哪个问题")
 
 async function copyText(t) {
   try { await navigator.clipboard.writeText(t); return true; }
@@ -1521,6 +1655,7 @@ function truncateDomFrom(ord) {
 /* ---------------- 消息块 ---------------- */
 function addUserMsg(text, atts) {
   removePlaceholder();
+  lastUserQ = text;
   const ord = ++userSeq;
   const wrap = document.createElement("div");
   wrap.className = "msg user";
@@ -1563,9 +1698,25 @@ function ensureAssistant() {
     </div>
     <div class="body" hidden></div>
     <div class="stats" hidden title="本次输出的实测耗时与速度(服务端返回 token 数才显示速度)"></div>
-    <div class="acts"><button class="cp" title="复制回复">⧉</button></div>`;
+    <div class="acts"><button class="cp" title="复制回复">⧉</button>
+      <span class="rate"><button class="rt-up" title="这个回答有帮助">👍</button><button class="rt-dn" title="这个回答不对/没帮助">👎</button></span></div>`;
   chat.appendChild(wrap);
   bindCopy(wrap.querySelector(".cp"), () => wrap.dataset.raw);
+  // 消息级反馈:👍/👎 只在带正文的助手消息上出现(纯工具调用消息的 .acts 会被整条移除)
+  wrap.dataset.lastQ = lastUserQ || "";
+  const rtUp = wrap.querySelector(".rt-up"), rtDn = wrap.querySelector(".rt-dn");
+  const doRate = (rating, btn) => {
+    if (wrap.classList.contains("rated")) return;
+    wrap.classList.add("rated");
+    btn.classList.add("picked");
+    const api = window.pywebview && pywebview.api;
+    if (!api || !api.rate_message) return;
+    api.rate_message(rating, wrap.dataset.lastQ || "", (wrap.dataset.raw || "").slice(0, 600))
+      .then(r => { if (r && r.ok === false) toast(r.msg || "反馈没有记录成功", true); })
+      .catch(() => {});
+  };
+  rtUp.addEventListener("click", () => doRate(1, rtUp));
+  rtDn.addEventListener("click", () => doRate(-1, rtDn));
   const trace = wrap.querySelector(".trace");
   trace.querySelector(".tr-head").addEventListener("click", () => {
     trace.classList.toggle("open");
@@ -1681,6 +1832,56 @@ function fixImages(root) {
   });
 }
 
+/* ---------------- mermaid 图表(计划/流程/结构) ----------------
+   vendor/mermaid.min.js 懒加载:出现 ```mermaid 块才拉起,渲染失败保持
+   原代码块可见;securityLevel=strict —— 模型生成的内容按不可信输入对待 */
+let mermaidLoading = null;
+function ensureMermaid() {
+  if (window.mermaid) return Promise.resolve(true);
+  if (mermaidLoading) return mermaidLoading;
+  mermaidLoading = new Promise(resolve => {
+    const s = document.createElement("script");
+    s.src = "vendor/mermaid.min.js";
+    s.onload = () => {
+      try {
+        mermaid.initialize({ startOnLoad: false, securityLevel: "strict",
+                             theme: document.documentElement.classList.contains("dark")
+                                    ? "dark" : "neutral" });
+        resolve(true);
+      } catch (e) { resolve(false); }
+    };
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+  return mermaidLoading;
+}
+async function renderMermaidBlocks(root) {
+  const blocks = root.querySelectorAll("pre code.language-mermaid");
+  if (!blocks.length) return;
+  if (!(await ensureMermaid())) return;
+  for (const code of blocks) {
+    const pre = code.parentElement;
+    if (pre.dataset.mmd === "1") continue;
+    pre.dataset.mmd = "1";
+    const div = document.createElement("div");
+    div.className = "mermaid";
+    // renderMd 先 esc() 再 marked:代码块里的 --> 已是字面量 &gt;,
+    // 喂给 mermaid 前先解码回真实字符(textContent 赋值,无注入面)
+    const ta = document.createElement("textarea");
+    ta.innerHTML = code.textContent;
+    div.textContent = ta.value;
+    pre.parentNode.insertBefore(div, pre);
+    pre.style.display = "none";
+    try {
+      await mermaid.run({ nodes: [div] });
+    } catch (e) {
+      div.remove();                    // 语法画不出来:把原代码块亮回来
+      pre.style.display = "";
+      pre.dataset.mmd = "0";
+    }
+  }
+}
+
 function renderAssistant(force) {
   const c = cur;
   if (!c) return;
@@ -1777,6 +1978,7 @@ window.__gcodeEvent = function (e) {
         foldAllTraces();
         renderAssistant(true);
         fixImages(cur.body || chat);
+        renderMermaidBlocks(cur.body || chat);
         if (!cur.text.trim()) {          // 纯工具调用/空回复:不给复制按钮
           const acts = cur.wrap.querySelector(".acts");
           if (acts) acts.remove();
@@ -1906,6 +2108,44 @@ window.__gcodeEvent = function (e) {
     case "info":
       toast(e.text);
       break;
+    case "proactive": {
+      // 看门狗推送(不带 session 键,全局可见):新通知/校历/待办/新版本
+      if (e.kind === "notices") {
+        const items = e.items || [];
+        if (!items.length) break;
+        const ask = "帮我解读学校官网刚发的新通知:\n"
+          + items.map((it, i) => `${i + 1}. 《${it.title}》(${it.url})`).join("\n")
+          + "\n逐条说说讲了什么、跟我有什么关系;"
+          + "讲完每一条,如果内容对同学有长期价值,先问我要不要存进知识库候选。";
+        showProactive(`官网有 ${items.length} 条新通知：`
+          + items.map(it => `《${it.title}》`).join(" "),
+          ask, true);
+      } else if (e.kind === "calendar") {
+        const name = String(e.name || "重要日程");
+        const days = Number(e.days_left) || 0;
+        const when = days === 0 ? "就是今天" : `还有 ${days} 天`;
+        showProactive(`${name}${when}(${e.start || ""})`,
+          `「${name}」${when}了,帮我做一份准备计划/注意事项清单`, false);
+      } else if (e.kind === "reminders") {
+        const items = e.items || [];
+        if (!items.length) break;
+        const lines = items.map(it => {
+          const days = Number(it.days_left);
+          const when = days < 0 ? `已过截止 ${-days} 天` :
+            (days === 0 ? "今天截止" : `还有 ${days} 天(${it.due || ""})`);
+          return `- ${it.title}(截止 ${when})${it.note ? ":" + it.note : ""}`;
+        });
+        showProactive(`有 ${items.length} 件事临近截止：`
+          + items.map(it => it.title).join("、"),
+          "我还有这些事没做完:\n" + lines.join("\n")
+          + "\n帮我逐个安排:现在该先做哪个、怎么做最省力,以及别漏掉什么。", false);
+      } else if (e.kind === "update") {
+        showProactive(`发现新版本 v${e.version}!` + (e.notes
+          ? String(e.notes).slice(0, 60) : ""),
+          String(e.url || ""), false, "open");
+      }
+      break;
+    }
     case "error":
       toast(e.text, true);
       break;
@@ -1923,6 +2163,7 @@ function renderHistory(messages) {
   chat.innerHTML = "";
   cur = null;
   userSeq = 0;
+  lastUserQ = "";
   cancelEdit(false);
   for (const m of messages) {
     if (m.role === "user") addUserMsg(m.text);
@@ -1946,6 +2187,7 @@ function renderHistory(messages) {
   }
   nearBottom = true; toBottom();
   fixImages(chat);
+  renderMermaidBlocks(chat);
 }
 
 function renderSessions(items) {
@@ -2497,8 +2739,53 @@ function renderTaskMetrics(m) {
         if (!r.ok) toast(r.msg, true);
       }).catch(e => toast("切换失败:" + String(e).slice(0, 60), true));
     });
-    menu.appendChild(row);
+      menu.appendChild(row);
+    }
+  if ($("ctxPanel").classList.contains("show")) renderCtxPanel();   // 面板开着就同步数字
+}
+
+/* ---------------- 上下文窗口面板(点任务栏「上下文」弹出) ---------------- */
+function renderCtxPanel() {
+  const panel = $("ctxPanel");
+  const b = taskMetrics && taskMetrics.context_breakdown;
+  if (!b || !b.window) {
+    panel.innerHTML = '<div class="ctx-desc">当前模型没有已知的上下文窗口大小,暂时给不出明细'
+      + '(可以在「模型管理」里对它点一次「测试」,测出窗口后这里就能显示)。</div>';
+    return;
   }
+  const used = Number(b.used) || 0, win = Number(b.window) || 1;
+  const pct = Math.min(100, Math.round(used / win * 100));
+  const mark = Math.round((Number(b.compact_at) || 0.7) * 100);
+  const rows = (b.buckets || []).map(x => {
+    const share = used ? Math.round((Number(x.tokens) || 0) / used * 100) : 0;
+    return `<div class="ctx-row"><span class="dot ${esc(x.key)}"></span>`
+      + `<span class="lb">${esc(x.label)}${x.count ? ` (${x.count}个)` : ""}</span>`
+      + `<span class="tk">${fmtTok(x.tokens)}</span><span class="pc">${share}%</span></div>`;
+  }).join("");
+  panel.innerHTML = `
+    <div class="ctx-head"><b>上下文窗口</b><span class="ctx-pct">${pct}%</span></div>
+    <div class="ctx-desc">展示当前任务的上下文占用情况;压缩会把早期内容摘编成摘要(真压缩,不是清屏),需等待片刻并消耗少量 token。白线右侧是自动压缩线(${mark}%)。</div>
+    <div class="ctx-bar"><div class="ctx-fill${pct >= mark ? " hot" : ""}" style="width:${pct}%"></div><div class="ctx-mark" style="left:${mark}%"></div></div>
+    <div class="ctx-rows">${rows}</div>
+    <button class="ctx-btn" id="btnCtxCompact">🗜 压缩上下文</button>`;
+  $("btnCtxCompact").addEventListener("click", doCompactContext);
+}
+function doCompactContext(ev) {
+  ev.stopPropagation();
+  const btn = $("btnCtxCompact");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = "🗜 压缩中…(模型正在摘编早期内容)";
+  pywebview.api.compact_now().then(r => {
+    btn.disabled = false;
+    btn.textContent = "🗜 压缩上下文";
+    if (r && r.ok === false) toast(r.msg, true);
+    // 成功时后端会推 compacted 提示与 session_metrics,数字由事件刷新
+  }).catch(e => {
+    btn.disabled = false;
+    btn.textContent = "🗜 压缩上下文";
+    toast("压缩失败:" + String(e).slice(0, 60), true);
+  });
 }
 
 function loadTaskMetrics() {
@@ -2509,11 +2796,20 @@ function loadTaskMetrics() {
 $("taskModelBtn").addEventListener("click", (ev) => {
   ev.stopPropagation();
   $("thinkMenu").classList.remove("show");
+  $("ctxPanel").classList.remove("show");
   $("taskModelMenu").classList.toggle("show");
+});
+$("tmContext").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  $("taskModelMenu").classList.remove("show");
+  $("thinkMenu").classList.remove("show");
+  renderCtxPanel();
+  $("ctxPanel").classList.toggle("show");
 });
 document.addEventListener("click", () => {
   $("taskModelMenu").classList.remove("show");
   $("thinkMenu").classList.remove("show");
+  $("ctxPanel").classList.remove("show");
 });
 
 /* ---------------- 思考档位(输入框下方 🧠 按钮) ---------------- */

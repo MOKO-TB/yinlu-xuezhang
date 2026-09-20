@@ -509,3 +509,143 @@ def crawl_web(ctx: ToolContext, url: str, max_pages: int = 10, max_depth: int = 
         lines.append("失败页面:")
         lines += [f"- {f['url']}: {f['error']}" for f in failed[:5]]
     return "\n".join(lines)
+
+
+# ------------------------------------------------------- web_search(搜索兜底)
+
+SEARCH_TOPK_LIMIT = 10
+SEARCH_SNIPPET = 200
+SEARCH_TIMEOUT = 15.0
+
+
+def _http_get(url: str, timeout: float = SEARCH_TIMEOUT) -> tuple[int, str]:
+    """同步 GET(与 NativeCrawler 同一套 httpx,冻结版已内置该依赖)。"""
+    import httpx
+    with httpx.Client(follow_redirects=True, timeout=timeout,
+                      headers={"User-Agent": USER_AGENT,
+                               "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}) as client:
+        resp = client.get(url)
+        return resp.status_code, resp.text
+
+
+def _parse_bing(html: str) -> list[dict]:
+    """必应结果页(服务端渲染,轻量抓取器就能拿到):li.b_algo > h2 a + 摘要。"""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html or "", "html.parser")
+    out = []
+    for li in soup.select("li.b_algo"):
+        a = li.select_one("h2 a")
+        if not a or not a.get("href"):
+            continue
+        href = str(a["href"])
+        if not href.startswith(("http://", "https://")):
+            continue
+        snippet_el = li.select_one(".b_caption p") or li.select_one("p")
+        out.append({
+            "title": a.get_text(" ", strip=True)[:120],
+            "url": href,
+            "snippet": (snippet_el.get_text(" ", strip=True)[:SEARCH_SNIPPET]
+                        if snippet_el else ""),
+        })
+    return out
+
+
+def _parse_baidu(html: str) -> list[dict]:
+    """百度结果页:div.c-container 的 h3 a(链接是百度跳转链,后面再解析)。"""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html or "", "html.parser")
+    out = []
+    for item in soup.select("div.c-container, div.result"):
+        a = item.select_one("h3 a")
+        if not a or not a.get("href"):
+            continue
+        href = str(a["href"])
+        snippet_el = (item.select_one("[class*=content-right]")
+                      or item.select_one(".c-abstract")
+                      or item.select_one("[class*=abstract]"))
+        out.append({
+            "title": a.get_text(" ", strip=True)[:120],
+            "url": href,
+            "snippet": (re.sub(r"\s+", " ", snippet_el.get_text(" ", strip=True))[:SEARCH_SNIPPET]
+                        if snippet_el else ""),
+        })
+    return out[:SEARCH_TOPK_LIMIT]
+
+
+def _resolve_redirect(url: str) -> str:
+    """解析百度 /link?url=... 跳转链成真实网址(先 HEAD 跟 Location,
+    跟不出来再 GET 一次取最终地址;任何失败都保留原链,不让搜索挂掉)。"""
+    try:
+        import httpx
+        headers = {"User-Agent": USER_AGENT}
+        current = url
+        with httpx.Client(follow_redirects=False, timeout=10.0,
+                          headers=headers) as client:
+            for _ in range(3):
+                resp = client.head(current)
+                location = resp.headers.get("location", "") \
+                    if resp.status_code in (301, 302, 303, 307, 308) else ""
+                if not location:
+                    break
+                from urllib.parse import urljoin
+                current = urljoin(current, location)
+        if "baidu.com/link" not in current:
+            return current
+        resp = httpx.get(current, follow_redirects=True, headers=headers, timeout=10.0)
+        return str(resp.url) or url
+    except Exception:
+        return url
+
+
+def web_search(ctx, query: str, top_k: int = 6) -> str:
+    """web_search 工具处理器:必应优先、百度兜底,返回带网址的结果列表。"""
+    query = (query or "").strip()
+    if not query:
+        return "错误: 搜索词不能为空。"
+    top_k = max(1, min(int(top_k), SEARCH_TOPK_LIMIT))
+    from urllib.parse import quote_plus
+
+    errors: list[str] = []
+    results: list[dict] = []
+    engine = ""
+    try:
+        status, html = _http_get(f"https://cn.bing.com/search?q={quote_plus(query)}"
+                                 f"&count={top_k}&setlang=zh-hans&mkt=zh-CN")
+        if status == 200:
+            results = _parse_bing(html)[:top_k]
+            if results:
+                engine = "必应"
+        else:
+            errors.append(f"必应 HTTP {status}")
+    except Exception as e:
+        errors.append(f"必应({type(e).__name__}: {e})")
+
+    if not results:
+        try:
+            status, html = _http_get(f"https://www.baidu.com/s?wd={quote_plus(query)}"
+                                     f"&rn={top_k}")
+            if status == 200:
+                results = _parse_baidu(html)[:top_k]
+                if results:
+                    engine = "百度"
+            else:
+                errors.append(f"百度 HTTP {status}")
+        except Exception as e:
+            errors.append(f"百度({type(e).__name__}: {e})")
+        for r in results:
+            r["url"] = _resolve_redirect(r["url"])
+
+    if not results:
+        detail = (";".join(errors) + "。" if errors else "")
+        return ("错误: 两个搜索引擎都没有返回结果。"
+                + detail +
+                "可以改用 browser_open 打开搜索引擎页面重试,或稍后再试。")
+    lines = [f"联网搜索「{query}」(引擎: {engine},共 {len(results)} 条):"]
+    for i, r in enumerate(results, start=1):
+        lines.append(f"{i}. {r['title']}")
+        lines.append(f"   网址: {r['url']}")
+        if r["snippet"]:
+            lines.append(f"   摘要: {r['snippet']}")
+    lines.append("注意: 以上来自公开网络,回答时注明来源网址;与校园官方信息"
+                 "(知识库/官网)冲突时,以官方信息为准。")
+    return "\n".join(lines)

@@ -15,6 +15,8 @@
   var METHODS = [
     ["get_info"],
     ["get_suggestions"],
+    ["get_countdowns"],
+    ["rate_message", "rating", "question", "answer"],
     ["send_task", "text", "attachments"],
     ["stop_task"],
     ["new_task"],

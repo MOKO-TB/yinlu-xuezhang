@@ -110,3 +110,74 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
     if proc.returncode != 0 and not out and not err:
         sections.append("(无输出。命令可能不存在,或需要不同的参数。)")
     return "\n".join(sections)
+
+
+# ------------------------------------------------------- py_script(内置运行时)
+
+PY_SCRIPT_OUTPUT_LIMIT = 8000
+
+
+def _py_runtime_command() -> list[str] | None:
+    """拿到"能跑脚本的内置解释器"命令行。
+
+    源码态就是当前 venv 的 python;打包版没有裸 python 可用,走 CLI exe 的
+    `--py` 模式(main.py 里实现)—— 它带着打包进去的 pptx/docx/openpyxl/pypdf。
+    单文件版没有 CLI 伙伴,返回 None 由调用方给出可读错误。
+    """
+    if getattr(sys, "frozen", False):
+        cli = Path(sys.executable).parent / "引路学长-CLI.exe"
+        return [str(cli), "--py"] if cli.exists() else None
+    return [sys.executable, "-X", "utf8"]
+
+
+def py_script(ctx: ToolContext, path: str, timeout: int = 120) -> str:
+    """py_script 工具:用应用内置的 Python 运行时执行一个脚本文件。
+
+    学生机器上不一定装了 Python,但打包版里带着完整解释器与文档库
+    (python-pptx / python-docx / openpyxl / pypdf)—— 转换类技能生成的脚本
+    都靠这个工具跑。脚本必须先写进工作区(write_file),路径受沙箱约束。
+    """
+    from minicode.tools.base import PathBlocked, PathOutsideWorkspace, resolve_path
+
+    raw = str(path or "").strip()
+    if not raw:
+        return "错误: 缺少脚本路径。先用 write_file 把脚本写进工作区,再把相对路径传进来。"
+    try:
+        target = resolve_path(ctx, raw)
+    except (PathBlocked, PathOutsideWorkspace) as e:
+        return f"错误: {e}"
+    if not target.is_file():
+        return f"错误: 脚本不存在: {raw}。先用 write_file 把脚本写进工作区再运行。"
+    timeout = max(10, min(int(timeout), MAX_TIMEOUT))
+    sandbox = getattr(ctx, "sandbox", None)
+    if sandbox is not None:
+        sandbox_timeout = int(getattr(sandbox.policy, "timeout_seconds", 0) or 0)
+        if sandbox_timeout > 0:
+            timeout = min(timeout, sandbox_timeout)
+    base = _py_runtime_command()
+    if base is None:
+        return ("错误: 当前是单文件版,没有内置脚本运行时(缺 引路学长-CLI.exe)。"
+                "请改用安装包/便携版,或把脚本内容直接展示给用户手动运行。")
+    cmd = [*base, str(target)]
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        proc = subprocess.run(cmd, cwd=ctx.workspace, capture_output=True,
+                              timeout=timeout, env=env, creationflags=creationflags)
+    except subprocess.TimeoutExpired as e:
+        partial = _decode(e.stdout or b"")
+        return (f"错误: 脚本运行超过 {timeout} 秒被中止。已产生的输出:\n"
+                f"{partial[:TIMEOUT_OUTPUT_LIMIT]}")
+    out = _decode(proc.stdout or b"").strip()
+    err = _decode(proc.stderr or b"").strip()
+    sections = [f"退出码: {proc.returncode}"]
+    if out:
+        sections.append(f"--- stdout ---\n{out}")
+    if err:
+        sections.append(f"--- stderr ---\n{err}")
+    text = "\n".join(sections)
+    if len(text) > PY_SCRIPT_OUTPUT_LIMIT:
+        text = text[:PY_SCRIPT_OUTPUT_LIMIT] + "\n…(输出过长,已截断)"
+    if proc.returncode != 0 and not out and not err:
+        text += "\n(无输出。脚本可能抛了异常却没打印,检查代码或让脚本 print 关键步骤。)"
+    return text

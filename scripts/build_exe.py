@@ -104,7 +104,9 @@ def write_user_files(dist: Path) -> None:
     # 同类运行时状态一并清掉:token 记账库(含构建机上的用量记录)与
     # 工作区记忆(含本机文件夹路径) —— 分享出去既没用,又像在泄露什么。
     for _name in ("token-usage.db", "token-usage.db-wal", "token-usage.db-shm",
-                  "workspaces.json", "workspaces.json.tmp"):
+                  "workspaces.json", "workspaces.json.tmp",
+                  # v0.9.14 知识库成长闭环的运行时日志(含本机问答/反馈,不该外发)
+                  "kb-gaps.jsonl", "kb-candidates.jsonl", "message-feedback.jsonl"):
         (dist / _name).unlink(missing_ok=True)
     shutil.copy(ROOT / "config.example.json", dist / "config.example.json")
     (dist / "使用说明.txt").write_text(
@@ -128,19 +130,23 @@ def write_user_files(dist: Path) -> None:
         "4. 当前对话想留档:点顶栏「⬇ 导出」存成 Markdown(方便贴进文档或发同学);\n"
         "   侧栏搜索框可以按关键词翻历史会话,搜到的会给出上下文片段。\n"
         "   快捷键:Ctrl+K 打开模型管理,Ctrl+N 新建任务。\n"
-        "5. 图书馆搜书用的是包内的离线馆藏库 crawled/mfindgzyykj.libsp.cn/library.db\n"
+        "5. 校园问答小工具:首页有「倒计时」chips(放假/四六级等,日期数据在\n"
+        "   kb/school-calendar.json,拿到教务处校历后可直接编辑补充);\n"
+        "   问绩点/加权平均,把成绩直接贴给它就算;每条回复右侧有 👍/👎,\n"
+        "   点了会记进本机反馈日志,帮助学长把回答越改越准。\n"
+        "6. 图书馆搜书用的是包内的离线馆藏库 crawled/mfindgzyykj.libsp.cn/library.db\n"
         "   (约 1.31 GB / 133 万条书目)。\n"
         "   - 需要至少 2 GB 空闲磁盘;库没拷全时界面会当场提示「馆藏数据不完整」;\n"
         "   - 单文件版(引路学长-单文件版.exe)**不带**这个馆藏库,单独用无法搜书;\n"
         "     要能搜书请用安装包,或把整个便携文件夹一起拷过去。\n"
         "   - 自检:引路学长-CLI.exe 里输入 /library 看库状态。\n"
-        "6. 想接 MCP 服务器:编辑 config.json 的 mcp_servers 数组\n"
+        "7. 想接 MCP 服务器:编辑 config.json 的 mcp_servers 数组\n"
         "   (格式见 config.example.json,支持 npx/uvx/python 启动的任意 MCP 服务器);\n"
-        "7. 问网页内容时它可以用真实浏览器看页面(靠 JS 渲染的站点、自己写的本地\n"
+        "8. 问网页内容时它可以用真实浏览器看页面(靠 JS 渲染的站点、自己写的本地\n"
         "   页面都能看,还能截图给你)。默认自己起一个干净的后台实例,不会动你\n"
         "   正在用的浏览器,也不带你的登录态;只有要看必须登录才看得到的页面时,\n"
         "   它会先问你才能用你自己的浏览器。终端里输 /browser 可看当前状态。\n"
-        "8. 会话留档在 sessions/;技能放 skills/(SKILL.md 格式);知识库放 kb/;\n"
+        "9. 会话留档在 sessions/;技能放 skills/(SKILL.md 格式);知识库放 kb/;\n"
         "   长期记忆在 memory/MEMORY.md。\n"
         "   注:选了别处的工作区后,上面这些(以及附件、计划)都跟随工作区走,\n"
         "   只有 config.json 与会话留档 sessions/ 留在程序目录。\n",

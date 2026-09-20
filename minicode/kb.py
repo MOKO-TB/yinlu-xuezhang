@@ -204,6 +204,11 @@ def search_knowledge(ctx, query: str, top_k: int = 3,
         return "错误: 知识库为空(kb/ 目录下没有可用的 JSON 数据)。"
     snippet_chars = _int_arg(snippet_chars, SNIPPET_LIMIT, SNIPPET_LIMIT, SNIPPET_MAX)
     results = search(entries, query, top_k=top_k, category=category)
+    if not results:
+        # 未命中登记(知识库成长闭环):库里明明有数据却接不住这个问法,
+        # 这就是要补的语料缺口。登记失败静默,绝不影响回答。
+        from minicode import growth
+        growth.log_kb_gap(query)
     out = format_results(results, snippet_chars=snippet_chars)
     return out[:max(MAX_CONTENT_LIMIT, snippet_chars * len(results) + 800)]
 

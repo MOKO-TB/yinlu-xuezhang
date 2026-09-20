@@ -138,6 +138,10 @@ def main() -> None:
             background_color="#FDF6EC",
         )
     ui.attach(window)
+    # 主动推荐看门狗(官网新通知/校历临近):daemon 线程,延迟 15 秒开跑,
+    # 任何异常都在模块里吞掉 —— 这是个锦上添花的功能,绝不阻塞/拖垮窗口
+    from minicode import proactive
+    proactive.start_loop(bridge)
 
     try:
         # func 在 GUI 线程启动后于独立线程执行:用来补开 WebView2 的原生右键菜单

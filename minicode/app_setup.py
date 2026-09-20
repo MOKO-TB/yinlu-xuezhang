@@ -8,6 +8,7 @@ from pathlib import Path
 
 from minicode.agent import Agent
 from minicode.browser import browser_prompt_section
+from minicode.calendar import calendar_prompt_section
 from minicode.config import Config
 from minicode.kb import kb_dirs, kb_prompt_section
 from minicode.library import library_prompt_section
@@ -34,6 +35,7 @@ def build_system_prompt(workspace: Path) -> str:
     skills = load_skills(skill_dirs(workspace))
     return (prompt + skills_prompt_section(skills)
             + kb_prompt_section(kb_dirs(workspace))
+            + calendar_prompt_section()
             + library_prompt_section(workspace)
             + library_guide_prompt_section(workspace)
             + browser_prompt_section()

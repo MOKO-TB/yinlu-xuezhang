@@ -366,6 +366,32 @@ def main() -> None:
         web_main_entry([a for a in sys.argv[1:] if a != "--web"])
         return
 
+    # --py <脚本>:用内置解释器执行一个 Python 脚本后退出。
+    # py_script 工具在打包版里靠它拿到带 pptx/docx/openpyxl/pypdf 的运行时
+    # (学生机器上没有裸 Python,这是转换类技能的执行底座)。
+    if "--py" in sys.argv:
+        rest = sys.argv[sys.argv.index("--py") + 1:]
+        if not rest:
+            print("错误: --py 需要一个脚本路径", file=sys.stderr)
+            raise SystemExit(2)
+        script = Path(rest[0])
+        try:
+            code = script.read_text(encoding="utf-8")
+        except OSError as e:
+            print(f"错误: 读不到脚本 {script}: {e}", file=sys.stderr)
+            raise SystemExit(2)
+        globs = {"__name__": "__main__", "__file__": str(script.resolve())}
+        sys.argv = rest
+        try:
+            exec(compile(code, str(script), "exec"), globs)  # noqa: S102
+        except SystemExit:
+            raise
+        except BaseException:
+            import traceback
+            traceback.print_exc()
+            raise SystemExit(1)
+        raise SystemExit(0)
+
     config = load_config()
     # 模型能力探测(窗口/是否支持视觉):有缓存立即生效,没有就后台问一次
     model_probe.ensure_async(config.base_url, config.api_key, config.model)

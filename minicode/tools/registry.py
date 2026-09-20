@@ -1,7 +1,10 @@
 """内置工具注册表。"""
 from __future__ import annotations
 
-from minicode import campus, kb, library, library_guide, memory, planning, skills
+from minicode import growth
+from minicode import calendar as school_calendar
+from minicode import reminders
+from minicode import campus, gpa, kb, library, library_guide, memory, planning, skills
 from minicode.tools import browser as browser_tools
 from minicode.tools import crawl, fs, search, shell
 from minicode.tools.base import Tool
@@ -72,6 +75,29 @@ def build_default_registry() -> list[Tool]:
             handler=shell.bash,
         ),
         Tool(
+            name="py_script",
+            description=(
+                "用应用内置的 Python 运行时执行工作区里的一个脚本文件并返回输出。"
+                "机器上不需要装 Python;内置环境带 python-pptx / python-docx / "
+                "openpyxl / pypdf 等文档库,做 PPT/Word/Excel/PDF 转换时先按相应"
+                "技能(write_file 写脚本)再调本工具运行。脚本里请 print 关键"
+                "步骤与产物路径;长时间任务可调 timeout(上限 300 秒)。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "脚本路径(相对工作区,先用 write_file 写好)"},
+                    "timeout": {"type": "integer",
+                                "description": "超时秒数,默认 120,上限 300"},
+                    "reason": {"type": "string",
+                               "description": "用一句中文说明这个脚本要达成什么目的(显示在权限确认框里)"},
+                },
+                "required": ["path"],
+            },
+            handler=shell.py_script,
+        ),
+        Tool(
             name="glob",
             description="按通配符模式匹配文件名(支持 ** 递归),返回相对路径列表。",
             parameters={
@@ -124,6 +150,26 @@ def build_default_registry() -> list[Tool]:
                 "required": ["url"],
             },
             handler=crawl.crawl_web,
+        ),
+        Tool(
+            name="web_search",
+            description=(
+                "联网搜索(必应优先、百度兜底),返回标题+网址+摘要的结果列表。"
+                "本地知识库(search_knowledge)没命中、又需要查证的事实类问题时用它;"
+                "回答必须注明来源网址,与校园官方信息冲突时以官方/知识库为准。"
+                "要网页正文再接 web_crawl 或 browser_open。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "搜索关键词(短语化查询词,不是整句)"},
+                    "top_k": {"type": "integer", "description": "返回条数,默认 6,上限 10"},
+                    "reason": {"type": "string",
+                               "description": "用一句中文说明要查什么、为什么(显示在权限确认框里)"},
+                },
+                "required": ["query"],
+            },
+            handler=crawl.web_search,
         ),
         # ---------------- 浏览器(browser_*)----------------
         # 与 web_crawl 的分工:crawl 抓静态正文入库;browser 是「真的开一个浏览器」——
@@ -361,6 +407,78 @@ def build_default_registry() -> list[Tool]:
             read_only=True,
         ),
         Tool(
+            name="campus_calendar",
+            description=(
+                "查校历:放假安排(国庆/中秋/寒暑假)、四六级等考试时间、报名截止等,"
+                "带倒计时天数与来源。用户问「什么时候放假/考试/还有几天到 XX」时用它,"
+                "不要凭印象报日期。数据里没有的日期要如实说「还没录入,以教务处通知为准」。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["upcoming", "query"],
+                               "description": "upcoming=接下来有什么(默认);query=按关键词查"},
+                    "query": {"type": "string",
+                              "description": "action=query 时:关键词,如 国庆 / 四六级 / 考试周"},
+                    "limit": {"type": "integer", "description": "最多列出几条,默认 8"},
+                },
+            },
+            handler=school_calendar.campus_calendar,
+            read_only=True,
+        ),
+        Tool(
+            name="gpa_calc",
+            description=(
+                "按学分计算加权平均分与绩点(两种国内常见算法,公式随结果标明)。"
+                "用户贴来一串成绩想算绩点/加权平均时,先把每门课解析成 "
+                "{name, score, credit} 列表再调用;score 支持百分制数字或"
+                "「优/良/中/及格」等级(工具按常见折算并注明)。"
+                "回答时必须提示「以学校教务处的绩点算法为准」。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "courses": {
+                        "type": "array",
+                        "description": "课程成绩列表",
+                        "items": {"type": "object", "properties": {
+                            "name": {"type": "string", "description": "课程名"},
+                            "score": {"description": "百分制分数,或 优/良/中/及格"},
+                            "credit": {"description": "学分(大于 0)"},
+                        }},
+                    },
+                },
+                "required": ["courses"],
+            },
+            handler=gpa.gpa_calc,
+            read_only=True,
+        ),
+        Tool(
+            name="kb_suggest",
+            description=(
+                "把一条有长期价值的校园问答存成「知识库候选」(只写候选文件,"
+                "维护者审核后才并入正式知识库,不会立即生效)。"
+                "仅在同时满足时使用:①search_knowledge 没命中;②通过 web_search/browser"
+                " 查到了可靠来源(官网/官方公众号优先);③用户同意存入。"
+                "来源不可靠或用户没同意都不要调用;不要向用户宣称信息已进入正式知识库。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "同学的问题(口语原话或短语)"},
+                    "answer": {"type": "string", "description": "核实过的答案要点(300 字内)"},
+                    "source_url": {"type": "string",
+                                   "description": "来源网址(必填,没有可靠来源就不要调用)"},
+                    "source_title": {"type": "string", "description": "来源标题,如通知标题/文章题"},
+                    "note": {"type": "string", "description": "补充说明,如适用校区/有效期"},
+                    "reason": {"type": "string",
+                               "description": "一句中文说明为什么要存这条(显示在权限确认框里)"},
+                },
+                "required": ["question", "answer", "source_url"],
+            },
+            handler=growth.kb_suggest,
+        ),
+        Tool(
             name="library_search",
             description=(
                 "查询本校图书馆馆藏(本地离线全量书目库,133 万条,毫秒级返回)。"
@@ -443,6 +561,34 @@ def build_default_registry() -> list[Tool]:
             },
             handler=memory.memory,
             read_only=False,
+        ),
+        Tool(
+            name="reminder",
+            description=(
+                "待办/截止日期提醒(存本机 reminders.json,启动时学长会主动催)。"
+                "用户说「提醒我 X 月 X 日交材料」「别忘了周五要报名」「我有哪些事没做完」时用:"
+                "action=add 记一条(title 必填,due 给 2026-10-08 / 10-08 这类能确定的日期,"
+                "说不准就不填——绝不猜日期);action=list 看清单;action=finish/delete 带 item_id。"
+                "临期(3 天内)与逾期事项会在启动时主动推送。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["add", "list", "finish", "delete"],
+                               "description": "add=记提醒;list=看清单;finish=标记完成;delete=删除"},
+                    "title": {"type": "string", "description": "add 用:要记的事(如:交奖学金材料)"},
+                    "due": {"type": "string",
+                            "description": "add 用:截止日期(2026-10-08 / 2026/10/8 / 10-08;"
+                                           "说不准就留空,不要猜)"},
+                    "note": {"type": "string", "description": "add 用:补充说明(可选)"},
+                    "item_id": {"type": "string",
+                                "description": "finish/delete 用:提醒的 id(如 r3,清单里能看到)"},
+                    "reason": {"type": "string",
+                               "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
+                },
+                "required": ["action"],
+            },
+            handler=reminders.reminder,
         ),
         # ---------------- 校园地图(map_*)----------------
         # 数据是线下交付包(手绘地图 + 36 张单栋标注图)的索引:是「位置图」,

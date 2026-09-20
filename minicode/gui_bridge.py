@@ -88,6 +88,18 @@ class PublicApi:
     def get_suggestions(self) -> dict:
         return self._b.get_suggestions()
 
+    def rate_message(self, rating: int, question: str = "", answer: str = "") -> dict:
+        """消息级 👍/👎 反馈:落到应用目录的反馈日志。"""
+        return self._b.rate_message(rating, question, answer)
+
+    def get_countdowns(self) -> dict:
+        """首页倒计时 chips:校历里最近的安排。"""
+        return self._b.get_countdowns()
+
+    def set_notice_watch(self, enabled: bool) -> dict:
+        """主动推荐开关:官网新通知看门狗。"""
+        return self._b.set_notice_watch(enabled)
+
     def stop_task(self) -> dict:
         return self._b.stop_task()
 
@@ -1146,6 +1158,46 @@ class Bridge:
         texts = collect_user_texts(self.sessions_dir, self.session.messages)
         return {"suggestions": build_suggestions(texts)}
 
+    def rate_message(self, rating: int, question: str = "", answer: str = "") -> dict:
+        """消息级 👍/👎 反馈:追加到应用目录 message-feedback.jsonl。
+
+        记录失败不影响使用(返回 ok=False 由前端静默处理);同一消息重复评分
+        由前端置灰防住,后端不再去重。session 记录的是留档文件名(还没落盘的
+        新会话用运行器键兜底),便于回溯当时是在哪个会话里答错的。
+        """
+        from minicode import growth
+        log = ""
+        try:
+            log = self.session.log_path.name or ""
+        except Exception:
+            pass
+        if not log and self._current is not None:
+            log = self._current.key
+        if not growth.log_feedback(int(rating), question=question,
+                                   answer=answer, session=log):
+            return {"ok": False, "msg": "反馈没有记录成功(不影响使用)"}
+        return {"ok": True}
+
+    def get_countdowns(self) -> dict:
+        """首页倒计时 chips:校历里最近的几条安排(没有就不显示)。"""
+        from minicode import calendar as campus_calendar
+        try:
+            items = campus_calendar.calendar_payload(limit=3)
+        except Exception:             # 校历文件坏了也不能拖垮首页
+            items = []
+        return {"ok": True, "countdowns": items}
+
+    def set_notice_watch(self, enabled: bool) -> dict:
+        """主动推荐:开/关官网新通知看门狗(落在 notice-watch.json)。"""
+        from minicode import proactive
+        state = proactive.load_state()
+        state["enabled"] = bool(enabled)
+        proactive.save_state(state)
+        self.ui.push("info", text="已开启官网新通知提醒" if enabled
+                     else "已关闭官网新通知提醒(随时可在 config 同目录的 "
+                          "notice-watch.json 里重新打开)")
+        return {"ok": True, "enabled": state["enabled"]}
+
     def stop_task(self) -> dict:
         """只停当前会话的任务;别的会话在后台继续跑。"""
         self._current.ui.request_stop()
@@ -1179,7 +1231,19 @@ class Bridge:
         return {"ok": True, "session": runner.key}
 
     def compact_now(self) -> dict:
+        """立即压缩上下文(上下文窗口面板的「压缩」按钮)。
+
+        压缩是真的:agent 会把早期对话交给模型摘编(消耗一次 LLM 调用),
+        所以任务进行中直接拒绝 —— 摘编读的就是那些消息,边跑边压会撕裂回合。
+        压缩完立即回推一次 session_metrics,面板上的占用数字马上掉下来。
+        """
+        if self._busy:
+            return {"ok": False, "msg": "任务进行中,等这轮跑完再压缩上下文"}
         self.agent.compact_now()
+        runner = self._current
+        if runner is not None:
+            self.ui.push("session_metrics", session=runner.key, **session_metrics(
+                runner.agent, runner.session, self.config, runner.llm_override))
         return {"ok": True}
 
     def set_permission_mode(self, mode: str) -> dict:
@@ -1479,6 +1543,19 @@ class Bridge:
         if name == "browser_screenshot":
             return (f"把当前页面截图存到:{args.get('path') or 'shots/ 下(自动命名)'}"
                     + ("" if args.get("full_page", True) else "(只截可视区)"))
+        if name == "web_search":
+            return f"联网搜索:{args.get('query', '')}"
+        if name == "kb_suggest":
+            return ("把这条信息存成知识库候选(等维护者审核,不进正式知识库):"
+                    + str(args.get('question', ''))[:120])
+        if name == "py_script":
+            return f"用内置 Python 运行时执行脚本:{args.get('path', '')}"
+        if name == "reminder":
+            action = str(args.get("action", "list"))
+            if action == "add":
+                due = str(args.get("due", "") or "未定日期")
+                return f"记一条提醒:{args.get('title', '')}(截止 {due})"
+            return f"查看/更新提醒清单(action={action})"
 
         return json.dumps(args, ensure_ascii=False)[:500]
 

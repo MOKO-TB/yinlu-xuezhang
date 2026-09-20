@@ -52,3 +52,11 @@ _build_*.log
 /upload_zip.py
 /upload_output.log
 
+
+# 知识库成长闭环的运行时日志(应用级数据,不进仓库)
+/kb-gaps.jsonl
+/kb-candidates.jsonl
+/message-feedback.jsonl
+
+# v0.9.17 截止日期提醒的运行时状态(本机待办,不进仓库)
+/reminders.json

@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 from minicode.agent import Agent
+from minicode.calendar import calendar_prompt_section
 from minicode.gui_bridge import Bridge
 from minicode.kb import kb_dirs, kb_prompt_section
 from minicode.library import library_prompt_section
@@ -28,6 +29,8 @@ from minicode.skills import load_skills, skill_dirs, skills_prompt_section
 # 同学可以用到的工具。改这里之前先读实施方案 §3。
 PUBLIC_TOOLS: frozenset[str] = frozenset({
     "search_knowledge",         # 校园语料(带来源与可信度)
+    "campus_calendar",          # 校历(放假/考试时间,纯本地数据)
+    "gpa_calc",                 # 绩点/加权平均计算(纯本地计算)
     "library_search",           # 图书馆 133 万条离线馆藏
     "library_guide",            # 入馆教学 / 中图法→楼层
     "use_skill",                # 读技能指导(只读)
@@ -50,6 +53,10 @@ EXCLUDED_TOOLS: dict[str, str] = {
     "memory": "读写所有者自己的长期记忆",
     "task": "子代理会携带 implement 类写工具,绕过白名单",
     "web_crawl": "SSRF:可让服务端请求校园内网任意地址;且会写 crawled//kb/",
+    "web_search": "对外形态不给网络访问(对外提示词也声明了没有联网能力)",
+    "kb_suggest": "会往服务器的候选文件写数据(访客侧无法审核)",
+    "py_script": "能在服务器上执行任意代码(文档转换脚本),绝对不进白名单",
+    "reminder": "会读写服务器的提醒清单文件(访客待办不该存在服务器上)",
     "browser_open": "对外模式不给浏览器:能访内网地址、带不上访客登录态却要占一台浏览器,"
                     "且 launch 出的实例会留在服务器上",
     "browser_eval": "等于在服务器浏览器里执行访客给的 JS",
@@ -69,7 +76,8 @@ ASSET_EXTENSIONS: frozenset[str] = frozenset({
 PUBLIC_PROMPT = """你是「广州应用科技学院 · 校园助手」,由学长学姐整理的经验库驱动,面向在校同学答疑。
 
 # 服务边界(必须遵守)
-- 你只能使用校园知识库、图书馆馆藏、校园地图这三类数据回答;手上有哪些工具见下方清单。
+- 你只能使用校园知识库、校历、绩点计算器、图书馆馆藏、校园地图这些本地数据与工具回答;
+  手上有哪些工具见下方清单。
 - 你没有读写文件、执行命令、访问网络的能力。**不要声称自己能做这些事**,也不要建议同学
   让你"去看某个文件";遇到这类请求,直说超出服务范围,并指出同学可以自己怎么办。
 - 涉及学校政策、通知、时间、金额、办事流程时,一律以知识库条目为准并给出**来源链接**;
@@ -81,6 +89,10 @@ PUBLIC_PROMPT = """你是「广州应用科技学院 · 校园助手」,由学�
   同学没特别说明校区时,一律按肇庆校区回答。
 - 常见问题范围:校园活动、考试与四六级、考研与专升本、奖助学金、入党、社团、学科竞赛、
   选课、宿舍与生活服务、校园卡、图书馆、办事流程。
+- 问「什么时候放假 / 四六级什么时候考 / 还有几天到 XX」→ 先调 `campus_calendar`,
+  校历里没有的日期如实说「还没录入,以教务处通知为准」,不要编日期。
+- 同学贴成绩想算绩点/加权平均 → 解析成课程列表用 `gpa_calc`,并说明
+  「以学校教务处的绩点算法为准」。
 
 # 校园地图(肇庆校区)
 - 手上有一份校区手绘地图的标注索引(36 处建筑 + 203 条学生俗称),回答时可以同时把位置画在
@@ -119,6 +131,7 @@ def build_public_system_prompt(workspace: Path) -> str:
     return (PUBLIC_PROMPT.replace("{date}", time.strftime("%Y-%m-%d"))
             + skills_prompt_section(skills)
             + kb_prompt_section(kb_dirs(workspace))
+            + calendar_prompt_section()
             + library_prompt_section(workspace)
             + library_guide_prompt_section(workspace))
 
@@ -173,6 +186,8 @@ class PublicFacade:
             "hello": self._hello,
             "get_info": self._get_info,
             "get_suggestions": self._get_suggestions,
+            "get_countdowns": self._get_countdowns,
+            "rate_message": self._rate_message,
             "send_task": self._send_task,
             "stop_task": self._stop_task,
             "new_task": self._new_task,
@@ -275,6 +290,18 @@ class PublicFacade:
 
     def _get_suggestions(self) -> dict:
         return self._b.get_suggestions()
+
+    def _get_countdowns(self) -> dict:
+        """首页倒计时:校历是公开数据,访客可见;坏了也不拖垮首页。"""
+        return self._b.get_countdowns()
+
+    def _rate_message(self, rating: int = 0, question: str = "",
+                      answer: str = "") -> dict:
+        """访客的 👍/👎 也收(只是往反馈日志追加一行,无敏感信息)。"""
+        try:
+            return self._b.rate_message(int(rating), question, answer)
+        except (TypeError, ValueError):
+            return _refuse("评分参数不合法")
 
     def _get_asset(self, rel_path: str = "") -> dict:
         """只放行图片:这个接口本来只用于显示技能正文里的配图。"""

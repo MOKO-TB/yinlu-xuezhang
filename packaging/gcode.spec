@@ -61,6 +61,11 @@ for pkg in ("openai", "httpx2", "pydantic", "pydantic_core",
 # 它是纯 Python(+一个可选 C 扩展),几 MB,不像 playwright 那样背 270MB 内核。
 hiddenimports += ["bs4", "soupsieve", "httpx", "httpcore", "h11", "websockets"]
 
+# v0.9.15 文档转换库(py_script 工具的内置运行时):只在工具 handler 函数内
+# 间接使用,静态分析看不见,必须显式声明。lxml/Pillow 已随其他依赖收进包里
+# (python-pptx/python-docx 靠它们),这里只补四个纯 Python 包,增量约 10MB。
+hiddenimports += ["pptx", "docx", "openpyxl", "pypdf"]
+
 # 不要把 crawl4ai/patchright/playwright 加回来:浏览器内核 270MB+、驱动 100MB,
 # 便携包放不下(会把 79MB 的 zip 撑到 500MB)。抓取用上面的内置轻量抓取器,
 # 看真实页面用 minicode/browser.py 的 CDP 路线(只需 websockets)。
@@ -69,8 +74,9 @@ common = dict(
     pathex=[ROOT],
     binaries=binaries,
     datas=datas,
-    hookspath=[],
-    runtime_hooks=[],
+    hiddenimports=hiddenimports,   # 必须显式传入:bs4/websockets 靠静态分析侥幸
+    hookspath=[],                  # 收进包,pptx/docx/openpyxl/pypdf 无静态引用,
+    runtime_hooks=[],              # 全靠这里强制收集 —— 漏传 = 静默丢依赖(v0.9.16 踩过)
     # crawl4ai 也在排除之列:crawl.py 里留着"优先用 crawl4ai"的 import,
     # 不排除的话 PyInstaller 会把 crawl4ai 的模块收进包(约 4MB),但它的运行依赖
     # (numpy)与浏览器驱动(patchright)都被排除了,import 必然失败 —— 收进去纯属死代码,
