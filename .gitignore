@@ -72,3 +72,8 @@ _build_*.log
 # v0.9.21 候选审核并入的人工知识库(含本机问答,应用级数据,不进仓库)
 /kb/reviewed.json
 /kb/reviewed.tmp
+
+# v0.9.22 关窗偏好与托盘诊断日志(本机状态)+ 数据目录写探针
+/close-pref.json
+/tray.log
+/.write-probe.tmp

@@ -1,9 +1,13 @@
-"""校验打包产物里编译进去的 minicode 代码确实是最新版(当前 v0.9.14)。
+"""校验打包产物里编译进去的 minicode 代码确实是最新版(TARGETS 即当版针)。
 
 PyInstaller 把纯 Python 模块压进 PYZ 归档(嵌在 exe 里),磁盘上看不到 .py 文件,
 所以走 PyInstaller 自己的读取器把模块字节码取出来,核对新增符号是否存在。
 
 用法: .venv/Scripts/python.exe scripts/check_frozen_version.py [exe路径]
+
+清单默认对准 **onedir 的 CLI exe**(`dist/引路学长/引路学长-CLI.exe`)。拿单文件版
+(`dist/引路学长-单文件版.exe`)核对时,`minicode.web_profile` 那一条必然假红 ——
+单文件版是纯桌面形态,入口不 import 网页层,那个模块压根不在它的 PYZ 里。
 """
 from __future__ import annotations
 
@@ -17,8 +21,20 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.gui_bridge": ("test_model", "fetch_models", "get_provider_presets",
                             "export_session", "search_sessions",
                             "rate_message", "get_countdowns",
-                            "_provider_credentials"),
+                            "_provider_credentials",
+                            # v0.9.22:按模型能力判定看图 + 写盘失败要说清 + 关窗答复
+                            "_vision_on", "_persist_config", "set_vision",
+                            "close_choice"),
     "minicode.model_probe": ("list_models", "explain_status", "remember"),
+    # ---- v0.9.22:安装版可用性(数据目录写探针 + 诊断下发) ----
+    "minicode.paths": ("_is_writable", "_local_state_dir", "diagnostics",
+                       "STATE_BACKEND"),
+    # ---- v0.9.22:托盘 + 关窗确认(整套新模块,漏收 = X 又变成直接退出) ----
+    "minicode.tray": ("install", "close_choice", "read_pref", "write_pref",
+                      "TrayController", "hide_to_tray", "_ensure_icon",
+                      "_ensure_parent"),
+    "minicode.reasoning": ("reasoning_snapshot", "get_capability",
+                           "apply_reasoning_choice"),
     "minicode.session": ("to_markdown", "search_logs", "export_filename"),
     "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill"),
     "minicode.web_profile": ("网页版不开放会话导出", "search_sessions"),
@@ -33,7 +49,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.tools.crawl": ("web_search", "_resolve_redirect"),
     # ---- v0.9.15:上下文面板 + py_script ----
     "minicode.tools.shell": ("py_script", "_py_runtime_command"),
-    "minicode.model_catalog": ("_context_breakdown",),
+    "minicode.model_catalog": ("_context_breakdown", "vision_forced"),
     # ---- v0.9.17:截止提醒 ----
     "minicode.reminders": ("reminder", "add", "due_soon", "parse_due"),
     # ---- v0.9.18:注入防御(provenance 是函数内 import,必须核它真进包了) ----
@@ -110,7 +126,7 @@ def main() -> int:
     if failures:
         print("FAIL: 包内不是最新版代码 →", failures)
         return 1
-    print("PASS: 包内后端代码包含 最新版(v0.9.21)全部新增符号")
+    print("PASS: 包内后端代码包含 最新版(v0.9.22)全部新增符号")
     return 0
 
 

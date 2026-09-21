@@ -78,6 +78,16 @@ for pkg in ("patchright", "playwright", "playwright_stealth", "numpy"):
 # 内置轻量抓取器(降级用)也需要这两个
 hiddenimports += ["httpx", "httpcore", "h11"]
 
+# v0.9.22 系统托盘:pystray 在函数里动态挑后端,静态分析看不见(与轻量版同理)
+try:
+    d, b, h = collect_all("pystray")
+    datas += d
+    binaries += b
+    hiddenimports += h
+except Exception:
+    pass
+hiddenimports += ["six"]
+
 common = dict(
     pathex=[ROOT],
     binaries=binaries,

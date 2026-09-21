@@ -656,6 +656,8 @@ try {
   .cap.multi{ background:rgba(94,184,173,.15); color:#2E8B7F; border:1px solid rgba(94,184,173,.4); }
   .cap.text{ background:var(--glass-lite); color:var(--text-3); border:1px solid var(--line-soft); }
   .cap.win{ background:rgba(109,156,255,.12); color:#4C74C9; border:1px solid rgba(109,156,255,.35); }
+  .cap.tog{ cursor:pointer; }
+  .cap.tog:hover{ filter:brightness(.94); text-decoration:underline; }
   .task-metric b{ color:var(--text-2); font-weight:800; }
   .task-metric.over b{ color:var(--warning); }
   .task-sep{ width:1px; height:12px; background:var(--line-soft); }
@@ -736,6 +738,13 @@ try {
   .overlay.show{ display:flex; }
   /* 确认弹窗要盖在普通弹窗(模型管理 z-index:50)之上,否则删除确认点不到 */
   #appConfirmOverlay{ z-index:80; }
+  /* 关窗确认框:由窗口 X 触发,盖在一切弹窗之上,否则可能被别的弹窗挡住 */
+  #closeOverlay{ z-index:90; }
+  .close-tip{ color:var(--text-2); font-size:13px; line-height:1.7; margin:2px 0 10px; }
+  .close-remember{ display:inline-flex; align-items:center; gap:6px;
+                   font-size:12.5px; color:var(--text-3); cursor:pointer;
+                   user-select:none; }
+  .close-remember input{ accent-color:var(--primary); cursor:pointer; }
   .dialog{ width:660px; max-width:92vw; background:var(--glass-strong);
            border:1px solid var(--line-soft); border-radius:var(--r-l); padding:18px;
            box-shadow:var(--shadow);
@@ -1321,6 +1330,20 @@ try {
     <div class="btns">
       <button class="b-no" id="btnAppCancel">取消</button>
       <button class="b-yes" id="btnAppOk">确定</button>
+    </div>
+  </div>
+</div>
+<!-- 点窗口 X:最小化到托盘 / 退出应用 / 不再询问(v0.9.22,对齐用户给的截图) -->
+<div class="overlay" id="closeOverlay">
+  <div class="dialog" style="width:440px">
+    <h3>退出引路学长?</h3>
+    <p class="close-tip">「最小化到托盘」= 窗口收进右下角托盘,正在跑的任务继续在后台干,
+      双击托盘图标就能叫回来;「退出应用」= 关掉所有任务与进程。</p>
+    <label class="close-remember"><input type="checkbox" id="closeRemember">不再询问</label>
+    <div class="btns">
+      <button class="b-no" id="btnCloseCancel">取消</button>
+      <button class="b-always" id="btnCloseHide">最小化到托盘</button>
+      <button class="b-yes" id="btnCloseExit">退出应用</button>
     </div>
   </div>
 </div>
@@ -2260,6 +2283,7 @@ window.__gcodeEvent = function (e) {
       break;
     case "session_metrics":       // 会话切换模型后立即刷新整块面板
       taskMetrics = e; renderTaskMetrics(e);
+      visionOn = !!e.vision;      // 换了模型=换了看图能力,提示口径要跟上
       loadReasoning();            // 模型换了,思考能力可能不同
       break;
     case "reasoning":             // 思考档位变化(本地切换/切模型归默认)
@@ -2267,6 +2291,9 @@ window.__gcodeEvent = function (e) {
       break;
     case "compacted":
       toast(`上下文已压缩:${e.before} → ${e.after} 条消息`);
+      break;
+    case "close_request":         // 点了窗口 X:后端已拦下关闭,由这里问去向
+      showCloseDialog();
       break;
     case "info":
       toast(e.text);
@@ -2505,6 +2532,31 @@ $("btnAppCancel").addEventListener("click", () => {
   $("appConfirmOverlay").classList.remove("show");
   appConfirmCb = null;
 });
+
+/* ---------------- 关窗去向(v0.9.22:托盘 + 不再询问) ----------------
+   点窗口 X 时后端已经把这个关闭动作拦下来(FormClosing e.Cancel=True),
+   推一条 close_request 让这里问去向;答复通过 close_choice 交回去。
+   没有这个 API 的环境(网页版、托盘接管失败)不弹这个框 —— 那边 X 就是退出。 */
+function showCloseDialog() {
+  $("closeRemember").checked = false;
+  $("closeOverlay").classList.add("show");
+}
+function answerClose(action) {
+  $("closeOverlay").classList.remove("show");
+  const remember = !!$("closeRemember").checked;
+  if (!window.pywebview || !pywebview.api || !pywebview.api.close_choice) {
+    if (action === "exit") window.close();     // 兜底:没有桥就直接关页面
+    else toast("当前环境没有托盘,无法最小化", true);
+    return;
+  }
+  pywebview.api.close_choice(action, remember).then(r => {
+    if (r && r.ok === false) { toast(r.msg || "操作失败", true); return; }
+    if (action === "hide" && remember) toast("已收进托盘。想改回来:右键托盘图标选「点 X 时先问我」");
+  }).catch(e => toast("操作失败:" + String(e).slice(0, 60), true));
+}
+$("btnCloseCancel").addEventListener("click", () => answerClose("cancel"));
+$("btnCloseHide").addEventListener("click", () => answerClose("hide"));
+$("btnCloseExit").addEventListener("click", () => answerClose("exit"));
 
 /* ---------------- 模型管理:供应商 + 供应商里的模型清单(v0.9.13) ---------------- */
 /* 一个供应商 = 一个接口地址 + 一个密钥 + 一串模型(每个可单独启停)。
@@ -2879,9 +2931,27 @@ function renderTaskMetrics(m) {
   taskMetrics = m;
   const knownWin = m.known && m.context_window;
   $("tmName").textContent = m.model || "—";
+  const forced = !!m.vision_forced;
+  const canToggle = !!(window.pywebview && window.pywebview.api
+                       && window.pywebview.api.set_vision);
+  const vis = (m.vision === undefined) ? !!m.supports_vision : !!m.vision;
   $("tmCaps").innerHTML =
-    `<span class="cap ${m.supports_vision ? "multi" : "text"}">${m.supports_vision ? "多模态" : "纯文本"}</span>`
+    `<span class="cap ${vis ? "multi" : "text"}${canToggle ? " tog" : ""}"`
+    + (canToggle ? ' id="tmVision"' : "")
+    + ` title="${vis ? (m.supports_vision ? "该模型支持看图:图片会编码进消息"
+                                          : "手动打开的看图:点一下关掉")
+                      : "能力表没登记这个模型能看图,默认只给文件路径;点一下可强制发图"}">`
+    + (vis ? (m.supports_vision ? "多模态" : "多模态·手动") : "纯文本") + "</span>"
     + (knownWin ? `<span class="cap win">${fmtCtx(m.context_window)}</span>` : "");
+  if (canVisionToggle) {
+    $("tmVision").addEventListener("click", () => {
+      if (m.supports_vision) { toast("该模型本身支持看图,不用手动开"); return; }
+      pywebview.api.set_vision(!forced).then(r => {
+        if (!r || r.ok === false) { toast((r && r.msg) || "设置失败", true); return; }
+        visionOn = !!r.vision;
+      }).catch(e => toast("设置失败:" + String(e).slice(0, 60), true));
+    });
+  }
   const cons = Number(m.consumed) || 0;
   $("tmConsumed").innerHTML = `任务消耗 <b>${fmtTok(cons)}</b>`;
   const used = Number(m.context_tokens) || 0;
@@ -2988,28 +3058,32 @@ let reasoningState = null;
 function renderReasoning(r) {
   reasoningState = r;
   const btn = $("thinkBtn"), menu = $("thinkMenu");
-  if (!r || !r.visible) {           // 能力表没有的模型:不显示按钮
+  if (!r || !r.visible) {           // 拿不到快照(老配置/网页版):不显示按钮
     btn.style.display = "none";
     menu.classList.remove("show");
     return;
   }
   btn.style.display = "";
-  btn.disabled = !!r.disabled;
+  const fixed = r.kind === "fixed";
+  const unknown = r.kind === "hidden";   // 能力表没登记:按钮在,但点不动
+  btn.disabled = !!(fixed || unknown);
   const labels = { default: "默认", off: "关闭", low: "低", high: "高", max: "最高", on: "开启" };
-  const cur = r.disabled ? "开启"
+  const cur = fixed ? "开启"
+    : unknown ? "跟随服务"
     : (labels[r.choice] || r.choice || "默认");
   $("thinkLabel").textContent = "思考 · " + cur;
-  btn.title = r.disabled ? "该模型固定开启思考"
-    : "思考档位:默认=跟随服务端;关闭=直接回答;低/高=思考深度";
-  menu.innerHTML = r.disabled
-    ? '<div class="tmenu-hint">该模型固定开启思考,不可调节</div>'
-    : (r.options || []).map(o =>
+  btn.title = r.hint || "思考档位:默认=跟随服务端;关闭=直接回答;低/高=思考深度";
+  const hint = r.hint ? `<div class="tmenu-hint">${esc(r.hint)}</div>`
+    + (unknown ? '<div class="tmenu-hint">想手动调节:在模型管理里改用已登记思考档位的模型(如 deepseek 家族)</div>' : "")
+    : "";
+  menu.innerHTML = (fixed || unknown) ? hint
+    : hint + (r.options || []).map(o =>
       `<div class="trow${o.value === r.choice ? " on" : ""}" data-v="${o.value}">
          <span class="tname">${esc(o.label)}</span>
          <span class="twin">${o.value === "default" ? "跟随服务" :
                               o.value === "off" ? "不思考" : "思考深度 " + o.label}</span>
        </div>`).join("");
-  if (!r.disabled) {
+  if (!fixed && !unknown) {
     menu.querySelectorAll(".trow").forEach(row => {
       row.addEventListener("click", (ev) => {
         ev.stopPropagation();
@@ -3644,7 +3718,25 @@ ctxMenu.addEventListener("click", (e) => {
   else if (act === "undo") document.execCommand("undo");
   else if (act === "redo") document.execCommand("redo");
   else if (act === "paste") {
-    // 优先异步剪贴板读文本;拿不到(权限/环境)再退回 execCommand("paste")
+    const pasteImage = () => {
+      // 剪贴板里是截图/图片:交给和拖拽同一条上传链路
+      if (!navigator.clipboard || !navigator.clipboard.read) {
+        document.execCommand("paste"); return;
+      }
+      navigator.clipboard.read().then(list => {
+        const job = [];
+        for (const it of list || []) {
+          const t = (it.types || []).find(x => x.startsWith("image/"));
+          if (t) job.push(it.getType(t).then(b => {
+            const ext = t.split("/")[1].replace("jpeg", "jpg");
+            return new File([b], `粘贴图片-${Date.now()}.${ext}`, { type: t });
+          }));
+        }
+        if (!job.length) { document.execCommand("paste"); return; }
+        Promise.all(job).then(files => uploadDroppedFiles(files, "正在读取剪贴板里的图片…"));
+      }).catch(() => document.execCommand("paste"));
+    };
+    // 优先异步剪贴板读文本;没有文本(或是图片)再走图片分支
     if (navigator.clipboard && navigator.clipboard.readText) {
       navigator.clipboard.readText().then(txt => {
         if (txt) {
@@ -3653,15 +3745,52 @@ ctxMenu.addEventListener("click", (e) => {
           el.setSelectionRange(s + txt.length, s + txt.length);
           el.dispatchEvent(new Event("input"));
           ok();
-        }
-      }).catch(() => document.execCommand("paste"));
-    } else document.execCommand("paste");
+        } else pasteImage();
+      }).catch(pasteImage);
+    } else pasteImage();
   }
   hideCtxMenu();
 });
 
-/* ---------------- 拖拽文件进对话框(v0.9.19) ----------------
-   取本地绝对路径在 WebView2 里不可靠,改用 FileReader 读字节交给后端落 uploads/。 */
+/* ---------------- 拖拽 / 粘贴文件进对话框 ----------------
+   v0.9.19 拖拽,v0.9.22 粘贴图片(截图直接 Ctrl+V)。
+   取本地绝对路径在 WebView2 里不可靠,一律用 FileReader 读字节交给后端落 uploads/。 */
+function uploadDroppedFiles(files, label) {
+  if (!window.pywebview || !pywebview.api || !pywebview.api.add_dropped_attachments) {
+    return;                              // 网页版不开放本地文件上传
+  }
+  if (busy) { toast("有任务正在进行中", true); return; }
+  if (editing) { toast("编辑重发时不支持新增附件,请先取消编辑", true); return; }
+  const list = Array.from(files || []);
+  if (!list.length) return;
+  const read = (f) => new Promise((res) => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      const buf = fr.result; const u8 = new Uint8Array(buf); let bin = "";
+      for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+      res({ name: f.name, b64: btoa(bin) });
+    };
+    fr.onerror = () => res(null);
+    fr.readAsArrayBuffer(f);
+  });
+  toast(label || "正在读取文件…");
+  Promise.all(list.map(read)).then(res => {
+    const items = res.filter(Boolean);
+    if (!items.length) { toast("文件读取失败", true); return; }
+    return pywebview.api.add_dropped_attachments(JSON.stringify(items)).then(r => {
+      if (!r.ok) { toast(r.msg, true); return; }
+      if (r.errors && r.errors.length) toast(r.errors.join("; "), true);
+      const got = r.items || [];
+      if (!got.length) return;
+      attachments = attachments.concat(got);
+      renderAttachments();
+      if (!visionOn && got.some(a => a.kind === "image"))
+        toast("当前模型未登记看图能力,图片先以文件路径提供;"
+              + "点任务面板那个「纯文本」标签可强制发图");
+    });
+  }).catch(e => toast("上传失败:" + String(e).slice(0, 60), true));
+}
+
 (function () {
   const box = document.querySelector(".box");
   if (!box) return;
@@ -3677,36 +3806,35 @@ ctxMenu.addEventListener("click", (e) => {
   box.addEventListener("drop", (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault(); depth = 0; box.classList.remove("dragover");
-    if (!pywebview.api.add_dropped_attachments) return;  // 网页版不开放拖拽上传
-    if (busy) { toast("有任务正在进行中", true); return; }
-    if (editing) { toast("编辑重发时不支持新增附件,请先取消编辑", true); return; }
-    const files = Array.from(e.dataTransfer.files || []);
-    if (!files.length) return;
-    const read = (f) => new Promise((res) => {
-      const fr = new FileReader();
-      fr.onload = () => {
-        const buf = fr.result; const u8 = new Uint8Array(buf); let bin = "";
-        for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
-        res({ name: f.name, b64: btoa(bin) });
-      };
-      fr.onerror = () => res(null);
-      fr.readAsArrayBuffer(f);
+    uploadDroppedFiles(e.dataTransfer.files, "正在读取拖入的文件…");
+  });
+})();
+
+/* 粘贴图片(Ctrl+V 截图 / 微信贴图)。浏览器只会把剪贴板图片命名成 image.png,
+   这里补一个带时间戳与真实扩展名的文件名,免得 uploads/ 里全是同名文件。 */
+(function () {
+  const el = $("input");
+  if (!el) return;
+  const stamp = () => {
+    const d = new Date(), p = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  };
+  el.addEventListener("paste", (e) => {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    const imgs = Array.from(dt.files || []).filter(f => f && (f.type || "").startsWith("image/"));
+    if (!imgs.length) return;            // 纯文本:交回浏览器原生粘贴
+    e.preventDefault();
+    const named = imgs.map((f, i) => {
+      const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+      const keep = f.name && f.name !== "image.png";
+      try {
+        return new File([f], keep ? f.name
+          : `粘贴图片-${stamp()}${imgs.length > 1 ? "-" + (i + 1) : ""}.${ext}`,
+          { type: f.type });
+      } catch (_) { return f; }           // 老内核没有 File 构造器:用原名也要能传
     });
-    toast("正在读取拖入的文件…");
-    Promise.all(files.map(read)).then(list => {
-      const items = list.filter(Boolean);
-      if (!items.length) { toast("文件读取失败", true); return; }
-      pywebview.api.add_dropped_attachments(JSON.stringify(items)).then(r => {
-        if (!r.ok) { toast(r.msg, true); return; }
-        if (r.errors && r.errors.length) toast(r.errors.join("; "), true);
-        const got = r.items || [];
-        if (!got.length) return;
-        attachments = attachments.concat(got);
-        renderAttachments();
-        if (!visionOn && got.some(a => a.kind === "image"))
-          toast("当前模型不支持直接看图,图片会以文件路径提供给模型");
-      });
-    });
+    uploadDroppedFiles(named, "正在读取粘贴的图片…");
   });
 })();
 

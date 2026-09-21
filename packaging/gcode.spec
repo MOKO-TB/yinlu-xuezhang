@@ -66,6 +66,20 @@ hiddenimports += ["bs4", "soupsieve", "httpx", "httpcore", "h11", "websockets"]
 # (python-pptx/python-docx 靠它们),这里只补四个纯 Python 包,增量约 10MB。
 hiddenimports += ["pptx", "docx", "openpyxl", "pypdf"]
 
+# v0.9.22 系统托盘:pystray 按平台在**函数里**动态挑后端(`from . import _win32`),
+# 静态分析只看得见 `import pystray` 那一行 —— 漏了后端就是"托盘图标创建失败",
+# 而托盘起不来时关窗会退回直接退出(见 minicode/tray.py),症状很隐蔽。
+# 用 collect_all 连 _util.win32 一起收;pystray 0.19 在 Windows 只用 ctypes + six,
+# 不需要 pywin32。
+try:
+    d, b, h = collect_all("pystray")
+    datas += d
+    binaries += b
+    hiddenimports += h
+except Exception:
+    pass
+hiddenimports += ["six", "minicode.tray"]
+
 # 不要把 crawl4ai/patchright/playwright 加回来:浏览器内核 270MB+、驱动 100MB,
 # 便携包放不下(会把 79MB 的 zip 撑到 500MB)。抓取用上面的内置轻量抓取器,
 # 看真实页面用 minicode/browser.py 的 CDP 路线(只需 websockets)。

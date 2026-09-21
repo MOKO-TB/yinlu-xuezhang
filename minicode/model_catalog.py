@@ -187,6 +187,10 @@ def session_metrics(agent, session, config, llm_override: dict | None) -> dict:
         "model": model,
         "capabilities": capabilities(model),
         "supports_vision": info["supports_vision"],
+        # 真正决定是否发图的那个:v0.9.22 起按模型能力判定,面板上的"强制看图"
+        # 只是把 config.vision 这个总开关打开(能力表没登记的自定义模型用得上)。
+        "vision": bool(info["supports_vision"] or getattr(config, "vision", False)),
+        "vision_forced": bool(getattr(config, "vision", False)),
         "known": info["known"],
         "context_window": window,
         "context_tokens": used,

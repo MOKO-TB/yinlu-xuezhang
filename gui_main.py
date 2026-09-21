@@ -1,7 +1,9 @@
 """引路学长 GUI 入口:pywebview 窗口 + 共享核心引擎。
 
 用法: python gui_main.py
-点 X 直接退出应用(无系统托盘、不留后台进程)。
+点 X 会先问一句:最小化到托盘(任务继续在后台跑)还是退出应用;
+在确认框里勾了「不再询问」以后按偏好直接执行。退出时关掉所有会话与
+MCP 子进程,不留后台进程。托盘接管失败的老环境仍退回"点 X 直接退出"。
 """
 import os
 import time
@@ -9,6 +11,7 @@ import time
 import webview
 
 from minicode import APP_NAME
+from minicode import tray
 from minicode import workspace as ws
 from minicode.config import ensure_config
 from minicode.gui_bridge import create_app
@@ -108,6 +111,33 @@ def _enable_native_context_menu() -> None:
     _log_warning("等待 WebView2 就绪超时,原生右键菜单未开启(不影响其他功能)")
 
 
+def install_tray(ui) -> bool:
+    """窗口原生对象就绪后接管关闭动作:点 X 变成"最小化到托盘 / 退出应用"。
+
+    与右键菜单同一个套路 —— `window.native`(BrowserForm)要等 WebView2 起来
+    才有,所以这里也轮询最多 10 秒。接管失败就退回老行为(X 直接退出),
+    只在 tray.log 留一行原因,绝不能因为托盘起不来而让窗口打不开。
+    """
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            windows = getattr(webview, "windows", None) or []
+            if windows and tray.install(windows[0], ui) is not None:
+                return True
+        except Exception as e:
+            tray.log(f"接管关窗失败: {type(e).__name__}: {e}")
+            return False
+        time.sleep(0.25)
+    tray.log("等待窗口就绪超时,未接管关闭动作(X 仍等于退出)")
+    return False
+
+
+def post_startup(ui) -> None:
+    """webview.start 的回调(独立线程):补开右键菜单 + 接管关窗。"""
+    _enable_native_context_menu()
+    install_tray(ui)
+
+
 def main() -> None:
     config = ensure_config()  # 未配置也照常开窗,界面内给出警示
     # 工作区:上次选的那个(workspaces.json 里的 current)优先,没有/失效才用
@@ -145,8 +175,8 @@ def main() -> None:
     proactive.start_class_loop(bridge)   # 课前到点提醒:独立的 5 分钟细轮询
 
     try:
-        # func 在 GUI 线程启动后于独立线程执行:用来补开 WebView2 的原生右键菜单
-        webview.start(_enable_native_context_menu, debug=False)
+        # func 在 GUI 线程启动后于独立线程执行:补开 WebView2 右键菜单 + 接管关窗
+        webview.start(post_startup, (ui,), debug=False)
     finally:
         # 关掉所有会话与 MCP 子进程,不留孤儿(多会话后台任务也一并停)
         try:

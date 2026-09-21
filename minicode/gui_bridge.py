@@ -35,7 +35,8 @@ from minicode.memory import (
 from minicode.llm import LLMClient
 from minicode.library import catalog_health, health_notice
 from minicode.model_catalog import session_metrics
-from minicode.paths import APP_DIR, SESSIONS_DIR, resource_path
+from minicode.paths import (APP_DIR, SESSIONS_DIR, diagnostics as paths_diagnostics,
+                            resource_path)
 from minicode.permission import MODE_LABELS, PERMISSION_MODES
 from minicode.sandbox import SandboxState, classify_path, policy_from_raw, policy_to_raw
 from minicode.session import (Session, export_filename as session_export_name,
@@ -187,6 +188,14 @@ class PublicApi:
     def set_reasoning_choice(self, choice: str) -> dict:
         """切换当前会话的思考档位(默认/关闭/低/高)。"""
         return self._b.set_reasoning_choice(choice)
+
+    def set_vision(self, on: bool) -> dict:
+        """强制开关"给模型发图":能力表没登记的自定义模型用得上。"""
+        return self._b.set_vision(on)
+
+    def close_choice(self, action: str, remember: bool = False) -> dict:
+        """关窗确认框:action = hide(最小化到托盘) / exit(退出应用)。"""
+        return self._b.close_choice(action, remember)
 
     def get_recent_projects(self) -> dict:
         """侧栏「项目」面板:最近工作区 + 当前(给任务栏下面那块工作区面板)。"""
@@ -444,7 +453,9 @@ class Bridge:
             "memory_user_count": len(mem_load_file(global_memory_path())),
             "mcp_servers": self._mcp_summary(),
             "sandbox": self._sandbox_info(),
-            "vision": bool(self.config.vision),
+            "vision": self._vision_on(fallback_model=self.config.model),
+            "vision_forced": bool(self.config.vision),
+            "paths": paths_diagnostics(),
             "campus_map": campus_map_data(),
             # 馆藏库自检:共享给同学后「图书馆搜书用不了」的头号原因就是库没装全
             # (1.3 GB 的大文件)。启动就把结论一并下发给界面,不用等搜书失败。
@@ -805,7 +816,7 @@ class Bridge:
             fell_back = chosen.name
             self.config.active_provider_id = BUILTIN_PROVIDER_ID
 
-        save_config(self.config_path, self.config)
+        self._persist_config()
         self._apply_active_provider()
         # 实时同步(v0.9.11):任务面板的可切列表/能力标签直接吃这份配置,
         # 不推的话用户在模型管理里加完模型,面板要等切会话才看得到(p1/p2)。
@@ -832,7 +843,7 @@ class Bridge:
             if not target.enabled_models():
                 return {"ok": False, "msg": f"「{target.name}」没有启用的模型"}
         self.config.set_active_provider(provider_id)
-        save_config(self.config_path, self.config)
+        self._persist_config()
         self._apply_active_provider()
         # 跟 save_providers 同理:面板立刻跟上新的全局模型(p1/p2 实时同步)
         for r in self._runners.values():
@@ -1049,6 +1060,62 @@ class Bridge:
         m["ok"] = True
         return m
 
+    def _persist_config(self) -> bool:
+        """把配置写回 config.json;写不进去时说清原因,绝不静默丢改动。
+
+        安装版被装进只读目录(以管理员身份安装 → Program Files)时,这里
+        原本会抛 OSError:前端的 promise 直接 reject,用户只看到"操作失败",
+        下次启动配好的 Key 又没了 —— 典型的"保存不了但也不知道为什么"。
+        """
+        try:
+            save_config(self.config_path, self.config)
+            return True
+        except OSError as e:
+            self.ui.push("info", text=(
+                f"⚠ 配置没能写入 {self.config_path}(目录不可写?{type(e).__name__})。"
+                "本次改动只在当前窗口有效,重启会丢失。"
+                "建议改用绿色便携版(整个目录放 D 盘),或重装到用户目录。"))
+            return False
+
+    def _vision_on(self, runner: SessionRunner | None = None,
+                   fallback_model: str = "") -> bool:
+        """当前会话能不能真把图片编码进消息(base64 data URL)。
+
+        v0.9.21 之前只看 `config.vision` 那个总开关 —— 而它**没有任何设置入口**,
+        只有手改 config.json 才打得开,所以"选了视觉模型仍说不能看图"。现在按
+        会话实际在用的模型查能力表(探测结果优先,静态目录兜底),配置里的开关
+        退化成"人工强制打开"。
+        """
+        model = self._active_model_name(runner) or fallback_model
+        try:
+            from minicode.model_catalog import lookup
+            capable = bool(lookup(model)["supports_vision"])
+        except Exception:
+            capable = False
+        return capable or bool(self.config.vision)
+
+    def set_vision(self, on: bool) -> dict:
+        """强制开关:能力表没登记的自定义模型,用户知道它能看图时手动打开。
+
+        只影响"要不要把图片压成 base64 塞进消息",不改模型本身;关掉后
+        退回"只给文件路径"的老行为。
+        """
+        self.config.vision = bool(on)
+        self._persist_config()
+        for r in self._runners.values():
+            self.ui.push("session_metrics", session=r.key, **session_metrics(
+                r.agent, r.session, self.config, r.llm_override))
+        self.ui.push("info", text="已" + ("开启" if on else "关闭")
+                     + "强制发图:图片" + ("会编码进消息给模型看"
+                                          if on else "按模型能力判定是否编码进消息"))
+        return {"ok": True, "vision": self._vision_on(),
+                "vision_forced": bool(self.config.vision)}
+
+    def close_choice(self, action: str, remember: bool = False) -> dict:
+        """关窗确认框的答复(见 minicode.tray)。"""
+        from minicode import tray
+        return tray.close_choice(action, bool(remember))
+
     def _apply_active_provider(self) -> None:
         """供应商/密钥变更后重建共享 LLM 客户端并同步给当前会话。"""
         self._shared_llm = LLMClient(self.config)
@@ -1065,7 +1132,8 @@ class Bridge:
         runner = self._current
         if runner.busy:
             return {"ok": False, "msg": "当前会话有任务正在进行中"}
-        content = build_content(text, atts, bool(self.config.vision)) if atts else None
+        content = (build_content(text, atts, self._vision_on(runner))
+                   if atts else None)
         runner.thread = threading.Thread(target=self._run_task,
                                          args=(runner, text, content), daemon=True)
         runner.thread.start()
@@ -1134,7 +1202,7 @@ class Bridge:
             return {"ok": False, "msg": "沙箱未启用"}
         state.policy.enabled = bool(enabled)
         self.config.sandbox = policy_to_raw(state.policy)
-        save_config(self.config_path, self.config)
+        self._persist_config()
         self.ui.push("info", text=f"沙箱已{'开启' if enabled else '关闭'} · {state.describe()}")
         return {"ok": True, "sandbox": self._sandbox_info()}
 
@@ -1348,7 +1416,7 @@ class Bridge:
         from minicode.permission import MODE_LABELS, PERMISSION_MODES
         if mode in PERMISSION_MODES:
             self.config.permission_mode = mode
-            save_config(self.config_path, self.config)
+            self._persist_config()
             self.ui.push("info",
                          text=f"权限模式已切换为「{MODE_LABELS[mode]}」({mode})")
             return {"ok": True, "permission_mode": mode}

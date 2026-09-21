@@ -109,7 +109,9 @@ def write_user_files(dist: Path) -> None:
                   "kb-gaps.jsonl", "kb-candidates.jsonl", "message-feedback.jsonl",
                   # v0.9.18 个人数据与本机缓存:课表属于使用者本人,天气缓存是构建机坐标的
                   "schedule.json", "weather-cache.json", "reminders.json",
-                  "notice-watch.json", "injection-events.log"):
+                  "notice-watch.json", "injection-events.log",
+                  # v0.9.22 关窗偏好与托盘诊断日志(本机状态,不外发)
+                  "close-pref.json", "tray.log"):
         (dist / _name).unlink(missing_ok=True)
     # v0.9.21:候选审核把人工核实的知识写进 app_path('kb')/reviewed.json;
     # 构建机上若试用过「并入」,那份文件含本机问答,不能随包发给别人。
@@ -159,7 +161,13 @@ def write_user_files(dist: Path) -> None:
         "10. 会话留档在 sessions/;技能放 skills/(SKILL.md 格式);知识库放 kb/;\n"
         "   长期记忆在 memory/MEMORY.md。\n"
         "   注:选了别处的工作区后,上面这些(以及附件、计划)都跟随工作区走,\n"
-        "   只有 config.json 与会话留档 sessions/ 留在程序目录。\n",
+        "   只有 config.json 与会话留档 sessions/ 留在程序目录。\n"
+        "11. 点窗口右上角 X 会先问一句:「最小化到托盘」= 窗口收进右下角托盘,\n"
+        "   正在跑的任务继续在后台干,双击托盘图标叫回窗口;「退出应用」= 真的退出。\n"
+        "   勾了「不再询问」以后想改回来:右键托盘图标选「点 X 时先问我」。\n"
+        "12. 安装版如果被装进只读目录(安装时用了管理员权限 → Program Files),\n"
+        "   程序数据会自动改存到 %LOCALAPPDATA%\\引路学长,配好的模型 Key 一样不会丢;\n"
+        "   想确认数据存在哪,看那个目录里有没有 config.json 即可。\n",
         encoding="utf-8",
     )
 

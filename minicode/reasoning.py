@@ -12,8 +12,9 @@ model_catalog.py 里登记过的模型与本项目实际会发请求的编码策
 ``extra_body.thinking = {"type": "enabled"|"disabled"}`` 控制开关,
 ``extra_body.reasoning_effort = low|high|max`` 控制强度(缺省开启、
 effort 默认档随服务)。因此这里对 deepseek 家族统一用
-``thinking_object_effort`` 策略;没登记的模型退回 hidden —— 界面上
-不显示思考按钮,也绝不往请求里塞思考参数,以免兼容端点直接报 400。
+``thinking_object_effort`` 策略;没登记的模型退回 hidden —— **界面上按钮照旧
+显示但置灰**,并说明"跟随服务端默认",同时绝不往请求里塞思考参数,以免兼容
+端点直接报 400(v0.9.21 之前是直接藏掉按钮,用户误以为安装包缺功能)。
 
 未知模型不猜:能力表没有的一律 hidden。新增模型时在 REASONING_CAPABILITIES
 里登记,或给 model_catalog 的同族加前缀规则。
@@ -85,16 +86,29 @@ def get_capability(model_name: str) -> ReasoningCapability:
 
 
 def reasoning_snapshot(model_name: str, choice: str = "default") -> dict:
-    """给界面的能力快照:visible 控制按钮显隐,options 带中文标签。"""
+    """给界面的能力快照:kind 三态 + options(中文标签)+ hint(为什么不能调)。
+
+    三态语义(v0.9.22 改了第一态):
+    - ``hidden``  这台服务上这个模型没登记过思考能力。**按钮照样显示但置灰**,
+      鼠标上去说明"跟随服务端默认"。以前是直接藏起来,结果用户以为装好的
+      版本少了功能(p1:安装版没有思考按钮),其实是免安装版正好用了
+      deepseek 家族。按钮在,解释就在。
+    - ``fixed``   模型固定思考,不可关(如 deepseek-reasoner)。
+    - ``effort``  有档位可选。
+    """
     cap = get_capability(model_name)
     fixed = cap.kind == "fixed"
+    unknown = cap.kind == "hidden"
     choice = str(choice or "default")
     if fixed:
         choice = "on"          # 固定思考的模型给个"开启"展示位
     return {
         "kind": cap.kind,
-        "visible": cap.kind != "hidden",
-        "disabled": fixed,
+        "visible": True,
+        "disabled": fixed or unknown,
+        "hint": (f"模型 {model_name or '未选择'} 未登记思考档位能力,"
+                 "将跟随服务端默认行为") if unknown else
+                ("该模型固定开启思考,不可调节" if fixed else ""),
         "choice": choice if choice in cap.options or fixed or choice == "default"
                   else "default",
         "options": [{"value": v, "label": LABELS[v]} for v in cap.options],

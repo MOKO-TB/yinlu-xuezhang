@@ -537,6 +537,99 @@ def test_send_task_with_vision_sends_content_parts(config, tmp_path):
     assert any(p.get("type") == "image_url" for p in content)
 
 
+def _png(tmp_path, name="a.png"):
+    from PIL import Image
+    src = tmp_path / name
+    Image.new("RGB", (30, 30), (1, 2, 3)).save(src)
+    return src
+
+
+def test_vision_follows_model_capability_without_config_flag(config, tmp_path):
+    """选了带视觉的模型就能发图。
+
+    v0.9.21 的坑:发图只看 `config.vision`,而那个开关在界面上**没有任何入口**
+    (只有手改 config.json 才打得开),于是"选了视觉模型仍说不能看图"。
+    """
+    src = _png(tmp_path)
+    config.providers[0].model = "kimi-k2.6"
+    assert config.vision is False                 # 用户从没打开过任何开关
+
+    bridge, _, session = make(config, tmp_path, FakeLLM([AssistantTurn(text="看过")]))
+    assert bridge._vision_on() is True
+
+    atts = [save_attachment(tmp_path, src)]
+    assert bridge.send_task("看图", json.dumps([a.to_dict() for a in atts]))["ok"]
+    assert wait_until(lambda: not bridge._busy)
+
+    content = next(m for m in session.messages if m.get("role") == "user")["content"]
+    assert isinstance(content, list)
+    assert any(p.get("type") == "image_url" for p in content)
+    assert config.vision is False                 # 能力判定不去篡改总开关
+
+
+def test_text_only_model_still_sends_paths(config, tmp_path):
+    """没登记视觉能力的模型继续只给路径清单 —— 不把上 MB 的 base64 塞进请求。"""
+    src = _png(tmp_path)
+    bridge, _, session = make(config, tmp_path, FakeLLM([AssistantTurn(text="ok")]))
+    assert bridge._vision_on() is False           # test-model 不在能力表里
+
+    atts = [save_attachment(tmp_path, src)]
+    assert bridge.send_task("看图", json.dumps([a.to_dict() for a in atts]))["ok"]
+    assert wait_until(lambda: not bridge._busy)
+
+    content = next(m for m in session.messages if m.get("role") == "user")["content"]
+    assert isinstance(content, str)
+    assert "[附件]" in content
+
+
+def test_set_vision_forces_images_and_persists(config, tmp_path):
+    """手动强制:自己知道这个模型能看图(能力表没登记的网关模型)时点一下就行。"""
+    src = _png(tmp_path)
+    bridge, window, session = make(config, tmp_path,
+                                   FakeLLM([AssistantTurn(text="a"),
+                                            AssistantTurn(text="b")]))
+
+    r = bridge.set_vision(True)
+    assert r["ok"] and r["vision"] is True and r["vision_forced"] is True
+    metrics = window.of_type("session_metrics")[-1]
+    assert metrics["vision"] is True and metrics["vision_forced"] is True
+    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["vision"] is True
+
+    assert bridge.send_task("看图",
+                            json.dumps([a.to_dict() for a in
+                                        [save_attachment(tmp_path, src)]]))["ok"]
+    assert wait_until(lambda: not bridge._busy)
+    content = next(m for m in session.messages if m.get("role") == "user")["content"]
+    assert isinstance(content, list)              # 纯文本模型也被强制编码成图片
+
+    assert bridge.set_vision(False)["vision"] is False
+    assert bridge._vision_on() is False           # 关掉后回到按能力判定
+
+
+def test_persist_config_failure_tells_the_user(config, tmp_path, monkeypatch):
+    """装进只读目录时不能静默丢改动:说清"配置没能写入"以及怎么办。"""
+    import minicode.gui_bridge as gb
+
+    def boom(path, cfg):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(gb, "save_config", boom)
+    bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+
+    assert bridge.set_vision(True)["ok"] is True   # 本次窗口内仍然生效
+    tips = [e for e in window.of_type("info") if "配置没能写入" in e.get("text", "")]
+    assert tips and "重启会丢失" in tips[0]["text"]
+
+
+def test_close_choice_without_tray_is_honest(config, tmp_path, monkeypatch):
+    """接管失败(网页版/非 Windows)时给出可操作的说明,不假装收进了托盘。"""
+    from minicode import tray
+    monkeypatch.setattr(tray, "_CONTROLLER", None)
+    bridge, _, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    r = bridge.close_choice("hide")
+    assert r["ok"] is False and "退出" in r["msg"]
+
+
 def test_send_task_ignores_attachments_outside_workspace(config, tmp_path):
     bridge, _, session = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
     outside = tmp_path.parent / "secret.txt"

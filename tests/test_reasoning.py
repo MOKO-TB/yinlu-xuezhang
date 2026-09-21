@@ -51,9 +51,15 @@ def test_snapshot_shape_and_labels():
 
 
 def test_snapshot_hidden_and_fixed():
-    assert rz.reasoning_snapshot("glm-5.2")["visible"] is False
+    # v0.9.22:未登记的模型不再把按钮藏掉(用户会当成安装包缺功能),
+    # 改成"看得见但点不动 + 一句为什么"。
+    unknown = rz.reasoning_snapshot("glm-5.2")
+    assert unknown["visible"] is True and unknown["disabled"] is True
+    assert unknown["kind"] == "hidden" and "未登记" in unknown["hint"]
+    assert unknown["options"] == []
     fixed = rz.reasoning_snapshot("deepseek-reasoner")
     assert fixed["visible"] is True and fixed["disabled"] is True
+    assert "固定开启" in fixed["hint"]
 
 
 def test_snapshot_keeps_valid_choice_only():
@@ -244,6 +250,6 @@ def test_bridge_set_permission_mode_and_reasoning(config, tmp_path, monkeypatch)
 
     # 思考档位:桥上读取快照与切换
     snap = bridge.get_reasoning()
-    assert snap["ok"] and snap["visible"] is False   # 测试模型不在能力表
+    assert snap["ok"] and snap["visible"] and snap["disabled"] is True   # 测试模型不在能力表
     bad = bridge.set_reasoning_choice("high")
     assert bad["ok"] is False                        # hidden 模型拒绝设置
