@@ -117,7 +117,8 @@
   /* ---------------- 隐藏所有者专属控件 ---------------- */
   var css = [
     "#btnMemory", "#btnSandbox", "#btnUndo", "#btnAttach", "#perm", "#btnSkills",
-    "#btnSchedule",
+    // 计划面板:plans/plan.md 在老板自己的工作区里,访客点开只会拿到一句拒绝
+    "#btnSchedule", "#btnPlan",
   ].join(",") + "{display:none !important}";
   function injectCss() {
     var style = document.createElement("style");

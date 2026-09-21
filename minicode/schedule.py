@@ -26,6 +26,7 @@ from pathlib import Path
 from minicode.paths import app_path
 
 SCHEDULE_FILE = "schedule.json"
+PREV_FILE = "schedule.prev.json"   # save 覆盖前的旧版(undo 的唯一依据)
 DEFAULT_WEEKS = "1-25"          # 没写周次默认全学期(可改文件),不默认"全周无课"
 
 _WEEKDAY_MAP = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 7, "天": 7}
@@ -35,6 +36,10 @@ _SINGLE_RE = re.compile(r"(?<![\d-])(\d{1,2})(?![\d-])")
 
 def state_path() -> Path:
     return app_path(SCHEDULE_FILE)
+
+
+def prev_path() -> Path:
+    return app_path(PREV_FILE)
 
 
 # ---------------------------------------------------------------- 加载/保存
@@ -49,6 +54,26 @@ def load() -> dict | None:
             and isinstance(data.get("term_start"), str)):
         return data
     return None
+
+
+def _snapshot_prev() -> bool:
+    """把当前 schedule.json 原样备份成 schedule.prev.json(覆盖前的 undo 点)。
+
+    只留一份:导入是"整表换新版",留历史栈没人会去翻,反而把个人数据
+    多一份副本。备份失败**不拦保存**(同学要的是课表存进去,不是备份)。
+    """
+    try:
+        raw = state_path().read_text(encoding="utf-8")
+    except OSError:
+        return False                       # 本来就没有课表:没有可备份的东西
+    if not raw.strip():
+        return False
+    try:
+        state_path().parent.mkdir(parents=True, exist_ok=True)
+        prev_path().write_text(raw, encoding="utf-8")
+    except OSError:
+        return False
+    return True
 
 
 def save(term_start: str, classes: list) -> tuple[bool, str]:
@@ -76,26 +101,85 @@ def save(term_start: str, classes: list) -> tuple[bool, str]:
     data = {"term_start": term.isoformat(),
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "classes": ok_rows}
+    old = load()                                   # 比对与备份都要在覆盖之前拿旧版
+    diff = compare(ok_rows, term_start, data=old) if old else None
+    has_prev = _snapshot_prev()
     try:
         state_path().parent.mkdir(parents=True, exist_ok=True)
         state_path().write_text(
             json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     except OSError as exc:
         return False, f"错误: 课表写不进去({type(exc).__name__})"
-    msg = f"课表已存(共 {len(ok_rows)} 门课,第 1 周周一 = {term.isoformat()})。"
+    msg = f"课表已存(共 {len(ok_rows)} 条课,第 1 周周一 = {term.isoformat()})。"
+    if diff:
+        msg += f" 与上一版比对:{diff['msg']}\n{describe_changes(diff)}"
     if dropped:
         msg += f" {len(dropped)} 条没通过校验被跳过: {'; '.join(dropped[:5])}"
     msg += (" 之后问「今天/明天有什么课」不用再看图;课有变动重新 save 覆盖即可。"
-            " 现在把结果向同学确认一遍(尤其被跳过的条目)。")
+            + ("旧版已备份,发现不对可用 schedule(action=undo) 换回来。" if has_prev else "")
+            + " 现在把结果(尤其变动清单和被跳过的条目)向同学确认一遍。")
     return True, msg
 
 
 def clear() -> str:
+    if not load():
+        return "没有已登记的课表,不用清。"
+    has_prev = _snapshot_prev()
     try:
         state_path().unlink(missing_ok=True)
     except OSError as exc:
         return f"错误: 删除课表失败({type(exc).__name__})"
-    return "课表已清除。"
+    return ("课表已清除。" + ("清掉的这一版还留着备份,后悔了用 schedule(action=undo) 换回来。"
+                          if has_prev else ""))
+
+
+def undo() -> tuple[bool, str]:
+    """把课表换回上一版(schedule.json ↔ schedule.prev.json 对调)。
+
+    为什么对调而不是删掉备份:同学点"回滚"之后很可能改主意"那还是用新的",
+    对调让这一步同样可逆,而且任何一版都不会因为一次误点而消失。
+    """
+    try:
+        raw_prev = prev_path().read_text(encoding="utf-8")
+    except OSError:
+        return False, ("没有可回滚的上一版课表(只有覆盖保存/清除课表时才会留下备份)。")
+    try:
+        cur_raw = state_path().read_text(encoding="utf-8")
+    except OSError:
+        cur_raw = ""
+    restored = _valid(raw_prev)
+    if restored is None:
+        return False, "错误: 上一版备份读不懂(坏文件不回滚,当前课表保持不动)。"
+    try:
+        state_path().write_text(raw_prev, encoding="utf-8")
+        if cur_raw:
+            prev_path().write_text(cur_raw, encoding="utf-8")
+        else:
+            prev_path().unlink(missing_ok=True)     # 回滚到"本来没有课表"
+    except OSError as exc:
+        return False, f"错误: 回滚写不进去({type(exc).__name__})"
+    return True, (f"课表已换回上一版(共 {len(restored)} 条课,"
+                  f"第 1 周周一 = {_term_of(raw_prev)})。"
+                  " 再点一次 undo 可换回刚才那一版。")
+
+
+def _valid(raw: str) -> list | None:
+    """校验一份课表 JSON;能用作课表则返回 classes,否则 None。"""
+    try:
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if (isinstance(data, dict) and isinstance(data.get("classes"), list)
+            and isinstance(data.get("term_start"), str)):
+        return data["classes"]
+    return None
+
+
+def _term_of(raw: str) -> str:
+    try:
+        return str(json.loads(raw).get("term_start"))
+    except Exception:
+        return "?"
 
 
 # ---------------------------------------------------------------- 解析辅助
@@ -176,6 +260,193 @@ def _normalize_class(raw) -> dict | None:
     if weeks is None and row["weeks"]:
         row["weeks"] = DEFAULT_WEEKS      # 解析不动周次:按全学期上课,漏报好于误报
     return row
+
+
+# ---------------------------------------------------------------- 变动比对
+
+COMPARE_FIELDS = ("day", "periods", "location", "weeks", "start_time")
+_FIELD_LABEL = {"day": "星期", "periods": "节次", "location": "地点",
+                "weeks": "周次", "start_time": "钟点"}
+
+
+def _identity(row: dict) -> tuple:
+    """一门课的身份键 = 课名 + 教师(空白去掉,大小写不管)。
+
+    为什么用课名+教师而不是整行哈希:调课/换教室时同学认识的还是"那门课",
+    比对要报的是"高等数学换到 B101 了",不是"删了一条又加了一条"。
+    """
+    squish = lambda v: re.sub(r"\s+", "", str(v or "")).casefold()
+    return (squish(row.get("name")), squish(row.get("teacher")))
+
+
+def _cmp_value(field: str, value):
+    """字段归一成"可比"的形式。归一不了就退回原串(绝不因认不出而判成相同)。"""
+    raw = str(value if value is not None else "").strip()
+    if field == "day":
+        d = _norm_day(raw)
+        return d if d is not None else raw
+    if field in ("periods", "weeks"):
+        if not raw:
+            return "" if field == "periods" else frozenset(parse_weeks(DEFAULT_WEEKS) or set())
+        span = parse_weeks(raw)                       # "1-16" 与 "1-8,9-16" 等价
+        return frozenset(span) if span else re.sub(r"\s+", "", raw)
+    if field == "start_time":
+        hm = _parse_hm(raw)
+        return f"{hm[0]:02d}:{hm[1]:02d}" if hm else raw
+    return re.sub(r"\s+", "", raw)
+
+
+def _similarity(old: dict, new: dict) -> int:
+    """两条同课条目的相似度 = 有几个字段一致(配对时挑最像的那条)。"""
+    return sum(1 for f in COMPARE_FIELDS
+               if _cmp_value(f, old.get(f)) == _cmp_value(f, new.get(f)))
+
+
+def _pair_group(olds: list, news: list) -> tuple[list, list, list]:
+    """同一门课(同身份键)的旧条目与新条目配对 → [(old, new), ...] + 剩下谁。
+
+    先按"星期+节次"完全相同配对(那几乎肯定是同一条记录),剩下的贪心配对:
+    越像的越先配 —— 这样"周三第 3-4 节换到第 5-6 节"报成 1 条变动,
+    而不是"取消 1 条 + 新增 1 条"让同学以为课少了。
+    """
+    pairs: list[tuple] = []
+    left_o, left_n = list(olds), list(news)
+    for o in list(left_o):
+        hit = next((n for n in left_n
+                    if _cmp_value("day", o.get("day")) == _cmp_value("day", n.get("day"))
+                    and _cmp_value("periods", o.get("periods"))
+                    == _cmp_value("periods", n.get("periods"))), None)
+        if hit is not None:
+            pairs.append((o, hit))
+            left_o.remove(o)
+            left_n.remove(hit)
+    while left_o and left_n:
+        best = max(((o, n, _similarity(o, n)) for o in left_o for n in left_n),
+                   key=lambda t: t[2])
+        if best[2] == 0:
+            break                       # 一点不像:宁可报成一取消一新增,不硬凑
+        pairs.append((best[0], best[1]))
+        left_o.remove(best[0])
+        left_n.remove(best[1])
+    return pairs, left_o, left_n
+
+
+def compare(classes, term_start: str = "", data: dict | None = None) -> dict:
+    """新课表 vs 本机已存课表 → 新增/取消/变动/不变(整表覆盖前先让同学看清差在哪)。
+
+    `data` 传 None 时读本机文件;向导在第②步就调这个函数(那时还没落盘),
+    所以比对**不写任何文件**。weeks/periods 按解析后的周次集合比,
+    "1-16" 与 "1-8,9-16" 不算变动;认不出的写法退回原串比较。
+    """
+    if data is None:
+        data = load()
+    old_rows = [r for r in ((data or {}).get("classes") or []) if isinstance(r, dict)]
+    new_rows = [r for r in (_normalize_class(x) for x in (classes or []))
+                if r is not None]
+    old_by: dict[tuple, list] = {}
+    new_by: dict[tuple, list] = {}
+    for r in old_rows:
+        old_by.setdefault(_identity(r), []).append(r)
+    for r in new_rows:
+        new_by.setdefault(_identity(r), []).append(r)
+
+    added: list[dict] = []
+    removed: list[dict] = []
+    changed: list[dict] = []
+    unchanged = 0
+    for key in set(old_by) | set(new_by):
+        olds, news = old_by.get(key, []), new_by.get(key, [])
+        if not olds:
+            added.extend(news)
+            continue
+        if not news:
+            removed.extend(olds)
+            continue
+        pairs, left_o, left_n = _pair_group(olds, news)
+        removed.extend(left_o)
+        added.extend(left_n)
+        for o, n in pairs:
+            fields = {f: {"old": o.get(f, ""), "new": n.get(f, "")}
+                      for f in COMPARE_FIELDS
+                      if _cmp_value(f, o.get(f)) != _cmp_value(f, n.get(f))}
+            if fields:
+                changed.append({"name": n.get("name", ""), "teacher": n.get("teacher", ""),
+                                "fields": fields, "old": o, "new": n})
+            else:
+                unchanged += 1
+    old_term = str((data or {}).get("term_start") or "").strip()
+    new_term = str(term_start or "").strip()
+    term_diff = {"old": old_term, "new": new_term,
+                 "changed": bool(new_term and new_term != old_term)}
+
+    counts = {"added": len(added), "removed": len(removed),
+              "changed": len(changed), "unchanged": unchanged,
+              "new_courses": len({k[0] for k in new_by}),
+              "old_courses": len({k[0] for k in old_by})}
+    out = {"ok": True, "has_existing": bool(data), "registered": bool(data),
+           "added": added, "removed": removed, "changed": changed,
+           "unchanged": unchanged, "counts": counts,
+           "term_start": term_diff, "can_undo": prev_path().exists(),
+           "msg": _diff_msg(counts, term_diff, bool(data))}
+    return out
+
+
+def _diff_msg(c: dict, term: dict, has_old: bool) -> str:
+    """给模型和界面共用的一行人话。没有旧课表时不报"新增 N 条"(首次导入)。"""
+    if not has_old:
+        return (f"本机还没有课表,这是首次导入(共 {c['added'] + c['unchanged'] + c['changed']}"
+                f" 条、约 {c['new_courses']} 门)。")
+    bits = []
+    if c["added"]:
+        bits.append(f"新增 {c['added']} 条")
+    if c["changed"]:
+        bits.append(f"变动 {c['changed']} 条")
+    if c["removed"]:
+        bits.append(f"取消 {c['removed']} 条")
+    if not bits:
+        msg = f"与本机课表完全一致({c['unchanged']} 条逐字相同)"
+    else:
+        if c["unchanged"]:
+            bits.append(f"不变 {c['unchanged']} 条")
+        msg = ";".join(bits)
+    if term["changed"]:
+        msg += f";第 1 周周一 {term['old']} → {term['new']}"
+    return msg + "。"
+
+
+def _slot_label(row: dict) -> str:
+    days = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "日"}
+    d = days.get(row.get("day"), "?")
+    bits = [f"周{d}", str(row.get("periods") or "?") + "节"]
+    if row.get("start_time"):
+        bits.append(str(row["start_time"]))
+    if row.get("location"):
+        bits.append(str(row["location"]))
+    return " ".join(bits)
+
+
+def describe_changes(res: dict, limit: int = 8) -> str:
+    """compare() 结果 → 给模型看的明细行(每门课一行,超长截断)。
+
+    为什么要明细:光有"变动 3 条"模型还是会向同学反问"哪三条",
+    不如一次把旧→新摆出来,让它照着念。
+    """
+    lines: list[str] = []
+    for ch in res.get("changed") or []:
+        who = ch["name"] + (f"({ch['teacher']})" if ch.get("teacher") else "")
+        fs = ";".join(f"{_FIELD_LABEL.get(k, k)} {v['old'] or '未填'}→{v['new'] or '未填'}"
+                      for k, v in (ch.get("fields") or {}).items())
+        lines.append(f"· 变动 {who}:{fs}")
+    for r in res.get("added") or []:
+        lines.append(f"· 新增 {r.get('name')}:{_slot_label(r)}"
+                     + (f" {r['weeks']}周" if r.get("weeks") else ""))
+    for r in res.get("removed") or []:
+        lines.append(f"· 取消 {r.get('name')}:{_slot_label(r)}")
+    if not lines:
+        return "· 与本机课表逐条一致,没有变动。"
+    head = "\n".join(lines[:limit])
+    return head + (f"\n· …另有 {len(lines) - limit} 处没列出(向导里能看全)"
+                   if len(lines) > limit else "")
 
 
 # ---------------------------------------------------------------- 查询
@@ -289,7 +560,8 @@ def view(today: date | None = None) -> dict:
     """
     data = load()
     if not data:
-        return {"registered": False}
+        # 没课表也要报有没有备份:清错了的那一回,「换回上一版」是唯一的退路
+        return {"registered": False, "can_undo": prev_path().exists()}
     today = today or date.today()
     wk = week_of(today, data)
 
@@ -305,6 +577,7 @@ def view(today: date | None = None) -> dict:
     return {"registered": True,
             "term_start": data.get("term_start"),
             "updated_at": data.get("updated_at"),
+            "can_undo": prev_path().exists(),
             "week": wk,
             "today": _pack(today),
             "tomorrow": _pack(today + timedelta(days=1)),
@@ -367,16 +640,28 @@ def schedule_prompt_section() -> str:
                  "课表里没写钟点的课只报第几节,不编具体时间(作息以教务处为准)。")
     lines.append("- 同学说课表变了(调课/换教室)→ 更新后重新 schedule(action=save) 覆盖;"
                  "要清空用 action=clear。别把整张课表原文贴回回答里,答当前问题即可。")
+    lines.append("- save 会自动报出与上一版的差(新增/变动/取消),把这几条**点名**念给同学听;"
+                 "只想先看差、先不落盘用 action=diff;存错了用 action=undo 换回上一版。")
     return "\n".join(lines) + "\n"
 
 
 def schedule(ctx, action: str = "save", term_start: str = "",
              classes=None, when: str = "") -> str:
-    """schedule 工具处理器:save(存课表)/show(看某天)/clear(清空)。"""
+    """schedule 工具处理器:save(存)/show(看某天)/diff(比对不写)/undo(回滚)/clear(清空)。"""
     action = (action or "save").strip().lower()
     if action == "save":
         ok, msg = save(term_start, classes or [])
         return msg if not ok else msg
+    if action == "diff":
+        data = load()
+        if not data:
+            return ("本机还没有课表,谈不上比对 —— 直接 action=save 存下来就是首次导入。")
+        if not (classes or []):
+            return "错误: diff 需要把要对比的 classes 一起传进来。"
+        res = compare(classes, term_start, data=data)
+        return ("比对结果(未写文件):" + res["msg"] + "\n" + describe_changes(res))
+    if action == "undo":
+        return undo()[1]
     if action == "show":
         data = load()
         if not data:

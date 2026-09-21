@@ -136,7 +136,7 @@ def test_tool_bad_action():
 # ---------------------------------------------------------------- 面板视图
 
 def test_view_before_registration():
-    assert schedule.view(date(2026, 9, 7)) == {"registered": False}
+    assert schedule.view(date(2026, 9, 7)) == {"registered": False, "can_undo": False}
 
 
 def test_view_shape_and_week_grid():
@@ -185,3 +185,168 @@ def test_upcoming_class_no_schedule():
     from datetime import datetime
     assert schedule.upcoming_class(datetime(2026, 9, 7, 7, 50)) is None
 
+
+
+# ---------------------------------------------------------------- 变动比对(v0.9.24)
+
+def _hi(**kw):
+    row = {"name": "高等数学", "day": 1, "periods": "1-2", "start_time": "08:00",
+           "weeks": "1-16", "location": "思齐楼B203", "teacher": "王老师的课"}
+    row.update(kw)
+    return row
+
+
+def test_compare_first_import_reports_no_changes():
+    res = schedule.compare([_hi()])               # 本机什么都没有
+    assert res["ok"] and res["has_existing"] is False
+    assert res["counts"]["added"] == 1 and res["counts"]["changed"] == 0
+    assert "首次导入" in res["msg"]
+
+
+def test_compare_identical_schedule_is_all_unchanged():
+    assert _save(classes=[_hi()])[0]
+    res = schedule.compare([_hi()])
+    assert res["has_existing"] and res["counts"]["unchanged"] == 1
+    assert not res["counts"]["added"] and not res["counts"]["removed"]
+    assert "完全一致" in res["msg"]
+
+
+def test_compare_weeks_written_differently_is_not_a_change():
+    """"1-16" 与 "1-8,9-16" 是同一串周次:写法不同不能报成"周次变动"。"""
+    assert _save(classes=[_hi(weeks="1-16")])[0]
+    res = schedule.compare([_hi(weeks="1-8,9-16")])
+    assert res["counts"] == {**res["counts"], "changed": 0, "unchanged": 1}
+
+
+def test_compare_period_and_time_normalisation():
+    """节次 "1-2" vs "01-02"、钟点 "8:00" vs "08:00" 同一回事,不算变动。"""
+    assert _save(classes=[_hi(periods="1-2", start_time="8:00")])[0]
+    res = schedule.compare([_hi(periods="01-02", start_time="08:00")])
+    assert res["counts"]["unchanged"] == 1 and res["counts"]["changed"] == 0
+
+
+def test_compare_room_change_is_one_change_with_old_and_new():
+    assert _save(classes=[_hi()])[0]
+    res = schedule.compare([_hi(location="思齐楼A101")])
+    assert res["counts"]["changed"] == 1
+    assert res["counts"]["added"] == 0 and res["counts"]["removed"] == 0
+    fields = res["changed"][0]["fields"]
+    assert fields["location"] == {"old": "思齐楼B203", "new": "思齐楼A101"}
+
+
+def test_compare_moved_class_pairs_instead_of_add_plus_remove():
+    """调课(星期+节次都变了,地点没变):报 1 条变动,不是"取消一条又新增一条"。"""
+    assert _save(classes=[_hi()])[0]
+    res = schedule.compare([_hi(day=3, periods="3-4")])
+    assert res["counts"]["changed"] == 1
+    assert res["counts"]["added"] == 0 and res["counts"]["removed"] == 0
+    assert set(res["changed"][0]["fields"]) == {"day", "periods"}
+
+
+def test_compare_unrelated_course_is_added_not_a_rename():
+    """两门课之间没有相似度可配:该分开报,不能硬凑成"变动"。"""
+    assert _save(classes=[_hi(name="高等数学", location="", weeks="1-8")])[0]
+    res = schedule.compare([_hi(name="线性代数", day=5, periods="7-8",
+                                start_time="", weeks="1-8", location="")])
+    assert res["counts"]["added"] == 1 and res["counts"]["removed"] == 1
+    assert res["counts"]["changed"] == 0
+
+
+def test_compare_per_slot_when_a_course_meets_twice():
+    """同一门课一周两上:两个时段各自配对,别把第二次上课误判成"新增"。"""
+    a, b = _hi(day=1, periods="1-2"), _hi(day=4, periods="1-2")
+    assert _save(classes=[a, b])[0]
+    res = schedule.compare([a, _hi(day=4, periods="3-4")])
+    assert res["counts"]["unchanged"] == 1 and res["counts"]["changed"] == 1
+    assert res["counts"]["added"] == 0 and res["counts"]["removed"] == 0
+
+
+def test_compare_reports_term_start_change():
+    assert _save(classes=[_hi()])[0]
+    res = schedule.compare([_hi()], term_start="2026-09-14")
+    assert res["term_start"] == {"old": "2026-09-07", "new": "2026-09-14",
+                                 "changed": True}
+    assert "2026-09-14" in res["msg"]
+
+
+def test_compare_writes_nothing():
+    """比对是"看",不是"存":调用前后本机文件必须一模一样。"""
+    assert _save(classes=[_hi()])[0]
+    before = schedule.state_path().read_text(encoding="utf-8")
+    schedule.compare([_hi(location="别处")])
+    assert schedule.state_path().read_text(encoding="utf-8") == before
+    assert not schedule.prev_path().exists()
+
+
+def test_describe_changes_lists_every_kind_once():
+    assert _save(classes=[_hi(), _hi(name="体育课", day=5, periods="7-8",
+                                     start_time="", location="")])[0]
+    res = schedule.compare([_hi(location="A101"),
+                            _hi(name="大学英语", day=2, periods="1-2",
+                                start_time="", location="", teacher="李老师")])
+    text = schedule.describe_changes(res)
+    assert "变动" in text and "新增" in text and "取消" in text
+    assert "体育课" in text and "大学英语" in text
+    assert "地点 思齐楼B203→A101" in text
+
+
+def test_save_reports_changes_and_keeps_backup():
+    assert _save(classes=[_hi()])[0]
+    ok, msg = schedule.save("2026-09-07", [_hi(location="思齐楼A101")])
+    assert ok and "与上一版比对" in msg and "变动 1 条" in msg
+    assert "思齐楼B203→思齐楼A101" in msg
+    assert schedule.prev_path().exists()
+
+
+def test_save_without_backup_stays_clean():
+    ok, msg = schedule.save("2026-09-07", [_hi()])
+    assert ok and "与上一版比对" not in msg
+    assert not schedule.prev_path().exists()       # 首次导入没有"上一版"
+
+
+def test_undo_swaps_back_and_is_repeatable():
+    assert _save(classes=[_hi(location="B203")])[0]
+    assert schedule.save("2026-09-07", [_hi(location="A101")])[0]
+    assert [c["location"] for c in schedule.load()["classes"]] == ["A101"]
+    ok, msg = schedule.undo()
+    assert ok and [c["location"] for c in schedule.load()["classes"]] == ["B203"]
+    assert "上一版" in msg
+    # 再点一次换回刚才那版(对调,不销毁任何一版)
+    assert schedule.undo()[0]
+    assert [c["location"] for c in schedule.load()["classes"]] == ["A101"]
+
+
+def test_undo_without_backup_is_honest():
+    ok, msg = schedule.undo()
+    assert not ok and "没有可回滚" in msg
+
+
+def test_undo_refuses_corrupt_backup():
+    assert _save(classes=[_hi()])[0]
+    assert schedule.save("2026-09-07", [_hi(location="A101")])[0]
+    schedule.prev_path().write_text("{坏文件", encoding="utf-8")
+    ok, msg = schedule.undo()
+    assert not ok and "读不懂" in msg
+    assert [c["location"] for c in schedule.load()["classes"]] == ["A101"]   # 原样不动
+
+
+def test_clear_keeps_backup_and_undo_restores_it():
+    assert _save(classes=[_hi()])[0]
+    assert "备份" in schedule.clear()
+    assert schedule.load() is None
+    assert schedule.view()["registered"] is False and schedule.view()["can_undo"] is True
+    assert schedule.undo()[0]
+    assert [c["name"] for c in schedule.load()["classes"]] == ["高等数学"]
+
+
+def test_tool_diff_and_undo_actions():
+    assert schedule.schedule(None, action="save", term_start="2026-09-07",
+                             classes=[_hi()])
+    out = schedule.schedule(None, action="diff", classes=[_hi(location="A101")])
+    assert "比对结果(未写文件)" in out and "变动" in out
+    assert schedule.load()["classes"][0]["location"] == "思齐楼B203"   # diff 不落盘
+    assert "错误" in schedule.schedule(None, action="diff")            # 没带 classes
+    assert schedule.schedule(None, action="save", term_start="2026-09-07",
+                             classes=[_hi(location="A101")])
+    assert "换回上一版" in schedule.schedule(None, action="undo")
+    assert schedule.load()["classes"][0]["location"] == "思齐楼B203"

@@ -38,6 +38,17 @@
       "enabled": false,
       "read_only": false,
       "description": "示例:文件系统 MCP 服务器(需 Node.js;enabled 改 true 即启用)"
+    },
+    {
+      "id": "remote-demo",
+      "transport": "http",
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "${MY_MCP_TOKEN}"
+      },
+      "enabled": false,
+      "read_only": true,
+      "description": "示例:只有网址的 MCP 服务器。transport 可写 http(新式 Streamable HTTP)或 sse(老式 HTTP+SSE),留空则是 command 启动的 stdio 服务器。密钥写成 ${环境变量名},发请求时才展开,不会以明文落进 config.json"
     }
   ]
 }

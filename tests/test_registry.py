@@ -8,7 +8,7 @@ def test_registry_contents():
                      "glob", "grep", "web_crawl", "web_search",
                      "browser_open", "browser_eval", "browser_snapshot",
                      "browser_click", "browser_fill", "browser_screenshot",
-                     "browser_close", "browser_status",
+                     "browser_close", "browser_status", "page_parse",
                      "use_skill", "plan",
                      "search_knowledge", "campus_calendar", "gpa_calc",
                      "kb_suggest", "library_search", "library_guide", "memory",
@@ -40,6 +40,7 @@ def test_read_only_flags():
         "browser_screenshot": False,
         "browser_close": False,
         "browser_status": True,
+        "page_parse": True,           # 只把页面上的表读成结构化文字,不写文件不驱动页面
         "use_skill": True,
         "search_knowledge": True,
         "campus_calendar": True,      # 校历查询:只读本地数据文件

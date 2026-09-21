@@ -775,3 +775,51 @@ def test_get_asset_serves_skill_images(config, tmp_path):
     # 防目录穿越
     assert not bridge.get_asset("../../secret.txt")["ok"]
     assert not bridge.get_asset("assets/missing.jpg")["ok"]
+
+
+# ---------------------------------------------------------------- 计划面板(v0.9.24)
+
+def test_get_plan_without_a_plan_offers_a_guide(config, tmp_path):
+    """没计划时不能回一张空表:前端要看 has_plan=False + path 才知道怎么引导。"""
+    bridge, _, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    r = bridge.get_plan()
+    assert r["ok"] and r["has_plan"] is False and r["steps"] == []
+    assert r["path"] == "plans/plan.md" and r["dispatch_text"] == ""
+
+
+def test_get_plan_reflects_the_workspace_file_with_flags(config, tmp_path):
+    """面板数据来自工作区那份文件:每步带 ready/blocked,顺带给派发文案。"""
+    from minicode import planning
+    bridge, _, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    ctx = planning.ToolContext(workspace=tmp_path, config=config)
+    planning._plan_write(ctx, "毕设排期", [
+        {"title": "定题"}, {"title": "写开题报告", "depends_on": [1]},
+        {"title": "做原型", "depends_on": [1]}])
+
+    r = bridge.get_plan()
+    assert r["ok"] and r["has_plan"] and r["goal"] == "毕设排期"
+    assert r["done"] == 0 and r["total"] == 3
+    assert r["ready"] == [1] and r["blocked"] == []
+    assert [s["ready"] for s in r["steps"]] == [True, False, False]
+    assert "第 1 步 定题" in r["dispatch_text"]
+
+
+def test_plan_writes_push_plan_changed_to_the_window(config, tmp_path):
+    """学长每写一次计划,界面要收到 plan_changed(带 session 标记),角标才会动。"""
+    from minicode import planning
+    bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    ctx = bridge._current.agent.ctx          # 真上下文:ui 是本会话的推送适配器
+    assert "计划已写入" in planning._plan_write(ctx, "毕设排期", [
+        {"title": "定题"}, {"title": "写开题报告", "depends_on": [1]}])
+    events = window.of_type("plan_changed")
+    assert len(events) == 1
+    assert events[0]["goal"] == "毕设排期" and events[0]["ready"] == [1]
+    assert events[0]["session"] == bridge._current.key
+
+    planning._plan_update(ctx, 1, "done")
+    events = window.of_type("plan_changed")
+    assert len(events) == 2 and events[-1]["done"] == 1 and events[-1]["ready"] == [2]
+    # 面板不会反过来改文件:读一次什么都不该变
+    before = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    bridge.get_plan()
+    assert (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8") == before

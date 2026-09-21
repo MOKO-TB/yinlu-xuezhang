@@ -20,8 +20,9 @@
 - **会话持久化**:每轮写入 `sessions/*.jsonl`;GUI 侧栏一键恢复,CLI `/resume`
 - **校园地图(肇庆校区,手绘版)**:用线下交付的手绘地图 + 36 张单栋标注图做"位置图"——问「图书馆在哪」「E栋怎么走」,agent 会把该建筑在手绘地图上框出来、并给出它的单栋标注图(整图 + 一个红框),面板支持滚轮缩放/拖动平移/点框看大图;也能**不用问模型自己找**:面板里有搜索框(支持 E栋、s5 这类俗称与「食堂」这类类别词,命中多处会全列出来让你挑)、图例上的类别徽章一点即筛(只看食堂/只看宿舍)、邻近建筑可点跳转、一键复制位置说明;首页首位的「🗺 打开校园地图」按钮点开即是地图并自动聚焦搜索框。**A栋~E栋在地图上是两栋楼(学思苑X / 集贤苑X座),工具会返回歧义并把候选都摆出来,绝不自作主张挑一个**。这份数据没有路网,所以只答"在哪、旁边是什么",不编路线与步行时间。数据是 `frontend/campus-index.json`(交付包索引副本),底图与建筑图由 `scripts/build_campus_assets.py` 从交付 PNG 生成
 - **权限确认解释"为什么"**:确认框顶部给出「这一步为什么要做 / 这一步会做什么 / 影响」——目的优先取模型填的 `reason`,没填就用同一轮它写的说明文字,再不行按命令形态做启发式解读(如"用 Python 读取并解析数据文件(一条命令里含多个步骤)"),并标出影响面(只读 / 会写文件 / 会联网 / 删除不可恢复 / bash 改动不在撤销范围)
-- **26 个内置工具**:`read_file` / `write_file` / `edit_file` / `bash` / `glob` / `grep` / `web_crawl` / `use_skill` / `plan` / `search_knowledge` / `library_search` / `library_guide` / `memory` + 地图 `map_find_place` / `map_show_list` / `map_highlight_building` / `map_drop_pin` / `map_clear` + 浏览器 `browser_open` / `browser_eval` / `browser_snapshot` / `browser_click` / `browser_fill` / `browser_screenshot` / `browser_close` / `browser_status`;另有 `task`(子代理派发,由应用装配层注入)
+- **35 个内置工具**:文件与命令 `read_file` / `write_file` / `edit_file` / `bash` / `py_script` / `glob` / `grep` + 联网 `web_crawl` / `web_search` + 浏览器 `browser_open` / `browser_eval` / `browser_snapshot` / `browser_click` / `browser_fill` / `browser_screenshot` / `browser_close` / `browser_status` / `page_parse`(把页面表格结构化) + 计划与技能 `plan` / `use_skill` + 知识与校园 `search_knowledge` / `kb_suggest` / `campus_calendar` / `gpa_calc` / `library_search` / `library_guide` + 个人数据 `memory` / `reminder` / `schedule` / `get_weather` + 地图 `map_find_place` / `map_show_list` / `map_highlight_building` / `map_drop_pin` / `map_clear`;另有 `task`(子代理派发,由应用装配层注入)
 - **计划依赖图**:`plans/plan.md` 的步骤可以声明 `depends_on`(文件里落成 `- 依赖: 1, 2`),写入时校验未知依赖/自依赖/环(不合法就不落盘);读计划时附一份「调度视图」——哪些步可执行(依赖已满足,可并行)、哪些被上游失败卡住(标 `[!]` 后下游自动判卡住,不会静默跳过)。老计划文件(无依赖行)照常读写
+- **GUI 计划面板**(v0.9.24):顶栏「🗂 计划」(带 `已完成/总数` 角标)打开后是进度条 + 「现在能动」与「被上游失败卡住」两栏 + 每步的依赖与备注;模型每 `plan(action=update)` 一次面板就自己动(`plan_changed` 推送)。**面板严格只读**——打勾仍由 plan 工具写文件,免得"文件即状态"变成两处真相;「↩ 派发到输入框」把「接着做哪几步」按依赖顺序填进输入框,用户过一眼再发(**刻意不并发派写子代理**:并发写会互相踩文件、确认门还会串到别的答案上)
 - **只读子代理并行派发**:一次要查多件互不相干的事时,`task` 的 `type` 与 `task` 都传数组就能并发(上限 4 个,报告按请求顺序合并)。**只对只读类型 explore/review 开放**——写类型并发会争抢同一条权限确认通道,混入会直接报错;并发时子代理的流式输出与工具卡片被静默(toast 与错误照常透传),避免几路 `text_delta` 在同一聊天区里互相穿插
 - **网页抓取**:`web_crawl` 抓网页/整站为 markdown(同域 BFS 跟链、限页限速),入库前自动去掉每页重复的导航/页脚;可选 to_kb 一键写入本地知识库 `kb/crawl-<域名>.json`,用 `kb_category`/`kb_tags` 打主题标签(检索时标签权重×2),由 search_knowledge 带来源网址检索。源码环境用 crawl4ai(真浏览器,能渲染 JS);**打包版自动切到内置轻量抓取器(httpx + BeautifulSoup)**,不带浏览器内核(否则 79MB 的包会涨到约 500MB),静态站点效果一致,需要 JS 的页面会明确提示(或改用下面的浏览器能力)
 - **浏览器能力(CDP 直连,不背浏览器内核)**:给 agent 装上"眼睛"——它能真的开一个浏览器看页面,而不只能抓静态 HTML。`browser_open` 返回 **JS 渲染完成后**的标题与正文(教务/通知页这类靠 JS 渲染的站点终于是真内容);`browser_eval` 在页面里跑一段 JS 精确取数(价格/表格/链接列表)或点按钮、滚动;**页面交互三件套**:`browser_snapshot` 列出页面上所有可见可交互元素(链接/按钮/输入框/下拉框,带序号与字段名,只读不弹确认),`browser_click` 按快照序号/按钮文字/CSS 选择器点击并自动回报点击后的页面状态(序号是 snapshot 在页面元素上打的临时标记——页面一变标记就失效,**永远不会点错元素**;页面上有多个同名按钮时拒绝盲点),`browser_fill` 按字段名批量填表单(name/id/占位符/aria/标签文字都认,下拉框按选项文字匹配、勾选框接受 true/false),文本框用「原生 setter + input/change 事件」写入——React/Vue 的受控组件也能感知到变化;可选 `submit=true` 全部填好后自动点提交,任何字段失败都不会提交半张表单;`browser_screenshot` 把页面截成 PNG 存进工作区,**图直接出现在对话里**(点图可放大);`browser_close` 收标签页。两条接入路线:**launch**(默认,零配置:自己找 Edge/Chrome 用独立 profile 起一个无窗口实例)与 **attach**(连用户自己开了远程调试的浏览器,**带他的登录态**,能看只看得到登录用户的页面)。**attach 只在显式 `mode="attach"` 或设了 `YINLUXS_CDP_URL` 时才用**——默认不动用户那个有几十个标签页和真实登录态的浏览器,对分发型程序太侵入,实测也更容易卡住(所以 auto 探到调试端口也会先走 launch,只有本机起不了浏览器时才拿 attach 兜底)。attach 的探测要**三级兜底**:`127.0.0.1:<port>/json/version` → `localhost:<port>` → **直接读用户目录里的 `DevToolsActivePort` 文件第二行**;实测本机 Edge 153 对 `/json/*` 一律返回 404,只有文件里那条 ws 路径连得上,只依赖 HTTP 探测就会永远报"没找到开着远程调试的浏览器"。且**探到端口不等于能用**(残留文件/端口被别的程序占),要真跑一次 `Browser.getVersion` 握手才算成立。靠纯 Python 的 `websockets` 说 CDP,所以轻量版安装包**不**需要 playwright 与 270MB 内核。安全三条:只允许 http/https(`file://`、`javascript:`、`chrome://` 一律拒);每个线程/会话/子代理**各自一个标签页**,并发不串台,已结束线程留下的页会被回收;网页版(对外只读)**不给浏览器工具**(可被用来打内网 + 在服务器上起浏览器)。终端 `/browser` 看当前能不能用、走的哪条路线
@@ -191,8 +192,12 @@ GUI 顶栏的「🛡 沙箱开/关」可随时切换(写回 config.json);CLI 用
 
 ## MCP 服务器
 
-支持接入任意[MCP](https://modelcontextprotocol.io)服务器(stdio 传输),外部工具会以
-`mcp_<服务器>_<工具>` 的名字挂进工具集,和内置工具一样被模型调用。
+支持接入任意[MCP](https://modelcontextprotocol.io)服务器,外部工具会以
+`mcp_<服务器>_<工具>` 的名字挂进工具集,和内置工具一样被模型调用。三种传输都支持:
+**stdio**(给 `command`,子进程按行收发)、**http**(Streamable HTTP:给 `url`,POST 过去,
+响应可能是 JSON 也可能是 `text/event-stream`,`Mcp-Session-Id` 会自动带上)、
+**sse**(老式 HTTP+SSE:`GET` 一条长流拿到 `endpoint` 事件后再 POST 到那条地址)。
+只有网址、没有启动命令的服务器从此也能连,而且**不额外依赖任何第三方库**(走标准库 `urllib`)。
 
 在 `config.json` 里配置(完整示例见 `config.example.json`):
 
@@ -205,14 +210,30 @@ GUI 顶栏的「🛡 沙箱开/关」可随时切换(写回 config.json);CLI 用
     "enabled": true,
     "read_only": false,
     "description": "文件系统"
+  },
+  {
+    "id": "remote-demo",
+    "transport": "http",
+    "url": "https://example.com/mcp",
+    "headers": { "Authorization": "${MY_MCP_TOKEN}" },
+    "enabled": true,
+    "read_only": true,
+    "description": "只有网址的服务器;密钥留在环境变量里,不写进 config.json"
   }
 ]
 ```
 
+`headers` 里的 `${VAR}` 在**发请求时**才展开(`MY_MCP_TOKEN` 从环境变量取),配置文件中不落明文;
+日志与报错里的 URL 一律**剥掉 query**,所以 token 不会顺着错误文案漏进对话。
+`transport` 留空即按 `command` 走 stdio;`url` 缺失、`file:` 协议、不认识的 transport 会被跳过并说明。
+
 | 字段 | 说明 | 默认 |
 |---|---|---|
 | `id` | 服务器标识,用于拼工具名(会规范化成字母数字下划线) | 必填 |
-| `command` / `args` | 启动命令,支持 `npx` / `uvx` / `python` 等 | 必填 |
+| `transport` | `stdio`(按 command 起子进程)/ `http` / `sse`;写 `streamable-http`、`http+sse` 等别名也认 | `stdio` |
+| `command` / `args` | 启动命令,支持 `npx` / `uvx` / `python` 等(**stdio 时必填**) | 空 |
+| `url` | 服务器地址(`http` / `sse` 时必填,只认 http/https) | 空 |
+| `headers` | 附加请求头(值支持 `${VAR}` 展开,发请求时才代入) | 空 |
 | `env` | 追加的环境变量(值支持 `%VAR%` / `$VAR` 展开) | 空 |
 | `enabled` | 关掉可保留配置不启动 | `true` |
 | `read_only` | 标记为只读 → 免确认直接执行;默认**需要用户确认** | `false` |
@@ -282,7 +303,7 @@ minicode/
 ├── app_setup.py    # CLI/GUI 共享装配:system prompt(含技能注入)+ Agent 构建
 ├── llm.py          # OpenAI 兼容流式调用 + 工具调用增量聚合 + 重试 + 本地代理绕行
 ├── skills.py       # SKILL.md 技能加载 + use_skill 工具处理器
-├── mcp.py          # MCP 客户端:stdio JSON-RPC / 工具发现 / 调用 / 进程回收
+├── mcp.py          # MCP 客户端:stdio / Streamable HTTP / HTTP+SSE 三种传输 + 工具发现 / 调用 / 进程回收
 ├── sandbox.py      # 沙箱策略:路径分级(工作区/外部/敏感)+ 命令管控 + 超时
 ├── workspace.py    # 工作区:选择校验(拒敏感目录)+ 最近列表持久化 + 启动回退
 ├── attachments.py  # 附件:落盘去重 / 图片压缩 / 多模态消息构造
@@ -412,7 +433,8 @@ python scripts/e2e_frozen.py       # 对 exe 做端到端验证
 
 ## 路线图(下一阶段)
 
-- [x] MCP 客户端(stdio,配置即用,连不上不阻塞启动)
+- [x] MCP 客户端(配置即用,连不上不阻塞启动);传输三种齐了(stdio / Streamable HTTP / HTTP+SSE,v0.9.24)
+      - 待做:`mcp_add_server` 让模型自助配置、预设模板库、断线重连与重试
 - [x] 长期记忆(用户偏好/项目约定,`memory/MEMORY.md`)
 - [x] 长期记忆整理:去重 / Dream 式归并,用户级全局记忆(`~/.yinluxs/memory/`)
 - [x] 子代理(`task` 工具):explore / implement / review 分工,**只读类型并行派发**(上限 4 个)

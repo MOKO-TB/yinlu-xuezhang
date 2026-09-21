@@ -11,8 +11,21 @@ PyInstaller 把纯 Python 模块压进 PYZ 归档(嵌在 exe 里),磁盘上看�
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
+
+
+def _src_version() -> str:
+    """版本号从源码里读,别在这份脚本里再抄一遍 —— 抄漏一次就是一句假绿的旧话。"""
+    p = Path(__file__).resolve().parent.parent / "minicode" / "__init__.py"
+    try:
+        m = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']',
+                      p.read_text(encoding="utf-8"), re.M)
+    except OSError:
+        return "?"
+    return m.group(1) if m else "?"
+
 
 # 每个模块要求存在的新增符号(v0.9.13:模型清单/导出搜索;v0.9.14:成长闭环/校历/绩点/搜索)
 TARGETS: dict[str, tuple[str, ...]] = {
@@ -29,7 +42,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "schedule_import_open", "schedule_import_read",
                             "schedule_import_model", "schedule_import_confirm",
                             "schedule_import_clear", "schedule_import_status",
-                            "_jw_flow", "get_onboarding", "dismiss_onboarding"),
+                            "_jw_flow", "get_onboarding", "dismiss_onboarding",
+                            # v0.9.24:计划面板数据源(只读 + 派发文案)
+                            "get_plan"),
     "minicode.model_probe": ("list_models", "explain_status", "remember"),
     # ---- v0.9.22:安装版可用性(数据目录写探针 + 诊断下发) ----
     "minicode.paths": ("_is_writable", "_local_state_dir", "diagnostics",
@@ -72,7 +87,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.schedule": ("parse_weeks", "classes_on", "next_class_note",
                           "schedule_prompt_section",
                           # v0.9.19:面板视图 + 课前到点提醒
-                          "view", "upcoming_class", "_parse_hm"),
+                          "view", "upcoming_class", "_parse_hm",
+                          # v0.9.24:覆盖前自动比对 + 换回上一版
+                          "compare", "undo", "describe_changes", "prev_path",
+                          "COMPARE_FIELDS"),
     "minicode.weather": ("weather_card", "umbrella_tip", "refresh_async",
                          "get_weather"),
     # ---- v0.9.19:拖拽上传(字节落盘,绕开 WebView2 拿不到本地路径) ----
@@ -88,7 +106,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # ---- v0.9.23:教务课表导入(整套新模块,漏收 = 点「导入课表」直接报错) ----
     "minicode.schedule_import": ("ImportFlow", "parse_grid", "summarize",
                                  "clear_login_state", "GRID_JS", "_norm_periods",
-                                 "MODEL_SYSTEM"),
+                                 "MODEL_SYSTEM",
+                                 # v0.9.24:通用取材 + 「先认版式再挑文法」那条路
+                                 "_parse_any", "page"),
+    # ---- v0.9.24:结构化解析从"只对着强智"泛化成独立一层(漏收 = 向导和 page_parse 都炸) ----
+    "minicode.site_parse": ("parse_page", "parse_qiangzhi_grid", "parse_generic_grid",
+                            "_entry_generic", "_entry_qiangzhi", "_weekday_header",
+                            "TABLE_JS", "page_parse", "_render_tool_result", "ROWS_CAP"),
     # ---- v0.9.23:首次运行向导 + 数据目录可视化 ----
     "minicode.onboarding": ("payload", "dismiss", "read", "STEPS", "PREF_FILE",
                             "reset"),
@@ -96,6 +120,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.browser": ("adopt_page", "page_frames", "eval_in_frame",
                          "read_frames", "ensure_visible", "_endpoint_port",
                          "FRAME_MAX_CHARS"),
+    # ---- v0.9.24:MCP 三种传输(stdio 之外只有网址的服务器也连得上) ----
+    "minicode.mcp": ("Transport", "StdioTransport", "HttpTransport", "SseTransport",
+                     "make_transport", "_iter_sse", "_safe_url", "_usable_url",
+                     "_norm_transport"),
+    # ---- v0.9.24:计划面板(漏收 = 顶栏「🗂 计划」点开永远说没计划) ----
+    "minicode.planning": ("plan_state", "dispatch_text", "notify_plan"),
 }
 
 
@@ -144,7 +174,7 @@ def main() -> int:
     if failures:
         print("FAIL: 包内不是最新版代码 →", failures)
         return 1
-    print("PASS: 包内后端代码包含 最新版(v0.9.23)全部新增符号")
+    print(f"PASS: 包内后端代码包含 最新版(v{_src_version()})全部新增符号")
     return 0
 
 

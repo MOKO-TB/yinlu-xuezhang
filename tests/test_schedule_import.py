@@ -355,3 +355,95 @@ def test_public_api_delegates_the_wizard_with_string_params():
     for n, params in sigs.items():
         for p in params:
             assert p.annotation is str, f"{n}({p.name}) 的参数该是 str,不是 {p.annotation}"
+
+
+# ---------------------------------------------------------------- 变动自动比对(v0.9.24)
+
+def _grid_json(grid):
+    return json.dumps(grid, ensure_ascii=False)
+
+
+def test_wizard_read_reports_first_import(grid):
+    """本机没课表时第②步要明说"首次导入",不要报一堆"新增 N 条"吓人。"""
+    r = si.ImportFlow(browser_mod=FakeBrowser(grid_json=_grid_json(grid))).read()
+    assert r["ok"] and r["diff"]["has_existing"] is False
+    assert "首次导入" in r["msg"]
+
+
+def test_wizard_read_shows_what_would_change(grid):
+    """已经存过表:第②步就得报出"换教室"这类差,再让人点覆盖。"""
+    assert schedule.save("2026-09-07", si.parse_grid(grid)["classes"])[0]
+    data = schedule.load()                       # 把已存的第一门课教室改掉
+    data["classes"][0]["location"] = "思齐楼Z999"
+    schedule.state_path().write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    r = si.ImportFlow(browser_mod=FakeBrowser(grid_json=_grid_json(grid))).read()
+    assert r["diff"]["has_existing"] is True
+    assert r["diff"]["counts"]["changed"] == 1
+    assert "变动 1 条" in r["msg"]
+
+
+def test_wizard_diff_never_writes(grid):
+    """比对全程只读:第②步之后盘上不该出现任何课表文件。"""
+    r = si.ImportFlow(browser_mod=FakeBrowser(grid_json=_grid_json(grid))).read()
+    assert r["ok"]
+    assert schedule.load() is None
+    assert not schedule.prev_path().exists()
+
+
+def test_wizard_survives_a_corrupt_local_schedule(grid):
+    """本机课表文件坏了也不能拦第②步:顶多退化成"没有可比的"。"""
+    schedule.state_path().parent.mkdir(parents=True, exist_ok=True)
+    schedule.state_path().write_text("{坏文件", encoding="utf-8")
+    r = si.ImportFlow(browser_mod=FakeBrowser(grid_json=_grid_json(grid))).read()
+    assert r["ok"] and r["diff"]["has_existing"] is False
+
+
+def test_wizard_reads_a_non_qiangzhi_timetable():
+    """学校不是强智也能走第②步:通用退路认出什么就报什么,并说明按哪条文法认的。"""
+    dump = {"url": "https://jw.example.edu/tb", "title": "学期课表", "selects": {},
+            "tables": [{"id": "", "cls": "", "rows": [
+                ["时间", "星期一", "星期二", "星期三", "星期四", "星期五"],
+                ["08:00-09:40\n第1-2节", "大学英语\n第1-2节\n1-16周\n主楼301\n王老师",
+                 "", "", "", ""]]}]}
+    r = si.ImportFlow(browser_mod=FakeBrowser(grid_json=_grid_json(dump))).read()
+    assert r["ok"] and r["stage"] == "ready"
+    assert r["adapter"] == "generic-table" and "generic-table" in r["msg"]
+    assert r["classes"][0]["name"] == "大学英语"
+    assert any("核一遍" in n for n in r["notes"])           # 通用退路要标出来
+
+
+def test_wizard_refuses_to_import_a_table_that_is_not_a_timetable():
+    """读到表格但不是课表(考试安排/书目):明说"这不是课表,我不替你存"。"""
+    dump = {"url": "https://jw.example.edu/ks", "title": "考试安排", "selects": {},
+            "tables": [{"id": "", "cls": "", "rows": [
+                ["考试科目", "时间", "考场"], ["高等数学", "9月30日 09:00", "思齐楼B203"]]}]}
+    r = si.ImportFlow(browser_mod=FakeBrowser(grid_json=_grid_json(dump))).read()
+    assert r["ok"] is False and r["stage"] == "not_timetable"
+    assert "不是课表" in r["msg"] and "page_parse" in r["msg"]
+    assert r["diff"] is None                                # 没课表可比,别装出"零变动"
+    assert schedule.load() is None and not schedule.prev_path().exists()
+
+
+def test_wizard_falls_back_to_the_model_when_the_timetable_is_unreadable():
+    """有星期列却一行课都读不出来:结构变了,该给模型整理那条退路。"""
+    dump = {"url": "u", "title": "t", "selects": {}, "tables": [{"id": "", "rows": [
+        ["时间", "星期一", "星期二", "星期三", "星期四", "星期五"],
+        ["08:00-09:40", "1-16周", "", "", "", ""]]}]}
+    r = si.ImportFlow(browser_mod=FakeBrowser(grid_json=_grid_json(dump))).read()
+    assert r["ok"] is False and r["stage"] == "parsed_failed"
+    assert "模型整理" in r["msg"] and r["unparsed"]
+
+
+def test_bridge_undo_returns_fresh_view():
+    """课表面板「换回上一版」:桥要把回滚后的视图一起回给前端。"""
+    from types import SimpleNamespace
+
+    from minicode.gui_bridge import Bridge
+    assert schedule.save("2026-09-07", [{"name": "高等数学", "day": 1,
+                                         "periods": "1-2", "location": "B203"}])[0]
+    assert schedule.save("2026-09-07", [{"name": "高等数学", "day": 1,
+                                         "periods": "1-2", "location": "A101"}])[0]
+    r = Bridge.schedule_undo(SimpleNamespace())
+    assert r["ok"] and r["schedule"]["registered"] is True
+    assert r["schedule"]["can_undo"] is True          # 对调后还能再换回去
+    assert schedule.load()["classes"][0]["location"] == "B203"

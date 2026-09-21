@@ -205,6 +205,7 @@ def test_owner_only_methods_refused(server):
                  "set_session_model", "export_session",
                  "get_token_usage",
                  "get_skills", "get_skill_body", "get_skill_channels", "add_skill",
+                 "get_plan",
                  "set_sandbox", "set_permission_mode", "consolidate_memory",
                  "pick_attachments"):
         status, payload = client.post(name, {})

@@ -4,7 +4,7 @@ from __future__ import annotations
 from minicode import growth
 from minicode import calendar as school_calendar
 from minicode import reminders
-from minicode import campus, gpa, kb, library, library_guide, memory, planning, schedule, skills, weather
+from minicode import campus, gpa, kb, library, library_guide, memory, planning, schedule, site_parse, skills, weather
 from minicode.tools import browser as browser_tools
 from minicode.tools import crawl, fs, search, shell
 from minicode.tools.base import Tool
@@ -355,6 +355,30 @@ def build_default_registry() -> list[Tool]:
             read_only=True,
         ),
         Tool(
+            name="page_parse",
+            description=(
+                "把**当前浏览器页面**里的表格结构化(读所有内嵌帧,不挑学校):"
+                "课表类表格直接拆成课程条目(课名/星期/节次/周次/地点/教师),"
+                "别的表(考试安排、书目、空教室、通知)会如实告诉你「这不是课表」,"
+                "并把原表的行列按文本一并给你 —— 不用再手写 browser_eval 去抠。"
+                "凡是校园系统里那张表要用 browser_eval 手写 JS 去抠的,先试这个 —— "
+                "它按版式识别,认得出的部分给你,认不出的行**原样列在 raw 里**,"
+                "你照着问同学,绝不要自己补。只读,不写任何文件、不替你存课表。"
+                "需要先 browser_open 打开页面(要登录的页面由用户自己在弹出窗口里登录)。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url_like": {"type": "string",
+                                 "description": "可选:只读 URL 含这个片段的帧(如 xskb),默认读所有帧"},
+                    "reason": {"type": "string", "description": "一句中文说明要解析哪一页、为什么"},
+                },
+            },
+            handler=site_parse.page_parse,
+            trust="external",
+            read_only=True,
+        ),
+        Tool(
             name="use_skill",
             description="读取一个技能的完整指导再行动。可用技能清单见系统提示词;接到与技能相关的任务时应先调用本工具。",
             parameters={
@@ -379,6 +403,8 @@ def build_default_registry() -> list[Tool]:
                 "失败的上游步骤标 status=failed,下游会被自动判为「被卡住」;"
                 "action=read:查看当前计划与调度视图(可执行/被卡住的步骤)。"
                 "接到多文件/多阶段的复杂任务时应先建计划。"
+                "写完不必反复 read 念给用户:桌面版顶栏「🗂 计划」会实时显示"
+                "每一步的状态与进度,提醒用户看那里即可。"
             ),
             parameters={
                 "type": "object",
@@ -612,14 +638,18 @@ def build_default_registry() -> list[Tool]:
                 "配合 schedule-helper 技能:把同学贴来的课表解析成条目后,问清「第 1 周周一是几月几号」"
                 "再 action=save 存下来(classes 每项 {name,day(1-7),periods,weeks(如 1-16 或 1-16(单周)),"
                 "start_time(课表里有才填),location,teacher});之后问「今天有什么课」直接照登记回答。"
-                "action=show 看某天课(when 传日期,默认今天);action=clear 清空。"
+                "action=show 看某天课(when 传日期,默认今天);action=diff 把 classes 与本机已存课表"
+                "比对(不写文件,先让同学看清新增/变动/取消);action=undo 换回上一版课表;"
+                "action=clear 清空。save 覆盖时会自动附上与上一版的变动清单,直接照着向同学念一遍。"
                 "课表里没写钟点的课只报第几节,绝不编具体时间。"
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["save", "show", "clear"],
-                               "description": "save=存/覆盖课表;show=看某天;clear=清空"},
+                    "action": {"type": "string",
+                               "enum": ["save", "show", "diff", "undo", "clear"],
+                               "description": "save=存/覆盖课表;show=看某天;diff=与已存课表比对(不写);"
+                                              "undo=回滚到上一版;clear=清空"},
                     "term_start": {"type": "string",
                                    "description": "save 用:第 1 周周一的日期(2026-09-07),向同学问清,不要猜"},
                     "classes": {"type": "array",

@@ -1,7 +1,10 @@
 """MCP(Model Context Protocol)客户端:把外部 MCP 服务器的工具挂进本机工具注册表。
 
 实现要点(对齐星瑶 Y-Code 的做法,按本项目的极简风格重写):
-- 传输:stdio,一行一个 JSON-RPC 2.0 报文(服务器日志走 stderr,不混进协议流);
+- 传输(v0.9.24 起三选一):
+    stdio —— 我们替它起进程,一行一个 JSON-RPC 报文(服务器日志走 stderr,不混进协议流);
+    http  —— Streamable HTTP:POST 到 url,响应可能是 JSON,也可能是 SSE 一条;
+    sse   —— 旧式 HTTP+SSE:GET 一条长流收消息(先给 endpoint),POST 发请求;
 - 生命周期:进程级长连接,启动时按配置**惰性宽容**连接——连不上只记日志跳过,
   绝不让一个坏配置把整个应用带崩;
 - 握手:initialize → notifications/initialized → tools/list;
@@ -10,16 +13,24 @@
 - 权限:MCP 工具默认**不是只读**——会走确认门;受信任服务器可在配置里标
   read_only: true 免确认。
 
+密钥的规矩(和模型 API Key 同一条):headers 的值写成 ${ENV} 形式即可,
+学长在读配置时展开 —— 这样密钥只留在环境变量里,不进 config.json。
+headers 与 URL 的查询串都不会出现在侧栏(tools_summary 只给 id/名字/工具数)
+或日志里(报错时地址会去掉 ?... 才落日志)。
+
 配置文件(config.json)示例::
 
     "mcp_servers": [
       {"id": "filesystem", "command": "npx",
        "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/data"],
-       "enabled": true, "read_only": false}
+       "enabled": true, "read_only": false},
+      {"id": "school-mcp", "transport": "http", "url": "https://mcp.school.edu/mcp",
+       "headers": {"Authorization": "Bearer ${SCHOOL_MCP_TOKEN}"}, "read_only": true}
     ]
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -28,6 +39,9 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,10 +61,10 @@ TOOL_NAME_MAX = 60
 
 @dataclass
 class McpServerConfig:
-    """一个 MCP 服务器的启动配置。"""
+    """一个 MCP 服务器的启动配置(传输方式三选一:stdio / http / sse)。"""
 
     sid: str
-    command: str
+    command: str = ""
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
@@ -61,6 +75,12 @@ class McpServerConfig:
     start_timeout: float = DEFAULT_START_TIMEOUT
     call_timeout: float = DEFAULT_CALL_TIMEOUT
     description: str = ""
+    # v0.9.24:不是每台服务器都得学长替它起进程 —— 学校/公司跑在服务器上的 MCP
+    # 只有一个网址。transport: stdio(默认,拉起子进程)/ http(Streamable HTTP,
+    # POST 到 url)/ sse(老式 HTTP+SSE:GET 一条长流收消息,POST 发请求)。
+    transport: str = "stdio"
+    url: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
 
     @property
     def label(self) -> str:
@@ -77,6 +97,26 @@ def _as_str_list(value) -> list[str]:
     return []
 
 
+def _norm_transport(value) -> str | None:
+    """配置里的 transport → 内部名。认不出来返回 None(这一项跳过,不猜)。"""
+    key = str(value or "").strip().lower()
+    if not key:
+        return "stdio"
+    return {"stdio": "stdio", "local": "stdio",
+            "http": "http", "streamable-http": "http", "streamable_http": "http",
+            "sse": "sse", "http+sse": "sse", "http_sse": "sse"}.get(key)
+
+
+def _usable_url(value) -> str:
+    """只认 http/https 的绝对地址 —— file:// 之类一律不给进协议层。"""
+    url = str(value or "").strip()
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return ""
+    return url if parts.scheme.lower() in ("http", "https") and parts.netloc else ""
+
+
 def parse_servers(raw) -> list[McpServerConfig]:
     """从配置原文解析服务器列表;非法项直接跳过(配置永远不该让应用起不来)。"""
     out: list[McpServerConfig] = []
@@ -87,7 +127,14 @@ def parse_servers(raw) -> list[McpServerConfig]:
         if not isinstance(item, dict):
             continue
         command = str(item.get("command") or "").strip()
-        if not command:
+        url = _usable_url(item.get("url"))
+        transport = _norm_transport(item.get("transport"))
+        if transport is None:
+            continue
+        if transport == "stdio":
+            if not command:                     # 老配置:没有 command 就没有可拉起的东西
+                continue
+        elif not url:                           # HTTP/SSE:没有地址就无从连起
             continue
         sid = str(item.get("id") or item.get("name") or f"server{i}").strip()
         sid = re.sub(r"[^0-9A-Za-z_-]+", "_", sid).strip("_") or f"server{i}"
@@ -97,6 +144,9 @@ def parse_servers(raw) -> list[McpServerConfig]:
         env_raw = item.get("env")
         env = ({str(k): str(v) for k, v in env_raw.items()}
                if isinstance(env_raw, dict) else {})
+        hdr_raw = item.get("headers")
+        headers = ({str(k): str(v) for k, v in hdr_raw.items()}
+                   if isinstance(hdr_raw, dict) else {})
         out.append(McpServerConfig(
             sid=sid,
             command=command,
@@ -108,15 +158,26 @@ def parse_servers(raw) -> list[McpServerConfig]:
             start_timeout=float(item.get("start_timeout", DEFAULT_START_TIMEOUT)),
             call_timeout=float(item.get("call_timeout", DEFAULT_CALL_TIMEOUT)),
             description=str(item.get("description") or ""),
+            transport=transport,
+            url=url,
+            headers=headers,
         ))
     return out
 
 
 def servers_to_raw(servers: list[McpServerConfig]) -> list[dict]:
-    """回写 config.json 用的序列化(env 保留,空值不写)。"""
+    """回写 config.json 用的序列化(env/headers 保留,空值不写)。"""
     out = []
     for s in servers:
-        item: dict = {"id": s.sid, "command": s.command}
+        item: dict = {"id": s.sid}
+        if s.command:
+            item["command"] = s.command
+        if s.transport and s.transport != "stdio":
+            item["transport"] = s.transport
+        if s.url:
+            item["url"] = s.url
+        if s.headers:
+            item["headers"] = dict(s.headers)
         if s.args:
             item["args"] = list(s.args)
         if s.env:
@@ -133,56 +194,161 @@ def servers_to_raw(servers: list[McpServerConfig]) -> list[dict]:
     return out
 
 
-# --------------------------------------------------------------------- 客户端
+# --------------------------------------------------------------------- 传输层
+# 学长和 MCP 服务器之间只有两种活法:要么我们替它起一个进程、用 stdin/stdout 说话
+# (stdio,最常见);要么它早就跑在某台机器上、只有一个网址(http / sse)。
+# 三种传输只做同一件事:把一条 JSON-RPC 报文送出去,把带同一个 id 的响应拿回来。
+# 协议本身(握手、tools/list、错误还原)只写在 McpClient 一处,这里不重复。
 
-class McpError(Exception):
-    """MCP 协议层或进程层错误。"""
 
+class Transport:
+    """一个 MCP 服务器的通道:子类只需实现 open/request/notify/close。"""
 
-class McpClient:
-    """单个 MCP 服务器的 stdio 客户端(进程级长连接)。"""
+    kind = "stdio"
 
     def __init__(self, cfg: McpServerConfig, log=None):
         self.cfg = cfg
         self._log = log
+
+    def open(self) -> None:
+        """把通道准备好(拉进程 / 开长流)。失败抛异常,由客户端记成"连接失败"。"""
+        raise NotImplementedError
+
+    def request(self, msg: dict, timeout: float) -> dict:
+        """送出一条请求报文,返回**原始响应报文**(带 id 与 result/error)。"""
+        raise NotImplementedError
+
+    def notify(self, msg: dict) -> None:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        pass
+
+    @property
+    def alive(self) -> bool:
+        return False
+
+    def tail(self) -> str:
+        """最近一条排错线索(stderr / 网络错误原文);**不含密钥**。"""
+        return ""
+
+    def _warn(self, text: str) -> None:
+        if callable(self._log):
+            try:
+                self._log(text)
+            except Exception:
+                pass
+
+
+def _clip(text, n=200) -> str:
+    return re.sub(r"\s+", " ", str(text or ""))[:n]
+
+
+def _safe_url(url) -> str:
+    """报错/记日志用的地址:去掉查询串 —— 有的托管 MCP 把密钥挂在 ?key=... 上。"""
+    try:
+        p = urllib.parse.urlsplit(str(url or ""))
+    except ValueError:
+        return "(地址读不懂)"
+    return f"{p.scheme}://{p.netloc}{p.path}" if p.netloc else _clip(url, 60)
+
+
+def _json_obj(text):
+    """一段文本 → dict(不是 JSON 或不是对象都给 None,不猜)。"""
+    if isinstance(text, dict):
+        return text
+    try:
+        obj = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _iter_sse(lines):
+    """SSE 行流 → (event, data) 逐条产出。吃 bytes 也吃 str 行,多行 data 拼起来。"""
+    event, data = "", []
+    for raw in lines or []:
+        line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+        line = line.rstrip("\r\n")
+        if not line:                                   # 空行 = 一个事件结束
+            if event or data:
+                yield event, "\n".join(data)
+            event, data = "", []
+            continue
+        if line.startswith(":"):                       # 注释/心跳(服务器保活用)
+            continue
+        field, _, value = line.partition(":")
+        value = value[1:] if value.startswith(" ") else value
+        if field == "event":
+            event = value.strip()
+        elif field == "data":
+            data.append(value)
+    if event or data:
+        yield event, "\n".join(data)
+
+
+class _StreamedTransport(Transport):
+    """「消息陆续从一条长流上回来,得按 id 等」—— stdio 与旧式 SSE 共用这套等待。"""
+
+    def __init__(self, cfg: McpServerConfig, log=None):
+        super().__init__(cfg, log)
+        self._cv = threading.Condition()
+        self._inbox: dict[int, dict] = {}
+        self._closed = False
+
+    def _deliver(self, msg: dict) -> None:
+        with self._cv:
+            self._inbox[msg["id"]] = msg
+            self._cv.notify_all()
+
+    def _take(self, rid, timeout: float, method: str) -> dict:
+        deadline = time.monotonic() + timeout
+        with self._cv:
+            while rid not in self._inbox:
+                if self._closed:
+                    raise McpError(f"服务器 {self.cfg.sid} 已关闭")
+                remain = deadline - time.monotonic()
+                if remain <= 0:
+                    tail = self.tail()
+                    hint = f"; 最近输出: {tail[-300:]}" if tail else ""
+                    raise McpError(f"{method} 超时({timeout:g}s){hint}")
+                self._cv.wait(min(remain, 0.5))
+            return self._inbox.pop(rid)
+
+    def _stop_waiting(self) -> None:
+        """关掉等待:让还在 _take 里等的线程立刻拿"已关闭",而不是干等到超时。"""
+        self._closed = True
+        with self._cv:
+            self._cv.notify_all()
+
+
+class StdioTransport(_StreamedTransport):
+    """我们拉起子进程:一行一个 JSON-RPC 报文(日志走 stderr,不混进协议流)。"""
+
+    kind = "stdio"
+
+    def __init__(self, cfg: McpServerConfig, log=None):
+        super().__init__(cfg, log)
         self._proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
-        self._lock = threading.Lock()          # 串行化请求,避免 id 交叉
-        self._cv = threading.Condition()
-        self._inbox: dict[int, dict] = {}      # id -> 响应
-        self._next_id = 0
         self._stderr: deque[str] = deque(maxlen=STDERR_KEEP_LINES)
-        self._closed = False
-        self.tools: list[dict] = []            # tools/list 原始结果
-        self.server_info: dict = {}
-        self.error: str = ""
-
-    # ----------------------------------------------------------- 生命周期
 
     @property
     def alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
-    def start(self) -> bool:
-        """拉起进程并完成握手 + 拉取工具清单;失败返回 False 且不抛异常。"""
-        try:
-            self._spawn()
-            info = self._request("initialize", {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": CLIENT_NAME, "version": _version()},
-            }, timeout=self.cfg.start_timeout)
-            self.server_info = (info or {}).get("serverInfo", {}) if isinstance(info, dict) else {}
-            self._notify("notifications/initialized", {})
-            listed = self._request("tools/list", {}, timeout=self.cfg.start_timeout)
-            tools = (listed or {}).get("tools", []) if isinstance(listed, dict) else []
-            self.tools = [t for t in tools if isinstance(t, dict) and t.get("name")]
-            return True
-        except Exception as e:                 # 配置错/命令不存在/握手超时
-            self.error = f"{type(e).__name__}: {e}"
-            self._warn(f"MCP 服务器 {self.cfg.sid} 连接失败: {self.error}")
-            self.close()
-            return False
+    def tail(self) -> str:
+        return "\n".join(self._stderr)
+
+    def open(self) -> None:
+        self._spawn()
+
+    def request(self, msg: dict, timeout: float) -> dict:
+        self._write(msg)
+        return self._take(msg.get("id"), timeout, str(msg.get("method") or "?"))
+
+    def notify(self, msg: dict) -> None:
+        self._write(msg)
 
     def _spawn(self) -> None:
         # npx/uvx 在 Windows 上是 .cmd,必须解析成实际路径再交给 CreateProcess
@@ -222,22 +388,29 @@ class McpClient:
             mid = msg.get("id")
             if mid is None:                   # 服务器主动通知/请求:本项目暂不处理
                 continue
-            with self._cv:
-                self._inbox[mid] = msg
-                self._cv.notify_all()
+            self._deliver(msg)
 
     def _stderr_loop(self) -> None:
         assert self._proc and self._proc.stderr
         for line in self._proc.stderr:
             self._stderr.append(line.rstrip())
 
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
+    def _write(self, msg: dict) -> None:
         proc = self._proc
+        if proc is None or proc.stdin is None or proc.poll() is not None:
+            raise McpError(f"服务器 {self.cfg.sid} 未在运行")
+        try:
+            proc.stdin.write(json.dumps(msg, ensure_ascii=False) + "\n")
+            proc.stdin.flush()
+        except OSError as e:
+            raise McpError(f"写入 {self.cfg.sid} 失败: {e}")
+
+    def close(self) -> None:
+        proc = self._proc
+        self._stop_waiting()
         if proc is None:
             return
+        self._proc = None
         try:
             if proc.poll() is None:
                 if proc.stdin:
@@ -252,46 +425,300 @@ class McpClient:
                     proc.kill()
         except Exception:
             pass
+
+
+class HttpTransport(Transport):
+    """Streamable HTTP(现行规范):一条 POST 进去、一条响应回来。
+
+    响应可能是 application/json(直接就是那条报文),也可能是 text/event-stream
+    (在流里找 id 对上的一条)。后一种**边读边找、找到就走**:有些服务器答完还
+    把流留着,等它关流就等于把请求挂死。
+
+    会话:MCP 规定服务器可以在 initialize 的响应头里给 Mcp-Session-Id,之后每条
+    请求都得带上 —— 漏了它,多数服务器会把后续请求当成新会话直接拒。关的时候
+    尽力 DELETE 一次让服务器自己回收会话(它不接也不影响我们)。
+    """
+
+    kind = "http"
+
+    def __init__(self, cfg: McpServerConfig, log=None):
+        super().__init__(cfg, log)
+        self._session = ""
+        self._last = ""
+        self._ok = False
+
+    @property
+    def alive(self) -> bool:
+        return self._ok
+
+    def tail(self) -> str:
+        return self._last
+
+    def open(self) -> None:
+        pass                                  # HTTP 没有"连接"这一步:第一条请求就是探测
+
+    def request(self, msg: dict, timeout: float) -> dict:
+        return self._post(msg, timeout, want_id=msg.get("id"))
+
+    def notify(self, msg: dict) -> None:
+        self._post(msg, self.cfg.start_timeout, want_id=None)
+
+    def close(self) -> None:
+        sid, self._session = self._session, ""
+        self._ok = False
+        if not sid:
+            return
+        req = urllib.request.Request(self.cfg.url, headers=self._headers(body=False),
+                                     method="DELETE")
+        with contextlib.suppress(Exception):    # 回收会话是礼貌,不是必需
+            urllib.request.urlopen(req, timeout=3).read()
+
+    # ---- 内部
+    def _headers(self, body: bool = True) -> dict:
+        """请求头:协议要的 + 配置里给的。值支持 ${ENV} 展开(密钥别写明文)。"""
+        h = {"Accept": "application/json, text/event-stream"}
+        if body:
+            h["Content-Type"] = "application/json"
+        for k, v in self.cfg.headers.items():
+            h[str(k)] = os.path.expandvars(str(v))
+        if self._session:
+            h["Mcp-Session-Id"] = self._session
+        return h
+
+    def _post(self, msg: dict, timeout: float, want_id):
+        payload = json.dumps(msg, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(self.cfg.url, data=payload,
+                                     headers=self._headers(), method="POST")
+        method = str(msg.get("method") or "?")
+        try:
+            resp = urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            text = ""
+            with contextlib.suppress(Exception):
+                text = exc.read().decode("utf-8", "replace")
+            self._last = f"HTTP {exc.code}: {_clip(text)}"
+            raise McpError(f"{method} 失败:{self._last}(→ {_safe_url(self.cfg.url)})") from None
+        except Exception as exc:
+            self._last = f"{type(exc).__name__}: {exc}"
+            raise McpError(f"连不上 {_safe_url(self.cfg.url)}({self._last})") from None
+        with resp:
+            sid = resp.headers.get("Mcp-Session-Id") or ""
+            if sid:
+                self._session = sid
+            ctype = resp.headers.get("Content-Type") or ""
+            if want_id is None:                 # 通知:服务器回 200/202 都算收到
+                self._ok = True
+                return None
+            if "text/event-stream" in ctype:
+                for _event, data in _iter_sse(resp):
+                    obj = _json_obj(data)
+                    if obj is not None and obj.get("id") == want_id:
+                        self._ok = True
+                        return obj
+                raise McpError(f"{method} 的响应里没有 id={want_id} 的那条报文")
+            text = resp.read().decode("utf-8", "replace")
+        obj = _json_obj(text)
+        if obj is None:
+            if not text.strip():
+                raise McpError(f"{method} 回了空响应:确认 url 指向 MCP 端点"
+                               "(新版规范通常以 /mcp 结尾)")
+            raise McpError(f"{method} 的响应不是 JSON:{_clip(text)}")
+        self._ok = True
+        return obj
+
+
+class SseTransport(_StreamedTransport):
+    """旧式 HTTP+SSE(2024-11-05 那版):GET 一条长流收消息,POST 发请求。
+
+    流的第一条 `event: endpoint` 告诉我们该往哪儿 POST(通常是 /messages?sessionId=…)。
+    现在的服务器多用上面那种 Streamable HTTP,但学校、公司里跑老实现的不少,
+    所以两种都留着:配置里写 "transport": "sse" 即可。
+    """
+
+    kind = "sse"
+
+    def __init__(self, cfg: McpServerConfig, log=None):
+        super().__init__(cfg, log)
+        self._endpoint_ready = threading.Event()
+        self._post_url = ""
+        self._resp = None
+        self._thread: threading.Thread | None = None
+        self._last = ""
+
+    @property
+    def alive(self) -> bool:
+        return bool(self._post_url) and not self._closed
+
+    def tail(self) -> str:
+        return self._last
+
+    def open(self) -> None:
+        self._thread = threading.Thread(target=self._listen, daemon=True,
+                                        name=f"mcp-sse-{self.cfg.sid}")
+        self._thread.start()
+        if not self._endpoint_ready.wait(self.cfg.start_timeout):
+            self._stop_waiting()
+            raise McpError(f"{self.cfg.start_timeout:g}s 内没等到 SSE 的 endpoint 事件"
+                           f"(→ {_safe_url(self.cfg.url)})")
+        if not self._post_url:
+            self._stop_waiting()
+            raise McpError(f"连不上 {_safe_url(self.cfg.url)}"
+                           f"({self._last or '这条 SSE 流没给出 endpoint'})")
+
+    def request(self, msg: dict, timeout: float) -> dict:
+        self._post(msg)
+        return self._take(msg.get("id"), timeout, str(msg.get("method") or "?"))
+
+    def notify(self, msg: dict) -> None:
+        self._post(msg)
+
+    def close(self) -> None:
+        self._stop_waiting()
+        resp, self._resp = self._resp, None
+        if resp is not None:
+            with contextlib.suppress(Exception):
+                resp.close()
+
+    # ---- 内部
+    def _headers(self) -> dict:
+        h = {"Accept": "text/event-stream"}
+        for k, v in self.cfg.headers.items():
+            h[str(k)] = os.path.expandvars(str(v))
+        return h
+
+    def _listen(self) -> None:
+        """长流:一条 GET 用到关。收到 endpoint 就放行 open(),之后的报文按 id 入箱。"""
+        req = urllib.request.Request(self.cfg.url, headers=self._headers(), method="GET")
+        try:
+            resp = urllib.request.urlopen(req, timeout=self.cfg.call_timeout)
+            self._resp = resp
+            for event, data in _iter_sse(resp):
+                if self._closed:
+                    break
+                text = data.strip()
+                if event == "endpoint" and text:
+                    self._post_url = urllib.parse.urljoin(self.cfg.url, text)
+                    self._endpoint_ready.set()
+                    continue
+                obj = _json_obj(text)
+                if obj is not None and obj.get("id") is not None:
+                    self._deliver(obj)
+        except Exception as exc:
+            self._last = f"{type(exc).__name__}: {exc}"
         finally:
-            self._proc = None
+            self._endpoint_ready.set()          # 别让 open() 白等一场超时
             with self._cv:
-                self._cv.notify_all()
+                self._cv.notify_all()           # 也别让在等响应的线程干等到超时
+
+    def _post(self, msg: dict) -> None:
+        if not self._post_url:
+            raise McpError(f"服务器 {self.cfg.sid} 还没给出 POST 地址(endpoint)")
+        req = urllib.request.Request(
+            self._post_url,
+            data=json.dumps(msg, ensure_ascii=False).encode("utf-8"),
+            headers={**self._headers(), "Content-Type": "application/json"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=self.cfg.start_timeout) as resp:
+                resp.read()                     # 这类服务器通常回 202,响应体在长流上
+        except urllib.error.HTTPError as exc:
+            text = ""
+            with contextlib.suppress(Exception):
+                text = exc.read().decode("utf-8", "replace")
+            self._last = f"HTTP {exc.code}: {_clip(text)}"
+            raise McpError(f"{msg.get('method')} 投递失败:{self._last}"
+                           f"(→ {_safe_url(self._post_url)})") from None
+        except Exception as exc:
+            self._last = f"{type(exc).__name__}: {exc}"
+            raise McpError(f"{msg.get('method')} 投递失败:{self._last}"
+                           f"(→ {_safe_url(self._post_url)})") from None
+
+
+_TRANSPORTS = {"stdio": StdioTransport, "http": HttpTransport, "sse": SseTransport}
+
+
+def make_transport(cfg: McpServerConfig, log=None) -> Transport:
+    """按配置挑传输。认不出的 transport 走 stdio(parse_servers 已经拦过一道)。"""
+    return _TRANSPORTS.get(cfg.transport, StdioTransport)(cfg, log=log)
+
+
+# --------------------------------------------------------------------- 客户端
+
+class McpError(Exception):
+    """MCP 协议层、进程层或网络层错误。"""
+
+
+class McpClient:
+    """单个 MCP 服务器的客户端:握手 + 拉工具清单 + 调用(通道细节在 Transport 里)。"""
+
+    def __init__(self, cfg: McpServerConfig, log=None, transport: Transport | None = None):
+        self.cfg = cfg
+        self._log = log
+        self.transport = transport or make_transport(cfg, log=log)
+        self._lock = threading.Lock()          # 串行化请求,避免 id 交叉
+        self._next_id = 0
+        self._closed = False
+        self.tools: list[dict] = []            # tools/list 原始结果
+        self.server_info: dict = {}
+        self.error: str = ""
+
+    # ----------------------------------------------------------- 生命周期
+
+    @property
+    def _proc(self):
+        """我们替它拉起的那个进程(只有 stdio 传输才有;HTTP 传输给 None)。"""
+        return getattr(self.transport, "_proc", None)
+
+    @property
+    def alive(self) -> bool:
+        return not self._closed and self.transport.alive
+
+    def start(self) -> bool:
+        """开好通道并完成握手 + 拉取工具清单;失败返回 False 且不抛异常。"""
+        try:
+            self.transport.open()
+            info = self._request("initialize", {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": CLIENT_NAME, "version": _version()},
+            }, timeout=self.cfg.start_timeout)
+            self.server_info = (info or {}).get("serverInfo", {}) if isinstance(info, dict) else {}
+            self._notify("notifications/initialized", {})
+            listed = self._request("tools/list", {}, timeout=self.cfg.start_timeout)
+            tools = (listed or {}).get("tools", []) if isinstance(listed, dict) else []
+            self.tools = [t for t in tools if isinstance(t, dict) and t.get("name")]
+            return True
+        except Exception as e:                 # 配置错/命令不存在/地址不通/握手超时
+            self.error = f"{type(e).__name__}: {e}"
+            self._warn(f"MCP 服务器 {self.cfg.sid}({self.transport.kind})连接失败: {self.error}")
+            self.close()
+            return False
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.transport.close()
 
     def stderr_tail(self) -> str:
-        return "\n".join(self._stderr)
+        """最近输出(stdio 是 stderr,HTTP 是最近一次网络错误)。"""
+        return self.transport.tail()
 
     # ------------------------------------------------------------- 协议
 
     def _notify(self, method: str, params: dict) -> None:
-        self._write({"jsonrpc": "2.0", "method": method, "params": params})
-
-    def _write(self, msg: dict) -> None:
-        proc = self._proc
-        if proc is None or proc.stdin is None or proc.poll() is not None:
-            raise McpError(f"服务器 {self.cfg.sid} 未在运行")
-        try:
-            proc.stdin.write(json.dumps(msg, ensure_ascii=False) + "\n")
-            proc.stdin.flush()
-        except OSError as e:
-            raise McpError(f"写入 {self.cfg.sid} 失败: {e}")
+        self.transport.notify({"jsonrpc": "2.0", "method": method, "params": params})
 
     def _request(self, method: str, params: dict, timeout: float) -> dict | None:
         with self._lock:
+            if self._closed:
+                raise McpError(f"服务器 {self.cfg.sid} 已关闭")
             self._next_id += 1
-            rid = self._next_id
-            self._write({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
-            deadline = time.monotonic() + timeout
-            with self._cv:
-                while rid not in self._inbox:
-                    if self._closed:
-                        raise McpError(f"服务器 {self.cfg.sid} 已关闭")
-                    remain = deadline - time.monotonic()
-                    if remain <= 0:
-                        tail = self.stderr_tail()
-                        hint = f"; stderr: {tail[-300:]}" if tail else ""
-                        raise McpError(f"{method} 超时({timeout:g}s){hint}")
-                    self._cv.wait(min(remain, 0.5))
-                msg = self._inbox.pop(rid)
+            msg = self.transport.request(
+                {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params},
+                timeout)
+        if msg is None:
+            return None
         if "error" in msg:
             err = msg["error"] or {}
             raise McpError(str(err.get("message") or err))

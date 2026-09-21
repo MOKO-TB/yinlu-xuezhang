@@ -172,6 +172,79 @@ def scheduling_view(plan: dict, limit: int = 3) -> str:
     return "\n".join(lines)
 
 
+# ------------------------------------------------------------------ 给界面看的一层
+
+def plan_state(workspace) -> dict:
+    """计划面板的数据:当前计划 + 每步的「可执行 / 被卡住」标记。
+
+    没有 plans/plan.md 时给出 has_plan=False(面板显示引导,而不是摆一张空表)。
+    只读:这里绝不写文件,面板打开一下不该改动计划状态。
+    """
+    p = Path(workspace) / PLAN_REL
+    empty = {"has_plan": False, "path": PLAN_REL.as_posix(), "goal": "",
+             "steps": [], "total": 0, "done": 0,
+             "ready": [], "blocked": [], "failed": []}
+    if not p.exists():
+        return empty
+    plan = parse_plan(p.read_text(encoding="utf-8"))
+    ready = [s["n"] for s in ready_steps(plan)]
+    blocked = [s["n"] for s in blocked_steps(plan)]
+    rdy, blk = set(ready), set(blocked)
+    steps = [{"n": s["n"], "title": s["title"], "detail": s["detail"],
+              "status": s["status"], "depends_on": list(s["depends_on"]),
+              "note": s["note"], "ready": s["n"] in rdy, "blocked": s["n"] in blk}
+             for s in plan["steps"]]
+    return {"has_plan": True, "path": PLAN_REL.as_posix(), "goal": plan["goal"],
+            "steps": steps, "total": len(steps),
+            "done": sum(1 for s in plan["steps"] if s["status"] == "done"),
+            "ready": ready, "blocked": blocked,
+            "failed": [s["n"] for s in plan["steps"] if s["status"] == "failed"]}
+
+
+def dispatch_text(state: dict) -> str:
+    """「一键派发」回填给主模型的那句话:按编号依次做依赖已满足的步骤。
+
+    刻意只写"依次执行",不并发派子代理:计划模式的价值是让用户看得见每一步在
+    做什么,而并发写文件会互相踩、确认门也会串到别的答案上。真要并行,主模型
+    自己会在对话里说明并征求同意。
+    """
+    steps = list(state.get("steps") or [])
+    if not steps:
+        return ""
+    by_n = {s["n"]: s for s in steps}
+    ready = [by_n[n] for n in (state.get("ready") or []) if n in by_n]
+    head = f"按计划「{state.get('goal') or '未命名'}」继续。"
+    if ready:
+        listed = ";".join(
+            f"第 {s['n']} 步 {s['title']}"
+            + (f"(依赖 {'、'.join(str(d) for d in s['depends_on'])})"
+               if s.get("depends_on") else "")
+            for s in ready)
+        body = f"依赖已满足、现在可以动手的是:{listed}。请按编号顺序依次做完。"
+    else:
+        body = "现在没有依赖已满足的步骤,请先说明卡在哪里,别硬往下做。"
+    tail = ("每完成一步就用 plan(action=update, step=编号, status=done) 标记;"
+            "做不成则标 failed 并写清原因。")
+    blocked = state.get("blocked") or []
+    extra = (f"另有第 {'、'.join(str(n) for n in blocked)} 步被上游失败卡住,"
+             "先别动,告诉我该重做上游还是改计划。" if blocked else "")
+    return head + body + tail + extra
+
+
+def notify_plan(ctx: ToolContext) -> None:
+    """计划写盘后把最新状态推给界面(图形模式);终端/无界面时什么都不做。"""
+    ui = getattr(ctx, "ui", None)
+    push = getattr(ui, "push", None)
+    if not callable(push):
+        return
+    try:
+        state = plan_state(ctx.workspace)
+        # 与 Bridge.get_plan 同构:面板刚收到推送时也要有派发文案,否则按钮会误灰
+        push("plan_changed", dispatch_text=dispatch_text(state), **state)
+    except Exception:                          # 面板刷新绝不能把工具执行带崩
+        pass
+
+
 def _load_plan(ctx: ToolContext) -> dict | None:
     p = plan_path(ctx)
     if not p.exists():
@@ -184,6 +257,7 @@ def _write_plan(ctx: ToolContext, plan: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     steps = sorted(plan["steps"], key=lambda s: s["n"])
     p.write_text(render_plan(plan["goal"], steps), encoding="utf-8")
+    notify_plan(ctx)           # 计划只有这一个落盘出口:write/update 都顺带刷新面板
 
 
 def _plan_write(ctx: ToolContext, goal: str, steps: list) -> str:

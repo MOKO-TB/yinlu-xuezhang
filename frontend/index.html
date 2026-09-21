@@ -301,6 +301,17 @@ try {
   .jw-links{ margin-top:8px; font-size:11px; }
   .jw-links button{ background:none; border:none; color:var(--text-3); cursor:pointer;
                     font-size:11px; padding:0; margin-right:12px; text-decoration:underline; }
+  /* 变动比对(v0.9.24):覆盖前把差摆出来,三种颜色一眼分得清 */
+  .jw-diff{ margin-top:8px; padding-top:6px; border-top:1px dashed var(--line); }
+  .jw-diff .d-sum{ font-size:11.5px; font-weight:700; color:var(--text-1); margin-bottom:4px; }
+  .jw-diff .d-line{ font-size:11px; padding:2px 6px; margin-bottom:2px; border-radius:5px;
+                    line-height:1.6; }
+  .jw-diff .d-add{ background:rgba(46,160,67,.13); }
+  .jw-diff .d-chg{ background:var(--warning-bg); }
+  .jw-diff .d-del{ background:rgba(210,60,60,.12); }
+  .jw-diff .d-del .nm{ text-decoration:line-through; opacity:.75; }
+  .jw-diff .d-arrow{ color:var(--primary-text); font-weight:700; }
+  .jw-diff .d-more{ font-size:10.5px; color:var(--text-3); margin-top:2px; }
 
   /* ---------------- 输入框右键菜单 + 拖拽高亮(v0.9.19) ---------------- */
   .ctx-menu{ position:fixed; z-index:9999; min-width:172px; padding:5px;
@@ -1127,6 +1138,40 @@ try {
                      border:1px solid var(--line-soft); cursor:pointer; }
   .cand-acts button:disabled{ opacity:.5; cursor:default; }
   .cand-acts .cand-merge{ background:var(--primary); color:#fff; border-color:var(--primary); }
+  /* 计划模式面板(v0.9.24):plans/plan.md 的依赖状态摆在明面上,卡片沿用候选那套质感 */
+  #btnPlan .pl-n{ font-size:10px; font-weight:700; opacity:.75; margin-left:3px; }
+  .pl-head{ display:flex; align-items:baseline; gap:10px; }
+  .pl-prog{ font-size:11.5px; color:var(--text-3); }
+  .pl-bar{ height:5px; border-radius:999px; background:var(--glass-lite);
+           border:1px solid var(--line-soft); overflow:hidden; margin:9px 0 0; }
+  .pl-bar i{ display:block; height:100%; width:0; background:var(--primary);
+             transition:width .25s ease; }
+  .pl-cols{ display:flex; gap:10px; margin:11px 0 2px; }
+  .pl-col{ flex:1; border:1px dashed var(--line-soft); border-radius:var(--r-m);
+           padding:7px 10px; font-size:11px; color:var(--text-3); line-height:1.65; }
+  .pl-col b{ display:block; font-size:11.5px; color:var(--text-2); margin-bottom:2px; }
+  .pl-body{ max-height:48vh; overflow-y:auto; margin:10px 0 0; display:flex;
+            flex-direction:column; gap:8px; }
+  .pl-step{ border:1px solid var(--line-soft); border-left:3px solid var(--line-soft);
+            border-radius:var(--r-m); padding:9px 12px; background:var(--glass-lite); }
+  .pl-step.s-ready{ border-left-color:var(--primary); }
+  .pl-step.s-done{ opacity:.66; }
+  .pl-step.s-failed{ border-left-color:#c04a4a; }
+  .pl-step.s-blocked{ border-left-color:#c8801a; }
+  .pl-t{ display:flex; align-items:flex-start; gap:8px; font-size:13px;
+         color:var(--text-1); line-height:1.6; }
+  .pl-t .nm{ flex:1; min-width:0; }
+  .pl-step.s-done .pl-t .nm{ text-decoration:line-through; }
+  .pl-badge{ flex:none; font-size:9.5px; font-weight:700; border-radius:var(--r-full);
+             padding:2px 9px; border:1px solid var(--line-soft); color:var(--text-3); }
+  .pl-badge.b-ready{ color:var(--primary-text); background:var(--primary-light);
+                     border-color:var(--primary); }
+  .pl-badge.b-done{ color:#127a3d; background:#e6f6ec; border-color:#8fd6ac; }
+  .pl-badge.b-failed{ color:#a33; background:#fbeaea; border-color:#e6b3b3; }
+  .pl-badge.b-blocked{ color:#8a5b00; background:var(--warning-bg); border-color:#e0a42d; }
+  .pl-meta{ margin-top:5px; font-size:10.5px; color:var(--text-3); line-height:1.6; }
+  .pl-note{ margin-top:5px; padding-top:5px; border-top:1px dashed var(--line-soft);
+            font-size:11px; color:var(--text-2); line-height:1.6; }
   /* 技能详情与添加表单:字段行,与模型管理弹窗同款节奏 */
   .skform{ border-top:1px solid var(--line-soft); margin-top:12px; padding-top:12px; }
   .skform .frow label{ width:64px; }
@@ -1236,6 +1281,7 @@ try {
       <span class="modelpill" id="modelPill"></span>
       <button id="btnMap" title="打开/收起校园地图(肇庆校区)">🗺 地图</button>
       <button id="btnSchedule" title="查看/导入我的课表(本机存储)">📅 课表</button>
+      <button id="btnPlan" title="查看当前任务计划(plans/plan.md):做到哪步、哪几步能接着做">🗂 计划<span class="pl-n" id="plPill"></span></button>
       <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐ 技能</button>
       <button id="btnUsage" title="查看每日 token 消耗">📊 用量</button>
       <button id="btnExport" title="把当前会话导出成 Markdown(方便贴进文档或发给同学)">⬇ 导出</button>
@@ -1415,7 +1461,29 @@ try {
     <div class="sc-body" id="scBody"></div>
     <div class="btns">
       <button class="b-yes" id="btnScheduleImport">导入 / 更新课表</button>
+      <button class="b-no" id="btnScheduleUndo" style="display:none">换回上一版</button>
       <button class="b-no" id="btnScheduleClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- v0.9.24:计划面板 —— 计划模式那几步「能做的/被卡的」摆在明面上(只读,状态归 plan 工具) -->
+<div class="overlay" id="planOverlay">
+  <div class="dialog" style="width:620px">
+    <div class="pl-head">
+      <h3>🗂 任务计划</h3>
+      <span class="pl-prog" id="plProg"></span>
+    </div>
+    <div class="pl-bar"><i id="plBar"></i></div>
+    <div class="pl-cols" id="plCols"></div>
+    <div class="pl-body" id="plBody"></div>
+    <div class="sc-note" id="plNote"></div>
+    <div class="btns">
+      <button class="b-yes" id="btnPlanDispatch"
+              title="把「现在能做的几步」拼成一条指令填进输入框 —— 你过一眼再按发送,学长不会替你发">
+        ↩ 派发到输入框</button>
+      <button class="b-no" id="btnPlanRefresh" title="重读 plans/plan.md">刷新</button>
+      <button class="b-no" id="btnPlanClose">关闭</button>
     </div>
   </div>
 </div>
@@ -2193,6 +2261,8 @@ window.__gcodeEvent = function (e) {
     if (document.getElementById("skillsOverlay").classList.contains("show")) loadSkills();
     return;
   }
+  // 计划文件是"工作区一个 plans/plan.md",不是"一会话一个":后台会话写计划也要刷角标
+  if (e.type === "plan_changed") { renderPlan({ ok: true, ...e }); return; }
   // 后台会话的事件:不往当前视图里画(切回去时会用 resumed 重建)
   if (e.session && currentSessionKey && e.session !== currentSessionKey
       && e.type !== "cleared" && e.type !== "resumed"
@@ -2311,6 +2381,7 @@ window.__gcodeEvent = function (e) {
       renderWorkspacePill({ workspace: e.path, workspace_name: e.name,
                             workspace_is_default: e.is_default });
       loadProjects();               // 侧栏项目面板同步(当前项高亮/置顶)
+      loadPlan();                   // 换了工作区=换了另一份 plans/plan.md,角标要跟上
       break;
     case "cleared":
       if (e.session) currentSessionKey = e.session;   // 新建/切换会话
@@ -3670,6 +3741,8 @@ function scList(classes, emptyText) {
 }
 function renderSchedule() {
   const body = $("scBody");
+  const undoBtn = $("btnScheduleUndo");
+  if (undoBtn) undoBtn.style.display = (scheduleData && scheduleData.can_undo) ? "" : "none";
   if (!scheduleData || !scheduleData.registered) {
     $("scWeek").textContent = "";
     body.innerHTML = `<div class="sc-empty">还没有登记课表。<br>
@@ -3732,6 +3805,128 @@ $("scBody").addEventListener("click", (e) => {
   CampusMap.findPlace(b.dataset.loc || "");
 });
 $("btnScheduleImport").addEventListener("click", openJwDlg);
+$("btnScheduleUndo").addEventListener("click", () => {
+  const api = window.pywebview && window.pywebview.api;
+  if (!api || !api.schedule_undo) { toast("这个功能只在桌面版有"); return; }
+  toast("正在换回上一版…");
+  api.schedule_undo().then(r => {
+    if (!r || !r.ok) { toast((r && r.msg) || "没能换回去"); return; }
+    scheduleData = r.schedule || null;
+    renderSchedule();
+    toast((r.msg || "已换回上一版").slice(0, 90));
+  }).catch(e => toast("回滚失败:" + e));
+});
+
+/* ---------------- 计划面板(v0.9.24) ----------------
+   plans/plan.md 就是计划模式的唯一状态(文件即状态),这里只负责把它读出来摆好:
+   哪几步依赖已满足、哪几步被上游失败卡住。步骤状态仍然只归 plan 工具改 ——
+   面板也能改就会两边互相盖,而且模型看不见你偷偷拧过的那一下。
+   「派发到输入框」是刻意保守的做法:只把"接着做哪几步"拼成一条指令填回输入框,
+   由你按发送;不自动发、也不并发派子代理(并发写文件会互相踩、确认门会串)。 */
+let planData = null;
+const planApi = () => (window.pywebview && pywebview.api && pywebview.api.get_plan)
+  ? pywebview.api : null;
+
+// 徽章 + 卡片左边条:一次决定这两处,免得颜色和文字各说各话
+function plLook(s) {
+  if (s.status === "done") return { cls: "s-done", badge: "b-done", text: "完成" };
+  if (s.status === "failed") return { cls: "s-failed", badge: "b-failed", text: "失败" };
+  if (s.blocked) return { cls: "s-blocked", badge: "b-blocked", text: "被卡住" };
+  if (s.ready) return { cls: "s-ready", badge: "b-ready", text: "可做" };
+  return { cls: "", badge: "", text: "待办" };
+}
+
+function plList(nums, steps) {
+  const by = {};
+  (steps || []).forEach(s => { by[s.n] = s; });
+  return nums.map(n => {
+    const s = by[n] || {};
+    return `<span class="pl-badge ${plLook(s).badge}">${n}. ${esc(s.title || "")}</span>`;
+  }).join(" ");
+}
+
+function renderPlan(r) {
+  planData = r || null;
+  const pill = $("plPill");
+  if (pill) pill.textContent = (r && r.has_plan && r.total) ? ` ${r.done}/${r.total}` : "";
+  const body = $("plBody"), cols = $("plCols"), note = $("plNote"), btn = $("btnPlanDispatch");
+  const bar = $("plBar"), prog = $("plProg");
+  if (!r || !r.ok) {
+    if (bar) bar.style.width = "0";
+    if (prog) prog.textContent = "";
+    cols.innerHTML = "";
+    body.innerHTML = `<div class="sc-empty">${esc((r && r.msg) || "计划读不出来")}</div>`;
+    note.textContent = "";
+    btn.disabled = true;
+    return;
+  }
+  if (!r.has_plan) {
+    if (bar) bar.style.width = "0";
+    if (prog) prog.textContent = "";
+    cols.innerHTML = "";
+    body.innerHTML = `<div class="sc-empty">当前还没有计划。<br>
+      跟学长说「这个任务先列个计划再动手」,它就会把步骤写进
+      <b>${esc(r.path || "plans/plan.md")}</b>;<br>
+      每完成一步这里会自己刷新,你也能随时点开看做到哪儿了。</div>`;
+    note.textContent = "计划文件即状态:它在你的工作区里,可以进版本库,也能自己改。";
+    btn.disabled = true;
+    return;
+  }
+  const pct = r.total ? Math.round(r.done * 100 / r.total) : 0;
+  if (bar) bar.style.width = pct + "%";
+  prog.textContent = `${r.done}/${r.total} 已完成 · ${pct}%` + (r.goal ? ` · ${r.goal}` : "");
+  cols.innerHTML = `
+    <div class="pl-col"><b>依赖已满足,现在可做</b>
+      ${r.ready.length ? plList(r.ready, r.steps) : `<span style="opacity:.7">无`
+        + (r.blocked.length ? "(剩下的都被上游失败卡住)" : "(要么都做完了,要么在等上游)") + `</span>`}</div>
+    <div class="pl-col"><b>被上游卡住,先别硬做</b>
+      ${r.blocked.length ? plList(r.blocked, r.steps)
+        : `<span style="opacity:.7">没有</span>`}</div>`;
+  body.innerHTML = (r.steps || []).map(s => {
+    const k = plLook(s);
+    const deps = (s.depends_on || []).length
+      ? ` ← 依赖 ${s.depends_on.join("、")}` : "";
+    return `<div class="pl-step ${k.cls}">
+      <div class="pl-t"><span class="nm">${s.n}. ${esc(s.title)}${
+        s.detail ? ` <span style="opacity:.7">—— ${esc(s.detail)}</span>` : ""}</span>
+        <span class="pl-badge ${k.badge}">${k.text}</span></div>
+      ${deps ? `<div class="pl-meta">${esc(deps)}</div>` : ""}
+      ${s.note ? `<div class="pl-note">备注:${esc(s.note)}</div>` : ""}</div>`;
+  }).join("") || `<div class="sc-empty">计划里还没有步骤。</div>`;
+  note.textContent = r.failed.length
+    ? `第 ${r.failed.join("、")} 步标了失败:下游已被挡住。跟学长说清是重做上游还是改计划。`
+    : "状态由学长用 plan 工具更新;面板只读,改计划请直接跟学长说。";
+  btn.disabled = !(r.dispatch_text && r.ready.length);
+}
+
+function loadPlan() {
+  const api = planApi();
+  if (!api) { renderPlan({ ok: false, has_plan: false, msg: "计划面板只在桌面版有" }); return; }
+  api.get_plan().then(renderPlan).catch(e => renderPlan({ ok: false, has_plan: false,
+                                                          msg: "计划读不出来:" + e }));
+}
+
+function openPlanDlg() {
+  $("planOverlay").classList.add("show");
+  loadPlan();
+}
+$("btnPlan").addEventListener("click", openPlanDlg);
+$("btnPlanRefresh").addEventListener("click", loadPlan);
+$("btnPlanClose").addEventListener("click", () => $("planOverlay").classList.remove("show"));
+$("planOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "planOverlay") $("planOverlay").classList.remove("show");
+});
+$("btnPlanDispatch").addEventListener("click", () => {
+  const t = (planData && planData.dispatch_text) || "";
+  if (!t) { toast("现在没有可派发的步骤(都做完了,或者都被上游卡住)", true); return; }
+  const input = $("input");
+  input.value = t;
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 180) + "px";
+  $("planOverlay").classList.remove("show");
+  input.focus();
+  toast("已把「接着做哪几步」填进输入框 —— 你过一眼再按发送");
+});
 
 /* ---------------- 教务课表导入向导(v0.9.23) ----------------
    三步各点一下,谁的事谁做:① 学长把教务登录页开在**看得见**的窗口里,
@@ -3761,6 +3956,7 @@ function jwBusyOff() { jwBusy = false; jwStepOn(jwStep); }
 function openJwDlg() {
   $("scheduleOverlay").classList.remove("show");
   jwParsed = null;
+  $("btnJwConfirm").textContent = "③ 确认导入";   // 上一次的"确认更新(新增 N…)"不能留着
   const api = jwApi();
   if (!api) {                       // 网页版/桥未就绪:老老实实退回文字导入
     scheduleManualImport();
@@ -3804,7 +4000,8 @@ function jwRead(model) {
       jwParsed = null;
       jwSayErr((r && r.msg) || "没读到课表");
       if (r && r.stage === "ready") jwStepOn(2);
-      if (!model) {
+      // 页上本来就没有课表:让模型"整理"只会编出一份假课表,所以这一步不给那个按钮
+      if (!model && (!r || r.stage !== "not_timetable")) {
         jwBodyAppend(`<div class="jw-links"><button id="lnJwModel">让学长用模型整理一次</button></div>`);
         $("lnJwModel").addEventListener("click", () => jwRead(true));
       }
@@ -3825,27 +4022,89 @@ function jwSayErr(msg) {
   $("lnJwManual3").addEventListener("click", scheduleManualImport);
 }
 
+const JW_DAYS = { 1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "日" };
+const JW_FIELD = { day: "星期", periods: "节次", location: "地点",
+                   weeks: "周次", start_time: "钟点" };
+
+function jwSlotText(r) {
+  const bits = ["周" + (JW_DAYS[r.day] || "?"), String(r.periods || "?") + "节"];
+  if (r.start_time) bits.push(r.start_time);
+  if (r.location) bits.push(r.location);
+  if (r.weeks && r.weeks !== "1-25") bits.push(r.weeks + "周");
+  return bits.join(" ");
+}
+
+// 变动比对:覆盖前把"差在哪"摆出来 —— 整表覆盖最怕的是悄悄少了一门课
+function jwDiffHtml(d) {
+  if (!d || !d.has_existing) return "";
+  const lines = [];
+  (d.changed || []).forEach(ch => {
+    const fs = Object.keys(ch.fields || {}).map(k => {
+      const v = ch.fields[k] || {};
+      return (JW_FIELD[k] || k) + ' <span class="d-arrow">'
+        + esc(v.old || "未填") + " → " + esc(v.new || "未填") + "</span>";
+    }).join(";");
+    lines.push(`<div class="d-line d-chg">⟳ 变动 <b>${esc(ch.name)}</b>`
+      + `<span style="opacity:.7">(${esc(jwSlotText(ch.new || {}))})</span>:${fs}</div>`);
+  });
+  (d.added || []).forEach(r => {
+    lines.push(`<div class="d-line d-add">＋ 新增 <b>${esc(r.name)}</b>`
+      + `<span style="opacity:.7">(${esc(jwSlotText(r))})</span></div>`);
+  });
+  (d.removed || []).forEach(r => {
+    lines.push(`<div class="d-line d-del">－ 取消 <span class="nm">${esc(r.name)}</span>`
+      + `<span style="opacity:.7">(${esc(jwSlotText(r))})</span></div>`);
+  });
+  const cap = 12;
+  return `<div class="jw-diff"><div class="d-sum">与本机课表比对:${esc(d.msg || "")}</div>`
+    + lines.slice(0, cap).join("")
+    + (lines.length > cap
+        ? `<div class="d-more">…另有 ${lines.length - cap} 处没列出(确认导入后学长会再报一次全的)</div>`
+        : "") + `</div>`;
+}
+
+function jwTermNote(d, val) {
+  if (!d || !d.has_existing) return "";
+  const old = (d.term_start || {}).old || "";
+  if (!old) return "";
+  if (!val) return `<div class="sc-note">本机课表记的开学日是 ${esc(old)};不改就沿用它。</div>`;
+  if (val === old) return "";
+  return `<div class="jw-warn">第 1 周周一 ${esc(old)} → ${esc(val)}:周次与课前提醒会按新日期重算。</div>`;
+}
+
 function jwRenderPreview() {
-  const r = jwParsed, s = r.summary || {};
+  const r = jwParsed, s = r.summary || {}, d = r.diff || null;
   $("jwTerm").textContent = (r.term ? "学期 " + r.term : "") + (r.week ? " · 第" + r.week + "周" : "");
-  const days = { 1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "日" };
+  const days = JW_DAYS;
   const rows = (r.classes || []).slice().sort((a, b) => a.day - b.day
       || String(a.periods).localeCompare(String(b.periods), undefined, { numeric: true }));
-  const hint = (scheduleData && scheduleData.term_start) || "";
-  jwSay(`<div class="msg"><b>${s.entries || 0} 条课</b>(约 ${s.courses || 0} 门),
+  const hint = (d && d.term_start && d.term_start.old) || (scheduleData && scheduleData.term_start) || "";
+  const c = (d && d.counts) || {};
+  $("btnJwConfirm").textContent = (d && d.has_existing)
+    ? `③ 确认更新(新增 ${c.added || 0} · 变动 ${c.changed || 0} · 取消 ${c.removed || 0})`
+    : "③ 确认导入";
+  jwSay(`${d && d.has_existing ? jwDiffHtml(d) : ""}
+    <div class="msg"><b>${s.entries || 0} 条课</b>(约 ${s.courses || 0} 门),
       ${rows.length ? "按星期排开如下。请对着教务页扫一眼:" : "读到了:"}</div>
-    <div style="margin-top:6px">${rows.map(c => `<div class="jw-row">
-      <span class="t">周${days[c.day] || "?"} ${esc(c.periods || "")}${c.start_time ? " · " + esc(c.start_time) : ""}</span>
-      ${esc(c.name)}${c.teacher ? " · " + esc(c.teacher) : ""}${c.location ? " @ " + esc(c.location) : ""}
-      ${c.weeks && c.weeks !== "1-25" ? " <span style=\"opacity:.6\">" + esc(c.weeks) + "</span>" : ""}
+    <div style="margin-top:6px">${rows.map(cc => `<div class="jw-row">
+      <span class="t">周${days[cc.day] || "?"} ${esc(cc.periods || "")}${cc.start_time ? " · " + esc(cc.start_time) : ""}</span>
+      ${esc(cc.name)}${cc.teacher ? " · " + esc(cc.teacher) : ""}${cc.location ? " @ " + esc(cc.location) : ""}
+      ${cc.weeks && cc.weeks !== "1-25" ? " <span style=\"opacity:.6\">" + esc(cc.weeks) + "</span>" : ""}
     </div>`).join("")}</div>
     ${(r.notes || []).map(n => `<div class="jw-warn">⚠ ${esc(n)}</div>`).join("")}
     ${s.no_location && s.no_location.length ? `<div class="jw-warn">没读到上课地点:${esc(s.no_location.join("、"))}</div>` : ""}
     ${(r.unparsed || []).length ? `<div class="jw-warn">这几条学长没认出来(不会偷偷编):${esc(r.unparsed.join(" | "))}</div>` : ""}
     <div class="jw-term">第 1 周周一是哪天?教务页上没有这一项,只能你填:
       <input type="date" id="jwTermStart" value="${esc(hint)}"></div>
-    <div class="sc-note">导入会<b>覆盖</b>本机现有课表${hint ? "(沿用上次那个开学日期)" : ""};
-      点「③ 确认导入」之前,学长不会写任何文件。</div>`);
+    <div id="jwTermNote">${jwTermNote(d, hint)}</div>
+    <div class="sc-note">${d && d.has_existing
+      ? "确认后会<b>整表覆盖</b>本机课表(上面已列出差在哪);旧版会留一份备份,课表面板里可「换回上一版」。"
+      : "导入会<b>覆盖</b>本机现有课表" + (hint ? "(沿用上次那个开学日期)" : "") + ";"}
+      点「${(d && d.has_existing) ? "③ 确认更新" : "③ 确认导入"}」之前,学长不会写任何文件。</div>`);
+  const box = $("jwTermStart");
+  if (box) box.addEventListener("input", () => {
+    $("jwTermNote").innerHTML = jwTermNote(d, box.value);
+  });
 }
 
 function jwConfirm() {
@@ -4344,6 +4603,7 @@ window.addEventListener("DOMContentLoaded", () => {
       refreshHomeSuggestions();
       loadProjects();      // 侧栏项目面板(最近工作区)
       loadReasoning();     // 思考档位按钮
+      loadPlan();          // 计划角标:工作区里已有计划时开窗就看得见进度
     }).catch(e => {
       $("hint").textContent = "界面初始化失败:" + String(e).slice(0, 80);
     });

@@ -109,6 +109,8 @@ def write_user_files(dist: Path) -> None:
                   "kb-gaps.jsonl", "kb-candidates.jsonl", "message-feedback.jsonl",
                   # v0.9.18 个人数据与本机缓存:课表属于使用者本人,天气缓存是构建机坐标的
                   "schedule.json", "weather-cache.json", "reminders.json",
+                  # v0.9.24 课表覆盖前的备份(同学本人的旧课表,同样不能外发)
+                  "schedule.prev.json",
                   "notice-watch.json", "injection-events.log",
                   # v0.9.22 关窗偏好与托盘诊断日志(本机状态,不外发)
                   "close-pref.json", "tray.log",
@@ -159,6 +161,10 @@ def write_user_files(dist: Path) -> None:
         "   - 自检:引路学长-CLI.exe 里输入 /library 看库状态。\n"
         "8. 想接 MCP 服务器:编辑 config.json 的 mcp_servers 数组\n"
         "   (格式见 config.example.json,支持 npx/uvx/python 启动的任意 MCP 服务器);\n"
+        "   只有网址没有启动命令的服务器也能连:写 \"transport\": \"http\"(新式)\n"
+        "   或 \"sse\"(老式 HTTP+SSE)加 \"url\";需要鉴权的写\n"
+        "   \"headers\": {\"Authorization\": \"${MY_MCP_TOKEN}\"} —— 密钥留在环境变量里,\n"
+        "   不落进 config.json,报错信息里也不会把它打出来。\n"
         "9. 问网页内容时它可以用真实浏览器看页面(靠 JS 渲染的站点、自己写的本地\n"
         "   页面都能看,还能截图给你)。默认自己起一个干净的后台实例,不会动你\n"
         "   正在用的浏览器,也不带你的登录态;只有要看必须登录才看得到的页面时,\n"
@@ -180,7 +186,14 @@ def write_user_files(dist: Path) -> None:
         "   学长不看也不存这些(登录态只留在那个浏览器实例里,不进对话、不落盘);\n"
         "   你登录好、打开「整学期」课表页后点「② 读取课表」,学长把解析结果列成预览,\n"
         "   你确认无误(顺便填一下「开学第一周周一是几号」—— 教务页面上没有这个信息)\n"
-        "   再点「③ 确认导入」才写进本机课表;不想留登录态了点「清除登录状态」。\n",
+        "   再点「③ 确认导入」才写进本机课表;不想留登录态了点「清除登录状态」。\n"
+        "   导入前学长会把新课表和你本机那份**逐条比对**(哪些课新增、哪些取消、\n"
+        "   哪门课换了教室或调了节次)列给你看,不再闷头整表覆盖;真导入后发现不对,\n"
+        "   课表面板上有「↩ 换回上一版」可以退回去。\n"
+        "14. 复杂任务学长会先列计划(工作区 plans/plan.md)。顶栏「🗂 计划」实时显示\n"
+        "   进度、现在能动的是哪几步、哪几步被上游失败卡住了;点「↩ 派发到输入框」\n"
+        "   把「接着做哪几步」填进输入框,你过一眼再发 —— 面板只看不改,\n"
+        "   打勾仍由学长在做完每一步时自己标。\n",
         encoding="utf-8",
     )
 

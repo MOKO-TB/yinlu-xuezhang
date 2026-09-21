@@ -24,169 +24,28 @@ import json
 import re
 from pathlib import Path
 
+# 文法与版式识别都在 site_parse;本模块只管"开哪一页、读哪一帧、什么时候问人"。
+# 旧名字(parse_grid/_entry/_norm_periods/GRID_JS…)在这里继续转出去:
+# v0.9.23 的测试、冻结清单与脚本都吃这些名字。
+from minicode.site_parse import (  # noqa: F401
+    GRID_JS, TABLE_JS, TEXT_JS, _cell_entries, _entry_qiangzhi, _norm_periods,
+    _norm_weeks, _rows_of, load_dump, parse_page)
+
 LOGIN_URL = "https://jw.educationgroup.cn/gzasc/"
 XKB_URL = "https://jw.educationgroup.cn/gzasc_jsxsd/xskb/xskb_list.do"
 HOST_HINT = "educationgroup.cn"   # 教务页所在站点(接管页面时按它找)
 FRAME_HINT = "xskb"               # 学期课表所在帧的 URL 片段
 MODEL_TEXT_CHARS = 16000          # 兜底交给模型的页面文字上限
 
-# 在课表帧里跑的那段 JS:把 #kbtable 拍成二维文本网格 + 顺手读出学期/周次筛选。
-# 为什么读 innerText 而不是解析 HTML:innerText 只含**可见**文本,教务页那些
-# display:none 的另一半单元格(单双周备用)天然被排除掉了。
-GRID_JS = """(() => {
-  const t = document.querySelector('#kbtable') || document.querySelector('table');
-  if (!t) return null;
-  const rows = [...t.querySelectorAll('tr')].map(tr =>
-    [...tr.children].map(c => (c.innerText || '').replace(/\\u00a0/g, ' ')));
-  const pick = (n) => { const s = document.querySelector('select[name="' + n + '"]');
-                        return s ? (s.options[s.selectedIndex] || {}).value || '' : ''; };
-  return JSON.stringify({term: pick('xnxq01id'), week: pick('zc'),
-                         title: document.title, url: location.href, rows});
-})()"""
-
-TEXT_JS = "(() => { const b = document.body; return b ? (b.innerText || '') : ''; })()"
-
-# 一格里的条目形状:第一串含「(周)」的行是锚点,它前面是课名/教师,后面是地点
-_DASH_RE = re.compile(r"^-{3,}$")
-_WEEK_LINE_RE = re.compile(r"[（(]周[)）]")
-_PERIOD_RE = re.compile(r"\[(\d{1,2}(?:\s*-\s*\d{1,2})+)\s*节\]")
-_BELL_RE = re.compile(r"(\d{1,2})[:：](\d{2})\s*[-~－]\s*(\d{1,2})[:：](\d{2})")
-_DAY_RE = re.compile(r"^\s*(星期|礼拜)?\s*([一二三四五六日天])\s*$")
+# 旧名字留着当门面:v0.9.23 的测试/冻结清单/脚本都吃这几个,含义一字不改。
+_entry = _entry_qiangzhi
 
 
-# ---------------------------------------------------------------- 确定性解析
+# ---------------------------------------------------------------- 确定性解析(已下沉到 site_parse)
 
-def _cell_entries(text: str) -> list[list[str]]:
-    """一个单元格 → 若干课程条目(短横线串是多门课之间的分隔)。"""
-    chunks: list[list[str]] = []
-    cur: list[str] = []
-    for raw in str(text or "").splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        if _DASH_RE.match(line):
-            if cur:
-                chunks.append(cur)
-                cur = []
-            continue
-        cur.append(line)
-    if cur:
-        chunks.append(cur)
-    return chunks
-
-
-def _norm_periods(raw: str) -> str:
-    """'01-02' / '01-08' → '1-2' / '1-8';'01-02-03-04' → '1-4'。
-
-    恰好两个数字时按**起-止区间**解释 —— 教务把跨 8 节的课写成 [01-08节],
-    若按"列举了两个节次"处理会得到 "1,8",等于把一连 8 节课说成第 1、8 两节。
-    三个以上数字才是逐个列举(不连续时退化成逗号表,宁缺不猜)。
-    """
-    nums = [int(n) for n in re.findall(r"\d{1,2}", raw)]
-    if not nums:
-        return ""
-    if len(nums) == 2:
-        a, b = sorted(nums)
-        return str(a) if a == b else (f"{a},{b}" if b - a > 12 else f"{a}-{b}")
-    ordered = sorted(set(nums))
-    if ordered == list(range(ordered[0], ordered[-1] + 1)):
-        return f"{ordered[0]}-{ordered[-1]}" if len(ordered) > 1 else str(ordered[0])
-    return ",".join(str(n) for n in ordered)
-
-
-def _norm_weeks(line: str) -> str:
-    """'1-6(周)' / '4,6,8,10(周)' → 交给 schedule.parse_weeks 的原样周次串。"""
-    core = _WEEK_LINE_RE.split(line)[0]
-    return re.sub(r"\s+", "", core)
-
-
-def _entry(lines: list[str], day: int, bell: str) -> tuple[dict | None, str | None]:
-    """一条课程条目 → (课表记录, 失败原因)。两者恰有一个非空。"""
-    anchor = next((i for i, l in enumerate(lines) if _WEEK_LINE_RE.search(l)), None)
-    if anchor is None:
-        return None, f"没有「周次(周)」这一行:{' / '.join(lines)[:60]}"
-    pm = _PERIOD_RE.search(lines[anchor])
-    if not pm:
-        return None, f"周次行里读不到节次:{lines[anchor][:60]}"
-    name = " ".join(lines[:max(anchor - 1, 0)]).strip()
-    teacher = lines[anchor - 1].strip() if anchor >= 2 else ""
-    if not name:                        # 只有一行在周次之前:那行就是课名,教师未知
-        name, teacher = " ".join(lines[:anchor]).strip(), ""
-    location = ""
-    for extra in lines[anchor + 1:]:
-        if not _WEEK_LINE_RE.search(extra):
-            location = extra
-            break
-    if not name:
-        return None, "读不出课程名"
-    return {"name": name[:60], "day": day, "periods": _norm_periods(pm.group(1)),
-            "start_time": bell, "weeks": _norm_weeks(lines[anchor])[:80],
-            "location": location[:60], "teacher": teacher[:40]}, None
-
-
-def parse_grid(grid: dict) -> dict:
-    """强智「学期理论课表」网格 → 课表记录。
-
-    返回 {"classes", "term", "week", "notes", "unparsed", "ok", "msg"}。
-    认不出表头(没有星期一~星期日那一行)时 ok=False 并说明为什么 ——
-    这时候该走模型兜底,而不是硬凑一份课表出来。
-    """
-    rows = (grid or {}).get("rows") or []
-    day_of: dict[int, int] = {}
-    header_row = -1
-    for ri, row in enumerate(rows[:3]):
-        got = {}
-        for ci, cell in enumerate(row):
-            m = _DAY_RE.match(str(cell).strip())
-            if m:
-                got[ci] = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
-                           "六": 6, "日": 7, "天": 7}[m.group(2)]
-        if len(got) >= 5:
-            day_of, header_row = got, ri
-            break
-    if not day_of:
-        return {"ok": False, "msg": "认不出课表的星期列(页面结构可能和强智不一样)",
-                "classes": [], "term": (grid or {}).get("term", ""),
-                "week": (grid or {}).get("week", ""), "notes": [], "unparsed": []}
-
-    classes: list[dict] = []
-    seen: set[tuple] = set()
-    unparsed: list[str] = []
-    for row in rows[header_row + 1:]:
-        cells = [str(c or "") for c in row]
-        bell = ""
-        bm = _BELL_RE.search(cells[0] if cells else "")
-        if bm:
-            bell = f"{int(bm.group(1)):02d}:{bm.group(2)}"
-        for ci, day in day_of.items():
-            if ci >= len(cells):
-                continue
-            for entry in _cell_entries(cells[ci]):
-                rec, why = _entry(entry, day, bell)
-                if rec is None:
-                    unparsed.append(why)
-                    continue
-                # 同一门"连上 8 节"的课会在每个大节行里重复出现:按内容去重,
-                # 保留最早那个钟点(它才是真正的第一次上课时间)。
-                key = (rec["name"], rec["day"], rec["periods"], rec["weeks"],
-                       rec["location"], rec["teacher"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                classes.append(rec)
-    classes.sort(key=lambda c: (c["day"], c["periods"], c["name"]))
-    notes: list[str] = []
-    if (grid or {}).get("week"):
-        notes.append(f"页面当前只筛了第 {grid['week']} 周 —— 导入前请把「周次」切回(全部)"
-                     "再读一次,否则读到的不是整学期。")
-    no_bell = sum(1 for c in classes if not c["start_time"])
-    if no_bell:
-        notes.append(f"{no_bell} 门课没读到上课钟点(节次行里没有时间点),"
-                     "这些课只报第几节,不编时间。")
-    return {"ok": bool(classes), "msg": "" if classes else "课表格里没解析出任何一条课",
-            "classes": classes, "term": (grid or {}).get("term", ""),
-            "week": (grid or {}).get("week", ""), "notes": notes,
-            "unparsed": sorted(set(unparsed))[:8]}
+def parse_grid(grid) -> dict:
+    """一张表(强智 dump 或整页 dump)→ 课表记录。文法在 site_parse 里。"""
+    return parse_page(grid if isinstance(grid, (dict, list)) else {})
 
 
 def summarize(classes) -> dict:
@@ -207,6 +66,7 @@ def summarize(classes) -> dict:
         "no_time": sorted({str(c.get("name", "")) for c in items
                            if not str(c.get("start_time", "")).strip()}),
     }
+
 
 
 # ---------------------------------------------------------------- 模型兜底
@@ -307,26 +167,68 @@ class ImportFlow:
             with contextlib.suppress(Exception):
                 brs.open_page(XKB_URL, mode=self.mode, headless=False,
                               wait_ms=brs.MAX_WAIT_MS, max_chars=brs.FRAME_MAX_CHARS)
-        grid = self.grid()
-        if not grid:
-            return {"ok": False, "stage": "no_grid", "classes": [], "notes": [],
-                    "unparsed": [], "summary": summarize([]),
-                    "msg": ("没在页面上找到强智那张课表表格。"
-                            + self._where()
-                            + " 请在教务系统里点开「课表查询 → 学期课表」(周次选全部),"
+        parsed = self._parse_any()
+        if parsed is None:
+            return {"ok": False, "stage": "no_grid", "kind": None, "adapter": "",
+                    "classes": [], "notes": [],
+                    "unparsed": [], "summary": summarize([]), "diff": None,
+                    "msg": ("强智那张课表表和整页通用识别都没读到表格" + self._where()
+                            + "。请在教务系统里点开「课表查询 → 学期课表」(周次选全部),"
                               "然后让学长用模型整理,或者你手工贴课表。")}
-        parsed = parse_grid(grid)
-        parsed["stage"] = "ready" if parsed["ok"] else "parsed_failed"
         parsed["summary"] = summarize(parsed["classes"])
         if parsed["ok"]:
-            parsed["msg"] = (f"读到 {parsed['summary']['entries']} 条课"
+            parsed["stage"] = "ready"
+            parsed["diff"] = self._diff(parsed["classes"])
+            d = parsed["diff"]
+            lead = (f"与本机课表比对:{d['msg']}" if d and d.get("has_existing")
+                    else "本机还没有课表,这次是首次导入。")
+            parsed["msg"] = (lead + f" 读到 {parsed['summary']['entries']} 条课"
                              f"(约 {parsed['summary']['courses']} 门)"
                              + (f",学期 {parsed['term']}" if parsed["term"] else "")
+                             + (f"(按{parsed['adapter']}文法认出)" if parsed.get("adapter") else "")
                              + "。请核对后确认导入 —— 在你点确认之前,学长不会写任何文件。")
+            return parsed
+        parsed["diff"] = None
+        if parsed.get("kind") is None and parsed.get("unparsed") == []:
+            # 认不出星期列 = 这根本不是一张课表(考试安排/书目/通知)。
+            # 这时候最坏的做法是"凑出一份课表存下去",所以直接不收。
+            parsed["stage"] = "not_timetable"
+            parsed["msg"] = ("这一页学长读到了内容,但它**不是课表**(没有星期一~星期日那一列)。"
+                             + self._where() + " 这不是课表,我不替你存 —— "
+                             "要读考试安排/书目这类表,直接让学长用 page_parse 看结构。")
         else:
+            parsed["stage"] = "parsed_failed"
             parsed["msg"] = (parsed["msg"]
                              + " 可以把页面文字交给模型整理一次(会发给你当前配置的模型)。")
         return parsed
+
+    def _parse_any(self) -> dict | None:
+        """先按强智那张表认,认不出再把整页表格交给通用退路(见 site_parse)。
+
+        两条路都跑完仍没认出课表时,回"至少读到了表"的那条 —— 它给的失败原因
+        比"什么都没有"更有用(结构变了 vs 页面没开对,是两件不同的事)。
+        """
+        results: list[dict] = []
+        for dump in (self.grid(), self.page()):
+            if not dump:
+                continue
+            res = parse_page(dump)
+            if res.get("ok"):
+                return res
+            results.append(res)
+        for res in results:
+            if res.get("notes") or res.get("unparsed"):
+                return res
+        return results[0] if results else None
+
+    @staticmethod
+    def _diff(classes) -> dict | None:
+        """覆盖前先算一次变动(只读,不写任何文件)。算不动就别拦读数。"""
+        from minicode import schedule
+        try:
+            return schedule.compare(classes)
+        except Exception:
+            return None
 
     def read_with_model(self, complete) -> dict:
         """第 2 步的退路:整页文字交给模型整理。会把手上的页面文字发给模型。"""
@@ -337,6 +239,7 @@ class ImportFlow:
         parsed.setdefault("week", "")
         parsed.setdefault("unparsed", [])
         parsed["summary"] = summarize(parsed.get("classes") or [])
+        parsed["diff"] = (self._diff(parsed["classes"]) if parsed.get("ok") else None)
         return parsed
 
     # ---- 取材(全部按帧读,详见 browser.read_frames)
@@ -380,6 +283,19 @@ class ImportFlow:
                 continue
             if data and (data.get("rows") or []):
                 return data
+        return None
+
+    def page(self):
+        """通用取材:整页(含所有内嵌帧)的所有表格 + 下拉框当前值。
+
+        与 grid() 的分工:grid() 只问强智那张 #kbtable;page() 不问学校长什么样,
+        把每张表都搬回来交给 site_parse 去认。认不出就算了,绝不硬凑。
+        """
+        brs = self.browser
+        for hit in brs.read_frames(TABLE_JS):
+            dump = load_dump(hit.get("value"))
+            if dump and _rows_of(dump):
+                return dump
         return None
 
     def page_text(self) -> str:

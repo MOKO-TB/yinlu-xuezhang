@@ -129,6 +129,10 @@ class PublicApi:
         """有没有刚读到、还没确认的课表。"""
         return self._b.schedule_import_status()
 
+    def schedule_undo(self) -> dict:
+        """课表面板「换回上一版」(名字避开输入框那个已有的 undo)。"""
+        return self._b.schedule_undo()
+
     def add_dropped_attachments(self, files_json: str = "[]") -> dict:
         """把拖进对话框的文件收进 uploads/(与 📎 选文件同一条落盘路径)。"""
         return self._b.add_dropped_attachments(files_json)
@@ -261,6 +265,10 @@ class PublicApi:
     def review_kb_candidate(self, index, action: str) -> dict:
         """候选审核:并入正式知识库(merge)或拒绝(reject)。"""
         return self._b.review_kb_candidate(index, action)
+
+    def get_plan(self) -> dict:
+        """计划面板:plans/plan.md 的每步状态(可执行/被卡住)+ 一键派发文案。"""
+        return self._b.get_plan()
 
     def get_workspaces(self) -> dict:
         """工作区弹窗:当前 / 默认 / 最近。"""
@@ -640,6 +648,25 @@ class Bridge:
         if ok:
             self.ui.push("info", text=msg)
         return {"ok": ok, "msg": msg}
+
+    # ------------------------------------------------------------ 计划面板
+
+    def get_plan(self) -> dict:
+        """计划面板的数据:plans/plan.md 拍平成每步带「可执行/被卡住」标记的状态。
+
+        只读。步骤状态归 plan 工具(文件即状态),面板不去改文件 ——
+        两边都能改就会互相盖,而且模型看不到界面偷偷改过的那一下。
+        「一键派发」要的这句话也在后端拼(dispatch_text),前端只负责填回输入框。
+        """
+        from minicode.planning import dispatch_text, plan_state
+        try:
+            state = plan_state(self.workspace)
+        except Exception as exc:      # 计划文件坏了/读不动都不该让面板打不开
+            return {"ok": False, "has_plan": False, "goal": "", "steps": [],
+                    "total": 0, "done": 0, "ready": [], "blocked": [], "failed": [],
+                    "dispatch_text": "",
+                    "msg": f"读取计划失败:{type(exc).__name__}: {exc}"}
+        return {"ok": True, "dispatch_text": dispatch_text(state), **state}
 
     # ------------------------------------------------------------ 工作区
 
@@ -1449,6 +1476,21 @@ class Bridge:
     def schedule_import_status(self) -> dict:
         """面板开关时问一次:学长手上有没有刚读到、还没确认的课表。"""
         return {"ok": True, "pending": bool(getattr(self, "_jw_result", None))}
+
+    def schedule_undo(self) -> dict:
+        """课表换回上一版(save/clear 时留的那份备份)。
+
+        为什么给按钮而不是只让模型做:导入向导第 ③ 步写着"覆盖",
+        同学点完才发现读错了周次 —— 这时候他要的是**一键回去**,
+        不是再去输入框里打一句话。
+        """
+        from minicode import schedule
+        ok, msg = schedule.undo()
+        try:
+            view = schedule.view()
+        except Exception:
+            view = None
+        return {"ok": ok, "msg": msg, "schedule": view}
 
     def add_dropped_attachments(self, files_json: str = "[]") -> dict:
         """把拖进对话框的文件落进工作区 uploads/(与点 📎 选文件同一条路径)。

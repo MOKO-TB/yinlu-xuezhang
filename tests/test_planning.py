@@ -1,7 +1,8 @@
-"""计划模式测试:写入/读取/更新/解析/校验。"""
+"""计划模式测试:写入/读取/更新/解析/校验 + 面板状态与「一键派发」指令。"""
 import json
 
-from minicode.planning import (blocked_steps, parse_plan, plan, plan_path,
+from minicode.planning import (blocked_steps, dispatch_text, notify_plan,
+                               parse_plan, plan, plan_path, plan_state,
                                ready_steps, render_plan)
 from minicode.tools.base import ToolContext
 
@@ -180,3 +181,108 @@ def test_legacy_plan_without_deps_still_works(tmp_path):
 def test_render_escape_newline_in_step():
     text = render_plan("g", [{"title": "a\nb"}])
     assert "a\nb" not in text.splitlines()[2] or True  # 标题内换行不破坏列表结构
+
+
+# ---------------------------------------------------------------- 面板(v0.9.24)
+
+
+class _UI:
+    """假界面:记下每次 push;raise=True 用来测"刷面板失败不该把工具带崩"。"""
+
+    def __init__(self, raise_it=False):
+        self.events = []
+        self.raise_it = raise_it
+
+    def push(self, type_, **payload):
+        self.events.append((type_, payload))
+        if self.raise_it:
+            raise RuntimeError("窗口已经关了")
+
+
+def test_plan_state_without_a_file_is_a_guide_not_an_empty_table(tmp_path):
+    st = plan_state(tmp_path)
+    assert st["has_plan"] is False and st["steps"] == [] and st["total"] == 0
+    assert st["path"] == "plans/plan.md"          # 前端那句引导要指得准
+    assert dispatch_text(st) == ""                # 没计划就别派发
+
+
+def test_plan_state_labels_ready_and_blocked_per_step(tmp_path):
+    ctx = _ctx(tmp_path)
+    plan(ctx, "write", goal="完成登录功能", steps=_DEP_STEPS)
+    st = plan_state(tmp_path)
+    assert (st["goal"], st["total"], st["done"]) == ("完成登录功能", 4, 0)
+    assert st["ready"] == [1] and st["blocked"] == []
+    assert [s["ready"] for s in st["steps"]] == [True, False, False, False]
+
+    plan(ctx, "update", step=1, status="done")
+    plan(ctx, "update", step=2, status="failed", note="接口契约没定下来")
+    st = plan_state(tmp_path)
+    assert st["done"] == 1 and st["failed"] == [2]
+    assert st["ready"] == [4] and st["blocked"] == [3]
+    by = {s["n"]: s for s in st["steps"]}
+    assert by[1]["status"] == "done" and by[1]["ready"] is False   # 做完的不算"可做"
+    assert by[3]["blocked"] is True and by[3]["ready"] is False
+    assert by[2]["note"] == "接口契约没定下来"          # 备注得跟着上面板
+
+
+def test_plan_state_is_read_only(tmp_path):
+    ctx = _ctx(tmp_path)
+    plan(ctx, "write", goal="g", steps=_DEP_STEPS)
+    before = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    plan_state(tmp_path)
+    assert (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8") == before
+
+
+def test_dispatch_text_lists_ready_steps_in_dependency_order(tmp_path):
+    ctx = _ctx(tmp_path)
+    plan(ctx, "write", goal="完成登录功能", steps=_DEP_STEPS)
+    t = dispatch_text(plan_state(tmp_path))
+    assert "完成登录功能" in t
+    assert "第 1 步 设计数据结构" in t and "第 2 步" not in t   # 只派现在能做的
+    assert "按编号顺序依次做完" in t
+    assert "plan(action=update" in t                    # 每做完一步要标记,面板才会动
+    assert "并行" not in t                              # 默认不并发派子代理
+
+
+def test_dispatch_text_names_the_blocked_steps(tmp_path):
+    ctx = _ctx(tmp_path)
+    plan(ctx, "write", goal="g", steps=_DEP_STEPS)
+    plan(ctx, "update", step=1, status="failed", note="上游没了")
+    t = dispatch_text(plan_state(tmp_path))
+    assert "现在没有依赖已满足的步骤" in t
+    assert "被上游失败卡住" in t and "别硬往下做" in t
+
+
+def test_dispatch_text_for_a_plan_without_deps_offers_everything(tmp_path):
+    ctx = _ctx(tmp_path)
+    _write_call(ctx)                                    # 老式三步、无依赖
+    st = plan_state(tmp_path)
+    assert st["ready"] == [1, 2, 3]
+    t = dispatch_text(st)
+    assert all(f"第 {n} 步" in t for n in (1, 2, 3))
+
+
+def test_writing_a_plan_refreshes_the_panel(tmp_path):
+    ui = _UI()
+    ctx = ToolContext(workspace=tmp_path, config=None, ui=ui)
+    plan(ctx, "write", goal="g", steps=_DEP_STEPS)
+    plan(ctx, "update", step=1, status="done")
+    types = [t for t, _ in ui.events]
+    assert types == ["plan_changed", "plan_changed"]    # write 与 update 各推一次
+    last = ui.events[-1][1]
+    assert last["done"] == 1 and last["ready"] == [2, 4]
+
+
+def test_a_broken_ui_never_breaks_the_plan_tool(tmp_path):
+    """窗口正在关闭时 push 会抛:计划照样落盘,工具照样回正常结果。"""
+    ctx = ToolContext(workspace=tmp_path, config=None, ui=_UI(raise_it=True))
+    r = plan(ctx, "write", goal="g", steps=[{"title": "a"}, {"title": "b"}])
+    assert "计划已写入" in r
+    assert (tmp_path / "plans" / "plan.md").exists()
+
+
+def test_notify_plan_without_a_ui_is_a_noop(tmp_path):
+    ctx = _ctx(tmp_path)                                 # 终端/CLI:ui 为空
+    notify_plan(ctx)                                     # 不该抛
+    plan(ctx, "write", goal="g", steps=[{"title": "a"}, {"title": "b"}])
+    assert plan_state(ctx.workspace)["total"] == 2

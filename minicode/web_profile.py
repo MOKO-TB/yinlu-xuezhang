@@ -68,6 +68,7 @@ EXCLUDED_TOOLS: dict[str, str] = {
     "browser_screenshot": "往服务器工作区写文件",
     "browser_close": "同上,浏览器能力整体不进白名单",
     "browser_status": "不暴露服务器的浏览器信息",
+    "page_parse": "与 browser_* 同一族:要在服务端起一个浏览器才读得到页面",
 }
 
 # 只允许通过 get_asset 读回的扩展名(该接口的原意是显示技能正文里的配图)
@@ -229,6 +230,8 @@ class PublicFacade:
             "add_skill": lambda **k: _refuse("网页版不开放技能面板"),
             # 工作区是服务器自己的目录选择:访客不能改(5 个方法整组拒绝)
             "get_workspaces": lambda **k: _refuse("网页版不开放工作区管理"),
+            # 计划面板读的是服务器工作区的 plans/plan.md,而访客侧压根没有 plan 工具
+            "get_plan": lambda **k: _refuse("网页版不开放计划面板(plan 工具只对本机版开放)"),
             "pick_workspace": lambda **k: _refuse("网页版不开放工作区管理"),
             "switch_workspace": lambda **k: _refuse("网页版不开放工作区管理"),
             "reset_workspace": lambda **k: _refuse("网页版不开放工作区管理"),
