@@ -24,7 +24,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "_provider_credentials",
                             # v0.9.22:按模型能力判定看图 + 写盘失败要说清 + 关窗答复
                             "_vision_on", "_persist_config", "set_vision",
-                            "close_choice"),
+                            "close_choice",
+                            # v0.9.23:教务课表导入 + 首次运行向导
+                            "schedule_import_open", "schedule_import_read",
+                            "schedule_import_model", "schedule_import_confirm",
+                            "schedule_import_clear", "schedule_import_status",
+                            "_jw_flow", "get_onboarding", "dismiss_onboarding"),
     "minicode.model_probe": ("list_models", "explain_status", "remember"),
     # ---- v0.9.22:安装版可用性(数据目录写探针 + 诊断下发) ----
     "minicode.paths": ("_is_writable", "_local_state_dir", "diagnostics",
@@ -37,7 +42,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "apply_reasoning_choice"),
     "minicode.session": ("to_markdown", "search_logs", "export_filename"),
     "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill"),
-    "minicode.web_profile": ("网页版不开放会话导出", "search_sessions"),
+    "minicode.web_profile": ("网页版不开放会话导出", "search_sessions",
+                             # v0.9.23:教务导入需要本机浏览器窗口,网页版必须挡掉
+                             "教务课表导入"),
     # ---- v0.9.14:知识库成长闭环 + 校园场景小工具 ----
     # v0.9.21:候选审核面板(list_candidates/review_candidate/_merge_into_kb)
     "minicode.growth": ("log_kb_gap", "save_candidate", "log_feedback", "kb_suggest",
@@ -78,6 +85,17 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.proactive": ("check_once", "fetch_latest", "start_loop", "clean_title",
                            "check_update", "push_briefing", "start_class_loop",
                            "calendar_alerts"),
+    # ---- v0.9.23:教务课表导入(整套新模块,漏收 = 点「导入课表」直接报错) ----
+    "minicode.schedule_import": ("ImportFlow", "parse_grid", "summarize",
+                                 "clear_login_state", "GRID_JS", "_norm_periods",
+                                 "MODEL_SYSTEM"),
+    # ---- v0.9.23:首次运行向导 + 数据目录可视化 ----
+    "minicode.onboarding": ("payload", "dismiss", "read", "STEPS", "PREF_FILE",
+                            "reset"),
+    # ---- v0.9.23:按帧读取 + 可见窗口(教务课表走的就是这几个能力) ----
+    "minicode.browser": ("adopt_page", "page_frames", "eval_in_frame",
+                         "read_frames", "ensure_visible", "_endpoint_port",
+                         "FRAME_MAX_CHARS"),
 }
 
 
@@ -126,7 +144,7 @@ def main() -> int:
     if failures:
         print("FAIL: 包内不是最新版代码 →", failures)
         return 1
-    print("PASS: 包内后端代码包含 最新版(v0.9.22)全部新增符号")
+    print("PASS: 包内后端代码包含 最新版(v0.9.23)全部新增符号")
     return 0
 
 

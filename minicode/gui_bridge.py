@@ -105,6 +105,30 @@ class PublicApi:
         """课表面板:今日/明日/本周网格(只读本机课表)。"""
         return self._b.get_schedule_view()
 
+    def schedule_import_open(self) -> dict:
+        """教务导入第 1 步:打开看得见的登录页(登录由人做)。"""
+        return self._b.schedule_import_open()
+
+    def schedule_import_read(self) -> dict:
+        """教务导入第 2 步:读学期课表并解析(不写文件)。"""
+        return self._b.schedule_import_read()
+
+    def schedule_import_model(self) -> dict:
+        """教务导入第 2 步的退路:页面文字交给模型整理。"""
+        return self._b.schedule_import_model()
+
+    def schedule_import_confirm(self, term_start: str = "") -> dict:
+        """教务导入第 3 步:用户点头后才落盘(要填第 1 周周一)。"""
+        return self._b.schedule_import_confirm(term_start)
+
+    def schedule_import_clear(self) -> dict:
+        """教务导入收尾:关窗口并清掉那份独立 profile 的登录态。"""
+        return self._b.schedule_import_clear()
+
+    def schedule_import_status(self) -> dict:
+        """有没有刚读到、还没确认的课表。"""
+        return self._b.schedule_import_status()
+
     def add_dropped_attachments(self, files_json: str = "[]") -> dict:
         """把拖进对话框的文件收进 uploads/(与 📎 选文件同一条落盘路径)。"""
         return self._b.add_dropped_attachments(files_json)
@@ -112,6 +136,14 @@ class PublicApi:
     def set_notice_watch(self, enabled: bool) -> dict:
         """主动推荐开关:官网新通知看门狗。"""
         return self._b.set_notice_watch(enabled)
+
+    def get_onboarding(self) -> dict:
+        """首次运行向导:该不该弹 + 三步内容 + 数据目录。"""
+        return self._b.get_onboarding()
+
+    def dismiss_onboarding(self, key: str = "first_run") -> dict:
+        """首次运行向导勾了「不再显示」。"""
+        return self._b.dismiss_onboarding(key)
 
     def stop_task(self) -> dict:
         return self._b.stop_task()
@@ -1116,6 +1148,21 @@ class Bridge:
         from minicode import tray
         return tray.close_choice(action, bool(remember))
 
+    def get_onboarding(self) -> dict:
+        """首次运行向导该不该弹 + 三步内容 + 数据目录实况(见 minicode.onboarding)。"""
+        from minicode import onboarding
+        try:
+            return onboarding.payload(key_configured=self.config.api_key_configured,
+                                      paths=paths_diagnostics())
+        except Exception as exc:                 # 向导是锦上添花,不能拖住启动
+            return {"ok": False, "show": False, "steps": [],
+                    "msg": f"读首次运行引导出错:{type(exc).__name__}"}
+
+    def dismiss_onboarding(self, key: str = "first_run") -> dict:
+        """「不再显示」:落盘偏好,写不进去要如实说(只读目录是踩过的坑)。"""
+        from minicode import onboarding
+        return onboarding.dismiss(str(key or "first_run"))
+
     def _apply_active_provider(self) -> None:
         """供应商/密钥变更后重建共享 LLM 客户端并同步给当前会话。"""
         self._shared_llm = LLMClient(self.config)
@@ -1322,6 +1369,86 @@ class Bridge:
             return {"ok": True, "schedule": schedule.view()}
         except Exception:
             return {"ok": False}
+
+    # ------------------------------------------- 教务课表导入(v0.9.23 三步向导)
+
+    def _jw_flow(self):
+        """整程共用一个 ImportFlow 实例(它自己不持有连接,只按 URL 认领页面)。"""
+        from minicode import schedule_import
+        flow = getattr(self, "_jw_import_flow", None)
+        if flow is None:
+            flow = schedule_import.ImportFlow()
+            self._jw_import_flow = flow
+        return flow
+
+    def schedule_import_open(self) -> dict:
+        """第 1 步:把教务登录页开在**看得见**的窗口里。登录是人的事,学长不碰。"""
+        self._jw_result = None
+        try:
+            return self._jw_flow().open_login()
+        except Exception as exc:                      # 桥不能让前端等一个不回来的 promise
+            return {"ok": False, "stage": "failed",
+                    "msg": f"学长这边出错了:{type(exc).__name__}: {exc}"}
+
+    def schedule_import_read(self) -> dict:
+        """第 2 步:读那张教务页的学期课表并确定性解析。**不落盘**。"""
+        self._jw_result = None
+        try:
+            r = self._jw_flow().read()
+        except Exception as exc:
+            return {"ok": False, "stage": "failed",
+                    "msg": f"读课表时出错:{type(exc).__name__}: {exc}"}
+        if r.get("ok"):
+            self._jw_result = [dict(c) for c in r.get("classes") or []]
+        return r
+
+    def schedule_import_model(self) -> dict:
+        """第 2 步的退路:页面文字交给当前模型整理(会真的发出这段文字)。"""
+        self._jw_result = None
+        llm = self._session_llm() or self._shared_llm
+        if llm is None:
+            return {"ok": False, "stage": "failed",
+                    "msg": "还没有可用的模型配置:先在设置里填好模型和密钥再试。"}
+        try:
+            r = self._jw_flow().read_with_model(llm.complete)
+        except Exception as exc:
+            return {"ok": False, "stage": "failed",
+                    "msg": f"模型整理课表时出错:{type(exc).__name__}: {exc}"}
+        if r.get("ok"):
+            self._jw_result = [dict(c) for c in r.get("classes") or []]
+        return r
+
+    def schedule_import_confirm(self, term_start: str = "") -> dict:
+        """第 3 步:用户点头之后才真的写 schedule.json。
+
+        term_start(第 1 周周一)教务页上**没有**,只能问人 —— 所以确认页必须有这一栏。
+        """
+        from minicode import schedule
+        classes = getattr(self, "_jw_result", None) or []
+        if not classes:
+            return {"ok": False,
+                    "msg": "手上还没有读到课表:先点「读取课表」,读到了再确认导入。"}
+        ok, msg = schedule.save(str(term_start or "").strip(), classes)
+        if ok:
+            self._jw_result = None
+        try:
+            view = schedule.view()
+        except Exception:
+            view = None
+        return {"ok": ok, "msg": msg, "schedule": view}
+
+    def schedule_import_clear(self) -> dict:
+        """收尾:关掉导入用的浏览器窗口并清掉它的登录状态(独立 profile)。"""
+        from minicode import schedule_import
+        self._jw_result = None
+        try:
+            return schedule_import.clear_login_state()
+        except Exception as exc:
+            return {"ok": False, "msg": f"清理登录态失败:{type(exc).__name__}: {exc}"}
+
+    def schedule_import_status(self) -> dict:
+        """面板开关时问一次:学长手上有没有刚读到、还没确认的课表。"""
+        return {"ok": True, "pending": bool(getattr(self, "_jw_result", None))}
 
     def add_dropped_attachments(self, files_json: str = "[]") -> dict:
         """把拖进对话框的文件落进工作区 uploads/(与点 📎 选文件同一条路径)。

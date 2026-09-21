@@ -77,3 +77,6 @@ _build_*.log
 /close-pref.json
 /tray.log
 /.write-probe.tmp
+
+# v0.9.23 首次运行向导的「不再显示」偏好(本机状态,开发态落在仓库根)
+/onboarding.json

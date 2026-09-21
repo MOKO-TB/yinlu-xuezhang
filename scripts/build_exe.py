@@ -111,8 +111,13 @@ def write_user_files(dist: Path) -> None:
                   "schedule.json", "weather-cache.json", "reminders.json",
                   "notice-watch.json", "injection-events.log",
                   # v0.9.22 关窗偏好与托盘诊断日志(本机状态,不外发)
-                  "close-pref.json", "tray.log"):
+                  "close-pref.json", "tray.log",
+                  # v0.9.23 首次运行向导的「不再显示」偏好(纯本机状态)
+                  "onboarding.json"):
         (dist / _name).unlink(missing_ok=True)
+    # v0.9.23:可见浏览器跑过教务导入后,这个 profile 目录里就是**真实的登录态**
+    # (cookie / sessionStorage)。随包发给同学 = 把自己的教务账号交出去。
+    shutil.rmtree(dist / "browser-profile", ignore_errors=True)
     # v0.9.21:候选审核把人工核实的知识写进 app_path('kb')/reviewed.json;
     # 构建机上若试用过「并入」,那份文件含本机问答,不能随包发给别人。
     (dist / "kb" / "reviewed.json").unlink(missing_ok=True)
@@ -167,7 +172,15 @@ def write_user_files(dist: Path) -> None:
         "   勾了「不再询问」以后想改回来:右键托盘图标选「点 X 时先问我」。\n"
         "12. 安装版如果被装进只读目录(安装时用了管理员权限 → Program Files),\n"
         "   程序数据会自动改存到 %LOCALAPPDATA%\\引路学长,配好的模型 Key 一样不会丢;\n"
-        "   想确认数据存在哪,看那个目录里有没有 config.json 即可。\n",
+        "   数据到底存在哪,看界面:顶栏「模型管理」下方会写明数据目录的真实路径,\n"
+        "   第一次打开也有引导页说明;那个目录写不进去时会当场用黄字提醒你,\n"
+        "   不会让你以为存好了其实没存。\n"
+        "13. 课表可以一键从教务系统导入:点「📅 课表」→「从教务导入」,学长会弹出一个\n"
+        "   真浏览器窗口停在登录页 —— **账号、密码、验证码都由你自己在那个窗口里输入**,\n"
+        "   学长不看也不存这些(登录态只留在那个浏览器实例里,不进对话、不落盘);\n"
+        "   你登录好、打开「整学期」课表页后点「② 读取课表」,学长把解析结果列成预览,\n"
+        "   你确认无误(顺便填一下「开学第一周周一是几号」—— 教务页面上没有这个信息)\n"
+        "   再点「③ 确认导入」才写进本机课表;不想留登录态了点「清除登录状态」。\n",
         encoding="utf-8",
     )
 

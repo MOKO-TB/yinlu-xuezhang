@@ -234,6 +234,18 @@ class PublicFacade:
             "reset_workspace": lambda **k: _refuse("网页版不开放工作区管理"),
             "forget_workspace": lambda **k: _refuse("网页版不开放工作区管理"),
         }
+        # 教务课表导入:要在**本机**拉起一个看得见的浏览器窗口让人自己登录。
+        # 服务器上跑网页版没有桌面会话,也不该替访客开浏览器 —— 整组明确拒绝,
+        # 好过落到"网页版不开放该功能:schedule_import_open"那种猜谜式提示。
+        _reason = "网页版不开放教务课表导入(需要本机浏览器窗口,请用桌面版)"
+        self._handlers.update({n: (lambda **k: _refuse(_reason)) for n in (
+            "schedule_import_open", "schedule_import_read", "schedule_import_model",
+            "schedule_import_confirm", "schedule_import_clear", "schedule_import_status")})
+        # 首次运行向导讲的是"本机数据目录/config.json 写在哪儿",对访客既没意义
+        # 也带路径:直接回"不弹",而不是回一条拒绝让前端当报错弹出来。
+        self._handlers["get_onboarding"] = lambda **k: {"ok": True, "show": False,
+                                                        "steps": [], "paths": {}}
+        self._handlers["dismiss_onboarding"] = lambda **k: {"ok": True, "msg": ""}
 
     # ------------------------------------------------------------ 分发
 

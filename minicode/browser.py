@@ -48,6 +48,9 @@ DEFAULT_WAIT_MS = 8000
 MAX_WAIT_MS = 30000
 DEFAULT_MAX_CHARS = 6000
 MAX_CHARS = 20000
+# 按帧读取的天花板:一张学期课表的 #kbtable 文本也就几万字,6000 的默认值
+# 会把后半张切掉 —— 那时候"没课"其实是"没读到"。给足,但仍要有上限防失控。
+FRAME_MAX_CHARS = 200_000
 MAX_SESSIONS = 6                     # 同时活着的标签页上限(超出关最旧的)
 LAUNCH_TIMEOUT = 25.0                # 冷启动耐心值(秒)
 # attach 握手限时:实测用户开着几十个标签页的 Edge **首次** WS 握手可超过 3 s
@@ -299,6 +302,7 @@ class PageSession:
     title: str = ""
     opened_at: float = field(default_factory=time.time)
     owner: Any = None        # weakref 到底创建它的线程:线程死了标签页就该回收
+    adopted: bool = False    # True = 用户本来就开着的页,我们只是接管:**绝不关它**
 
 
 @dataclass
@@ -306,6 +310,7 @@ class _State:
     conn: _Conn | None = None
     browser: str = ""
     mode: str = ""                    # attach / launch
+    headless: bool = True             # 只说 launch 那一支:有没有窗口(教务登录必须有)
     proc: subprocess.Popen | None = None
     port: int | None = None
     sessions: dict[str, PageSession] = field(default_factory=dict)
@@ -337,6 +342,27 @@ def _require_conn() -> _Conn:
 
 # ---------------------------------------------------------------- 端点与启动
 
+def _endpoint_port(raw: str) -> int:
+    """从 YINLUXS_CDP_URL 的值里取端口:http://127.0.0.1:9222 / localhost:9222 / 9222。
+
+    为什么不直接 re.search(r"(\\d{2,5})"):那个正则命中的是**第一段数字**,
+    而对文档里推荐的写法 `http://127.0.0.1:9222` 来说那是 IP 的 "127" ——
+    于是永远去探 127 端口,attach 这条路"怎么都连不上"(真机踩到)。
+    """
+    v = (raw or "").strip()
+    if v.isdigit():
+        return int(v)
+    try:
+        port = urllib.parse.urlsplit(v).port
+    except ValueError:                       # 端口越界/非数字,交给下面的兜底
+        port = None
+    if port:
+        return int(port)
+    m = re.search(r":(\d{2,5})(?:[/?#\s]|$)", v)
+    port = int(m.group(1)) if m else 0
+    return port if 0 < port <= 65535 else 0
+
+
 def _attach_endpoint() -> tuple[str, dict] | None:
     """找一个可以直接 attach 的调试端点(独立于我们自己的实例)。"""
     env = (os.environ.get(ENV_CDP_URL) or "").strip()
@@ -345,10 +371,10 @@ def _attach_endpoint() -> tuple[str, dict] | None:
             raise BrowserUnavailable(
                 f"{ENV_CDP_URL} 请写成 http://127.0.0.1:<port> 的形式"
                 "(具体 WebSocket 地址由程序从 /json/version 取)")
-        m = re.search(r"(\d{2,5})", env)
-        if not m:
+        port = _endpoint_port(env)
+        if not port:
             raise BrowserUnavailable(f"{ENV_CDP_URL} 看不出端口:{env}")
-        info = probe_endpoint(int(m.group(1)))
+        info = probe_endpoint(port)
         if not info:
             raise BrowserUnavailable(
                 f"{ENV_CDP_URL} 指向的 {env} 连不上:确认浏览器开着且带 --remote-debugging-port")
@@ -497,8 +523,42 @@ def _ensure_conn(*, mode: str = "auto", headless: bool = True) -> tuple[_Conn, s
         _STATE.conn = conn
         _STATE.browser = info.get("Browser", "浏览器")
         _STATE.mode = "launch"
+        _STATE.headless = bool(headless)
         _STATE.proc, _STATE.port = proc, port
         return conn, _STATE.browser, _STATE.mode
+
+
+def ensure_visible(*, timeout: float = LAUNCH_TIMEOUT) -> dict:
+    """保证"接下来打开的页用户看得见"(教务登录这种必须人来输验证码的路子)。
+
+    三种情况:
+      - 已经 attach 在用户自己的浏览器上 → 他那本来就有窗口,直接返回;
+      - 我们自己起的实例**本来就带窗口** → 复用;
+      - 起的是无窗口实例(自动浏览默认) → 收掉重起一个有窗口的;
+        但**有别的线程正在用标签页时不动它**,否则等于把同伴的现场掀了。
+    """
+    with _LOCK:
+        if _STATE.conn is not None:
+            if _STATE.mode == "attach" or not _STATE.headless:
+                return {"ok": True, "mode": _STATE.mode, "browser": _STATE.browser}
+            live = [k for k, s in _STATE.sessions.items()
+                    if s.owner is None or (s.owner() is not None and s.owner().is_alive())]
+            if live:
+                raise BrowserUnavailable(
+                    "现在有一个**无窗口**的浏览器任务还在跑(自动浏览中),"
+                    "不能半路给它换窗口。等那条任务结束后再点导入。")
+            shutdown()
+        proc, port, info = launch_browser(headless=False)
+        try:
+            conn = _Conn(info["webSocketDebuggerUrl"])
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                proc.terminate()
+                proc.wait(timeout=5)
+            raise BrowserUnavailable(f"浏览器已启动但连不上它的调试端口:{exc}") from exc
+        _STATE.conn, _STATE.browser, _STATE.mode = conn, info.get("Browser", "浏览器"), "launch"
+        _STATE.proc, _STATE.port, _STATE.headless = proc, port, False
+        return {"ok": True, "mode": "launch", "browser": _STATE.browser}
 
 
 def _ensure_session(*, mode: str = "auto", headless: bool = True) -> PageSession:
@@ -545,20 +605,26 @@ def _sweep_dead_sessions_locked() -> None:
 
 
 def _prune_locked(*, keep: str) -> None:
-    """标签页太多时关掉最旧的,别让浏览器堆一屏。"""
-    if len(_STATE.sessions) <= MAX_SESSIONS:
+    """标签页太多时关掉最旧的,别让浏览器堆一屏。
+
+    用户自己开着的页(adopted)不参与:那是他的登录窗口,不是我们堆出来的。
+    """
+    if len([s for s in _STATE.sessions.values() if not s.adopted]) <= MAX_SESSIONS:
         return
     ordered = sorted(_STATE.sessions.items(), key=lambda kv: kv[1].opened_at)
     for k, s in ordered:
-        if len(_STATE.sessions) <= MAX_SESSIONS:
-            break
-        if k == keep:
+        if s.adopted or k == keep:
             continue
+        if len([x for x in _STATE.sessions.values() if not x.adopted]) <= MAX_SESSIONS:
+            break
         _close_session_locked(k, s)
 
 
 def _close_session_locked(key: str, sess: PageSession) -> None:
+    """丢掉一份会话。**接管的页只脱手、不关闭** —— 那是用户自己的标签页。"""
     _STATE.sessions.pop(key, None)
+    if sess.adopted:
+        return
     with contextlib.suppress(Exception):
         sess.conn.call("Target.closeTarget", {"targetId": sess.target_id}, timeout=5)
 
@@ -665,6 +731,122 @@ def open_page(url: str, *, wait_ms: int = DEFAULT_WAIT_MS, wait_for: str = "",
         "chars": len(text), "loaded": ok, "state": state, "waited_ms": int(waited),
         "mode": sess.mode, "browser": sess.browser, "wait_for": (wait_for or "").strip(),
     }
+
+
+# -------------------------------------------------- 接管现有页 / 按帧读取
+
+def adopt_page(url_like: str = "", *, mode: str = "attach",
+               timeout: float = 20.0) -> dict | None:
+    """认领浏览器里**已经开着**的那一页,而不是另起一张空白页。
+
+    为什么要这条:`_ensure_session` 只会 `Target.createTarget(about:blank)`,
+    新标签页看不到用户那张已登录的页面 —— 「读他刚登录好的教务页」就实现不了。
+    接管而来的会话标成 adopted:回收/收工都只脱手、**绝不替用户关他的标签页**。
+    找不到匹配页返回 None(由调用方如实说"没找到",而不是猜)。
+    """
+    key = _session_key()
+    with _LOCK:
+        if _STATE.conn is not None:
+            conn, browser_name, how = _STATE.conn, _STATE.browser, _STATE.mode
+        elif mode == "launch":
+            return None            # 没有连接 = 没有"已经开着的页",不去为找一个页而开浏览器
+        else:
+            conn, browser_name, how = _ensure_conn(mode="attach")
+        targets = conn.call("Target.getTargets", timeout=timeout).get("targetInfos") or []
+        pages = [t for t in targets
+                 if t.get("type") == "page" and url_like in str(t.get("url", ""))]
+        if not pages:
+            return None
+        t = pages[0]
+        cdp = conn.call("Target.attachToTarget", {"targetId": t["targetId"],
+                                                 "flatten": True},
+                        timeout=timeout).get("sessionId")
+        if not cdp:
+            raise BrowserError("接管标签页失败(Target.attachToTarget 没返回 sessionId)")
+        for method in ("Page.enable", "Runtime.enable"):
+            conn.call(method, session=cdp)
+        old = _STATE.sessions.get(key)
+        if old is not None and old.target_id != t["targetId"]:
+            _close_session_locked(key, old)      # 我们自己那张旧页可以让它走
+        sess = PageSession(conn=conn, target_id=t["targetId"], cdp_session=cdp,
+                           browser=browser_name, mode=how,
+                           url=str(t.get("url", "")), title=str(t.get("title", "")),
+                           owner=weakref.ref(threading.current_thread()), adopted=True)
+        _STATE.sessions[key] = sess
+        return {"url": sess.url, "title": sess.title, "mode": how,
+                "browser": browser_name}
+
+
+def _walk_frame_tree(node: dict, out: list[dict], depth: int = 0) -> None:
+    """摊平 Page.getFrameTree(帧里还能套帧)。"""
+    f = node.get("frame") or {}
+    if f.get("id"):
+        out.append({"frameId": f["id"], "url": f.get("url") or "",
+                    "name": f.get("name") or "", "depth": depth})
+    for child in node.get("childFrames") or []:
+        _walk_frame_tree(child, out, depth + 1)
+
+
+def page_frames(*, timeout: float = 20.0) -> list[dict]:
+    """当前页里的所有 frame,含**进程内 iframe**。
+
+    为什么不能只看 Target.getTargets:同源的进程内 iframe 根本不作为 target 出现,
+    而强智教务的课表就塞在这样一个 iframe 里(`xskb/xskb_list.do`)——
+    按 target 找会得出"这页是空的"这种假结论(真机踩过)。
+    """
+    sess = _current()
+    if sess is None:
+        raise BrowserError("还没有打开的页面:先 browser_open 或用 adopt_page 接管一页。")
+    tree = _cmd("Page.getFrameTree", session=sess, timeout=timeout).get("frameTree") or {}
+    out: list[dict] = []
+    _walk_frame_tree(tree, out)
+    return out
+
+
+def eval_in_frame(frame_id: str, expression: str, *, timeout: float = 25.0) -> Any:
+    """在指定 frame(顶层帧同样可以)里跑一段 JS,按值取回结果,**不截断**。
+
+    绕一圈 createIsolatedWorld 是因为 Runtime.evaluate 默认打在**顶层帧**的上下文上;
+    它的返回字段名是 executionContextId(取错键会每帧静默拿到 None)。
+    """
+    sess = _current()
+    if sess is None:
+        raise BrowserError("还没有打开的页面:先 browser_open 或用 adopt_page 接管一页。")
+    world = _cmd("Page.createIsolatedWorld",
+                 {"frameId": frame_id, "worldName": "yinluxs"},
+                 session=sess, timeout=timeout)
+    ctx = world.get("executionContextId") or world.get("contextId")
+    if not ctx:
+        raise BrowserError("拿不到该 frame 的执行上下文(页面可能刚被换掉)")
+    res = _cmd("Runtime.evaluate",
+               {"expression": expression, "returnByValue": True, "contextId": ctx},
+               session=sess, timeout=timeout)
+    if res.get("exceptionDetails"):
+        det = res["exceptionDetails"]
+        msg = (det.get("exception") or {}).get("description") or det.get("text") or "JS 出错"
+        raise BrowserError(f"页面里执行 JS 出错:{msg.splitlines()[0][:300]}")
+    return (res.get("result") or {}).get("value")
+
+
+def read_frames(expression: str, *, url_like: str = "",
+                max_chars: int = FRAME_MAX_CHARS, timeout: float = 25.0) -> list[dict]:
+    """在所有帧(或 URL 含 url_like 的帧)里跑同一段 JS,返回 [{url, value, truncated}]。"""
+    out: list[dict] = []
+    for fr in page_frames(timeout=timeout):
+        if url_like and url_like not in fr["url"]:
+            continue
+        try:
+            val = eval_in_frame(fr["frameId"], expression, timeout=timeout)
+        except (BrowserError, BrowserUnavailable) as exc:
+            out.append({"url": fr["url"], "frameId": fr["frameId"],
+                        "error": str(exc)[:200], "value": None})
+            continue
+        text = val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
+        cut = bool(max_chars and len(text) > max_chars)
+        out.append({"url": fr["url"], "frameId": fr["frameId"],
+                    "value": text[:max_chars] if cut else val, "truncated": cut,
+                    "chars": len(text)})
+    return out
 
 
 def screenshot(path: str | Path, *, full_page: bool = True) -> dict:
@@ -1017,6 +1199,8 @@ def shutdown() -> None:
     """收工:关掉我们自己起的浏览器实例(attach 到用户浏览器的只断连接)。"""
     with _LOCK:
         for key, sess in list(_STATE.sessions.items()):
+            if sess.adopted:
+                continue        # 用户自己的标签页:收工时只脱手,不替他关
             with contextlib.suppress(Exception):
                 sess.conn.call("Target.closeTarget", {"targetId": sess.target_id}, timeout=3)
         _STATE.sessions.clear()
@@ -1024,6 +1208,7 @@ def shutdown() -> None:
         proc, _STATE.proc = _STATE.proc, None
         _STATE.mode = ""
         _STATE.browser = ""
+        _STATE.headless = True
         if conn is not None:
             conn.close()
         if proc is not None and proc.poll() is None:

@@ -7,6 +7,7 @@ scripts/e2e_browser.py。
 import base64
 import json
 import threading
+import weakref
 
 import pytest
 
@@ -69,11 +70,12 @@ def isolated_state(monkeypatch):
     launch_browser 也必须桩掉:auto 现在默认走 launch,不桩的话几乎每个用例都会
     真的起一个 Edge(全量测试因此慢几十秒)——本文件先前就有这类隐性泄漏。
     """
-    saved = (br._STATE.conn, br._STATE.browser, br._STATE.mode, br._STATE.proc,
-             br._STATE.port, dict(br._STATE.sessions))
+    saved = (br._STATE.conn, br._STATE.browser, br._STATE.mode, br._STATE.headless,
+             br._STATE.proc, br._STATE.port, dict(br._STATE.sessions))
     br._STATE.conn = None
     br._STATE.browser = ""
     br._STATE.mode = ""
+    br._STATE.headless = True
     br._STATE.proc = None
     br._STATE.port = None
     br._STATE.sessions.clear()
@@ -104,8 +106,8 @@ def isolated_state(monkeypatch):
     monkeypatch.delenv(br.ENV_CDP_URL, raising=False)
     yield
     br._STATE.sessions.clear()
-    (br._STATE.conn, br._STATE.browser, br._STATE.mode, br._STATE.proc,
-     br._STATE.port, sessions) = saved
+    (br._STATE.conn, br._STATE.browser, br._STATE.mode, br._STATE.headless,
+     br._STATE.proc, br._STATE.port, sessions) = saved
     br._STATE.sessions.clear()
     br._STATE.sessions.update(sessions)
 
@@ -391,6 +393,43 @@ def test_probe_uses_port_file_when_http_all_404(monkeypatch, tmp_path):
     assert info == {"webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/dead-beef",
                     "Browser": "浏览器(由 DevToolsActivePort 探测)"}
     assert br.probe_endpoint(59999) is None       # 文件里的端口对不上就不算
+
+
+def test_endpoint_port_reads_the_url_port_not_the_ip():
+    """文档推荐的写法是 http://127.0.0.1:9222 —— 老正则命中的是第一串数字,
+    也就是 IP 里的 "127",于是永远去探 127 端口,attach 这条路"怎么都连不上"
+    (抓教务样本时真机踩到)。端口必须从 URL 的 host:port 里取。"""
+    assert br._endpoint_port("http://127.0.0.1:9222") == 9222
+    assert br._endpoint_port("http://localhost:9223/") == 9223
+    assert br._endpoint_port("127.0.0.1:9222") == 9222
+    assert br._endpoint_port("http://127.0.0.1:9222/json/version") == 9222
+    assert br._endpoint_port("9222") == 9222                  # 只写端口也认
+    assert br._endpoint_port("开着呢") == 0                    # 没端口:交回上层报文案
+    assert br._endpoint_port("http://127.0.0.1:99999") == 0    # 越界不崩
+
+
+_REAL_ATTACH_ENDPOINT = br._attach_endpoint     # 导入期取真身(见下面用例的说明)
+
+
+def test_attach_endpoint_probes_the_env_url_port(isolated_state, monkeypatch):
+    """显式设了端点时,探测的端口必须是 URL 里那个,不能是 IP 的第一段。
+
+    autouse 的 isolated_state 把 _attach_endpoint 整个桩成了"永远探得到",
+    所以这里要在导入期取到的真身换回来 —— 否则用例测的是桩。
+    """
+    seen: list[int] = []
+
+    def fake_probe(port, timeout=1.5):
+        seen.append(int(port))
+        return None
+
+    monkeypatch.setattr(br, "_attach_endpoint", _REAL_ATTACH_ENDPOINT)
+    monkeypatch.setattr(br, "probe_endpoint", fake_probe)
+    monkeypatch.setenv(br.ENV_CDP_URL, "http://127.0.0.1:9222")
+    with pytest.raises(br.BrowserUnavailable) as e:
+        br._attach_endpoint()
+    assert seen == [9222]
+    assert "9222" in str(e.value)                 # 文案里带上用户写的那个地址
 
 
 def test_attach_validated_by_real_handshake(isolated_state, monkeypatch):
@@ -851,3 +890,228 @@ def test_fill_reports_missing_options_of_select(ctx, monkeypatch):
 def test_click_and_fill_require_open_page(ctx):
     assert bt.browser_click(ctx, "1").startswith("错误:")
     assert bt.browser_fill(ctx, {"a": "b"}).startswith("错误:")
+
+
+# ------------------------------------- 接管现有页 / 按帧读取(教务课表导入这条路)
+
+JW_TARGETS = {"targetInfos": [
+    {"type": "page", "targetId": "TJW", "url": "https://jw.educationgroup.cn/gzasc/xsMain.jsp",
+     "title": "教务系统"},
+    {"type": "iframe", "targetId": "TIF", "url": "https://jw.educationgroup.cn/xskb/xskb_list.do",
+     "title": ""},
+    {"type": "page", "targetId": "OTHER", "url": "https://example.com/", "title": "别的"},
+]}
+
+
+def test_adopt_page_takes_over_the_users_tab_without_opening_a_new_one(isolated_state, monkeypatch):
+    """登录完那张页是**用户的**:按 URL 认领它,不能再 createTarget,也不能关它。"""
+    monkeypatch.setattr(br, "_ensure_conn",
+                        lambda **kw: (FakeConn(), "Edg/153.0", "attach"))
+    br._STATE.conn = FakeConn()
+    br._STATE.mode = "attach"
+    FakeConn.results = {"Target.getTargets": JW_TARGETS}
+    ours = br._ensure_session()                       # 我们自己那张空白页
+    FakeConn.calls.clear()
+    got = br.adopt_page("educationgroup.cn", mode="attach")
+    assert got["url"].endswith("xsMain.jsp") and got["mode"] == "attach"
+    names = _method_names()
+    assert "Target.createTarget" not in names, "接管时不该再开一张新页"
+    assert "Target.closeTarget" in names, "我们自己那张旧页该让位"
+    sess = br._STATE.sessions[br._session_key()]
+    assert sess.target_id == "TJW" and sess.adopted is True
+    assert ours.target_id not in [s.target_id for s in br._STATE.sessions.values()]
+
+
+def test_adopt_page_refuses_to_boot_a_browser_just_to_look(isolated_state):
+    """mode=launch 且还没有连接 = 没有"已经开着的页":回 None,别为找页拉起浏览器。"""
+    assert br._STATE.conn is None
+    assert br.adopt_page("educationgroup.cn", mode="launch") is None
+    assert "__launch__" not in [c[0] for c in FakeConn.calls]
+    assert br._STATE.sessions == {}
+
+
+def test_adopt_page_says_nothing_found_when_no_page_matches(isolated_state, monkeypatch):
+    monkeypatch.setattr(br, "_ensure_conn",
+                        lambda **kw: (FakeConn(), "Edg/153.0", "attach"))
+    br._STATE.conn = FakeConn()
+    FakeConn.results = {"Target.getTargets": {"targetInfos": [
+        {"type": "page", "targetId": "X", "url": "https://example.com/", "title": "别的"}]}}
+    assert br.adopt_page("educationgroup.cn") is None
+    assert br._STATE.sessions == {}, "没找到就不该登记会话"
+
+
+def test_adopted_tab_is_never_closed_on_our_behalf(isolated_state):
+    """脱手 ≠ 关页:回收与收工都不能替用户关掉他的教务窗口。"""
+    conn = br._ensure_conn()[0]
+    sess = br.PageSession(conn=conn, target_id="TJW", cdp_session="S1", adopted=True)
+    br._STATE.sessions[br._session_key()] = sess
+    br._close_session_locked(br._session_key(), sess)
+    assert "Target.closeTarget" not in _method_names()
+    assert br._STATE.sessions == {}
+
+    sess2 = br.PageSession(conn=conn, target_id="TJW2", cdp_session="S2", adopted=True)
+    br._STATE.sessions["a"] = sess2
+    for i in range(br.MAX_SESSIONS + 3):              # 挤爆上限也不该殃及它
+        s = br.PageSession(conn=conn, target_id=f"T{i}", cdp_session=f"S{i}")
+        s.opened_at = float(i)
+        br._STATE.sessions[f"k{i}"] = s
+    br._prune_locked(keep="k0")
+    assert "a" in br._STATE.sessions
+    br._STATE.sessions.clear()
+    br._STATE.sessions["a"] = sess2
+    FakeConn.calls.clear()
+    br.shutdown()
+    assert "Target.closeTarget" not in _method_names()
+
+
+FRAME_TREE = {"frameTree": {
+    "frame": {"id": "F0", "url": "https://jw.educationgroup.cn/gzasc/xsMain.jsp", "name": ""},
+    "childFrames": [
+        {"frame": {"id": "F1", "url": "https://jw.educationgroup.cn/gzasc_jsxsd/xskb/xskb_list.do",
+                   "name": "Frame1"},
+         "childFrames": [{"frame": {"id": "F2",
+                                    "url": "https://jw.educationgroup.cn/gzasc_jsxsd/xskb/xskb_list.do#print",
+                                    "name": ""}}]},
+        {"frame": {"id": "F3", "url": "https://jw.educationgroup.cn/other"}},
+    ]}}
+
+
+def _ready_page(monkeypatch, results: dict) -> None:
+    conn = FakeConn()
+    br._STATE.conn = conn
+    br._STATE.mode = "launch"
+    sess = br.PageSession(conn=conn, target_id="TJW", cdp_session="S1")
+    br._STATE.sessions[br._session_key()] = sess
+    FakeConn.results = results
+
+
+def test_page_frames_sees_in_process_iframes(isolated_state, monkeypatch):
+    """进程内 iframe 不作为 target 出现:只按 target 找会误判"这页是空的"。"""
+    _ready_page(monkeypatch, {"Page.getFrameTree": FRAME_TREE})
+    frames = br.page_frames()
+    assert [f["frameId"] for f in frames] == ["F0", "F1", "F2", "F3"]
+    assert [f["depth"] for f in frames] == [0, 1, 2, 1]
+    assert "xskb_list.do" in frames[1]["url"]
+
+
+def test_frame_helpers_need_a_page_first(isolated_state):
+    with pytest.raises(br.BrowserError) as e:
+        br.page_frames()
+    assert "adopt_page" in str(e.value)
+
+
+def test_eval_in_frame_uses_the_isolated_world_context(isolated_state, monkeypatch):
+    """Runtime.evaluate 默认打在顶层帧:必须带 contextId,且字段名是 executionContextId。"""
+    seen = {}
+
+    def fake_call(self, method, params=None, session=None, timeout=30.0):
+        FakeConn.calls.append((method, params or {}, session))
+        if method == "Page.createIsolatedWorld":
+            return {"executionContextId": 77}
+        if method == "Runtime.evaluate":
+            seen.update(params or {})
+            return {"result": {"value": "ok"}}
+        return _DEFAULTS.get(method, {})
+
+    monkeypatch.setattr(FakeConn, "call", fake_call)
+    _ready_page(monkeypatch, {})
+    assert br.eval_in_frame("F1", "1+1") == "ok"
+    assert seen["contextId"] == 77 and seen["returnByValue"] is True
+
+    # JS 抛错要如实报错,不能当成"这帧没内容"
+    monkeypatch.setattr(FakeConn, "call", lambda self, m, p=None, session=None, timeout=30.0:
+                        ({"exceptionDetails": {"exception": {"description":
+                            "SyntaxError: bad\n  at line 1"}}}
+                         if m == "Runtime.evaluate" else {"executionContextId": 5}))
+    with pytest.raises(br.BrowserError) as e:
+        br.eval_in_frame("F1", "坏表达式")
+    assert "出错" in str(e.value) and "SyntaxError" in str(e.value)
+
+
+def test_read_frames_filters_by_url_and_keeps_going_when_one_frame_dies(isolated_state, monkeypatch):
+    grid = json.dumps({"rows": [["星期一"]]})
+    calls = {"n": 0}
+
+    def fake_call(self, method, params=None, session=None, timeout=30.0):
+        FakeConn.calls.append((method, params or {}, session))
+        if method == "Page.getFrameTree":
+            return FRAME_TREE
+        if method == "Page.createIsolatedWorld":
+            calls["n"] += 1
+            if (params or {}).get("frameId") == "F3":
+                raise br.BrowserError("帧刚被换掉")
+            return {"executionContextId": 9}
+        if method == "Runtime.evaluate":
+            return {"result": {"value": grid}}
+        return _DEFAULTS.get(method, {})
+
+    monkeypatch.setattr(FakeConn, "call", fake_call)
+    _ready_page(monkeypatch, {})
+    hits = br.read_frames("GRID", url_like="xskb")
+    assert len(hits) == 2 and {h["frameId"] for h in hits} == {"F1", "F2"}
+    assert json.loads(hits[0]["value"])["rows"] == [["星期一"]]
+    assert hits[0]["truncated"] is False
+    # 不筛 URL:F3 报错也只是这一帧带 error,别的帧照样返回
+    all_hits = br.read_frames("GRID")
+    assert [h["frameId"] for h in all_hits] == ["F0", "F1", "F2", "F3"]
+    bad = [h for h in all_hits if h.get("error")]
+    assert len(bad) == 1 and bad[0]["frameId"] == "F3" and bad[0]["value"] is None
+    assert sum(1 for h in all_hits if not h.get("error")) == 3
+
+
+def test_read_frames_marks_truncation_instead_of_silently_cutting(isolated_state, monkeypatch):
+    big = "课" * 5000
+
+    def fake_call(self, method, params=None, session=None, timeout=30.0):
+        if method == "Page.getFrameTree":
+            return {"frameTree": {"frame": {"id": "F0", "url": "u"}}}
+        if method == "Page.createIsolatedWorld":
+            return {"executionContextId": 3}
+        if method == "Runtime.evaluate":
+            return {"result": {"value": big}}
+        return {}
+
+    monkeypatch.setattr(FakeConn, "call", fake_call)
+    _ready_page(monkeypatch, {})
+    hit = br.read_frames("T", max_chars=100)[0]
+    assert hit["truncated"] is True and hit["chars"] == 5000 and len(hit["value"]) == 100
+    whole = br.read_frames("T")[0]
+    assert whole["truncated"] is False and whole["value"] == big
+
+
+# ---------------------------------------------------------------- 看得见窗口
+
+def test_ensure_visible_reuses_attach_and_visible_launch(isolated_state):
+    br._STATE.conn = FakeConn()
+    br._STATE.mode = "attach"
+    br._STATE.headless = True                # attach 时这个字段无意义
+    assert br.ensure_visible()["ok"]
+    assert "__launch__" not in [c[0] for c in FakeConn.calls]
+    br._STATE.mode = "launch"
+    br._STATE.headless = False
+    assert br.ensure_visible()["ok"]
+    assert "__launch__" not in [c[0] for c in FakeConn.calls], "有窗口的实例被白起了第二个"
+
+
+def test_ensure_visible_restarts_headless_instance_with_a_window(isolated_state):
+    br._STATE.conn = FakeConn()
+    br._STATE.mode = "launch"
+    br._STATE.headless = True
+    got = br.ensure_visible()
+    launches = [c for c in FakeConn.calls if c[0] == "__launch__"]
+    assert len(launches) == 1 and launches[0][1]["headless"] is False
+    assert got["ok"] and br._STATE.headless is False and br._STATE.mode == "launch"
+
+
+def test_ensure_visible_refuses_to_yank_a_running_task_window(isolated_state):
+    """无窗口的自动浏览正跑到一半:掀它的桌等于让同伴现场蒸发,只能如实说等一等。"""
+    br._STATE.conn = FakeConn()
+    br._STATE.mode = "launch"
+    br._STATE.headless = True
+    br._STATE.sessions[br._session_key()] = br.PageSession(
+        conn=br._STATE.conn, target_id="T1", cdp_session="S1",
+        owner=weakref.ref(threading.current_thread()))
+    with pytest.raises(br.BrowserUnavailable) as e:
+        br.ensure_visible()
+    assert "无窗口" in str(e.value)
+    assert br._STATE.conn is not None, "报错时不该顺手把同伴的浏览器关掉"

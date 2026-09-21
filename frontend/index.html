@@ -283,6 +283,25 @@ try {
   .sc-cell .t{ color:var(--primary-text); font-weight:600; }
   .sc-note{ font-size:11px; color:var(--text-3); margin-top:8px; line-height:1.7; }
 
+  /* ---------------- 教务课表导入三步向导(v0.9.23) ---------------- */
+  .jw-steps{ display:flex; gap:6px; margin:2px 0 10px; }
+  .jw-step{ flex:1; font-size:11px; color:var(--text-3); padding:6px 8px; text-align:center;
+            border-radius:8px; background:var(--glass-strong); line-height:1.4; }
+  .jw-step.on{ color:var(--primary-text); font-weight:600; }
+  .jw-step.done{ color:var(--text-2); }
+  .jw-body{ font-size:12px; color:var(--text-1); line-height:1.75; max-height:46vh;
+            overflow:auto; }
+  .jw-body .msg{ font-size:11.5px; color:var(--text-2); }
+  .jw-row{ font-size:11px; padding:3px 6px; margin-bottom:3px; border-radius:6px;
+           background:var(--glass-strong); color:var(--text-1); }
+  .jw-row .t{ color:var(--primary-text); font-weight:600; }
+  .jw-warn{ font-size:11px; color:var(--warn,#c8801a); line-height:1.7; margin-top:6px; }
+  .jw-term{ margin-top:10px; font-size:12px; }
+  .jw-term input{ font-size:12px; padding:4px 6px; border-radius:6px; }
+  .jw-links{ margin-top:8px; font-size:11px; }
+  .jw-links button{ background:none; border:none; color:var(--text-3); cursor:pointer;
+                    font-size:11px; padding:0; margin-right:12px; text-decoration:underline; }
+
   /* ---------------- 输入框右键菜单 + 拖拽高亮(v0.9.19) ---------------- */
   .ctx-menu{ position:fixed; z-index:9999; min-width:172px; padding:5px;
              display:none; flex-direction:column; gap:1px;
@@ -1362,6 +1381,7 @@ try {
       </aside>
       <section class="prov-main" id="provMain"></section>
     </div>
+    <div class="sc-note" id="provPaths"></div>
     <div class="btns">
       <button class="b-no" id="btnProvClose">关闭</button>
       <button class="b-yes" id="btnProvSave">保存</button>
@@ -1396,6 +1416,46 @@ try {
     <div class="btns">
       <button class="b-yes" id="btnScheduleImport">导入 / 更新课表</button>
       <button class="b-no" id="btnScheduleClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- v0.9.23:教务课表导入向导 —— 登录是人的事,读和解析是程序的事,确认才落盘 -->
+<div class="overlay" id="jwOverlay">
+  <div class="dialog" style="width:640px">
+    <div class="sc-head">
+      <h3>🎓 从教务系统导入课表</h3>
+      <span class="sc-week" id="jwTerm"></span>
+    </div>
+    <div class="jw-steps" id="jwSteps">
+      <div class="jw-step" data-s="1">① 你登录教务</div>
+      <div class="jw-step" data-s="2">② 学长读课表</div>
+      <div class="jw-step" data-s="3">③ 你核对导入</div>
+    </div>
+    <div class="jw-body" id="jwBody"></div>
+    <div class="btns">
+      <button class="b-no" id="btnJwOpen">① 打开登录页</button>
+      <button class="b-no" id="btnJwRead">② 读取课表</button>
+      <button class="b-yes" id="btnJwConfirm" disabled>③ 确认导入</button>
+      <button class="b-no" id="btnJwClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- v0.9.23:首次运行向导 —— 只在没配密钥时弹一次,三步 + 数据目录摆在明面上 -->
+<div class="overlay" id="firstRun">
+  <div class="dialog" style="width:540px">
+    <div class="sc-head">
+      <h3>👋 第一次打开引路学长</h3>
+      <span class="sc-week" id="frStep"></span>
+    </div>
+    <div class="jw-steps" id="frSteps"></div>
+    <div class="jw-body" id="frBody"></div>
+    <div class="sc-note" id="frPaths"></div>
+    <div class="btns">
+      <button class="b-no" id="btnFrDont">不再显示</button>
+      <button class="b-no" id="btnFrPrev">上一步</button>
+      <button class="b-yes" id="btnFrNext">下一步</button>
     </div>
   </div>
 </div>
@@ -2588,6 +2648,7 @@ function openProvDlg() {
       provEdit = provActive || (provData[0] && provData[0]._k) || "";
     fillPresetSelect();
     renderProvAll();
+    $("provPaths").textContent = pathsLine(infoPaths);
     $("provOverlay").classList.add("show");
   }).catch(e => toast("读取模型配置失败:" + String(e).slice(0, 60), true));
 }
@@ -3670,8 +3731,161 @@ $("scBody").addEventListener("click", (e) => {
   $("scheduleOverlay").classList.remove("show");
   CampusMap.findPlace(b.dataset.loc || "");
 });
-$("btnScheduleImport").addEventListener("click", () => {
+$("btnScheduleImport").addEventListener("click", openJwDlg);
+
+/* ---------------- 教务课表导入向导(v0.9.23) ----------------
+   三步各点一下,谁的事谁做:① 学长把教务登录页开在**看得见**的窗口里,
+   账号/密码/验证码只由你输(学长不碰、也不问);② 你在教务里点开「学期课表」
+   并把周次选成(全部),学长读那一页做确定性解析;③ 你核对 —— 包括填教务页
+   上根本没有的「第 1 周周一」—— 点确认才写 schedule.json。
+   读取/解析这两步**一个字都不落盘**;网页版没有本机浏览器窗口,那条路直接退回文字导入。 */
+let jwStep = 1, jwParsed = null, jwBusy = false;
+const jwApi = () => (window.pywebview && pywebview.api && pywebview.api.schedule_import_open)
+  ? pywebview.api : null;
+
+function jwStepOn(n) {
+  jwStep = n;
+  $("jwSteps").querySelectorAll(".jw-step").forEach(b => {
+    const k = +b.dataset.s;
+    b.classList.toggle("on", k === n);
+    b.classList.toggle("done", k < n);
+  });
+  $("btnJwConfirm").disabled = !(jwParsed && jwParsed.ok);
+  $("btnJwRead").disabled = jwBusy || n < 1;
+  $("btnJwOpen").disabled = jwBusy;
+}
+function jwSay(html) { $("jwBody").innerHTML = html; }
+function jwBusyOn(text) { jwBusy = true; jwStepOn(jwStep); jwSay(`<div class="msg">${esc(text)}</div>`); }
+function jwBusyOff() { jwBusy = false; jwStepOn(jwStep); }
+
+function openJwDlg() {
   $("scheduleOverlay").classList.remove("show");
+  jwParsed = null;
+  const api = jwApi();
+  if (!api) {                       // 网页版/桥未就绪:老老实实退回文字导入
+    scheduleManualImport();
+    return;
+  }
+  jwStepOn(1);
+  jwSay(`<div class="msg">学长先帮你把<b>教务登录页</b>开在桌面上。这一步之后:
+    你自己输账号密码和验证码,再点开「课表查询 → 学期课表」,把<b>周次选成(全部)</b>
+    —— 只有整学期那张表才读得全。<br>
+    登录状态只留在本机那个独立浏览器配置里,不进对话、也不写进课表文件。</div>
+    <div class="jw-links"><button id="lnJwManual">我自己贴课表文字/截图</button>
+    <button id="lnJwClear">清掉教务登录状态</button></div>`);
+  $("lnJwManual").addEventListener("click", scheduleManualImport);
+  $("lnJwClear").addEventListener("click", jwClearLogin);
+  $("jwOverlay").classList.add("show");
+}
+
+function jwOpenLogin() {
+  const api = jwApi(); if (!api) return scheduleManualImport();
+  jwBusyOn("正在打开教务登录页(第一次拉起浏览器可能要十几秒)…");
+  api.schedule_import_open().then(r => {
+    jwBusyOff();
+    if (!r || !r.ok) { jwSayErr((r && r.msg) || "打不开教务登录页"); return; }
+    jwStepOn(2);
+    jwSay(`<div class="msg">登录页已经开了(<b>${esc(r.title || r.url || "")}</b>)。
+      请在<b>那个窗口里</b>登录教务系统,点开「课表查询 → 学期课表」,
+      周次选<b>(全部)</b>。弄好回来点下面的「② 读取课表」。</div>
+      <div class="jw-links"><button id="lnJwManual2">我自己贴课表文字/截图</button></div>`);
+    $("lnJwManual2").addEventListener("click", scheduleManualImport);
+  }).catch(e => { jwBusyOff(); jwSayErr("学长这边出错了:" + e); });
+}
+
+function jwRead(model) {
+  const api = jwApi(); if (!api) return scheduleManualImport();
+  jwBusyOn(model ? "正在把页面文字交给模型整理(确定性解析没认出来的那条退路)…"
+                 : "正在读学期课表…");
+  const p = model ? api.schedule_import_model() : api.schedule_import_read();
+  p.then(r => {
+    jwBusyOff();
+    if (!r || !r.ok) {
+      jwParsed = null;
+      jwSayErr((r && r.msg) || "没读到课表");
+      if (r && r.stage === "ready") jwStepOn(2);
+      if (!model) {
+        jwBodyAppend(`<div class="jw-links"><button id="lnJwModel">让学长用模型整理一次</button></div>`);
+        $("lnJwModel").addEventListener("click", () => jwRead(true));
+      }
+      return;
+    }
+    jwParsed = r;
+    jwStepOn(3);
+    jwRenderPreview();
+  }).catch(e => { jwBusyOff(); jwSayErr("学长这边出错了:" + e); });
+}
+
+function jwBodyAppend(html) { $("jwBody").insertAdjacentHTML("beforeend", html); }
+function jwSayErr(msg) {
+  jwSay(`<div class="jw-warn">${esc(msg)}</div>
+    <div class="jw-links"><button id="lnJwRetry">再读一次</button>
+    <button id="lnJwManual3">我自己贴课表文字/截图</button></div>`);
+  $("lnJwRetry").addEventListener("click", () => jwRead(false));
+  $("lnJwManual3").addEventListener("click", scheduleManualImport);
+}
+
+function jwRenderPreview() {
+  const r = jwParsed, s = r.summary || {};
+  $("jwTerm").textContent = (r.term ? "学期 " + r.term : "") + (r.week ? " · 第" + r.week + "周" : "");
+  const days = { 1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "日" };
+  const rows = (r.classes || []).slice().sort((a, b) => a.day - b.day
+      || String(a.periods).localeCompare(String(b.periods), undefined, { numeric: true }));
+  const hint = (scheduleData && scheduleData.term_start) || "";
+  jwSay(`<div class="msg"><b>${s.entries || 0} 条课</b>(约 ${s.courses || 0} 门),
+      ${rows.length ? "按星期排开如下。请对着教务页扫一眼:" : "读到了:"}</div>
+    <div style="margin-top:6px">${rows.map(c => `<div class="jw-row">
+      <span class="t">周${days[c.day] || "?"} ${esc(c.periods || "")}${c.start_time ? " · " + esc(c.start_time) : ""}</span>
+      ${esc(c.name)}${c.teacher ? " · " + esc(c.teacher) : ""}${c.location ? " @ " + esc(c.location) : ""}
+      ${c.weeks && c.weeks !== "1-25" ? " <span style=\"opacity:.6\">" + esc(c.weeks) + "</span>" : ""}
+    </div>`).join("")}</div>
+    ${(r.notes || []).map(n => `<div class="jw-warn">⚠ ${esc(n)}</div>`).join("")}
+    ${s.no_location && s.no_location.length ? `<div class="jw-warn">没读到上课地点:${esc(s.no_location.join("、"))}</div>` : ""}
+    ${(r.unparsed || []).length ? `<div class="jw-warn">这几条学长没认出来(不会偷偷编):${esc(r.unparsed.join(" | "))}</div>` : ""}
+    <div class="jw-term">第 1 周周一是哪天?教务页上没有这一项,只能你填:
+      <input type="date" id="jwTermStart" value="${esc(hint)}"></div>
+    <div class="sc-note">导入会<b>覆盖</b>本机现有课表${hint ? "(沿用上次那个开学日期)" : ""};
+      点「③ 确认导入」之前,学长不会写任何文件。</div>`);
+}
+
+function jwConfirm() {
+  if (!jwParsed) return;
+  const ts = ($("jwTermStart") || {}).value || "";
+  if (!ts) { toast("先填「第 1 周周一」的日期,不然提醒和周次都算不准"); return; }
+  const api = jwApi(); if (!api) return;
+  jwBusyOn("正在存课表…");
+  api.schedule_import_confirm(ts).then(r => {
+    jwBusyOff();
+    if (!r || !r.ok) { jwSayErr((r && r.msg) || "课表没存进去"); return; }
+    jwParsed = null;
+    scheduleData = r.schedule || scheduleData;
+    renderSchedule();
+    $("jwOverlay").classList.remove("show");
+    toast((r.msg || "课表已导入").slice(0, 120));
+  }).catch(e => { jwBusyOff(); jwSayErr("学长这边出错了:" + e); });
+}
+
+function jwClearLogin() {
+  const api = jwApi(); if (!api || !api.schedule_import_clear) return;
+  jwBusyOn("正在关窗口并清登录态…");
+  api.schedule_import_clear().then(r => {
+    jwBusyOff(); jwStepOn(1);
+    jwSay(`<div class="msg">${esc((r && r.msg) || "已清理")}</div>`);
+  }).catch(e => { jwBusyOff(); jwSayErr("清理失败:" + e); });
+}
+
+$("btnJwOpen").addEventListener("click", jwOpenLogin);
+$("btnJwRead").addEventListener("click", () => jwRead(false));
+$("btnJwConfirm").addEventListener("click", jwConfirm);
+$("btnJwClose").addEventListener("click", () => $("jwOverlay").classList.remove("show"));
+$("jwOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "jwOverlay") $("jwOverlay").classList.remove("show");
+});
+
+// 退路(也留给网页版):把课表文字/截图发给学长,由对话里那条 schedule 工具存
+function scheduleManualImport() {
+  $("scheduleOverlay").classList.remove("show");
+  $("jwOverlay").classList.remove("show");
   const has = scheduleData && scheduleData.registered;
   $("input").value = has
     ? "我的课表有变动,这是最新课表(下面贴给你),帮我更新一下:\n"
@@ -3679,6 +3893,64 @@ $("btnScheduleImport").addEventListener("click", () => {
   $("input").focus();
   $("input").style.height = "auto";
   toast("把课表文字接在后面发给我;截图也可以,但文字更准(内置模型不一定能看图)");
+}
+
+/* ---------------- 首次运行向导 + 数据目录可视化(v0.9.23) ----------------
+   v0.9.22 那轮"配了不保存"的根因是数据目录不可写,而界面上看不见它在哪。
+   现在:模型管理面板常驻一行目录实况;没配密钥的首次运行则走一遍三步向导。 */
+let frData = null, frIdx = 0, infoPaths = null;
+
+function pathsLine(p) {
+  if (!p || !p.app_dir) return "";
+  const bits = [p.frozen ? "安装版" : "开发版",
+                p.backend === "local" ? "状态存用户目录" : "状态随程序目录"];
+  return "数据目录:" + p.app_dir + " · " + bits.join(" · ")
+    + (p.writable === false
+        ? " · ⚠ 这里写不进去:设置就算点了保存也不会生效(给这个文件夹加写权限,或换到文档盘安装)"
+        : "");
+}
+
+function renderFr() {
+  const steps = (frData && frData.steps) || [];
+  $("frSteps").innerHTML = steps.map((s, i) =>
+    `<div class="jw-step${i === frIdx ? " on" : (i < frIdx ? " done" : "")}">${esc(s.title)}</div>`
+  ).join("");
+  const s = steps[frIdx] || {};
+  $("frStep").textContent = (frIdx + 1) + " / " + steps.length;
+  $("frBody").innerHTML = `<div style="font-weight:600;margin-bottom:4px">${esc(s.title || "")}</div>
+    <div class="msg">${esc(s.body || "")}</div>`;
+  $("frPaths").textContent = pathsLine(frData && frData.paths);
+  $("btnFrPrev").disabled = frIdx === 0;
+  $("btnFrNext").textContent = frIdx >= steps.length - 1 ? "开始用" : "下一步";
+}
+
+function frDont(silent) {
+  const api = window.pywebview && pywebview.api;
+  $("firstRun").classList.remove("show");
+  if (!api || !api.dismiss_onboarding) return;
+  api.dismiss_onboarding("first_run").then(r => {
+    if (!silent && r && !r.ok) toast(r.msg || "这台机器记不下「不再显示」", true);
+  }).catch(() => {});
+}
+
+function showFirstRun() {
+  const api = window.pywebview && pywebview.api;
+  if (!api || !api.get_onboarding) return;
+  api.get_onboarding().then(r => {
+    if (!r || !r.show) return;                // 配好密钥/关过/网页版:一律不打扰
+    frData = r; frIdx = 0; renderFr();
+    $("firstRun").classList.add("show");
+  }).catch(() => {});                         // 向导是锦上添花,读不到不能拦人
+}
+
+$("btnFrNext").addEventListener("click", () => {
+  const n = ((frData && frData.steps) || []).length;
+  if (frIdx >= n - 1) frDont(true); else { frIdx++; renderFr(); }
+});
+$("btnFrPrev").addEventListener("click", () => { if (frIdx > 0) { frIdx--; renderFr(); } });
+$("btnFrDont").addEventListener("click", () => frDont(false));
+$("firstRun").addEventListener("click", (e) => {
+  if (e.target.id === "firstRun") $("firstRun").classList.remove("show");
 });
 
 /* ---------------- 输入框右键菜单(v0.9.19) ----------------
@@ -4061,6 +4333,13 @@ window.addEventListener("DOMContentLoaded", () => {
         : "当前模型服务不可用:请检查校园网连接,或联系管理员配置 API Key";
       $("hint").textContent = keyNotice;
       $("hint").classList.remove("warn");
+      // 数据目录写不进去 = "配了不保存"那类反馈的唯一真相来源,直接摆在明面上
+      infoPaths = info.paths || null;
+      if (infoPaths && infoPaths.writable === false) {
+        $("hint").textContent = "⚠ " + pathsLine(infoPaths);
+        $("hint").classList.add("warn");
+      }
+      showFirstRun();
       pywebview.api.refresh_sessions();
       refreshHomeSuggestions();
       loadProjects();      // 侧栏项目面板(最近工作区)
