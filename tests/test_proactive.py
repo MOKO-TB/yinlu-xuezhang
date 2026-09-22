@@ -162,3 +162,145 @@ def test_check_update_ignores_same_older_and_failures(monkeypatch):
 
     monkeypatch.setattr(httpx, "get", boom)
     assert proactive.check_update("0.9.17") is None      # 断网静默
+
+
+# ============================================ 桌面通知正文(v0.9.25)
+
+def test_desktop_text_reuses_the_chat_line():
+    """briefing / class / schedule 已经带 text:两处用同一行,不许各说各话。"""
+    for kind in ("briefing", "class", "schedule"):
+        assert proactive.desktop_text(
+            kind, {"text": " 快上课了：高等数学 08:00 · B101 "}) == \
+            "快上课了：高等数学 08:00 · B101"
+
+
+def test_desktop_text_from_reminders_fields():
+    payload = {"items": [{"title": "交奖学金材料", "due": "2026-09-22",
+                          "days_left": 1},
+                         {"title": "还书", "due": "2026-09-20", "days_left": -1}],
+               "total": 2}
+    assert proactive.desktop_text("reminders", payload) == \
+        "交奖学金材料(2026-09-22,还有 1 天) 等 2 件"
+    one = {"items": [{"title": "交表", "due": "2026-09-20", "days_left": -3}]}
+    assert proactive.desktop_text("reminders", one) == "交表(2026-09-20,已逾期 3 天)"
+    bare = {"items": [{"title": "交表"}]}                  # 没 due 就不编时间
+    assert proactive.desktop_text("reminders", bare) == "交表"
+
+
+def test_desktop_text_from_calendar_and_notices_and_update():
+    assert proactive.desktop_text("calendar", {"name": "中秋节", "days_left": 6,
+                                               "start": "2026-09-25"}) == \
+        "中秋节:还有 6 天(2026-09-25)"
+    assert proactive.desktop_text("calendar", {"name": "中秋节", "days_left": 6}) == \
+        "中秋节:还有 6 天(日期见校历)"              # 没日期不编日期
+    notices = {"items": [{"title": "期末考试安排", "source": "教务处通知"},
+                         {"title": "第二条"}], "total": 5}
+    assert proactive.desktop_text("notices", notices) == \
+        "教务处通知:期末考试安排 等 5 条新通知"
+    assert proactive.desktop_text("notices", {"items": [
+        {"title": "只有一条"}]}) == "官网:只有一条"
+    assert proactive.desktop_text("update", {"version": "0.9.26"}) == \
+        "v0.9.26 已发布,去下载更新"
+
+
+@pytest.mark.parametrize("kind,payload", [
+    ("reminders", {"items": []}),
+    ("reminders", {"items": [{"due": "2026-09-22"}]}),        # 连标题都没有
+    ("calendar", {"days_left": 3}),                            # 叫不出事件名
+    ("calendar", {"name": "校运会"}),                          # 不知道几天后
+    ("notices", {"items": []}),
+    ("update", {}),
+    ("class", {}),                                             # 新类别没 text
+    ("unknown_kind", {"foo": 1}),
+])
+def test_desktop_text_refuses_to_invent(kind, payload):
+    """缺字段就回 None(整条不发):桌面通知比聊天消息更容易被当真。"""
+    assert proactive.desktop_text(kind, payload) is None
+
+
+def test_push_desktop_maps_title_and_delegates(monkeypatch):
+    calls = []
+    from minicode import tray
+    monkeypatch.setattr(tray, "notify",
+                        lambda title, body, kind="": calls.append(
+                            (title, body, kind)) or {"ok": True})
+    r = proactive.push_desktop("class", {"text": "快上课了：高等数学"})
+    assert r == {"ok": True}
+    assert calls == [("快上课了", "快上课了：高等数学", "class")]
+
+
+def test_push_desktop_stays_quiet_without_text(monkeypatch):
+    from minicode import tray
+    monkeypatch.setattr(tray, "notify",
+                        lambda *a, **k: pytest.fail("没正文不该弹"))
+    assert proactive.push_desktop("calendar", {}) == \
+        {"ok": False, "skipped": "no_text"}
+
+
+def test_push_desktop_swallows_tray_errors(monkeypatch):
+    """桌面层再怎么炸也不能影响聊天里那条推送。"""
+    from minicode import tray
+
+    def boom(*a, **k):
+        raise RuntimeError("托盘没了")
+
+    monkeypatch.setattr(tray, "notify", boom)
+    assert proactive.push_desktop("class", {"text": "要上课"})["skipped"] == "error"
+
+
+def _push_bridge(broken: bool = False):
+    """够用的 bridge 替身:_push_proactive 只碰 bridge.ui.push。"""
+    from types import SimpleNamespace
+
+    class UI:
+        def __init__(self):
+            self.events = []
+
+        def push(self, type_, **payload):
+            if broken:
+                raise RuntimeError("窗口已销毁")
+            payload["type"] = type_
+            self.events.append(payload)
+
+    ui = UI()
+    return SimpleNamespace(ui=ui), ui
+
+
+def test_push_proactive_pushes_ui_and_desktop(monkeypatch):
+    desktop = []
+    from minicode import tray
+    monkeypatch.setattr(tray, "notify",
+                        lambda title, body, kind="": desktop.append(
+                            (title, body, kind)) or {"ok": True})
+    bridge, ui = _push_bridge()
+    proactive._push_proactive(bridge, "notices", items=[
+        {"title": "调课通知", "source": "教务处通知"}], total=1)
+    assert ui.events == [{"kind": "notices", "items": [
+        {"title": "调课通知", "source": "教务处通知"}], "total": 1,
+        "type": "proactive"}]
+    assert desktop == [("校园新通知", "教务处通知:调课通知", "notices")]
+
+
+def test_push_proactive_survives_ui_error_and_still_desktop(monkeypatch):
+    """聊天栏推失败(窗口正关着)时,桌面那条仍要发出去。"""
+    desktop = []
+    from minicode import tray
+    monkeypatch.setattr(tray, "notify",
+                        lambda title, body, kind="": desktop.append(body))
+    bridge, _ui = _push_bridge(broken=True)
+    proactive._push_proactive(bridge, "calendar", name="国庆", days_left=5,
+                              start="2026-10-01")
+    assert desktop == ["国庆:还有 5 天(2026-10-01)"]
+
+
+def test_push_proactive_ignores_desktop_layer_exceptions(monkeypatch):
+    """托盘那侧的桌面通知没装成也不能影响聊天里那条推送。"""
+    from minicode import tray
+
+    def boom(*a, **k):
+        raise ImportError("托盘模块装不起来")
+
+    monkeypatch.setattr(tray, "notify", boom)
+    bridge, ui = _push_bridge()
+    proactive._push_proactive(bridge, "class", text="要上课了")
+    assert ui.events and ui.events[0]["text"] == "要上课了"

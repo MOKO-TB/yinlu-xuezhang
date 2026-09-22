@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from minicode import growth
 from minicode import calendar as school_calendar
-from minicode import reminders
+from minicode import reminders, tray
 from minicode import campus, gpa, kb, library, library_guide, memory, planning, schedule, site_parse, skills, weather
 from minicode.tools import browser as browser_tools
 from minicode.tools import crawl, fs, search, shell
@@ -670,6 +670,36 @@ def build_default_registry() -> list[Tool]:
                 "required": ["action"],
             },
             handler=schedule.schedule,
+        ),
+        Tool(
+            name="desktop_notify",
+            description=(
+                "桌面提醒开关(Windows 右下角通知):课前 20 分钟、今日简报、临期待办、"
+                "官网新通知这些主动提醒,以前只在聊天窗口顶部那条提示栏里,窗口一最小化"
+                "就等于没提醒;开了之后同时弹到桌面。用户说「提醒直接弹桌面」「别弹通知」"
+                "「提醒做成两种:栏里一条 + 桌面一条」「看不到通知」时用:action=status 看"
+                "现状(哪些类别会弹、托盘在不在),action=on/off 开或关(kind 可只动一类:"
+                "briefing/class/schedule/reminders/calendar/notices/update),action=test "
+                "当场发一条测试通知(**排查「看不到通知」先走这条**:回了「已发出」"
+                "就说明是系统挡的,要用户去 设置→系统→通知 里放行本应用)。"
+                "只有桌面版弹得出去,命令行/网页版会如实说明弹不了,绝不假装已开启。"
+                "两条默认行为要说清:窗口正在前台时桌面不重复弹(聊天栏那条已经看得见),"
+                "同一条内容 ~90 秒内只响一次(免得重复推的提醒刷屏)。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["status", "on", "off", "test"],
+                               "description": "status=看状态(默认);on/off=开关;test=发一条测试"},
+                    "kind": {"type": "string",
+                             "description": "可选:只开关这一类提醒(briefing 今日简报 / class 课前 / "
+                                            "schedule 课程 / reminders 待办 / calendar 校历 / "
+                                            "notices 校园通知 / update 新版本)"},
+                    "reason": {"type": "string",
+                               "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
+                },
+            },
+            handler=tray.desktop_notify,
         ),
         Tool(
             name="get_weather",

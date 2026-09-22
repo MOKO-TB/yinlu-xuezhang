@@ -22,6 +22,7 @@ datas = [
     (os.path.join(ROOT, "system_prompt.md"), "."),
     (os.path.join(ROOT, "config.example.json"), "."),
     (os.path.join(ROOT, "assets", "gcode.ico"), "assets"),
+    (os.path.join(ROOT, "assets", "toast-icon.png"), "assets"),
     (os.path.join(ROOT, "frontend"), "frontend"),
     (os.path.join(ROOT, "skills"), "skills"),
     (os.path.join(ROOT, "kb"), "kb"),

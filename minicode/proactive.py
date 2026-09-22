@@ -8,6 +8,11 @@
 
 三条纪律:独立 daemon 线程绝不阻塞启动;断网/改版/任何异常一律静默跳过
 (锦上添花的功能不能变成报错源);用户可以一键关(notice-watch.json.enabled)。
+
+v0.9.25 起这些推送除了落在聊天顶部那条提示栏,还会同步弹一条 **Windows 桌面通知**
+(窗口最小化时才有意义):正文由 `desktop_text()` 从**同一份 payload** 生成,
+不另起一套文案;窗口正显示且有焦点时默认不重复弹。"绝不编造"同样管这里 ——
+payload 里没有课名/时间/地点就整条不发。
 """
 from __future__ import annotations
 
@@ -215,11 +220,80 @@ def check_update(current: str, timeout: float = 10.0) -> dict | None:
             "notes": str(data.get("body") or "").strip()[:120]}
 
 
+# ---------------------------------------------------------------- 桌面通知文案
+
+# 标题只说"这是哪一类提醒",内容全在正文里;正文能复用聊天那行 text 就复用,
+# 免得同一件事两处各写一遍、日后各说各话。
+KIND_TITLES = {"briefing": "今日简报", "class": "快上课了", "schedule": "今天的课",
+               "reminders": "待办临期", "calendar": "校历提醒",
+               "notices": "校园新通知", "update": "引路学长有新版本"}
+
+
+def desktop_text(kind: str, payload: dict) -> str | None:
+    """把一条主动推送拍成桌面通知正文;拍不出来就回 None(**不发**)。
+
+    只准用 payload 里真实存在的字段:课名、时间、地点这些缺了就整条不发,
+    绝不为了"通知看着饱满"编一个出来 —— 桌面通知比聊天消息更容易被当真。
+    """
+    text = str(payload.get("text") or "").strip()
+    if text:
+        return text
+    if kind == "reminders":
+        items = payload.get("items") or []
+        if not items:
+            return None
+        first = items[0] if isinstance(items[0], dict) else {}
+        title = str(first.get("title") or "").strip()
+        if not title:
+            return None
+        due = str(first.get("due") or "").strip()
+        left = first.get("days_left")
+        tail = ""
+        if due and isinstance(left, int):
+            tail = f"({due}" + (f",还有 {left} 天" if left >= 0 else f",已逾期 {-left} 天") + ")"
+        more = f" 等 {payload.get('total') or len(items)} 件" if len(items) > 1 else ""
+        return f"{title}{tail}{more}"
+    if kind == "calendar":
+        name = str(payload.get("name") or "").strip()
+        days = payload.get("days_left")
+        if not name or not isinstance(days, int):
+            return None
+        return f"{name}:还有 {days} 天({payload.get('start') or '日期见校历'})"
+    if kind == "notices":
+        items = payload.get("items") or []
+        if not items:
+            return None
+        first = items[0] if isinstance(items[0], dict) else {}
+        title = str(first.get("title") or "").strip()
+        if not title:
+            return None
+        src = str(first.get("source") or "官网").strip() or "官网"
+        total = payload.get("total") or len(items)
+        return f"{src}:{title}" + (f" 等 {total} 条新通知" if total > 1 else "")
+    if kind == "update":
+        version = str(payload.get("version") or "").strip()
+        return f"v{version} 已发布,去下载更新" if version else None
+    return None
+
+
+def push_desktop(kind: str, payload: dict) -> dict:
+    """把一条推送同步发到桌面;任何失败都不许冒出来影响聊天里的推送。"""
+    try:
+        from minicode import tray
+        body = desktop_text(kind, payload)
+        if not body:
+            return {"ok": False, "skipped": "no_text"}
+        return tray.notify(KIND_TITLES.get(kind, "引路学长"), body, kind=kind)
+    except Exception as e:
+        return {"ok": False, "skipped": "error", "msg": f"{type(e).__name__}"}
+
+
 def _push_proactive(bridge, kind: str, **payload) -> None:
     try:
         bridge.ui.push("proactive", kind=kind, **payload)
     except Exception:
         pass
+    push_desktop(kind, payload)
 
 
 def push_briefing(bridge) -> bool:

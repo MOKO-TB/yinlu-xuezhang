@@ -52,14 +52,25 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # ---- v0.9.22:托盘 + 关窗确认(整套新模块,漏收 = X 又变成直接退出) ----
     "minicode.tray": ("install", "close_choice", "read_pref", "write_pref",
                       "TrayController", "hide_to_tray", "_ensure_icon",
-                      "_ensure_parent"),
+                      "_ensure_parent",
+                      # v0.9.25:桌面提醒(漏收 = 最小化后课前提醒彻底没声)
+                      "notify", "notify_status", "read_notify_pref",
+                      "write_notify_pref", "notify_enabled", "set_notify",
+                      "desktop_notify", "KIND_LABELS", "NOTIFY_PREF",
+                      # v0.9.25 修:Win11 不显示托盘气球,真通道是 WinRT toast
+                      # (漏收 = 装好的包又回到"通知永远看不见")
+                      "_toast", "_balloon", "register_notify_identity",
+                      "_powershell", "AUMID"),
     "minicode.reasoning": ("reasoning_snapshot", "get_capability",
                            "apply_reasoning_choice"),
     "minicode.session": ("to_markdown", "search_logs", "export_filename"),
     "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill"),
     "minicode.web_profile": ("网页版不开放会话导出", "search_sessions",
                              # v0.9.23:教务导入需要本机浏览器窗口,网页版必须挡掉
-                             "教务课表导入"),
+                             "教务课表导入",
+                             # v0.9.25:桌面提醒开的是本机通知,网页版同样挡掉
+                             # (钉住 toast 字样 = 挡话是改道后那版,不是旧气球版)
+                             "桌面提醒", "WinRT toast"),
     # ---- v0.9.14:知识库成长闭环 + 校园场景小工具 ----
     # v0.9.21:候选审核面板(list_candidates/review_candidate/_merge_into_kb)
     "minicode.growth": ("log_kb_gap", "save_candidate", "log_feedback", "kb_suggest",
@@ -102,7 +113,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     #      避免 dict 重复键 last-wins 让早先的 needle 悄悄漏检) ----
     "minicode.proactive": ("check_once", "fetch_latest", "start_loop", "clean_title",
                            "check_update", "push_briefing", "start_class_loop",
-                           "calendar_alerts"),
+                           "calendar_alerts",
+                           # v0.9.25:同一份推送同步发到桌面
+                           "KIND_TITLES", "desktop_text", "push_desktop"),
     # ---- v0.9.23:教务课表导入(整套新模块,漏收 = 点「导入课表」直接报错) ----
     "minicode.schedule_import": ("ImportFlow", "parse_grid", "summarize",
                                  "clear_login_state", "GRID_JS", "_norm_periods",
