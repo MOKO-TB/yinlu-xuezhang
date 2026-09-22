@@ -418,3 +418,278 @@ def test_tool_diff_and_undo_actions():
                              classes=[_hi(location="A101")])
     assert "换回上一版" in schedule.schedule(None, action="undo")
     assert schedule.load()["classes"][0]["location"] == "思齐楼B203"
+
+
+# ------------------------------------------------ 空闲时段 + 作息表(v0.9.27)
+
+def _row(name="高等数学", day=1, periods="1-2", **kw):
+    return {"name": name, "day": day, "periods": periods, "weeks": "1-16", **kw}
+
+
+def _data(*rows, term="2026-09-07"):
+    return {"term_start": term, "classes": [dict(r) for r in rows]}
+
+
+def _times(*pairs):
+    """作息表夹具:按 (起, 止) 依次排第 1..N 节(直接喂 free_slots,不落盘)。"""
+    return {"periods": {i + 1: {"start": s, "end": e}
+                        for i, (s, e) in enumerate(pairs)},
+            "total": len(pairs), "source": "夹具"}
+
+
+# ---------------------------------------------------------------- 节次解析
+
+def test_parse_periods_accepts_schedule_spellings():
+    assert schedule._parse_periods("1-2") == {1, 2}
+    assert schedule._parse_periods("第 3 节") == {3}
+    assert schedule._parse_periods("5-6节") == {5, 6}
+    assert schedule._parse_periods("1,3,5") == {1, 3, 5}
+    assert schedule._parse_periods([2, 3]) == {2, 3}
+
+
+def test_parse_periods_rejects_rubbish_and_out_of_range():
+    for bad in ("", None, "第一节", "0-2", "1-13", "abc"):
+        assert schedule._parse_periods(bad) is None
+
+
+# ---------------------------------------------------------------- 空档口径
+
+def test_free_slots_finds_gap_between_classes_by_period():
+    res = schedule.free_slots(TODAY_MON, _data(_row(periods="1-2"), _row("体育课", 1, "5-6")))
+    assert res["in_term"] and not res["clock"]
+    assert [(g["label"], g["periods"]) for g in res["gaps"]] == [("第 3-4 节", 2)]
+    assert res["gaps"][0]["start"] == ""          # 没作息表就没有钟点,不编
+
+
+def test_free_slots_without_clock_stays_out_of_the_business_of_times():
+    """没填作息表时,回答里出现任何钟点都是编的 —— 连"8:00"这种形态都不许有。"""
+    import re as _re
+    res = schedule.free_slots(TODAY_MON, _data(_row(periods="1-2"), _row("体育课", 1, "5-6")))
+    text = schedule.format_free_slots(res)
+    assert not _re.search(r"\d{1,2}:\d{2}", text), text
+    assert "第 3-4 节" in text and "只按节次" in text
+
+
+def test_free_slots_does_not_claim_time_after_the_last_class():
+    """没作息表时全天共几节没人知道,最后一节之后的部分不报(报了就是猜)。"""
+    res = schedule.free_slots(TODAY_MON, _data(_row(periods="1-2")))
+    assert res["gaps"] == [] and "没有空档" in res["note"]
+
+
+def test_free_slots_with_times_spans_the_whole_day_and_adds_clock():
+    times = _times(("08:00", "08:45"), ("08:55", "09:40"), ("10:00", "10:45"),
+                   ("10:55", "11:40"), ("14:00", "14:45"))
+    res = schedule.free_slots(TODAY_MON, _data(_row(periods="1-2")), times)
+    gaps = res["gaps"]
+    assert [g["label"] for g in gaps] == ["第 3-5 节"]        # 3/4/5 连着空就是一整段
+    assert (gaps[0]["start"], gaps[0]["end"]) == ("10:00", "14:45")   # 跨节取首尾
+    assert gaps[0]["clock"] and res["clock"]
+    assert "10:00~14:45" in schedule.format_free_slots(res)
+
+
+def test_free_slots_all_day_free_without_and_with_times():
+    empty = _data(_row(day=3))                     # 周三有课,周一整天没有
+    plain = schedule.free_slots(TODAY_MON, empty)
+    assert plain["all_day_free"] and plain["gaps"] == []
+    assert "没填作息表" in plain["note"] and "说不到几点" in plain["note"]
+    clocked = schedule.free_slots(TODAY_MON, empty, _times(("08:00", "08:45"), ("08:55", "09:40")))
+    assert clocked["all_day_free"] and clocked["gaps"][0]["start"] == "08:00"
+    assert "08:00~09:40" in schedule.format_free_slots(clocked)
+
+
+def test_free_slots_never_calls_an_out_of_term_day_free():
+    """开学前那天"没查到课"是真的,"全天有空"是假的 —— 只能不报。"""
+    res = schedule.free_slots(date(2026, 9, 1), _data(_row()))
+    assert not res["in_term"] and res["gaps"] == [] and not res["all_day_free"]
+    assert res["week"] is None
+    assert "不报空闲" in schedule.format_free_slots(res)
+
+
+def test_free_slots_refuses_when_a_class_has_no_period():
+    rows = _data(_row(periods="1-2"), _row("选修课", 1, ""))
+    res = schedule.free_slots(TODAY_MON, rows)
+    assert res["unknown"] == ["选修课"]
+    assert res["gaps"] == []                       # 那门课可能正落在"空档"里
+    assert "算不准" in res["note"]
+
+
+def test_an_unlocated_class_can_be_found_by_start_time_when_times_are_filled():
+    """节次写歪但填了作息表:靠"上课钟点正好等于某节上课钟点"定位(只认完全相等)。"""
+    rows = _data(_row(periods="1"), _row("选修课", 1, "", start_time="10:00"))
+    times = _times(("08:00", "08:45"), ("08:55", "09:40"), ("10:00", "10:45"))
+    res = schedule.free_slots(TODAY_MON, rows, times)
+    assert not res["unknown"] and [g["label"] for g in res["gaps"]] == ["第 2 节"]
+    near_miss = _data(_row(periods="1"), _row("选修课", 1, "", start_time="10:05"))
+    assert schedule.free_slots(TODAY_MON, near_miss, times)["unknown"] == ["选修课"]
+
+
+def test_free_slots_without_schedule_says_so():
+    res = schedule.free_slots(TODAY_MON, None, {"periods": {}, "total": 0, "source": ""})
+    assert not res["registered"] and "登记课表" in schedule.format_free_slots(res)
+
+
+# ---------------------------------------------------------------- 周概览
+
+def test_week_gaps_lists_every_day_once():
+    rows = _data(_row(periods="1-2"), _row("早读", 3, "1-2"), _row("体育课", 3, "5-6"))
+    res = schedule.week_gaps(TODAY_MON, rows)
+    assert res["week"] == 1 and len(res["days"]) == 7
+    assert [d["weekday"] for d in res["days"]] == list("一二三四五六日")
+    assert [g["label"] for g in res["days"][2]["gaps"]] == ["第 3-4 节"]   # 周中有空档
+    assert res["days"][0]["gaps"] == []                            # 周一两节连着上
+
+
+def test_week_gaps_puts_the_longest_slot_first_and_honours_the_limit():
+    rows = _data(_row(periods="1-2"), _row("实验", 1, "7-8"), _row("班会", 1, "11"))
+    text = schedule.format_week_gaps(schedule.week_gaps(TODAY_MON, rows), limit=1)
+    line = [ln for ln in text.splitlines() if ln.startswith("- 周一")][0]
+    assert "第 3-6 节" in line and "等" in line        # 最长的先说,列不下的承认还有
+
+
+def test_week_gaps_outside_term_does_not_read_as_a_free_week():
+    text = schedule.format_week_gaps(schedule.week_gaps(date(2026, 7, 6), _data(_row())))
+    assert "不在学期内" in text and "别说成有空" in text
+
+
+# ---------------------------------------------------------------- 作息表落盘
+
+def test_save_period_times_roundtrip():
+    ok, msg = schedule.save_period_times(
+        [{"start": "8:00", "end": "8:45"}, {"start": "08:55", "end": "9:40"}], "教务处")
+    assert ok and "第 1-2 节" in msg
+    times = schedule.load_period_times()
+    assert times["total"] == 2 and times["source"] == "教务处"
+    assert times["periods"][1] == {"start": "08:00", "end": "08:45"}     # 补零,字符串比对才稳
+
+
+def test_save_period_times_rejects_bad_rows_without_touching_the_file():
+    assert schedule.save_period_times([{"start": "08:00", "end": "08:45"}])[0]
+    for bad in ([{"start": "八点", "end": "08:45"}],                   # 看不懂的时刻
+                [{"start": "08:00", "end": "07:45"}],                  # 下课早于上课
+                [{"period": 1, "start": "08:00", "end": "08:45"},
+                 {"period": 3, "start": "10:00", "end": "10:45"}],     # 中间断了
+                [{"period": 1, "start": "08:00", "end": "08:45"},
+                 {"period": 1, "start": "08:55", "end": "09:40"}]):    # 同一节两条
+        ok, msg = schedule.save_period_times(bad)
+        assert not ok, bad
+        assert msg.startswith("错误")
+        assert schedule.load_period_times()["total"] == 1              # 本机文件原样
+
+
+def test_saving_nothing_clears_the_timetable():
+    assert schedule.save_period_times([{"start": "08:00", "end": "08:45"}])[0]
+    assert schedule.save_period_times([])[0]
+    assert schedule.load_period_times()["total"] == 0
+
+
+def test_load_period_times_tolerates_garbage_and_broken_chains():
+    schedule.period_times_path().parent.mkdir(parents=True, exist_ok=True)
+    schedule.period_times_path().write_text("{坏文件", encoding="utf-8")
+    assert schedule.load_period_times()["total"] == 0
+    schedule.period_times_path().write_text(
+        '{"periods": [{"period": 1, "start": "08:00", "end": "08:45"},'
+        '{"period": 3, "start": "10:00", "end": "10:45"}]}', encoding="utf-8")
+    times = schedule.load_period_times()
+    assert times["total"] == 1          # 第 2 节空着 → 只认连续到第 1 节,不猜第 3 节
+
+
+def test_free_slots_ignores_timetable_periods_beyond_the_contiguous_chain():
+    schedule.period_times_path().parent.mkdir(parents=True, exist_ok=True)
+    schedule.period_times_path().write_text(
+        '{"periods": [{"period": 1, "start": "08:00", "end": "08:45"},'
+        '{"period": 2, "start": "08:55", "end": "09:40"},'
+        '{"period": 4, "start": "10:00", "end": "10:45"}]}', encoding="utf-8")
+    assert schedule.save("2026-09-07", [_row(periods="1-2")])[0]
+    res = schedule.free_slots(TODAY_MON)
+    assert res["gaps"] == []                        # 只到第 2 节,第 3 节往后一律不猜
+
+
+# ---------------------------------------------------------------- 工具与面板
+
+def test_tool_free_and_times_actions():
+    from datetime import timedelta
+    monday = date.today() - timedelta(days=date.today().weekday())     # 不写死今天,否则换日就假红
+    assert schedule.schedule(None, action="save", term_start=monday.isoformat(),
+                             classes=[_row(periods="1-2"), _row("早读", 3, "1-2"),
+                                      _row("体育课", 3, "5-6")])[0]
+    out = schedule.schedule(None, action="free")
+    assert "本周(第 1 周" in out and monday.isoformat() in out
+    assert "第 3-4 节" in schedule.schedule(None, action="free",
+                                            when=(monday + timedelta(days=2)).isoformat())
+    assert (monday + timedelta(days=7)).isoformat() in schedule.schedule(
+        None, action="free", when="next")
+    assert "错误" in schedule.schedule(None, action="free", when="下周三")
+    assert "本机没有作息表" in schedule.schedule(None, action="times")
+    assert schedule.schedule(None, action="save_times",
+                             periods=[{"start": "08:00", "end": "08:45"}])
+    assert "第 1-1 节" in schedule.schedule(None, action="times")
+    assert "未知 action" in schedule.schedule(None, action="nope")
+
+
+def test_prompt_section_carries_the_computed_week_gaps():
+    assert schedule.save("2026-09-07", [_row(periods="1-2")])[0]
+    text = schedule.schedule_prompt_section()
+    assert "本周空档" in text and "不要" in text          # 没作息表不许报钟点那条约束在
+
+
+def test_view_carries_gaps_period_times_and_day_items(monkeypatch):
+    from minicode import calendar, reminders
+    assert schedule.save("2026-09-07", [_row(periods="1-2"), _row("早读", 3, "1-2"),
+                                        _row("体育课", 3, "5-6")])[0]
+    assert reminders.add("交实验报告", due="2026-09-09")["ok"]      # 周三
+    assert reminders.add("只有文字日期", due="下周三")["ok"]         # 不落日期的不参与
+    monkeypatch.setattr(calendar, "load_events", lambda: ([
+        {"name": "期中考试周", "start": "2026-09-09", "end": "2026-09-12", "kind": "exam"},
+        {"name": "没日期的安排", "start": "", "kind": "note"}], "夹具"))
+    view = schedule.view(TODAY_MON)
+    assert view["clock"] is False and view["period_times"]["filled"] is False
+    wed = view["week_grid"]["3"]
+    assert [g["label"] for g in wed["gaps"]] and wed["items"][0]["title"] == "交实验报告"
+    assert len(wed["items"]) == 1                     # 只有 due_raw 的那条没摊进来
+    assert wed["events"][0]["span"] == "2026-09-09 ~ 2026-09-12"
+    assert view["week_grid"]["4"]["events"] == []     # 跨多日只标首日,不铺四天
+    assert view["today"]["date"] == "2026-09-07"
+
+
+def test_view_counts_overdue_separately_and_survives_broken_sources(monkeypatch):
+    from minicode import calendar, reminders
+    assert schedule.save("2026-09-07", [_row()])[0]
+    assert reminders.add("早就过期了", due="2026-09-01")["ok"]
+    monkeypatch.setattr(calendar, "load_events",
+                        lambda: (_ for _ in ()).throw(OSError("读不动")))
+    view = schedule.view(TODAY_MON)                   # 校历读不了不能连累课表面板
+    assert view["overdue"] == 1 and view["week_grid"]["1"]["events"] == []
+
+# ---------------------------------------------------------------- 桥与门面
+
+def test_bridge_save_times_rejects_unparsable_payloads_without_writing():
+    """面板传来的 JSON 看不懂时,本机文件必须原样不动(不能"顺手清空")。"""
+    from minicode.gui_bridge import Bridge
+    assert schedule.save_period_times([{"start": "08:00", "end": "08:45"}])[0]
+    for bad in ("{坏JSON", '{"不是":"一列节次"}'):
+        r = Bridge.schedule_save_times(object(), bad)
+        assert not r["ok"] and r["schedule"] is None
+        assert schedule.load_period_times()["total"] == 1
+    ok = Bridge.schedule_save_times(object(), '[{"start":"08:00","end":"08:45"}]')
+    # 没登记课表时面板回引导态(不带 period_times):作息表存了,但要等有课表才说空档
+    assert ok["ok"] and ok["schedule"]["registered"] is False
+
+
+def test_facade_forwards_the_timetable_form():
+    """前端只碰得到门面:漏一条转发,「填作息表」点了就是 undefined 报错。"""
+    from minicode.gui_bridge import PublicApi
+
+    seen = []
+
+    class Recorder:
+        def __getattr__(self, name):
+            def call(*args):
+                seen.append((name, args))
+                return {"ok": True}
+            return call
+
+    api = PublicApi.__new__(PublicApi)
+    api._b = Recorder()
+    payload = '[{"start":"08:00","end":"08:45"}]'
+    assert PublicApi.schedule_save_times(api, payload)["ok"] is True
+    assert seen == [("schedule_save_times", (payload,))]

@@ -105,6 +105,10 @@ class PublicApi:
         """课表面板:今日/明日/本周网格(只读本机课表)。"""
         return self._b.get_schedule_view()
 
+    def schedule_save_times(self, rows_json: str = "[]") -> dict:
+        """课表面板「填作息表」:存本人按教务处抄来的每节起止(空数组=清掉)。"""
+        return self._b.schedule_save_times(rows_json)
+
     def schedule_import_open(self) -> dict:
         """教务导入第 1 步:打开看得见的登录页(登录由人做)。"""
         return self._b.schedule_import_open()
@@ -1396,6 +1400,31 @@ class Bridge:
             return {"ok": True, "schedule": schedule.view()}
         except Exception:
             return {"ok": False}
+
+    def schedule_save_times(self, rows_json: str = "[]") -> dict:
+        """课表面板「填作息表」:把每节起止存进本机 `period-times.json`。
+
+        为什么值得给面板一个表单:教务处那张作息表同学手上有,但为了"以后问空档
+        能带钟点"专门开一轮对话贴一遍,多数人不会做。填一次,面板和
+        `schedule(action=free)` 同时升级成钟点口径;**传空数组就是清掉**,
+        空档退回只说第几节。绝不替他生成"常见作息"。
+        """
+        import json
+        from minicode import schedule
+        try:
+            rows = json.loads(rows_json or "[]")
+        except (TypeError, ValueError):
+            return {"ok": False, "msg": "作息表没读明白,本机文件保持原样。",
+                    "schedule": None}
+        if not isinstance(rows, list):
+            return {"ok": False, "msg": "作息表格式不对(要每节一条起止),没写文件。",
+                    "schedule": None}
+        ok, msg = schedule.save_period_times(rows)
+        try:
+            view = schedule.view()
+        except Exception:
+            view = None
+        return {"ok": ok, "msg": msg, "schedule": view}
 
     # ------------------------------------------- 教务课表导入(v0.9.23 三步向导)
 

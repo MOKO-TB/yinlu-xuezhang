@@ -553,8 +553,59 @@ def _parse_hm(value) -> tuple[int, int] | None:
     return (hh, mm) if 0 <= hh <= 23 and 0 <= mm <= 59 else None
 
 
+def _week_overlay(days: list[date]) -> dict:
+    """把待办 DDL 与校历事件按天摊到这一周(面板一格一格显示用)。
+
+    两处刻意收窄:
+    - 待办只认**写了具体日期**的件(`due` 是 ISO)。"下周要交"那种只有 `due_raw`
+      文字的不参与 —— 摊到哪天都是猜,宁可不显示。
+    - 校历跨多日的事件(考试周、假期、运动会)**只标首日**并带 `span` 区间说明,
+      否则同一件事会在七天里重复七遍,把面板刷成一块公告栏。
+
+    函数级导入 `reminders`/`calendar`:两者都不回头依赖本模块,但这样面板一次调用
+    取齐三样,与 `briefing.py` 的写法一致。读失败当没有这两行,不影响课表本身。
+    """
+    from minicode import calendar, reminders
+    first, last = min(days), max(days)
+    due_map: dict[str, list] = {d.isoformat(): [] for d in days}
+    event_map: dict[str, list] = {d.isoformat(): [] for d in days}
+    overdue = 0
+    try:
+        for item in reminders.list_items():
+            due = _parse_date(item.get("due"))
+            if due is None:
+                continue
+            if due.isoformat() in due_map:
+                due_map[due.isoformat()].append(
+                    {"id": item.get("id"), "title": str(item.get("title") or "")[:60]})
+            elif due < first:
+                overdue += 1    # 逾期的不摊到某天头上装"那天的事",单独报个总数
+    except Exception:
+        pass
+    try:
+        events, _src = calendar.load_events()
+        for e in events:
+            start = _parse_date(e.get("start"))
+            if start is None:
+                continue
+            end = _parse_date(e.get("end")) or start
+            if end < first or start > last:
+                continue
+            anchor = max(start, first)
+            if anchor.isoformat() not in event_map:
+                continue
+            event_map[anchor.isoformat()].append({
+                "name": str(e.get("name") or "")[:40],
+                "kind": str(e.get("kind") or ""),
+                "span": (f"{start.isoformat()} ~ {end.isoformat()}"
+                         if end > start else "")})
+    except Exception:
+        pass
+    return {"due_map": due_map, "event_map": event_map, "overdue": overdue}
+
+
 def view(today: date | None = None) -> dict:
-    """课表面板的数据:今日/明日 + 本周(周一~周日)网格。
+    """课表面板的数据:今日/明日 + 本周网格 + 每天的空档与待办/校历叠加。
 
     没登记课表时只回 registered=False(面板据此显示引导,不显示空表)。
     """
@@ -564,24 +615,39 @@ def view(today: date | None = None) -> dict:
         return {"registered": False, "can_undo": prev_path().exists()}
     today = today or date.today()
     wk = week_of(today, data)
+    times = load_period_times()
+    monday = today - timedelta(days=today.weekday())
+    span = [monday + timedelta(days=i) for i in range(7)]
+    overlay = _week_overlay(span)
 
     def _pack(day: date) -> dict:
-        rows = classes_on(day, data)
-        return {"date": day.isoformat(),
+        iso = day.isoformat()
+        slot = free_slots(day, data, times)
+        return {"date": iso,
                 "weekday": "一二三四五六日"[day.weekday()],
                 "week": week_of(day, data),
-                "classes": rows}
+                "classes": classes_on(day, data),
+                # 空档:面板与 schedule(action=free) 同一份算法,不会出现两处说法不一致
+                "gaps": slot["gaps"], "all_day_free": slot["all_day_free"],
+                "in_term": slot["in_term"], "unknown": slot["unknown"],
+                "class_count": slot["class_count"], "note": slot["note"],
+                "items": overlay["due_map"].get(iso, []),
+                "events": overlay["event_map"].get(iso, [])}
 
-    monday = today - timedelta(days=today.weekday())
-    grid = {str(i + 1): _pack(monday + timedelta(days=i)) for i in range(7)}
     return {"registered": True,
             "term_start": data.get("term_start"),
             "updated_at": data.get("updated_at"),
             "can_undo": prev_path().exists(),
             "week": wk,
+            # 面板顶部那句话的口径开关:填过作息表才允许说"几点到几点有空"
+            "clock": bool(times.get("total")),
+            "period_times": {"filled": bool(times.get("total")),
+                             "total": times.get("total") or 0,
+                             "source": times.get("source") or ""},
+            "overdue": overlay["overdue"],
             "today": _pack(today),
             "tomorrow": _pack(today + timedelta(days=1)),
-            "week_grid": grid}
+            "week_grid": {str(i + 1): _pack(day) for i, day in enumerate(span)}}
 
 
 def _note_key(day: date, start_time: str, name: str) -> str:
@@ -670,6 +736,315 @@ def late_class_note(now=None, within_minutes: int = LATE_WINDOW_MINUTES) -> dict
             "key": _note_key(now.date(), best["start_time"], best["name"])}
 
 
+# ---------------------------------------------------------------- 作息表与空闲时段
+
+# 为什么要同学自己填一次作息表:课表里每门课只有 `start_time`(还常常没有)和
+# "第 1-2 节"这种节次,**没有下课时刻**。本模块头上那条硬规矩(课表没写钟点就
+# 绝不编"8:00 上课")同样管着空档 —— 想说"下午两点到四点有空",必须有一份来源
+# 清楚的作息表。没填过也照常能用,只是只能说"第 3-4 节没课":照样能约人,不直觉。
+PERIOD_TIMES_FILE = "period-times.json"
+MAX_PERIODS = 12          # 作息表最多录到第 12 节(晚课也够了),再多是录错了
+
+
+def period_times_path() -> Path:
+    return app_path(PERIOD_TIMES_FILE)
+
+
+def _fmt_hm(hm: tuple[int, int]) -> str:
+    return f"{hm[0]:02d}:{hm[1]:02d}"
+
+
+def load_period_times() -> dict:
+    """作息表 → {"periods": {节次: {"start","end"}}, "total": 连续到第几节, "source": 说明}。
+
+    没填过 / 文件坏了 / 内容不像话都回**空表**而不是报错:空档功能本就该以节次
+    口径工作,有作息表只是把说法升级成钟点。`total` 只取从第 1 节起的连续一段 ——
+    中间断了(只填了 1-3 和 6-8)就不猜第 4-5 节的钟点,那两节宁可不说时间。
+    """
+    try:
+        raw = json.loads(period_times_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"periods": {}, "total": 0, "source": ""}
+    rows = raw.get("periods") if isinstance(raw, dict) else raw
+    if not isinstance(rows, list):
+        return {"periods": {}, "total": 0, "source": ""}
+    out: dict[int, dict] = {}
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        try:
+            n = int(str(row.get("period") or (i + 1)).strip())
+        except ValueError:
+            continue
+        start, end = _parse_hm(row.get("start")), _parse_hm(row.get("end"))
+        if not (1 <= n <= MAX_PERIODS and start and end and end > start):
+            continue
+        out[n] = {"start": _fmt_hm(start), "end": _fmt_hm(end)}
+    total = 0
+    while total + 1 in out:
+        total += 1
+    return {"periods": out, "total": total,
+            "source": str(raw.get("source") or "") if isinstance(raw, dict) else ""}
+
+
+def save_period_times(periods=None, source: str = "") -> tuple[bool, str]:
+    """存作息表(课表面板那个表单走这里)。返回 (是否写入, 给人看的话)。
+
+    刻意**不做**"按常见作息帮你生成":那等于替同学编下课时间。填了不对的随时
+    再改就行 —— 文件是普通 JSON,`period-times.json` 也在打包清理清单里(本机作息)。
+    传空列表 = 清掉作息表,空档退回节次口径。
+    """
+    rows: list[dict] = []
+    for i, row in enumerate(periods or []):
+        if not isinstance(row, dict):
+            return False, f"错误: 第 {i + 1} 行不是节次对象。"
+        try:
+            n = int(str(row.get("period") or (i + 1)).strip())
+        except ValueError:
+            return False, f"错误: 第 {i + 1} 行的节次不是数字。"
+        start, end = _parse_hm(row.get("start")), _parse_hm(row.get("end"))
+        if not start or not end:
+            return False, (f"错误: 第 {n} 节的起止时刻看不懂(要 08:00 这种"
+                           "「时:分」写法)。没填进来,本机作息表保持原样。")
+        if end <= start:
+            return False, f"错误: 第 {n} 节下课时刻({row.get('end')})不晚于上课时刻。"
+        rows.append({"period": n, "start": _fmt_hm(start), "end": _fmt_hm(end)})
+    rows.sort(key=lambda r: r["period"])
+    seen = {r["period"] for r in rows}
+    if len(seen) != len(rows):
+        return False, "错误: 有重复的节次,没填进来(同一节只该有一条起止)。"
+    for n in range(1, (rows[-1]["period"] if rows else 0) + 1):
+        if n not in seen:
+            return False, (f"错误: 第 {n} 节空着,作息表得从第 1 节连续往后填"
+                           "(中间断了就不算得准钟点空档)。")
+    try:
+        period_times_path().parent.mkdir(parents=True, exist_ok=True)
+        period_times_path().write_text(json.dumps(
+            {"updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+             "source": str(source or "本人按教务处作息表填写"),
+             "periods": rows},
+            ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError as exc:
+        return False, f"错误: 作息表写不进去({type(exc).__name__}),本机文件保持原样。"
+    if not rows:
+        return True, "作息表已清掉,空档回到按节次说。"
+    return True, (f"作息表已存:第 1-{rows[-1]['period']} 节,"
+                  f"{rows[0]['start']} 第一节上课、{rows[-1]['end']} 最后一节下课。"
+                  "之后问空档会带钟点。")
+
+
+def _parse_periods(spec) -> set[int] | None:
+    """"1-2" / "3" / "5-6节" / "1,3,5" → 节次集合;认不出返回 None(调用方如实说算不准)。
+
+    不照 `parse_weeks` 复用是因为口径不同:节次没有单双周,也不认"1-16"里那种
+    超过一天的跨度 —— 越界(第 0 节、第 13 节)直接判成认不出,而不是夹到边界内,
+    免得把录错的课表当成"第 1-12 节全是课"。
+    """
+    if isinstance(spec, (list, tuple)):
+        parts = [str(x) for x in spec]
+    else:
+        text = str(spec or "").strip()
+        if not text:
+            return None
+        parts = re.split(r"[,，、;；]", re.sub(r"[((（\[].*?[))）\]]", "", text))
+    nums: set[int] = set()
+    for part in parts:
+        # 「3-4节」「第 3 节」都是课表里的原生写法:两头的花花肠子先剥掉
+        part = part.strip().rstrip("节").lstrip("第").strip()
+        if not part:
+            continue
+        m = _RANGE_RE.search(part)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            if a > b:
+                a, b = b, a
+            if not (1 <= a and b <= MAX_PERIODS):
+                return None
+            nums.update(range(a, b + 1))
+            continue
+        m2 = re.fullmatch(r"(\d{1,2})", part)
+        if not m2:
+            return None
+        n = int(m2.group(1))
+        if not 1 <= n <= MAX_PERIODS:
+            return None
+        nums.add(n)
+    return nums or None
+
+
+def _row_periods(row: dict, times: dict) -> set[int] | None:
+    """这门课占的是第几节。节次写歪了但填了作息表时,用 start_time 反查一节课。
+
+    反查只认**时刻完全相等**(08:00 对 08:00):"差五分钟"就判成不匹配,因为那是
+    两节不同的课,猜错会把整天的空档全算歪。
+    """
+    got = _parse_periods(row.get("periods"))
+    if got:
+        return got
+    hm = _parse_hm(row.get("start_time"))
+    if hm and times.get("total"):
+        for n in range(1, times["total"] + 1):
+            if times["periods"][n]["start"] == _fmt_hm(hm):
+                return {n}
+    return None
+
+
+def _gap(from_n: int, to_n: int, times: dict) -> dict:
+    """一段连续空档。填了作息表就带钟点,否则只有节次(`clock` 标着这条差异)。"""
+    total = times.get("total") or 0
+    label = f"第 {from_n} 节" if from_n == to_n else f"第 {from_n}-{to_n} 节"
+    out = {"from": from_n, "to": to_n, "label": label,
+           "periods": to_n - from_n + 1, "clock": False, "start": "", "end": ""}
+    if total and to_n <= total:
+        out.update({"clock": True,
+                    "start": times["periods"][from_n]["start"],
+                    "end": times["periods"][to_n]["end"]})
+    return out
+
+
+def free_slots(day: date, data: dict | None = None, times: dict | None = None) -> dict:
+    """某天哪些时段没课。**面板与 schedule(action=free) 共用这一份算法**。
+
+    三条不算错的口径(都是本轮定下来的,改动前先看这里):
+    - 不在学期内(`week_of` 给 None,含开学前与假期)→ `in_term=False` 且不说空档。
+      "没查到课"和"整天空着"是两件事,前者什么都推不出。
+    - 有课但节次看不懂 → 整天空档**一条都不报**(`gaps=[]` + `unknown`),因为那门
+      课正好可能落在你以为空着的那几节里。宁可回"算不准",不给一个好看的假答案。
+    - 没填作息表:只在**已排课的首尾之间**找空档(全天共几节没人知道,报"最后一节
+      之后还空着"是猜);填了才从第 1 节起到最后一节全展开,并给钟点。
+    """
+    data = data if data is not None else load()
+    times = times if times is not None else load_period_times()
+    wd = "一二三四五六日"[day.weekday()]
+    out: dict = {"date": day.isoformat(), "weekday": wd,
+                 "week": week_of(day, data), "registered": bool(data),
+                 "in_term": False, "class_count": 0, "gaps": [],
+                 "unknown": [], "all_day_free": False, "clock": bool(times.get("total")),
+                 "note": ""}
+    if not data:
+        out["note"] = "还没有登记课表"
+        return out
+    wk = week_of(day, data)
+    if wk is None:
+        out["note"] = "那天不在本学期内(开学前或假期),不说空闲"
+        return out
+    out["in_term"] = True
+    rows = classes_on(day, data)
+    out["class_count"] = len(rows)
+    if not rows:
+        out["all_day_free"] = True
+        if times.get("total"):
+            gap = _gap(1, times["total"], times)
+            out["gaps"] = [gap]
+            out["note"] = f"那天没课({gap['start']}~{gap['end']} 都没课)"
+        else:
+            out["note"] = "那天没课(没填作息表,只能说没课、说不到几点)"
+        return out
+    occupied: set[int] = set()
+    for row in rows:
+        got = _row_periods(row, times)
+        if not got:
+            out["unknown"].append(str(row.get("name") or "某节课"))
+            continue
+        occupied |= got
+    if out["unknown"]:
+        out["note"] = (f"{len(out['unknown'])} 节课没写节次({ '、'.join(out['unknown'][:3]) })"
+                       ",空档算不准 —— 补上节次或填作息表才准")
+        return out
+    lo = 1 if times.get("total") else min(occupied)
+    hi = times["total"] if times.get("total") else max(occupied)
+    gaps: list[dict] = []
+    run: list[int] = []
+    for n in range(lo, hi + 1):
+        if n in occupied:
+            if run:
+                gaps.append(_gap(run[0], run[-1], times))
+            run = []
+        else:
+            run.append(n)
+    if run:
+        gaps.append(_gap(run[0], run[-1], times))
+    out["gaps"] = gaps
+    if gaps:
+        out["note"] = ""
+    else:
+        span = f"第 {lo} 节" if lo == hi else f"第 {lo}-{hi} 节"
+        out["note"] = (f"那天 {len(rows)} 节课,{span} 排满了,没有空档"
+                       if hi >= lo else "那天没有可用的节次区间")
+    return out
+
+
+def week_gaps(start: date | None = None, data: dict | None = None,
+              times: dict | None = None) -> dict:
+    """周一~周日每天的空档。`start` 给本周任意一天即可(内部换算到周一)。"""
+    data = data if data is not None else load()
+    times = times if times is not None else load_period_times()
+    start = start or date.today()
+    monday = start - timedelta(days=start.weekday())
+    days = [free_slots(monday + timedelta(days=i), data, times) for i in range(7)]
+    return {"term_start": (data or {}).get("term_start"),
+            "week": week_of(monday, data) if data else None,
+            "monday": monday.isoformat(),
+            "clock": bool(times.get("total")),
+            "days": days}
+
+
+def format_week_gaps(res: dict, limit: int = 3) -> str:
+    """给模型/回答看的周概览。每天最多列最长的 `limit` 段,长段优先 ——
+    "空 1 节" 那种课间缝不算安排空间,列出来只会淹掉真有空的那天。"""
+    if not res.get("week"):
+        return ("课表:本周不在学期内(开学前/假期),没法说哪天有空 —— "
+                "这不是\"整周空闲\",别说成有空。")
+    lines = [f"本周(第 {res['week']} 周,周一 {res['monday']})空档"
+             + ("(按填过的作息表给了钟点)" if res.get("clock")
+                else "(没填作息表,只按节次说;要说\"几点到几点\"得先填一次作息表)")]
+    for day in res["days"]:
+        if not day.get("in_term"):
+            lines.append(f"- 周{day['weekday']}: 不在学期内,不说空闲")
+            continue
+        if day.get("all_day_free"):
+            bits = day.get("gaps") or []
+            lines.append(f"- 周{day['weekday']} {day['date']}: 全天没课"
+                         + (f"({bits[0]['start']}~{bits[0]['end']})" if bits else ""))
+            continue
+        if day.get("unknown"):
+            lines.append(f"- 周{day['weekday']} {day['date']}: {day['note']}")
+            continue
+        gaps = sorted(day.get("gaps") or [], key=lambda g: -g["periods"])[:limit]
+        if not gaps:
+            lines.append(f"- 周{day['weekday']} {day['date']}: 没有空档"
+                         f"({day['class_count']} 节课排满)")
+            continue
+        bits = "、".join(g["label"] + (f"({g['start']}~{g['end']})" if g["clock"] else "")
+                        for g in gaps)
+        lines.append(f"- 周{day['weekday']} {day['date']}: {bits}"
+                     + (" 等" if len(day.get("gaps") or []) > limit else ""))
+    return "\n".join(lines)
+
+
+def format_free_slots(day_res: dict) -> str:
+    """单天空档的一行式说法(action=free 传了具体日期时走这里)。"""
+    head = f"{day_res['date']}(周{day_res['weekday']}" + (
+        f" · 第 {day_res['week']} 周" if day_res.get("week") else "") + ")"
+    if not day_res.get("registered"):
+        return f"{head} 还没有登记课表,查不了空档 —— 先按 schedule-helper 存课表。"
+    if not day_res.get("in_term"):
+        return f"{head} 不在本学期内(开学前或假期),不报空闲。"
+    if day_res.get("unknown"):
+        return f"{head} {day_res['note']}。"
+    if day_res.get("all_day_free"):
+        bits = day_res.get("gaps") or []
+        return f"{head} 全天没课" + (
+            f"({bits[0]['start']}~{bits[0]['end']})" if bits else
+            "(没填作息表,说不到几点到几点)") + "。"
+    gaps = day_res.get("gaps") or []
+    if not gaps:
+        return f"{head} {day_res['note']}。"
+    return (f"{head} 共 {day_res['class_count']} 节课,空档: " + "、".join(
+        g["label"] + (f"({g['start']}~{g['end']})" if g["clock"] else "")
+        for g in gaps) + ("" if day_res.get("clock") else " —— 只按节次,没编钟点"))
+
+
 # ---------------------------------------------------------------- 提示词与工具
 
 def schedule_prompt_section() -> str:
@@ -693,12 +1068,19 @@ def schedule_prompt_section() -> str:
                  "要清空用 action=clear。别把整张课表原文贴回回答里,答当前问题即可。")
     lines.append("- save 会自动报出与上一版的差(新增/变动/取消),把这几条**点名**念给同学听;"
                  "只想先看差、先不落盘用 action=diff;存错了用 action=undo 换回上一版。")
+    lines.append("- 本周空档(学长算好的,不是心算):\n"
+                 + format_week_gaps(week_gaps(), limit=2))
+    lines.append("- 「我这周什么时候有空」「周三能约吗」直接照上面那几行回答;"
+                 "上面标着没填作息表时只能说\"第几节到第几节空着\",**不要**报成几点到几点,"
+                 "也别把\"不在学期内\"的那天说成空闲。同学想要钟点口径,让他把教务处作息表贴过来"
+                 "(或去课表面板点「填作息表」),schedule(action=save_times) 存一次即可。")
     return "\n".join(lines) + "\n"
 
 
 def schedule(ctx, action: str = "save", term_start: str = "",
-             classes=None, when: str = "") -> str:
-    """schedule 工具处理器:save(存)/show(看某天)/diff(比对不写)/undo(回滚)/clear(清空)。"""
+             classes=None, when: str = "", periods=None, source: str = "") -> str:
+    """schedule 工具处理器:save(存)/show(看某天)/free(看空档)/diff(比对不写)/
+    undo(回滚)/times(看作息表)/save_times(存作息表)/clear(清空)。"""
     action = (action or "save").strip().lower()
     if action == "save":
         ok, msg = save(term_start, classes or [])
@@ -727,4 +1109,34 @@ def schedule(ctx, action: str = "save", term_start: str = "",
         return format_day(day, data)
     if action == "clear":
         return clear() if load() else "没有已登记的课表,不用清。"
-    return "错误: 未知 action。可用: save(存课表)/show(看某天课)/clear(清空)。"
+    if action == "free":
+        spec = str(when or "").strip().lower()
+        if spec in ("", "week", "本周"):
+            return format_week_gaps(week_gaps())
+        if spec in ("next", "next_week", "下周"):
+            return format_week_gaps(week_gaps(date.today() + timedelta(days=7)))
+        day = _parse_date(spec)
+        if day is None:
+            return ('错误: free 的 when 要具体日期(2026-09-23)、"week"(本周)或'
+                    '"next"(下周)。')
+        return format_free_slots(free_slots(day))
+    if action == "times":
+        times = load_period_times()
+        if not times.get("total"):
+            return ("本机没有作息表:空档只能按节次说(\"第 3-4 节没课\"),说不到几点到几点。"
+                    "同学想听钟点就把教务处作息表贴过来,用 action=save_times 存一次(一次性)。")
+        bits = "、".join(f"第{n}节 {times['periods'][n]['start']}-{times['periods'][n]['end']}"
+                         for n in range(1, times["total"] + 1))
+        return (f"本机作息表(第 1-{times['total']} 节,{times['source'] or '本人填写'}):"
+                f"{bits}")
+    if action == "save_times":
+        rows = [{"period": r.get("period") or (i + 1),
+                 "start": r.get("start"), "end": r.get("end")}
+                for i, r in enumerate(periods or []) if isinstance(r, dict)]
+        if len(rows) != len(periods or []):
+            return "错误: periods 每项要写成 {period?, start, end}(如 {start:\"08:00\", end:\"08:45\"})。"
+        ok, msg = save_period_times(rows, source)
+        return msg if ok else "存作息表没成功:" + msg
+    return ("错误: 未知 action。可用: save(存课表)/show(看某天课)/free(查空档,"
+            "when 传日期或 week)/times(看作息表)/save_times(存作息表)/"
+            "diff(比对不写)/undo(回滚)/clear(清空)。")

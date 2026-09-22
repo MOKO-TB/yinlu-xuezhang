@@ -282,6 +282,39 @@ try {
             border-radius:6px; background:var(--glass-strong); color:var(--text-1); }
   .sc-cell .t{ color:var(--primary-text); font-weight:600; }
   .sc-note{ font-size:11px; color:var(--text-3); margin-top:8px; line-height:1.7; }
+  /* ---- v0.9.27 空档/待办叠加 + 作息表表单 ---- */
+  .sc-col{ cursor:pointer; }
+  .sc-gaps{ margin-top:5px; border-top:1px dashed var(--line-soft); padding-top:5px; }
+  .sc-gap{ font-size:10px; line-height:1.3; padding:3px 5px; margin-bottom:4px; border-radius:6px;
+           border-left:2px solid var(--primary); background:var(--primary-light);
+           color:var(--primary-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sc-free{ font-size:10px; padding:3px 5px; margin-bottom:4px; border-radius:6px;
+            background:var(--glass-strong); color:var(--text-2); text-align:center; }
+  .sc-off{ font-size:10px; padding:3px 5px; margin-bottom:4px; border-radius:6px;
+           color:var(--text-3); text-align:center; border:1px dashed var(--line-soft); }
+  .sc-more{ font-size:9.5px; color:var(--text-3); text-align:center; }
+  .sc-todo,.sc-evt{ font-size:10px; line-height:1.3; padding:3px 5px; margin-bottom:4px;
+                    border-radius:6px; background:var(--glass-strong); color:var(--text-2);
+                    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sc-freehead{ font-size:11px; color:var(--text-3); margin:10px 0 4px; font-weight:600; }
+  .sc-freerow{ display:flex; justify-content:space-between; gap:10px; font-size:12.5px;
+               padding:7px 11px; margin-bottom:6px; border-radius:9px;
+               border-left:2px solid var(--primary); background:var(--primary-light);
+               color:var(--text-1); }
+  .sc-freerow b{ font-weight:600; color:var(--primary-text); flex:none; }
+  .sc-freebig{ font-size:13px; padding:12px; margin-top:6px; text-align:center;
+               border-radius:10px; background:var(--primary-light); color:var(--primary-text); }
+  .sc-back{ float:right; font-size:11px; padding:2px 9px; border-radius:999px;
+            border:1px solid var(--line-soft); background:transparent; color:var(--text-3); }
+  .sc-back:hover{ color:var(--primary-text); border-color:var(--primary); }
+  .sc-trow{ display:flex; align-items:center; gap:7px; font-size:12px; color:var(--text-2);
+            margin-bottom:6px; }
+  .sc-trow span{ flex:none; width:52px; }
+  .sc-trow em{ font-style:normal; color:var(--text-3); }
+  .sc-in{ flex:1; min-width:0; font-size:12.5px; padding:5px 8px; border-radius:8px;
+          border:1px solid var(--line-soft); background:var(--glass-strong); color:var(--text-1); }
+  .sc-tacts{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .sc-tacts button{ font-size:12px; padding:5px 12px; }
 
   /* ---------------- 教务课表导入三步向导(v0.9.23) ---------------- */
   .jw-steps{ display:flex; gap:6px; margin:2px 0 10px; }
@@ -1461,6 +1494,9 @@ try {
     <div class="sc-body" id="scBody"></div>
     <div class="btns">
       <button class="b-yes" id="btnScheduleImport">导入 / 更新课表</button>
+      <button class="b-no" id="btnScheduleTimes"
+              title="填一次每节课的起止时刻,存本机 period-times.json —— 之后问空档才会带钟点">
+        填作息表</button>
       <button class="b-no" id="btnScheduleUndo" style="display:none">换回上一版</button>
       <button class="b-no" id="btnScheduleClose">关闭</button>
     </div>
@@ -3722,6 +3758,7 @@ $("btnCompact").addEventListener("click", () => pywebview.api.compact_now());
    而是把输入框预填成引导语并聚焦,交给已上线的 schedule-helper 技能 + 模型。 */
 let scheduleData = null;
 let scheduleTab = "today";
+let scTimesRows = 0;   // 「填作息表」表单临时列几节(0 = 跟着已存的节数或默认 8)
 
 function scTimeCell(c) {
   // 有钟点显示钟点,没钟点只说第几节 —— 绝不编时间
@@ -3739,10 +3776,94 @@ function scList(classes, emptyText) {
         title="在校园地图上看看">🗺</button>` : ""}
     </div>`).join("");
 }
+/* 空档全部用后端 free_slots 的结果(面板与 schedule(action=free) 同一份算法),
+   前端只负责摆出来 —— 在这儿心算会算出第二个版本的"有空"。 */
+function scGapText(g) {
+  return g.label + (g.clock ? ` ${g.start}~${g.end}` : "");
+}
+function scGapChips(day, maxN) {
+  if (!day.in_term) return `<div class="sc-off" title="开学前/假期:没查到课不等于有空">不在学期内</div>`;
+  if (day.unknown && day.unknown.length)
+    return `<div class="sc-off" title="${esc(day.unknown.join("、"))} 没写节次">节次缺失,算不准</div>`;
+  if (day.all_day_free) {
+    const g = (day.gaps || [])[0];
+    return `<div class="sc-free">没课${g && g.clock ? ` ${g.start}~${g.end}` : ""}</div>`;
+  }
+  const gaps = (day.gaps || []).slice().sort((a, b) => b.periods - a.periods);
+  if (!gaps.length) return "";
+  return gaps.slice(0, maxN).map(g =>
+    `<div class="sc-gap" title="${esc(g.label)} 没课">${esc(scGapText(g))}</div>`
+  ).join("") + (gaps.length > maxN ? `<div class="sc-more">+${gaps.length - maxN}</div>` : "");
+}
+function scTail(day) {
+  // 格子里的待办与校历:短,且一眼能分清"这天的课"和"这天要交的东西"
+  const items = (day.items || []).map(it =>
+    `<div class="sc-todo" title="${esc(it.title)}">⚑ ${esc(it.title)}</div>`).join("");
+  const events = (day.events || []).map(ev =>
+    `<div class="sc-evt" title="${esc(ev.span || ev.name)}">📌 ${esc(ev.name)}</div>`).join("");
+  return items + events;
+}
+function scDayPanel(day, emptyText) {
+  const gaps = (day.gaps || []).slice().sort((a, b) => b.periods - a.periods);
+  const free = !day.in_term ? `<div class="sc-note">那天不在本学期内(开学前/假期)。
+      学长的口径是<b>不报空闲</b> —— 没查到课和整天有空是两件事。</div>`
+    : day.unknown && day.unknown.length
+      ? `<div class="sc-note">有 ${day.unknown.length} 节课没写节次(${esc(day.unknown.join("、"))}),
+          它可能正落在你以为的空档里,所以今天<b>一条空档都不报</b>。把节次补进课表就准了。</div>`
+      : day.all_day_free
+        ? `<div class="sc-freebig">🌴 这天没课${
+            gaps[0] && gaps[0].clock ? ` · ${esc(gaps[0].start)}~${esc(gaps[0].end)} 全空` : ""}</div>`
+        : gaps.length
+          ? `<div class="sc-freehead">空档</div>` + gaps.map(g =>
+              `<div class="sc-freerow"><span>${esc(g.label)}</span>
+                 <b>${g.clock ? esc(g.start + " ~ " + g.end) : "只按节次"}</b></div>`).join("")
+          : `<div class="sc-note">这天 ${day.class_count} 节课排满,没有空档。</div>`;
+  const todos = (day.items || []).length
+    ? `<div class="sc-freehead">这天要交</div>` + (day.items || []).map(it =>
+        `<div class="sc-freerow"><span>⚑ ${esc(it.title)}</span><b>截止今天</b></div>`
+      ).join("") : "";
+  const evts = (day.events || []).length
+    ? `<div class="sc-freehead">校历安排</div>` + (day.events || []).map(ev =>
+        `<div class="sc-freerow"><span>📌 ${esc(ev.name)}</span>
+           <b>${esc(ev.span || "")}</b></div>`).join("") : "";
+  return `<div class="sc-dayhead">周${esc(day.weekday)} · ${esc(day.date)}
+      ${day.week ? ` · 第 ${day.week} 周` : ""}
+      <button class="sc-back" data-act="week" style="display:${
+        scheduleTab.startsWith("day:") ? "" : "none"}">← 回到本周</button></div>`
+    + scList(day.classes, emptyText) + free + todos + evts;
+}
+function scTimesForm() {
+  const pt = (scheduleData && scheduleData.period_times) || {};
+  const n = scTimesRows || Math.max(4, Math.min(12, pt.total || 8));
+  const rows = [];
+  for (let i = 1; i <= n; i++) {
+    rows.push(`<div class="sc-trow"><span>第 ${i} 节</span>
+        <input class="sc-in" type="time" data-n="${i}" data-k="start" value="">
+        <em>—</em>
+        <input class="sc-in" type="time" data-n="${i}" data-k="end" value=""></div>`);
+  }
+  return `<div class="sc-note">填一次就好:学长把每节课的<b>起止时刻</b>存在本机
+      <code>period-times.json</code>,之后问空档才会说"14:00~16:40 有空",
+      而不是只能说"第 7-8 节没课"。<b>按教务处那张表填</b> —— 学长不会替你猜作息。</div>
+    ${rows.join("")}
+    <div class="sc-tacts">
+      <button class="b-no" data-act="times-minus">−1 节</button>
+      <button class="b-no" data-act="times-plus">+1 节</button>
+      <button class="b-yes" data-act="times-save">保存</button>
+      <button class="b-no" data-act="times-clear">不填了(退回按节次)</button>
+    </div>
+    <div class="sc-note">${pt.filled
+      ? `现在存着第 1-${pt.total} 节(${esc(pt.source || "本人填写")})。
+          这里改一行存一行;要改回去直接改完再保存。`
+      : "现在没填:空档按节次说。"}</div>`;
+}
 function renderSchedule() {
   const body = $("scBody");
   const undoBtn = $("btnScheduleUndo");
   if (undoBtn) undoBtn.style.display = (scheduleData && scheduleData.can_undo) ? "" : "none";
+  const timesBtn = $("btnScheduleTimes");
+  // 没登记课表时空档算不出来,「填作息表」这个入口此刻没有意义(藏掉,不留死按钮)
+  if (timesBtn) timesBtn.style.display = (scheduleData && scheduleData.registered) ? "" : "none";
   if (!scheduleData || !scheduleData.registered) {
     $("scWeek").textContent = "";
     body.innerHTML = `<div class="sc-empty">还没有登记课表。<br>
@@ -3756,30 +3877,37 @@ function renderSchedule() {
     const g = scheduleData.week_grid || {};
     const todayIso = (scheduleData.today || {}).date;
     body.innerHTML = `<div class="sc-grid">` + [1, 2, 3, 4, 5, 6, 7].map(k => {
-      const col = g[k] || { classes: [], weekday: "一二三四五六日"[k - 1] };
+      const col = g[k] || {};
       const cells = (col.classes || []).map(c =>
         `<div class="sc-cell">${c.start_time ? `<span class="t">${esc(c.start_time)}</span> ` : ""}${esc(c.name)}</div>`
       ).join("") || `<div class="sc-cell" style="opacity:.5">—</div>`;
-      return `<div class="sc-col${col.date === todayIso ? " today" : ""}">
-        <h5>周${esc(col.weekday)}</h5>${cells}</div>`;
+      return `<div class="sc-col${col.date === todayIso ? " today" : ""}" data-day="${k}"
+          title="点开看这天的空档与要交的东西">
+        <h5>周${esc(col.weekday || "一二三四五六日"[k - 1])}</h5>${cells}
+        <div class="sc-gaps">${scGapChips(col, 2)}${scTail(col)}</div></div>`;
     }).join("") + `</div>
       <div class="sc-note">本周按第 ${scheduleData.week || "?"} 周排课(单双周已过滤);
-      没写钟点的课只显示节次。数据存本机,不上传。</div>`;
+      没写钟点的课只显示节次。${scheduleData.overdue ? `另有 ${scheduleData.overdue} 条待办已逾期。` : ""}
+      ${scheduleData.clock ? "空档已按你填的作息表给钟点。"
+        : "空档只按节次说(没编时间)—— 点下面「填作息表」就能说到几点到几点。"}
+      数据存本机,不上传。</div>`;
     return;
+  }
+  if (scheduleTab === "times") { body.innerHTML = scTimesForm(); return; }
+  if (scheduleTab.startsWith("day:")) {
+    const day = (scheduleData.week_grid || {})[scheduleTab.slice(4)];
+    if (day) { body.innerHTML = scDayPanel(day, "那天没有课"); return; }
   }
   const day = scheduleTab === "tomorrow" ? scheduleData.tomorrow : scheduleData.today;
   if (!day) { body.innerHTML = ""; return; }
-  body.innerHTML = `<div class="sc-dayhead">周${esc(day.weekday)} · ${esc(day.date)}
-      ${day.week ? ` · 第 ${day.week} 周` : ""}</div>`
-    + scList(day.classes, day.date === (scheduleData.today || {}).date
-        ? "今天没有课 🎈" : "那天没有课");
+  body.innerHTML = scDayPanel(day, day === scheduleData.today ? "今天没有课 🎈" : "那天没有课");
 }
 function openScheduleDlg() {
   pywebview.api.get_schedule_view().then(r => {
     scheduleData = (r && r.ok) ? r.schedule : { registered: false };
     scheduleTab = "today";
-    $("scTabs").querySelectorAll("button").forEach(b =>
-      b.classList.toggle("on", b.dataset.tab === "today"));
+    scTimesRows = 0;
+    scSyncTabs();
     renderSchedule();
     $("scheduleOverlay").classList.add("show");
   });
@@ -3792,17 +3920,83 @@ $("scheduleOverlay").addEventListener("click", (e) => {
 $("scTabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-tab]");
   if (!b) return;
+  scTimesRows = 0;
   scheduleTab = b.dataset.tab;
-  $("scTabs").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  scSyncTabs();
   renderSchedule();
 });
+// 下钻某天/作息表表单都算「本周」那一档:否则点了「本周」再下钻,标签会全不亮,
+// 人不知道自己还在课表面板里哪一层。
+function scSyncTabs() {
+  const near = (scheduleTab === "week" || scheduleTab === "times"
+                || scheduleTab.startsWith("day:")) ? "week" : scheduleTab;
+  $("scTabs").querySelectorAll("button").forEach(x =>
+    x.classList.toggle("on", x.dataset.tab === near));
+}
+function scCollectTimes() {
+  const box = {};
+  $("scBody").querySelectorAll(".sc-in").forEach(el => {
+    const n = el.dataset.n;
+    box[n] = box[n] || {};
+    box[n][el.dataset.k] = el.value || "";
+  });
+  return Object.keys(box).sort((a, b) => a - b).map(n =>
+    ({ period: +n, start: box[n].start, end: box[n].end }));
+}
+function scSaveTimes(rows, doneText) {
+  const api = window.pywebview && window.pywebview.api;
+  if (!api || !api.schedule_save_times) { toast("这个功能只在桌面版有"); return; }
+  api.schedule_save_times(JSON.stringify(rows)).then(r => {
+    if (!r || !r.ok) { toast((r && r.msg) || "作息表没保存", true); return; }
+    scTimesRows = 0;
+    if (r.schedule) scheduleData = r.schedule;
+    scheduleTab = "week";
+    scSyncTabs();
+    renderSchedule();
+    toast(doneText || r.msg || "作息表已存");
+  }).catch(() => toast("作息表没保存(学长那边没接上)", true));
+}
+function scAct(name) {
+  if (name === "week") { scheduleTab = "week"; scSyncTabs(); renderSchedule(); return; }
+  if (name === "times-plus" || name === "times-minus") {
+    const pt = ((scheduleData || {}).period_times) || {};
+    const cur = scTimesRows || Math.max(4, Math.min(12, pt.total || 8));
+    scTimesRows = Math.max(1, Math.min(12, cur + (name === "times-plus" ? 1 : -1)));
+    renderSchedule();
+    return;
+  }
+  if (name === "times-clear") { scSaveTimes([], "作息表已清掉,空档回到按节次说"); return; }
+  if (name === "times-save") {
+    const rows = scCollectTimes();
+    if (!rows.length) { toast("表格里没有可保存的节次", true); return; }
+    const blank = rows.filter(r => !r.start || !r.end);
+    // 前端只拦"空着没填"(点了保存却少时刻,后端只会回一句看不懂);
+    // 起止谁先谁后、断没断档一律交给后端的校验,别让面板长出第二套规则
+    if (blank.length) {
+      toast(`第 ${blank.map(r => r.period).join("、")} 节的起止还没填完`, true); return;
+    }
+    scSaveTimes(rows);
+  }
+}
 $("scBody").addEventListener("click", (e) => {
   // v0.9.21 课表↔地图:有地点的课一键在校园地图上定位(搜不到会如实说明,不猜)
   const b = e.target.closest(".sc-map");
-  if (!b) return;
-  if (!window.CampusMap || !CampusMap.findPlace) { toast("地图不可用"); return; }
-  $("scheduleOverlay").classList.remove("show");
-  CampusMap.findPlace(b.dataset.loc || "");
+  if (b) {
+    if (!window.CampusMap || !CampusMap.findPlace) { toast("地图不可用"); return; }
+    $("scheduleOverlay").classList.remove("show");
+    CampusMap.findPlace(b.dataset.loc || "");
+    return;
+  }
+  const act = e.target.closest("[data-act]");
+  if (act) { scAct(act.dataset.act); return; }
+  const col = e.target.closest(".sc-col[data-day]");   // v0.9.27 点某天下钻看空档
+  if (col) { scheduleTab = "day:" + col.dataset.day; scSyncTabs(); renderSchedule(); }
+});
+$("btnScheduleTimes").addEventListener("click", () => {
+  scTimesRows = 0;
+  scheduleTab = "times";
+  scSyncTabs();
+  renderSchedule();
 });
 $("btnScheduleImport").addEventListener("click", openJwDlg);
 $("btnScheduleUndo").addEventListener("click", () => {

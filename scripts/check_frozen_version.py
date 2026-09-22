@@ -114,7 +114,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "COMPARE_FIELDS",
                           # v0.9.26:开机补发"今天已开课却没提醒过"的那节课
                           # (漏收 = 8:50 开机只补简报,错过的课永远没人提)
-                          "_note_key", "LATE_WINDOW_MINUTES", "late_class_note"),
+                          "_note_key", "LATE_WINDOW_MINUTES", "late_class_note",
+                          # v0.9.27:空闲时段 + 本机作息表(漏收 = 面板「填作息表」点了
+                          # 没反应、问"我什么时候有空"退回模型心算,口径全丢)
+                          "PERIOD_TIMES_FILE", "load_period_times",
+                          "save_period_times", "_parse_periods", "_row_periods",
+                          "free_slots", "week_gaps", "format_week_gaps",
+                          "format_free_slots", "_week_overlay"),
     "minicode.weather": ("weather_card", "umbrella_tip", "refresh_async",
                          "get_weather"),
     # ---- v0.9.19:拖拽上传(字节落盘,绕开 WebView2 拿不到本地路径) ----

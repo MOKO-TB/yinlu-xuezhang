@@ -638,18 +638,23 @@ def build_default_registry() -> list[Tool]:
                 "配合 schedule-helper 技能:把同学贴来的课表解析成条目后,问清「第 1 周周一是几月几号」"
                 "再 action=save 存下来(classes 每项 {name,day(1-7),periods,weeks(如 1-16 或 1-16(单周)),"
                 "start_time(课表里有才填),location,teacher});之后问「今天有什么课」直接照登记回答。"
-                "action=show 看某天课(when 传日期,默认今天);action=diff 把 classes 与本机已存课表"
+                "action=show 看某天课(when 传日期,默认今天);action=free 查空档"
+                "(when 传日期看那天、传 week/留空看本周、传 next 看下下周 —— 照它算好的回答,别心算);"
+                "action=times 看本机作息表填了没、action=save_times 把同学给的教务处作息表存下来"
+                "(一次性,之后空档才会带钟点);action=diff 把 classes 与本机已存课表"
                 "比对(不写文件,先让同学看清新增/变动/取消);action=undo 换回上一版课表;"
                 "action=clear 清空。save 覆盖时会自动附上与上一版的变动清单,直接照着向同学念一遍。"
-                "课表里没写钟点的课只报第几节,绝不编具体时间。"
+                "课表里没写钟点的课只报第几节,绝不编具体时间;没填作息表时空档同理只说第几节。"
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "action": {"type": "string",
-                               "enum": ["save", "show", "diff", "undo", "clear"],
-                               "description": "save=存/覆盖课表;show=看某天;diff=与已存课表比对(不写);"
-                                              "undo=回滚到上一版;clear=清空"},
+                               "enum": ["save", "show", "free", "diff", "undo",
+                                        "times", "save_times", "clear"],
+                               "description": "save=存/覆盖课表;show=看某天;free=查空档;"
+                                              "diff=与已存课表比对(不写);undo=回滚到上一版;"
+                                              "times=看本机作息表;save_times=存作息表;clear=清空"},
                     "term_start": {"type": "string",
                                    "description": "save 用:第 1 周周一的日期(2026-09-07),向同学问清,不要猜"},
                     "classes": {"type": "array",
@@ -663,7 +668,19 @@ def build_default_registry() -> list[Tool]:
                                     "location": {"type": "string"},
                                     "teacher": {"type": "string"},
                                 }}},
-                    "when": {"type": "string", "description": "show 用:日期(2026-09-22),默认今天"},
+                    "when": {"type": "string",
+                             "description": "show/free 用:日期(2026-09-22)。free 也接受"
+                                            " week(本周,默认)与 next(下周)"},
+                    "periods": {"type": "array",
+                                "description": "save_times 用:按第 1 节往后排的作息表,"
+                                               "每项 {start,end}(如 {start:'08:00',end:'08:45'}),"
+                                               "只录同学给的真实作息,不要替他编",
+                                "items": {"type": "object", "properties": {
+                                    "period": {"type": "integer"},
+                                    "start": {"type": "string"},
+                                    "end": {"type": "string"}}}},
+                    "source": {"type": "string",
+                               "description": "save_times 用:这份作息表的出处(如「教务处 2025-2026 校历」),没有就留空"},
                     "reason": {"type": "string",
                                "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
                 },
