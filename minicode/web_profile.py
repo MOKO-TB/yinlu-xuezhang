@@ -248,6 +248,12 @@ class PublicFacade:
         self._handlers.update({n: (lambda **k: _refuse(_reason)) for n in (
             "schedule_import_open", "schedule_import_read", "schedule_import_model",
             "schedule_import_confirm", "schedule_import_clear", "schedule_import_status")})
+        # 「我的数据」列的是**服务器本机**的文件清单,导出/导入还会在服务器上写读文件:
+        # 对访客既没意义又泄露路径,整组明确拒绝(桌面版才有这个面板)。
+        _md_reason = "网页版不开放「我的数据」(列的是服务器本机的文件,迁移请用桌面版)"
+        self._handlers.update({n: (lambda **k: _refuse(_md_reason)) for n in (
+            "mydata_inventory", "mydata_export", "mydata_import_pick",
+            "mydata_import_apply", "mydata_forget_import", "mydata_open_dir")})
         # 首次运行向导讲的是"本机数据目录/config.json 写在哪儿",对访客既没意义
         # 也带路径:直接回"不弹",而不是回一条拒绝让前端当报错弹出来。
         self._handlers["get_onboarding"] = lambda **k: {"ok": True, "show": False,

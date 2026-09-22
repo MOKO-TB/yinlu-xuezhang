@@ -38,7 +38,7 @@ def test_state_scan_actually_finds_the_real_files():
     found = check_docs.state_targets()
     for name in ("schedule.json", "reminders.json", "period-times.json",
                  "pushed-today.json", "watchdog.log", "weather.json",
-                 "web-sessions", "web-usage.log"):
+                 "web-sessions", "web-usage.log", "migrate-backup"):
         assert name in found, f"{name} 在代码里写进数据目录,却没被扫出来"
 
 

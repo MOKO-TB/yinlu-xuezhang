@@ -44,7 +44,18 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "schedule_import_clear", "schedule_import_status",
                             "_jw_flow", "get_onboarding", "dismiss_onboarding",
                             # v0.9.24:计划面板数据源(只读 + 派发文案)
-                            "get_plan"),
+                            "get_plan",
+                            # v0.9.30:「我的数据」面板 + 迁移包(漏收一条 = 装好的包里
+                            # 点「数据」没反应;漏 _ask_open_path = 导入第 1 步选不了包)
+                            "mydata_inventory", "mydata_export",
+                            "mydata_import_pick", "mydata_import_apply",
+                            "mydata_forget_import", "mydata_open_dir",
+                            "_ask_open_path"),
+    # v0.9.30:迁移包整模块是新文件,漏收 = 装好的包连面板都打不开
+    "minicode.mydata": ("inventory", "pack_plan", "export_package", "read_package",
+                        "import_pick", "import_apply", "forget_preview",
+                        "deny_reason", "TABLE", "BACKUP_DIR", "MTIME_TOLERANCE",
+                        "FORMAT_VERSION"),
     "minicode.model_probe": ("list_models", "explain_status", "remember"),
     # ---- v0.9.22:安装版可用性(数据目录写探针 + 诊断下发) ----
     "minicode.paths": ("_is_writable", "_local_state_dir", "diagnostics",

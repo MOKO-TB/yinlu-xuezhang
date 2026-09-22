@@ -217,6 +217,30 @@ class PublicApi:
         """把当前会话导出成 Markdown 文件。"""
         return self._b.export_session()
 
+    def mydata_inventory(self) -> dict:
+        """「我的数据」面板:数据在哪 + 每类有哪些文件(只读)。"""
+        return self._b.mydata_inventory()
+
+    def mydata_export(self, include_sessions: bool = True) -> dict:
+        """导出迁移包(先弹"另存为");密钥与教务登录态压根不在候选里。"""
+        return self._b.mydata_export(include_sessions)
+
+    def mydata_import_pick(self) -> dict:
+        """导入第 1 步:选包 + 给逐条预览,**不写盘**。"""
+        return self._b.mydata_import_pick()
+
+    def mydata_import_apply(self, nonce: str = "") -> dict:
+        """导入第 2 步:用户点头后按预览落盘(替换前先备份)。"""
+        return self._b.mydata_import_apply(nonce)
+
+    def mydata_forget_import(self, nonce: str = "") -> dict:
+        """预览看了说"算了":丢掉这次预览,不留"稍后还能写"的口子。"""
+        return self._b.mydata_forget_import(nonce)
+
+    def mydata_open_dir(self) -> dict:
+        """在资源管理器里打开数据目录。"""
+        return self._b.mydata_open_dir()
+
     def search_sessions(self, query: str = "") -> dict:
         """侧栏搜索:在所有历史会话留档里找关键词。"""
         return self._b.search_sessions(query)
@@ -1773,7 +1797,8 @@ class Bridge:
         self.ui.push("info", text=f"会话已导出:{target}")
         return {"ok": True, "path": str(target), "name": Path(target).name}
 
-    def _ask_save_path(self, default_name: str):
+    def _ask_save_path(self, default_name: str, file_types: tuple =
+                       ("Markdown 文件 (*.md)", "所有文件 (*.*)")):
         """弹系统"另存为"框;窗口没就绪、或用户取消,都返回 None。"""
         window = getattr(self.ui, "window", None)
         if window is None:
@@ -1782,12 +1807,109 @@ class Bridge:
             import webview
             picked = window.create_file_dialog(
                 webview.SAVE_DIALOG, save_filename=default_name,
-                file_types=("Markdown 文件 (*.md)", "所有文件 (*.*)"))
+                file_types=file_types)
         except Exception:
             return None
         if isinstance(picked, (list, tuple)):
             picked = picked[0] if picked else None
         return Path(picked) if picked else None
+
+    def _ask_open_path(self, file_types: tuple =
+                       ("迁移包 (*.zip)", "所有文件 (*.*)")) -> Path | None:
+        """弹系统单选文件框;取消或窗口没就绪返回 None(不报错、不写任何东西)。"""
+        window = getattr(self.ui, "window", None)
+        if window is None:
+            return None
+        try:
+            import webview
+            picked = window.create_file_dialog(webview.OPEN_DIALOG, file_types=file_types)
+        except Exception:
+            return None
+        if isinstance(picked, (list, tuple)):
+            picked = picked[0] if picked else None
+        return Path(picked) if picked else None
+
+    # ------------------------------------------------------------ 我的数据 / 迁移包
+    #
+    # 这一节只做三件事:把面板要的数据交给前端、把"存到哪/读哪个"交给**系统对话框**、
+    # 把真正的打包/落盘交给 mydata 模块。路径**绝不从前端字符串拿**(那是 zip-slip 的
+    # 入口),前端只能拿到 nonce。
+
+    def mydata_inventory(self) -> dict:
+        """「我的数据」面板 payload:数据目录在哪 + 每类有哪些文件。"""
+        from minicode import mydata
+        return mydata.inventory(workspace=str(self.workspace))
+
+    def mydata_export(self, include_sessions=True) -> dict:
+        """导出迁移包:先弹"另存为",再交给 mydata 打包。
+
+        `include_sessions` 前端可能传成字符串("false"),按字符串判一次,
+        别把用户"不要带聊天记录"的勾选当成真。
+        """
+        from minicode import mydata
+        if isinstance(include_sessions, str):
+            include_sessions = include_sessions.strip().lower() not in (
+                "false", "0", "off", "no", "")
+        window = getattr(self.ui, "window", None)
+        if window is None:
+            return {"ok": False, "msg": "窗口未就绪,无法另存迁移包"}
+        import time as _time
+        target = self._ask_save_path(
+            f"引路学长迁移包-{_time.strftime('%Y%m%d-%H%M')}.zip",
+            file_types=("迁移包 (*.zip)", "所有文件 (*.*)"))
+        if target is None:
+            return {"ok": False, "msg": "已取消导出"}
+        result = mydata.export_package(target, include_sessions=bool(include_sessions))
+        if result.get("ok"):
+            self.ui.push("info", text=f"迁移包已导出:{result['path']}"
+                                      f"({result['files']} 个文件,{result['size']})")
+        return result
+
+    def mydata_import_pick(self) -> dict:
+        """导入第 1 步:选包 + 逐条预览(写不写、保不保留本机,这一步就已定死)。"""
+        from minicode import mydata
+        window = getattr(self.ui, "window", None)
+        if window is None:
+            return {"ok": False, "msg": "窗口未就绪,无法选择迁移包"}
+        source = self._ask_open_path()
+        if source is None:
+            return {"ok": False, "msg": "已取消导入"}
+        return mydata.import_pick(source)
+
+    def mydata_import_apply(self, nonce: str = "") -> dict:
+        """导入第 2 步:按预览确认落盘;替换过的原件先进 migrate-backup。"""
+        from minicode import mydata
+        result = mydata.import_apply(str(nonce or ""))
+        if result.get("ok"):
+            tail = ";重启学长后生效" if result.get("restart_needed") else ""
+            self.ui.push("info", text=(
+                f"迁移包已导入:新增 {result['written']} 项、更新 {result['replaced']} 项、"
+                f"本机更新保留 {result['kept_newer']} 项、跳过 {result['blocked']} 项"
+                + tail))
+        return result
+
+    def mydata_forget_import(self, nonce: str = "") -> dict:
+        """用户看了预览说"算了":把这次预览丢掉。"""
+        from minicode import mydata
+        mydata.forget_preview(str(nonce or ""))
+        return {"ok": True}
+
+    def mydata_open_dir(self) -> dict:
+        """在资源管理器里打开数据目录(只开目录,不开任何数据文件)。"""
+        import os
+        from minicode import paths
+        target = paths.app_path()
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            return {"ok": False, "msg": f"打不开数据目录:{e}"}
+        try:
+            os.startfile(str(target))       # type: ignore[attr-defined]
+        except AttributeError:
+            return {"ok": False, "msg": "这个平台没有资源管理器可打开,路径见面板顶部"}
+        except OSError as e:
+            return {"ok": False, "msg": f"打不开数据目录:{type(e).__name__}"}
+        return {"ok": True, "path": str(target)}
 
     def search_sessions(self, query: str = "") -> dict:
         """侧栏搜索:在所有历史会话留档里找关键词。

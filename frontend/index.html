@@ -316,6 +316,41 @@ try {
   .sc-tacts{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
   .sc-tacts button{ font-size:12px; padding:5px 12px; }
 
+  /* ---------------- 我的数据面板与迁移包(v0.9.30) ----------------
+     这个面板只读:它回答"数据在哪、有哪些、哪些不会跟着迁移包走",
+     删东西、改东西仍然只归各自的工具与面板(两边都能改就会互相盖)。 */
+  .md-loc{ font-size:12px; color:var(--text-2); line-height:1.75; padding:9px 12px;
+           margin-bottom:10px; border-radius:11px; background:var(--glass-lite);
+           border:1px solid var(--line-soft); word-break:break-all; }
+  .md-loc b{ color:var(--primary-text); font-weight:600; }
+  .md-warn{ margin-top:6px; padding:6px 9px; border-radius:8px; font-size:11.5px;
+            color:var(--warning); background:var(--warning-bg); line-height:1.6; }
+  .md-cat{ font-size:11.5px; font-weight:600; color:var(--text-2); margin:12px 0 2px; }
+  .md-hint{ font-size:10.5px; color:var(--text-3); margin:0 0 6px; line-height:1.6; }
+  .md-row{ display:flex; align-items:flex-start; gap:9px; padding:7px 10px; margin-bottom:5px;
+           border-radius:9px; background:var(--glass-lite); border:1px solid var(--line-soft); }
+  .md-row.absent{ opacity:.55; }
+  .md-nm{ flex:1; min-width:0; font-size:12.5px; color:var(--text-1); }
+  .md-nm em{ display:block; font-style:normal; font-size:10.5px; color:var(--text-3);
+             margin-top:2px; line-height:1.55; }
+  .md-sz{ flex:none; font-size:11px; color:var(--text-3); white-space:nowrap; }
+  .md-tag{ flex:none; font-size:10px; line-height:1.5; padding:1px 7px; border-radius:var(--r-full);
+           color:var(--primary-text); background:var(--primary-light); white-space:nowrap; }
+  .md-tag.no{ color:var(--text-3); background:transparent; border:1px solid var(--line-soft); }
+  .md-pkg{ font-size:11.5px; color:var(--text-2); line-height:1.7; padding:8px 11px;
+           margin:8px 0; border-radius:10px; background:var(--glass-strong);
+           border:1px solid var(--line-soft); }
+  .md-line{ display:flex; justify-content:space-between; gap:10px; font-size:12px;
+            padding:5px 8px; margin-bottom:4px; border-radius:7px; background:var(--glass-lite); }
+  .md-line .act{ flex:none; font-size:11px; }
+  .md-line.written .act{ color:var(--success); }
+  .md-line.replaced .act{ color:var(--primary-text); }
+  .md-line.kept-newer .act{ color:var(--warning); }
+  .md-line.blocked{ background:var(--danger-bg); }
+  .md-line.blocked .act{ color:var(--danger); }
+  .md-opt{ display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--text-2);
+           margin-right:auto; }
+
   /* ---------------- 教务课表导入三步向导(v0.9.23) ---------------- */
   .jw-steps{ display:flex; gap:6px; margin:2px 0 10px; }
   .jw-step{ flex:1; font-size:11px; color:var(--text-3); padding:6px 8px; text-align:center;
@@ -1318,6 +1353,7 @@ try {
       <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐ 技能</button>
       <button id="btnUsage" title="查看每日 token 消耗">📊 用量</button>
       <button id="btnExport" title="把当前会话导出成 Markdown(方便贴进文档或发给同学)">⬇ 导出</button>
+      <button id="btnMyData" title="我的数据:都存在哪台目录、都有哪些文件,以及导出/导入迁移包(密钥与教务登录态永不外发)">💾 数据</button>
       <button id="btnSandbox" style="display:none" title="沙箱状态">🛡 沙箱</button>
       <button id="btnMemory" title="整理长期记忆">🧠 记忆</button>
       <button id="btnTheme" title="切换深色/浅色主题">🌙 深色</button>
@@ -1499,6 +1535,30 @@ try {
         填作息表</button>
       <button class="b-no" id="btnScheduleUndo" style="display:none">换回上一版</button>
       <button class="b-no" id="btnScheduleClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- v0.9.30「我的数据」:数据在哪 + 都有哪些文件(只读),以及导出/导入迁移包。
+     面板不提供删除与编辑:每一项数据仍然只归它自己的工具改(两边都能改就会互相盖)。
+     迁移包压根不含密钥与教务登录态 —— 桥里没有"带上密钥"这条参数,不是勾掉了才不带。 -->
+<div class="overlay" id="myDataOverlay">
+  <div class="dialog" style="width:620px">
+    <div class="sc-head">
+      <h3>💾 我的数据</h3>
+      <span class="sc-week" id="mdTotals"></span>
+    </div>
+    <div class="sc-body" id="mdBody"></div>
+    <div class="btns">
+      <label class="md-opt" title="聊天记录往往是最占地方的一项:取消勾选就只带课表、待办、设置与记忆">
+        <input type="checkbox" id="mdSessions" checked> 包含聊天记录
+      </label>
+      <button class="b-yes" id="btnMdExport"
+              title="打成一个 zip:课表、待办、作息表、记忆、聊天记录、设置与偏好。密钥与教务登录态永远不在包里(API Key 只存在 ~/.yinluxs/credentials.json,桥里也没有「带上密钥」这条参数)">导出迁移包</button>
+      <button class="b-no" id="btnMdImport"
+              title="选一个迁移包:先看逐条预览(会写哪些、本机更新所以保留哪些),你点头才落盘;替换前的原件先备份进 migrate-backup">导入迁移包</button>
+      <button class="b-no" id="btnMdOpen" title="在资源管理器里打开数据目录">打开数据目录</button>
+      <button class="b-no" id="btnMdClose">关闭</button>
     </div>
   </div>
 </div>
@@ -4009,6 +4069,142 @@ $("btnScheduleUndo").addEventListener("click", () => {
     renderSchedule();
     toast((r.msg || "已换回上一版").slice(0, 90));
   }).catch(e => toast("回滚失败:" + e));
+});
+
+/* ---------------- 我的数据与迁移包(v0.9.30) ----------------
+   面板只读:它回答「数据存在哪个目录、都有哪些文件、哪些不会跟着迁移包走」。
+   删除与编辑仍然只归各自的工具与面板 —— 两边都能改就会互相盖,而且模型不知道你拧过。
+
+   两条安全口径写死在这里:
+   - **路径不经过前端**。导出/导入的文件路径只由系统对话框决定,前端拿到的
+     只有一个 nonce(预览编号)。能让前端传路径,就能传 "../config.json" 写到任何目录。
+   - 预览里 kept-newer(本机比包新)与 blocked(不认识/不安全)都显示**为什么不写**,
+     而不是静默少几项 —— 静默是最难查的。 */
+let mdData = null;
+let mdPreview = null;      // {nonce, rows, counts} —— 有值说明正等着用户点「确认导入」
+
+const mdApi = () => (window.pywebview && pywebview.api && pywebview.api.mydata_inventory)
+  ? pywebview.api : null;
+
+function mdRow(it) {
+  const cnt = (it.count === null || it.count === undefined)
+    ? "" : ` · ${it.count} 项`;
+  return `<div class="md-row${it.exists ? "" : " absent"}">
+      <div class="md-nm">${esc(it.label)}${it.note ? `<em>${esc(it.note)}</em>` : ""}</div>
+      <span class="md-sz">${it.exists ? esc(it.size) + cnt : "还没生成过"}</span>
+      <span class="md-tag${it.pack ? "" : " no"}">${it.pack ? "进包" : "不进包"}</span>
+    </div>`;
+}
+
+function mdPreviewRows() {
+  const acts = { written: "新增", replaced: "更新为本机没有的版本",
+                 "kept-newer": "本机更新,保留本机的", blocked: "跳过" };
+  const rows = (mdPreview.rows || []).map(r => `<div class="md-line ${esc(r.action)}">
+      <span>${esc(r.label)}<br><em class="md-sz">${esc(r.reason || "")}</em></span>
+      <span class="act">${acts[r.action] || esc(r.action || "")}</span></div>`).join("");
+  const c = mdPreview.counts || {};
+  return `<div class="md-pkg">这份包出自学长 <b>${esc(mdPreview.from_version || "?")}</b>
+      (${esc(mdPreview.created_at || "时间见包")},要写 ${esc(mdPreview.size || "0 B")}):
+      新增 ${c.written || 0} 项、更新 ${c.replaced || 0} 项、
+      本机更新保留 ${c["kept-newer"] || 0} 项、跳过 ${c.blocked || 0} 项。
+      导入只会新增与更新,**不会删掉本机任何东西**;要更新的文件先备份进 migrate-backup。</div>${rows}`;
+}
+
+function renderMyData() {
+  const body = $("mdBody");
+  if (!mdData) { body.innerHTML = '<div class="sc-empty">没读到数据目录</div>'; return; }
+  if (mdPreview) { body.innerHTML = mdPreviewRows(); return; }
+  let html = `<div class="md-loc">数据目录:<b>${esc(mdData.app_dir || "?")}</b>`
+    + (mdData.backend === "exe" ? "(在程序旁边,整目录拷走就是搬家)"
+       : mdData.backend === "local" ? "(用户目录:程序装在只读位置时自动搬到这里)"
+         : "(程序目录)")
+    + (mdData.workspace ? `<br>当前工作区:${esc(mdData.workspace)}(这里的文件不算「我的数据」)` : "")
+    + "</div>";
+  (mdData.warnings || []).forEach(w => { html += `<div class="md-warn">${esc(w)}</div>`; });
+  (mdData.groups || []).forEach(g => {
+    html += `<div class="md-cat">${esc(g.label)}</div><div class="md-hint">${esc(g.hint)}</div>`
+      + g.items.map(mdRow).join("");
+  });
+  body.innerHTML = html;
+  const t = mdData.totals || {};
+  $("mdTotals").textContent = `${t.files || 0} 个文件 · ${t.size || "0 B"}`
+    + ` · 迁移包 ${t.pack_files || 0} 项 / ${t.pack_size || "0 B"}`;
+}
+
+function refreshMyData() {
+  const api = mdApi();
+  if (!api) { toast("这个功能只在桌面版有"); return; }
+  api.mydata_inventory().then(r => {
+    mdData = (r && r.ok) ? r : null;
+    mdPreview = null;
+    $("btnMdImport").textContent = "导入迁移包";
+    renderMyData();
+    $("myDataOverlay").classList.add("show");
+  }).catch(() => toast("数据一览没读出来(学长那边没接上)", true));
+}
+
+function openMyDataDlg() {
+  if (!mdApi()) { toast("这个功能只在桌面版有"); return; }
+  refreshMyData();
+}
+
+function mdExport() {
+  const api = mdApi();
+  if (!api) { toast("这个功能只在桌面版有"); return; }
+  const withSess = $("mdSessions").checked;
+  toast("正在打包(会先问你要存到哪)…");
+  api.mydata_export(withSess).then(r => {
+    if (!r) { toast("导出没成功:学长那边没接上", true); return; }
+    if (!r.ok) { toast(r.msg || "导出没成功", true); return; }
+    toast(`迁移包已生成:${r.files} 个文件 / ${r.size}`
+          + (r.scrubbed ? `(已清掉 ${r.scrubbed} 处 API Key)` : ""));
+    refreshMyData();
+  }).catch(() => toast("导出没成功(学长那边没接上)", true));
+}
+
+function mdImport() {
+  const api = mdApi();
+  if (!api) { toast("这个功能只在桌面版有"); return; }
+  if (!mdPreview) {                        // 第 1 步:选包看预览,一个字都不写
+    api.mydata_import_pick().then(r => {
+      if (!r) { toast("导入没成功:学长那边没接上", true); return; }
+      if (!r.ok) { toast(r.msg || "这份包用不了", true); return; }
+      mdPreview = r;
+      $("btnMdImport").textContent = "确认导入";
+      renderMyData();
+    }).catch(() => toast("选包没成功", true));
+    return;
+  }
+  const nonce = mdPreview.nonce;           // 第 2 步:确认落盘
+  api.mydata_import_apply(nonce).then(r => {
+    mdPreview = null;
+    $("btnMdImport").textContent = "导入迁移包";
+    if (!r || !r.ok) { toast((r && r.msg) || "导入没成功", true); refreshMyData(); return; }
+    toast(`已导入:新增 ${r.written} 项、更新 ${r.replaced} 项、本机保留 ${r.kept_newer} 项`
+          + (r.blocked ? `、跳过 ${r.blocked} 项` : "")
+          + (r.restart_needed ? ";重启学长后生效" : ""));
+    refreshMyData();
+  }).catch(() => { mdPreview = null; $("btnMdImport").textContent = "导入迁移包"; toast("导入没成功", true); });
+}
+
+$("btnMyData").addEventListener("click", openMyDataDlg);
+$("btnMdExport").addEventListener("click", mdExport);
+$("btnMdImport").addEventListener("click", mdImport);
+$("btnMdOpen").addEventListener("click", () => {
+  const api = mdApi();
+  if (!api) { toast("这个功能只在桌面版有"); return; }
+  api.mydata_open_dir().then(r => { if (!r || !r.ok) toast((r && r.msg) || "打不开数据目录", true); });
+});
+function closeMyData() {
+  // 没确认的预览就地作废:不留"过一会儿再点一下也还能写"的口子
+  if (mdPreview && mdApi()) mdApi().mydata_forget_import(mdPreview.nonce);
+  mdPreview = null;
+  $("btnMdImport").textContent = "导入迁移包";
+  $("myDataOverlay").classList.remove("show");
+}
+$("btnMdClose").addEventListener("click", closeMyData);
+$("myDataOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "myDataOverlay") closeMyData();
 });
 
 /* ---------------- 计划面板(v0.9.24) ----------------

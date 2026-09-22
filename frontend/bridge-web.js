@@ -118,7 +118,8 @@
   var css = [
     "#btnMemory", "#btnSandbox", "#btnUndo", "#btnAttach", "#perm", "#btnSkills",
     // 计划面板:plans/plan.md 在老板自己的工作区里,访客点开只会拿到一句拒绝
-    "#btnSchedule", "#btnPlan",
+    // 「我的数据」:列的是服务器本机的文件清单,导出还会往服务器上写 zip —— 不给访客
+    "#btnSchedule", "#btnPlan", "#btnMyData",
   ].join(",") + "{display:none !important}";
   function injectCss() {
     var style = document.createElement("style");
