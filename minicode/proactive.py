@@ -75,6 +75,103 @@ def save_state(state: dict) -> None:
         pass          # 状态写不进去就下次重新 diff,功能不受影响
 
 
+# -------------------------------------------------- 今天已经推过哪些提醒(按天)
+#
+# 为什么单独一份:`start_class_loop` 的去重集原来是**内存里的 set**,`last_day`
+# 也是内存的 —— 一重启就清空。于是两种失败同时发生:①8:40 那条课前提醒没赶上
+# (机器开着机/学长没在跑),重启后**永远不会补**;②8:50 重启,同一节课**再弹一次**。
+# 落盘 + 按天滚动同时解决这两件:补发知道谁没弹过,去重知道谁弹过了。
+PUSHED_FILE = "pushed-today.json"
+PUSHED_CAP = 200                      # 一天内最多记这么多条(防文件无限长)
+_push_lock = threading.RLock()        # 两条看门狗线程都会碰它;mark_pushed 里
+                                      # 还要再调 load_pushed → 必须是可重入锁
+_mem_pushed: set[str] = set()         # 写不进文件时的兜底(至少本次运行不重复)
+_mem_day = ""
+
+
+def pushed_path() -> Path:
+    return app_path(PUSHED_FILE)
+
+
+def _day_key(day: "date | None" = None) -> str:
+    return (day or date.today()).isoformat()
+
+
+def _pushed_mem(day: str) -> list[str]:
+    """内存兜底里今天的键 —— 只在账本写不进去时才有东西。
+
+    取**快照**比对:另一条线程正跨天 `clear()` 时直接迭代会炸
+    "Set changed size during iteration",而调用方是守护线程,炸了就是静默漏推。
+    """
+    with _push_lock:
+        return [k for k in list(_mem_pushed) if k.startswith(f"{day}|")]
+
+
+def load_pushed(day: str = "") -> list[str]:
+    """今天已推过的提醒键,**只含落盘那一份**,顺序 = 推送顺序(最老的在前)。
+
+    顺序是有意义的:`mark_pushed` 用 `keys[-PUSHED_CAP:]` 淘汰,混进无序的内存集
+    会让淘汰丢掉随机几条而不是最老的,还会把已经淘汰掉的键复活。想知道"到底推没
+    推过"用 `was_pushed()` —— 它两份都查。跨天、坏文件、缺字段一律给空
+    (宁可重弹不可漏弹)。
+    """
+    import json
+    day = day or _day_key()
+    try:
+        data = json.loads(pushed_path().read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("date") == day:
+            return [k for k in (data.get("keys") or []) if isinstance(k, str)]
+    except (OSError, json.JSONDecodeError, ValueError):
+        pass
+    return []
+
+
+def was_pushed(kind: str, key: str = "", day: "date | None" = None) -> bool:
+    """这条提醒今天推过了吗。`key` 空 = 按"类别 + 天"去重(如今日简报)。
+
+    落盘账本和内存兜底**两份都查**:后者专门装"这次写不进文件但至少本次运行
+    别重复弹"的那几条。
+    """
+    d = _day_key(day)
+    full = f"{d}|{kind}|{key}"
+    return full in load_pushed(d) or full in _pushed_mem(d)
+
+
+def mark_pushed(kind: str, key: str = "", day: "date | None" = None) -> bool:
+    """记下"这条推过了",返回**是否真的落了盘**。
+
+    写不进文件(只读目录、装在 Program Files 里)时退回内存集并如实返回 False
+    —— 本次运行仍然不会重复弹,只是重启后可能再弹一次,不能假装已经记住了。
+    写成功就把内存集清空:兜底的那几条已经跟着这次一起落盘了,留着反而会让
+    账本里淘汰掉的键被复活。
+    """
+    import json
+    global _mem_day
+    d = _day_key(day)
+    full = f"{d}|{kind}|{key}"
+    with _push_lock:
+        if _mem_day != d:
+            _mem_pushed.clear()
+            _mem_day = d
+        keys = load_pushed(d)
+        for k in _pushed_mem(d) + [full]:          # 兜底过的键一起补进账本
+            if k not in keys:
+                keys.append(k)
+        keys = keys[-PUSHED_CAP:]
+        try:
+            pushed_path().parent.mkdir(parents=True, exist_ok=True)
+            tmp = pushed_path().with_suffix(".tmp")
+            tmp.write_text(json.dumps({"date": d, "keys": keys},
+                                      ensure_ascii=False, indent=1),
+                           encoding="utf-8")
+            tmp.replace(pushed_path())
+            _mem_pushed.clear()
+            return True
+        except OSError:
+            _mem_pushed.add(full)
+            return False
+
+
 def clean_title(raw: str) -> str:
     """从列表页锚文本里提出干净标题:剥日期前缀,在通知类结尾词处截断。
 
@@ -283,7 +380,8 @@ def push_desktop(kind: str, payload: dict) -> dict:
         body = desktop_text(kind, payload)
         if not body:
             return {"ok": False, "skipped": "no_text"}
-        return tray.notify(KIND_TITLES.get(kind, "引路学长"), body, kind=kind)
+        return tray.notify(str(payload.get("title") or "").strip()
+                           or KIND_TITLES.get(kind, "引路学长"), body, kind=kind)
     except Exception as e:
         return {"ok": False, "skipped": "error", "msg": f"{type(e).__name__}"}
 
@@ -296,12 +394,24 @@ def _push_proactive(bridge, kind: str, **payload) -> None:
     push_desktop(kind, payload)
 
 
-def push_briefing(bridge) -> bool:
+def briefing_pushed_today(day: "date | None" = None) -> bool:
+    """今天的简报是否已经推过(重启/重开一轮都不该再来一条,也不该被当成没推)。"""
+    return was_pushed("briefing", _day_key(day), day=day)
+
+
+def push_briefing(bridge, force: bool = False) -> bool:
     """推一次今日简报;返回是否推成功(调用方据此跳过重复的单条推送)。
 
     聚合失败/无内容一律 False,主循环照旧单条推 —— 简报是加分项,不能
     因为它的异常把原有提醒全吞掉。
+
+    **每天最多一条**(`pushed-today.json` 按天去重):去重集原来在内存里,
+    所以"上午开过一次学长,下午再开又弹一条今日简报"是常态;开机补发也走这里,
+    两条线程同时启动不会抢出两条(闸门在锁里判)。
     """
+    key = _day_key()
+    if not force and briefing_pushed_today():
+        return False
     try:
         from minicode import briefing as _briefing
         b = _briefing.build()
@@ -309,6 +419,10 @@ def push_briefing(bridge) -> bool:
         return False
     if not b:
         return False
+    with _push_lock:
+        if not force and was_pushed("briefing", key):
+            return False           # 另一条线程刚推过
+        mark_pushed("briefing", key)
     _push_proactive(bridge, "briefing", **b)
     return True
 
@@ -330,7 +444,9 @@ def start_loop(bridge, interval_hours: float | None = None) -> None:
                 # 单条推送本轮不再打扰(内容已在简报里);事件类(新通知/
                 # 新版本/课前到点)不受影响。
                 if not briefing_done:
-                    briefing_pushed = push_briefing(bridge)
+                    # 今天推过就算"已覆盖":否则下午重开时 push_briefing 返回
+                    # False 会让下面三条单条推送又来一遍。
+                    briefing_pushed = briefing_pushed_today() or push_briefing(bridge)
                     briefing_done = True
                 state = load_state()
                 if state.get("enabled", True):
@@ -384,29 +500,56 @@ CLASS_TICK_SECONDS = 5 * 60         # 课前提醒单独一条细粒度轮询,�
 CLASS_LEAD_MINUTES = 20             # 开课前多久提醒(一节课通常 40-45 分钟,20 分钟够从宿舍出门)
 
 
+def catch_up(bridge) -> dict:
+    """开机补发(启动后第一轮做一次):把"今天该知道但没赶上"的两件补上。
+
+    - **今日简报**:今天从来没推过就补一条(早上没开机,下午打开学长还看得到
+      今天几节课、要不要带伞)。已经推过就绝不再来一条。
+    - **错过的课**:有节课**已经开课但还在补发窗口内**(默认 60 分钟)且没提醒过,
+      补一条「错过的提醒」。同一节课与到点提醒共用去重键,先弹了"快上课了"
+      就不会再弹这条,反过来也一样。
+
+    只做这两件,不把过去每节课都补一遍(那只会变成刷屏);任何异常静默 ——
+    补发是加分项,不能把看门狗弄崩。
+    """
+    out = {"briefing": False, "class": ""}
+    try:
+        out["briefing"] = push_briefing(bridge)
+    except Exception:
+        pass
+    try:
+        from minicode import schedule as _schedule
+        note = _schedule.late_class_note()
+        if note and not was_pushed("class", note["key"]):
+            _push_proactive(bridge, "class", **note)
+            mark_pushed("class", note["key"])
+            out["class"] = note["key"]
+    except Exception:
+        pass
+    return out
+
+
 def start_class_loop(bridge) -> None:
     """课前到点提醒线程:每 ~5 分钟看一次有没有课在 20 分钟内开课。
 
     与 start_loop 分开跑(主循环 6 小时一次,太粗做不到"快上课了")。
-    同一节课用 key 去重、只提醒一次;跨天清空去重集。任何异常一律吞掉。
+    去重键落盘在 `pushed-today.json`(按天滚动),**不再用内存 set** —— 内存集
+    一重启就空,于是"错过的那条永远不补"和"同一节课重启后再弹一次"会同时发生。
+    任何异常一律吞掉。
     """
-    reminded: set[str] = set()
-    last_day = None
-
     def run() -> None:
-        nonlocal last_day
         time.sleep(FIRST_DELAY_SECONDS)
+        try:
+            catch_up(bridge)             # 先补今天错过的,再进入正常轮询
+        except Exception:
+            pass
         while True:
             try:
                 from minicode import schedule as _schedule
                 note = _schedule.upcoming_class(lead_minutes=CLASS_LEAD_MINUTES)
-                today = date.today().isoformat()
-                if last_day != today:
-                    reminded.clear()
-                    last_day = today
-                if note and note["key"] not in reminded:
+                if note and not was_pushed("class", note["key"]):
                     _push_proactive(bridge, "class", **note)
-                    reminded.add(note["key"])
+                    mark_pushed("class", note["key"])
             except Exception:
                 pass
             time.sleep(CLASS_TICK_SECONDS)

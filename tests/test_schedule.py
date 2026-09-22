@@ -186,6 +186,74 @@ def test_upcoming_class_no_schedule():
     assert schedule.upcoming_class(datetime(2026, 9, 7, 7, 50)) is None
 
 
+# ------------------------------------------------ 补发"错过的课"(v0.9.26)
+
+def test_late_class_note_fires_for_a_class_that_already_started():
+    from datetime import datetime
+    assert _save()[0]
+    note = schedule.late_class_note(datetime(2026, 9, 7, 8, 50))
+    assert note and "错过的提醒" in note["text"] and "高等数学" in note["text"]
+    assert note["minutes_since"] == 50 and note["title"] == "错过的提醒"
+    assert "思齐楼B203" in note["text"]
+    # 与到点提醒**共用同一个键**:先弹了"快上课了"就不会再弹这条,反之也一样
+    assert note["key"] == "2026-09-07T08:00:高等数学"
+    assert note["key"] == schedule.upcoming_class(
+        datetime(2026, 9, 7, 7, 50))["key"]
+
+
+def test_late_class_note_windows_and_edges():
+    from datetime import datetime
+    assert _save()[0]
+    assert schedule.late_class_note(datetime(2026, 9, 7, 7, 59)) is None   # 还没开课
+    assert schedule.late_class_note(datetime(2026, 9, 7, 8, 0)) is None    # 正好开课=0 分钟
+    assert schedule.late_class_note(datetime(2026, 9, 7, 8, 50))["minutes_since"] == 50
+    assert schedule.late_class_note(datetime(2026, 9, 7, 9, 0))["minutes_since"] == 60
+    assert schedule.late_class_note(datetime(2026, 9, 7, 9, 1)) is None    # 刚过窗口
+    # 窗口收窄 = 只补"刚刚错过"的,不把一小时前的旧事再念一遍
+    assert schedule.late_class_note(datetime(2026, 9, 7, 8, 50),
+                                    within_minutes=30) is None
+
+
+def test_late_class_note_only_gives_the_nearest_missed_class():
+    """一早上两节都没赶上,也只补最近那一节 —— 补发不是刷屏的许可证。"""
+    from datetime import datetime
+    assert schedule.save("2026-09-07", [
+        {"name": "高等数学", "day": 1, "periods": "1-2", "start_time": "08:00",
+         "weeks": "1-16", "location": "思齐楼B203"},
+        {"name": "大学英语", "day": 1, "periods": "3-4", "start_time": "08:50",
+         "weeks": "1-16", "location": "外院101"},
+    ])[0]
+    note = schedule.late_class_note(datetime(2026, 9, 7, 9, 10))
+    assert note["name"] == "大学英语" and note["minutes_since"] == 20
+
+
+def test_late_class_note_never_invents_what_the_schedule_lacks():
+    from datetime import datetime
+    # 没写钟点的课(体育课)不参与补发
+    assert _save()[0]
+    for hh in range(0, 23):
+        assert schedule.late_class_note(datetime(2026, 9, 18, hh, 30)) is None
+    # 没写教室 → 正文里不出现"教室 …",但课名/钟点是真的
+    assert schedule.save("2026-09-07", [
+        {"name": "高等数学", "day": 1, "periods": "1-2", "start_time": "08:00",
+         "weeks": "1-16"},
+    ])[0]
+    note = schedule.late_class_note(datetime(2026, 9, 7, 8, 20))
+    assert note and "教室" not in note["text"] and "08:00" in note["text"]
+    # 没课表 = 整条不发
+    schedule.clear()
+    assert schedule.late_class_note(datetime(2026, 9, 7, 8, 20)) is None
+
+
+def test_late_class_note_never_claims_class_is_still_running():
+    """课表里没有结束钟点,所以文案只能说"已开课约 N 分钟",不能说"还在上"。"""
+    from datetime import datetime
+    assert _save()[0]
+    note = schedule.late_class_note(datetime(2026, 9, 7, 8, 20))
+    assert "还在上" not in note["text"] and "未结束" not in note["text"]
+    assert "过了约 20 分钟" in note["text"]
+
+
 
 # ---------------------------------------------------------------- 变动比对(v0.9.24)
 

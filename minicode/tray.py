@@ -307,8 +307,17 @@ def register_notify_identity(force: bool = False) -> dict:
         return {"ok": False, "msg": msg}
 
 
-def _toast(title: str, body: str, tag: str = "") -> dict:
-    """走 WinRT Toast 发一条;返回 ok 只代表 PowerShell 认了这条 Show()。"""
+def _run_ps(script: str, env_extra: dict, timeout: int = _TOAST_TIMEOUT,
+            need_ok: bool = True) -> dict:
+    """起一次系统自带的 PowerShell 5.1 跑脚本。
+
+    三条纪律(都是真机踩出来的,见上面 AUMID 与 env 那两段):
+    - 脚本走 `-EncodedCommand`(base64 utf-16-le),不拼引号;
+    - **所有文本(标题、正文、路径、描述)只经 `YX_*` 环境变量进去**,不进 argv;
+    - 环境块必须是**纯字符串**:Windows 建进程时塞进 Path/None 会直接抛
+      "environment can only contain strings",而唯一的报错点就在 subprocess.run 里。
+    成功判据是"退出码 0 且 stdout 以 OK 结尾" —— 脚本自己不说 OK 就不算成功。
+    """
     import base64
     import os
     import subprocess
@@ -316,31 +325,45 @@ def _toast(title: str, body: str, tag: str = "") -> dict:
     if not os.path.isfile(exe):
         return {"ok": False, "skipped": "no_powershell",
                 "msg": f"系统里没有 PowerShell:{exe}"}
-    icon = resource_path(*AUMID_ICON)
-    # 环境块必须是**纯字符串**:Windows 建进程时塞进 Path/None 会直接抛
-    # "environment can only contain strings"(真机踩过一次,三条通知全没发出去),
-    # 而这条路唯一的报错点就在 subprocess.run 里,不看日志根本猜不到是这里。
-    env = {k: str(v) for k, v in dict(
-        os.environ, YX_AUMID=AUMID, YX_TITLE=str(title or AUMID_NAME),
-        YX_BODY=str(body), YX_TAG=str(tag or ""),
-        # 必须是 file:/// 形式:裸路径会让 <image src> 静默失效(通知没图标)
-        YX_ICON=_file_uri(icon) if os.path.isfile(icon) else "").items()}
-    encoded = base64.b64encode(_TOAST_PS.encode("utf-16-le")).decode("ascii")
+    env = {k: str(v) for k, v in dict(os.environ, **env_extra).items()}
     argv = [exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-            "-EncodedCommand", encoded]
+            "-EncodedCommand",
+            base64.b64encode(script.encode("utf-16-le")).decode("ascii")]
     try:
-        p = subprocess.run(argv, env=env, capture_output=True,
-                           timeout=_TOAST_TIMEOUT,
+        p = subprocess.run(argv, env=env, capture_output=True, timeout=timeout,
                            **({"creationflags": _NO_WINDOW} if os.name == "nt" else {}))
     except Exception as e:
-        return {"ok": False, "skipped": "toast_spawn",
+        return {"ok": False, "skipped": "ps_spawn",
                 "msg": f"{type(e).__name__}: {e}"}
     out = (p.stdout or b"").decode("utf-8", "ignore").strip()
-    if p.returncode == 0 and out.endswith("OK"):
-        return {"ok": True, "channel": "toast"}
     err = ((p.stderr or b"").decode("utf-8", "ignore") or out).strip()
-    return {"ok": False, "skipped": "toast",
-            "msg": f"退出码 {p.returncode}: {err[:200] or '无输出'}"}
+    if p.returncode != 0:
+        return {"ok": False, "skipped": "ps",
+                "msg": f"退出码 {p.returncode}: {err[:200] or '无输出'}"}
+    if need_ok and not out.endswith("OK"):
+        # 退出码 0 但没打印 OK = 脚本半路没走完,不能算成功
+        return {"ok": False, "skipped": "ps",
+                "msg": f"没有回 OK:{err[:200] or '无输出'}"}
+    return {"ok": True, "out": out}
+
+
+def _toast(title: str, body: str, tag: str = "") -> dict:
+    """走 WinRT Toast 发一条;返回 ok 只代表 PowerShell 认了这条 Show()。"""
+    import os
+    icon = resource_path(*AUMID_ICON)
+    r = _run_ps(_TOAST_PS, dict(
+        YX_AUMID=AUMID, YX_TITLE=str(title or AUMID_NAME),
+        YX_BODY=str(body), YX_TAG=str(tag or ""),
+        # 必须是 file:/// 形式:裸路径会让 <image src> 静默失效(通知没图标)
+        YX_ICON=_file_uri(icon) if os.path.isfile(icon) else ""))
+    if r.get("ok"):
+        return {"ok": True, "channel": "toast"}
+    skipped = r.get("skipped")
+    if skipped == "ps_spawn":
+        return {"ok": False, "skipped": "toast_spawn", "msg": r.get("msg", "")}
+    if skipped == "ps":
+        return {"ok": False, "skipped": "toast", "msg": r.get("msg", "")}
+    return {"ok": False, "skipped": skipped or "toast", "msg": r.get("msg", "")}
 
 
 def _balloon(title: str, body: str) -> dict:
@@ -477,6 +500,163 @@ def notify_status() -> dict:
             "last": dict(_LAST)}
 
 
+# ------------------------------------------------------- 开机自动启动(v0.9.26)
+#
+# 为什么算在"桌面提醒"这一摊里:提醒只有**学长在跑**才发得出去。8:30 开机先看
+# 一眼消息、再顺手把学长关掉,那 8:40 的课前提醒就已经没了 —— 自启 + 错过的补发
+# 才让 v0.9.25 那条桌面通知真正闭环。
+#
+# 为什么用当前用户的「启动」文件夹快捷方式,而不是注册表 Run 键:两条都免管理员,
+# 但快捷方式是**磁盘上一个看得见的文件** —— 用户能自己开资源管理器看到它指向谁、
+# 不满意直接删;写注册表反而不好审计。代价是造 .lnk 得借 PowerShell 的
+# WScript.Shell,所以建完一定要**读回来核对指向**才算成功。
+STARTUP_NAME = "引路学长.lnk"
+STARTUP_DESC = "引路学长 —— 开机自动启动(桌面提醒需要学长在跑)"
+_STARTUP_MAKE_PS = r"""
+$ErrorActionPreference = 'Stop'
+$dir = Split-Path -Parent $env:YX_LNK
+if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+$ws = New-Object -ComObject WScript.Shell
+$s = $ws.CreateShortcut($env:YX_LNK)
+$s.TargetPath = $env:YX_TARGET
+$s.Arguments = $env:YX_ARGS
+$s.WorkingDirectory = $env:YX_WORKDIR
+$s.Description = $env:YX_DESC
+if ($env:YX_ICON) { $s.IconLocation = $env:YX_ICON }
+$s.Save()
+if (Test-Path -LiteralPath $env:YX_LNK) { 'OK' }
+"""
+_STARTUP_READ_PS = r"""
+$ErrorActionPreference = 'Stop'
+if (-not (Test-Path -LiteralPath $env:YX_LNK)) { 'MISSING'; exit }
+$ws = New-Object -ComObject WScript.Shell
+$s = $ws.CreateShortcut($env:YX_LNK)
+Write-Output ("TARGET=" + $s.TargetPath)
+"""
+
+
+def startup_path() -> str:
+    """当前用户的「启动」文件夹里那个快捷方式(没有 APPDATA 时回空串)。"""
+    import os
+    appdata = os.environ.get("APPDATA") or ""
+    if not appdata:
+        return ""
+    return os.path.join(appdata, "Microsoft", "Windows", "Start Menu",
+                        "Programs", "Startup", STARTUP_NAME)
+
+
+# 开机自启带这个参数:开机是来用电脑的,不是来看学长窗口的 —— 直接进托盘待命,
+# 提醒照弹,想看界面双击托盘图标(「显示主窗口」)。gui_main 读同一个常量。
+BACKGROUND_FLAG = "--background"
+
+
+def starts_hidden(argv=None) -> bool:
+    """本次启动该不该直接进托盘(命令行没有 `--background` 就是正常开窗口)。"""
+    import sys
+    return BACKGROUND_FLAG in list(sys.argv[1:] if argv is None else argv)
+
+
+def launch_target() -> tuple:
+    """(可执行文件, 参数, 工作目录):打包后就是 app 自己,开发态用 pythonw 跑 gui_main。
+
+    开发态刻意选 `pythonw.exe`(而不是 `python.exe`):开机弹一个黑色控制台窗口
+    比不自启更烦人。找不到 pythonw 才退回当前解释器。
+
+    参数里带 `BACKGROUND_FLAG`:自启只负责**让学长在跑**,不负责把窗口摆到脸上。
+    真起不来托盘时 gui_main 会照常显示窗口(见 `start_in_tray`),不会出现
+    "进程在、界面永远叫不出来"那种更糟的结果。
+    """
+    import os
+    import sys
+    if getattr(sys, "frozen", False):
+        exe = sys.executable
+        return exe, BACKGROUND_FLAG, os.path.dirname(exe)
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    here = os.path.dirname(os.path.abspath(sys.executable))
+    exe = os.path.join(here, "pythonw.exe")
+    if not os.path.isfile(exe):
+        exe = sys.executable
+    script = os.path.join(repo, "gui_main.py")
+    return (exe, f'"{script}" {BACKGROUND_FLAG}' if os.path.isfile(script) else "",
+            repo)
+
+
+def startup_present() -> bool:
+    """快捷方式在不在 —— **只查文件,不起 PowerShell**。
+
+    托盘菜单每次右键都要画勾选态,而 `startup_status()` 要冷启动一次 PowerShell
+    读 `.lnk` 指向,拿它当回调会让菜单卡一下。这里只回答"有没有";
+    "是不是我们写的那个"仍由 `startup_status()` / `set_startup()` 判。
+    """
+    import os
+    lnk = startup_path()
+    return bool(lnk) and os.path.isfile(lnk)
+
+
+def startup_status() -> dict:
+    """自启现状:快捷方式在不在、指向哪个 exe、是不是我们写的那个。"""
+    import os
+    lnk = startup_path()
+    exe, _args, _wd = launch_target()
+    st = {"supported": bool(lnk) and os.name == "nt", "lnk": lnk,
+          "installed": False, "target": "", "ours": False, "want": exe}
+    if not st["supported"]:
+        return st
+    r = _run_ps(_STARTUP_READ_PS, {"YX_LNK": lnk}, need_ok=False)
+    out = (r.get("out") or "").strip()
+    if not r.get("ok") or out == "MISSING" or not out.startswith("TARGET="):
+        return st
+    target = out[len("TARGET="):].strip()
+    st["installed"] = bool(target)
+    st["target"] = target
+    st["ours"] = bool(target) and target.lower() == exe.lower()
+    return st
+
+
+def set_startup(enabled: bool) -> dict:
+    """开/关开机自启。**只在真把快捷方式建出来/删掉后才说成功**。
+
+    关的时候如果那个 `.lnk` 指向的不是本应用(用户自己放了同名快捷方式、或换了
+    安装目录),**拒绝动手** —— 这是别人的文件,删了不可恢复,只能如实说。
+    """
+    import os
+    st = startup_status()
+    if not st["supported"]:
+        return {"ok": False, "enabled": False,
+                "msg": "这个系统/形态没有可写的「启动」文件夹,开不了开机自启"}
+    lnk = st["lnk"]
+    if not enabled:
+        if not st["installed"]:
+            return {"ok": True, "enabled": False, "msg": "本来就没开"}
+        if not st["ours"]:
+            return {"ok": False, "enabled": True,
+                    "msg": f"「启动」里那个 {STARTUP_NAME} 指向的是 "
+                           f"{st['target'] or '(空)'},不是本应用,不动别人的文件"}
+        try:
+            os.remove(lnk)
+        except OSError as e:
+            return {"ok": False, "enabled": True,
+                    "msg": f"删不掉:{type(e).__name__}: {e}"}
+        log("开机自启:关(已删启动文件夹快捷方式)")
+        return {"ok": True, "enabled": False}
+    exe, args, workdir = launch_target()
+    icon = resource_path("assets", "gcode.ico")
+    r = _run_ps(_STARTUP_MAKE_PS, {
+        "YX_LNK": lnk, "YX_TARGET": exe, "YX_ARGS": args,
+        "YX_WORKDIR": workdir, "YX_DESC": STARTUP_DESC,
+        "YX_ICON": str(icon) if os.path.isfile(icon) else ""})
+    if not r.get("ok"):
+        return {"ok": False, "enabled": False, "msg": r.get("msg") or "PowerShell 没建成"}
+    after = startup_status()
+    ours = bool(after["installed"] and after["ours"])
+    if not ours:
+        return {"ok": False, "enabled": False,
+                "msg": f"快捷方式建出来了但指向不对(读到 "
+                       f"{after['target'] or '空'}),不敢算已开启"}
+    log(f"开机自启:开({lnk} → {exe})")
+    return {"ok": True, "enabled": True, "lnk": lnk, "target": exe}
+
+
 # ------------------------------------------------------------------ 控制器
 
 class TrayController:
@@ -604,6 +784,8 @@ class TrayController:
                                      self._tray_toggle_notify,
                                      checked=lambda item: notify_enabled()),
                     pystray.MenuItem("测试一条桌面通知", self._tray_test_notify),
+                    pystray.MenuItem("开机自动启动", self._tray_toggle_startup,
+                                     checked=lambda item: startup_present()),
                     pystray.MenuItem("点 X 时先问我", self._tray_reset_ask),
                     pystray.MenuItem("退出引路学长", self._tray_quit),
                 )
@@ -647,6 +829,17 @@ class TrayController:
         r = notify("引路学长 · 测试", "看到这条就说明桌面提醒是通的。", force=True)
         log("托盘:测试通知 " + ("已发出" if r.get("ok") else
                                f"未发出({r.get('skipped')} {r.get('msg', '')})"))
+
+    def _tray_toggle_startup(self, icon=None, item=None) -> None:
+        """翻转开机自启。真建好/删掉了才算数,失败就把"想开/想关"和原因一起记下。
+
+        记的是 `want` 而不是结果:失败时 `enabled` 恒为 False,拿结果写日志会把
+        "点了开没开成"记成"关",看日志的人反而找不到那次操作。
+        """
+        want = not startup_present()
+        r = set_startup(want)
+        log(f"托盘:开机自启 → {'开' if want else '关'}"
+            + ("" if r.get("ok") else f" (失败: {r.get('msg')})"))
 
     def _tray_quit(self, icon=None, item=None) -> None:
         self.quit()
@@ -714,6 +907,24 @@ def install(window, ui) -> TrayController | None:
     return controller
 
 
+def start_in_tray() -> bool:
+    """`--background` 自启:窗口已按 hidden 创建,这里只保证托盘在、并把话说清楚。
+
+    自启的唯一职责是"让学长在跑",好让课前提醒和补发发得出去;可开机就糊一个
+    1280×820 的窗口在脸上,用户下一步就是关掉自启。所以 `gui_main` 建窗口时带
+    `hidden=True`,本函数只验托盘图标起没起 —— **起不来一定要返回 False**,
+    调用方会照常显示窗口:进程在跑但界面永远叫不出来,比多一个窗口糟得多。
+    """
+    c = _CONTROLLER
+    if c is None:
+        log("后台启动:托盘控制器还没就绪,窗口保持显示")
+        return False
+    ok = c.hide_to_tray()      # 里面先建图标,建不出来就返回 False
+    log("后台启动:" + ("已收进托盘,双击托盘图标叫出窗口" if ok else
+                       "托盘没起来,窗口照常显示"))
+    return bool(ok)
+
+
 def controller() -> TrayController | None:
     return _CONTROLLER
 
@@ -744,6 +955,16 @@ def desktop_notify(ctx, action: str = "status", kind: str = "",
     st = notify_status()
     if action == "status":
         last = st["last"]
+        su = startup_status()
+        if not su["supported"]:
+            startup_line = "开机自启:这个系统/形态没有可写的「启动」文件夹,开不了。"
+        elif su["installed"] and su["ours"]:
+            startup_line = f"开机自启:已开启({su['lnk']})。"
+        elif su["installed"]:
+            startup_line = (f"开机自启:没开 —— 「启动」里有个同名快捷方式但指向 "
+                            f"{su['target'] or '(空)'},不是本应用,学长不会去动它。")
+        else:
+            startup_line = "开机自启:没开(说「开机自动启动学长」可以打开)。"
         on = [KIND_LABELS.get(k, k) for k in NOTIFY_KINDS if st["kinds"].get(k)]
         off = [KIND_LABELS.get(k, k) for k in NOTIFY_KINDS
                if not st["kinds"].get(k)]
@@ -758,9 +979,10 @@ def desktop_notify(ctx, action: str = "status", kind: str = "",
                                     "(Windows 11 上多半不显示)")
                 + f";通知身份:{st['aumid']}"
                   + ("(已登记成「引路学长」)" if st["identity_registered"] else "(未登记)")
-                + "。\n最近一次:" + ("没发过" if last.get("ok") is None else
-                                     f"{last.get('channel') or '两条通道都没走通'}"
-                                     f" · {last.get('msg') or '已交给系统'}")
+                + f"\n{startup_line}\n最近一次:"
+                + ("没发过" if last.get("ok") is None else
+                   f"{last.get('channel') or '两条通道都没走通'}"
+                   f" · {last.get('msg') or '已交给系统'}")
                 + "\n偏好文件:" + st["pref_path"]
                 + ("" if st["tray_installed"] else
                    "\n(当前形态没有托盘:不影响走 toast 弹通知,只是没法退回气球;"
@@ -771,6 +993,18 @@ def desktop_notify(ctx, action: str = "status", kind: str = "",
         what = f"「{KIND_LABELS.get(kind, kind)}」这一类" if kind else "全部桌面提醒"
         return ((f"已把{what}关掉。" if not want else f"已打开{what}。")
                 + ("" if r.get("ok") else f" 注意:{r.get('msg')}"))
+    if action in ("startup_on", "startup_off"):
+        want = action == "startup_on"
+        r = set_startup(want)
+        if not r.get("ok"):
+            return ("开机自启没能" + ("打开" if want else "关掉") + ":"
+                    + r.get("msg", "未知原因")
+                    + "\n学长按原样在跑,现在的提醒一条没少,只是下次开机要先自己打开学长。")
+        if want:
+            return ("已开启开机自启:开机后学长会在后台等着,课前提醒、今日简报、"
+                    "错过的补发都会照常弹。\n快捷方式:" + str(r.get("lnk", ""))
+                    + "\n不想要了在托盘菜单里取消勾选,或直接跟学长说一声。")
+        return "已关掉开机自启(启动文件夹里那个快捷方式已删除)。开机后需要自己打开学长,提醒才发得出去。"
     if action == "test":
         r = notify("引路学长 · 测试", "看到这条就说明桌面提醒是通的。", force=True)
         if r.get("ok") and r.get("verified"):
@@ -783,4 +1017,5 @@ def desktop_notify(ctx, action: str = "status", kind: str = "",
         return ("这条测试通知没能发出:" + r.get("msg", r.get("skipped", ""))
                 + "\n原因也写在数据目录里的 tray.log;"
                   "主动提醒仍会显示在聊天窗口顶部那条提示栏里。")
-    return f"未知的 action「{action}」,可用:status / on / off / test"
+    return (f"未知的 action「{action}」,"
+            "可用:status / on / off / test / startup_on / startup_off")

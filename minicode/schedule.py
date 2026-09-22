@@ -584,6 +584,15 @@ def view(today: date | None = None) -> dict:
             "week_grid": grid}
 
 
+def _note_key(day: date, start_time: str, name: str) -> str:
+    """课前提醒的稳定去重键。
+
+    到点提醒(`upcoming_class`)与开机补发(`late_class_note`)**共用同一个键**:
+    同一节课先弹了"快上课了"就不该再弹"错过的提醒",反过来也一样。
+    """
+    return f"{day.isoformat()}T{start_time}:{name}"
+
+
 def upcoming_class(now=None, lead_minutes: int = 20) -> dict | None:
     """课前到点提醒:今天节次里,距开课上不到 lead_minutes 分钟的一节。
 
@@ -615,8 +624,50 @@ def upcoming_class(now=None, lead_minutes: int = 20) -> dict | None:
     return {"text": text, "ask": ask,
             "name": best["name"], "time": best["start_time"],
             "location": best.get("location", ""), "minutes_left": best["_m"],
-            "key": f"{now.date().isoformat()}T{best['start_time']}:{best['name']}"}
+            "key": _note_key(now.date(), best["start_time"], best["name"])}
 
+
+
+LATE_WINDOW_MINUTES = 60   # 开课后多久之内补提醒还算来得及,超过就不打扰
+
+
+def late_class_note(now=None, within_minutes: int = LATE_WINDOW_MINUTES) -> dict | None:
+    """开机补发:今天**已经开课、且开课不超过 within_minutes 分钟**的那节课。
+
+    为什么需要:课前提醒的去重集以前只在内存里,一重启就空 —— 于是"8:50 才开机
+    错过 8:40 那条"和"重启后同一节课又弹一次"会同时发生。
+
+    两条诚实性:①只认课表里**确实写了 `start_time`** 的课;②课表里**没有结束钟点**,
+    所以绝不宣称"这节课还在上",只说"已开课约 N 分钟"(这个我们说得准),而且
+    **只给最近的一节** —— 一早上三节都没赶上,不会连着弹三条刷屏。
+    """
+    from datetime import datetime
+    now = now or datetime.now()
+    data = load()
+    if not data:
+        return None
+    best = None
+    for r in classes_on(now.date(), data):
+        hm = _parse_hm(r.get("start_time"))
+        if hm is None:
+            continue
+        start = now.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+        since = round((now - start).total_seconds() / 60)
+        if 0 < since <= within_minutes and (best is None or since < best["_since"]):
+            best = {**r, "_since": since}
+    if best is None:
+        return None
+    loc = f" · 教室 {best['location']}" if best.get("location") else ""
+    now_hm = now.strftime("%H:%M")
+    text = (f"错过的提醒:{best['name']} {best['start_time']} 已开课"
+            f"(现在 {now_hm},过了约 {best['_since']} 分钟){loc}")
+    ask = (f"{best['name']} {best['start_time']} 已经开课了,现在 {now_hm},"
+           "我现在过去还来得及吗?需要带什么?")
+    return {"text": text, "ask": ask, "title": "错过的提醒",
+            "name": best["name"], "time": best["start_time"],
+            "location": best.get("location", ""),
+            "minutes_since": best["_since"],
+            "key": _note_key(now.date(), best["start_time"], best["name"])}
 
 
 # ---------------------------------------------------------------- 提示词与工具

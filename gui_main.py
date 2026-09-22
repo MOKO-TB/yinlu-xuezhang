@@ -132,10 +132,26 @@ def install_tray(ui) -> bool:
     return False
 
 
+def _reveal_window() -> None:
+    """兜底:本该进托盘却起不来托盘 → 把窗口显示出来。
+
+    "进程在跑、界面永远叫不出来"比开机多一个窗口糟得多,所以宁显不藏。
+    """
+    try:
+        windows = getattr(webview, "windows", None) or []
+        if windows:
+            windows[0].show()
+    except Exception as e:
+        tray.log(f"显示窗口失败: {type(e).__name__}: {e}")
+
+
 def post_startup(ui) -> None:
-    """webview.start 的回调(独立线程):补开右键菜单 + 接管关窗。"""
+    """webview.start 的回调(独立线程):补开右键菜单 + 接管关窗 + 自启进托盘。"""
     _enable_native_context_menu()
     install_tray(ui)
+    # 开机自启带 --background:窗口建的时候就是 hidden,这里只验托盘在不在。
+    if tray.starts_hidden() and not tray.start_in_tray():
+        _reveal_window()
 
 
 def main() -> None:
@@ -154,6 +170,9 @@ def main() -> None:
             js_api=api,
             width=1280, height=820,
             background_color="#FDF6EC",
+            # 开机自启(--background)建窗口时先不显示,等托盘就绪;手动双击照常弹出。
+            # 上面那条「前端资源缺失」的分支**永远显示**:报错看不见比多一个窗口更糟。
+            hidden=tray.starts_hidden(),
         )
     else:
         window = webview.create_window(

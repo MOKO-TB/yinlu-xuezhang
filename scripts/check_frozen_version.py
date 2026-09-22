@@ -63,7 +63,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
                       "_powershell", "AUMID",
                       # v0.9.25 修第二轮:显示名要写在注册表默认值上、图标路径
                       # 必须 file:///(漏收 = 装好的包通知顶着一串英文、没图标)
-                      "_file_uri"),
+                      "_file_uri",
+                      # v0.9.26:开机自启(漏收 = 「开机自动启动」说了没反应,
+                      # 或更坏:建了快捷方式却没读回核对,开机弹一个死掉的自启项)
+                      "_run_ps", "startup_path", "startup_present",
+                      "startup_status", "set_startup", "launch_target",
+                      "STARTUP_NAME", "BACKGROUND_FLAG", "starts_hidden",
+                      # 漏收 = 自启时窗口藏不进托盘也没人把它显示回来(隐形进程)
+                      "start_in_tray"),
     "minicode.reasoning": ("reasoning_snapshot", "get_capability",
                            "apply_reasoning_choice"),
     "minicode.session": ("to_markdown", "search_logs", "export_filename"),
@@ -104,7 +111,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "view", "upcoming_class", "_parse_hm",
                           # v0.9.24:覆盖前自动比对 + 换回上一版
                           "compare", "undo", "describe_changes", "prev_path",
-                          "COMPARE_FIELDS"),
+                          "COMPARE_FIELDS",
+                          # v0.9.26:开机补发"今天已开课却没提醒过"的那节课
+                          # (漏收 = 8:50 开机只补简报,错过的课永远没人提)
+                          "_note_key", "LATE_WINDOW_MINUTES", "late_class_note"),
     "minicode.weather": ("weather_card", "umbrella_tip", "refresh_async",
                          "get_weather"),
     # ---- v0.9.19:拖拽上传(字节落盘,绕开 WebView2 拿不到本地路径) ----
@@ -118,7 +128,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "check_update", "push_briefing", "start_class_loop",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
-                           "KIND_TITLES", "desktop_text", "push_desktop"),
+                           "KIND_TITLES", "desktop_text", "push_desktop",
+                           # v0.9.26:去重集落盘 + 开机补发(漏收 = 重启后
+                           # "错过的那条永远不补、弹过的那条再弹一次")
+                           "PUSHED_FILE", "pushed_path", "load_pushed",
+                           "was_pushed", "mark_pushed",
+                           "briefing_pushed_today", "catch_up"),
     # ---- v0.9.23:教务课表导入(整套新模块,漏收 = 点「导入课表」直接报错) ----
     "minicode.schedule_import": ("ImportFlow", "parse_grid", "summarize",
                                  "clear_login_state", "GRID_JS", "_norm_periods",

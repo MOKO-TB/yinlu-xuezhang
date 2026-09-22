@@ -682,6 +682,10 @@ def build_default_registry() -> list[Tool]:
                 "briefing/class/schedule/reminders/calendar/notices/update),action=test "
                 "当场发一条测试通知(**排查「看不到通知」先走这条**:回了「已发出」"
                 "就说明是系统挡的,要用户去 设置→系统→通知 里放行本应用)。"
+                "另外管开机自启:action=startup_on / startup_off 开或关「开机自动启动学长」"
+                "(用户说「开机后忘了打开学长所以没收到提醒」「让它开机就自己起来」时用;"
+                "实现是在当前用户的「启动」文件夹放一个快捷方式,不写注册表,用户能自己"
+                "看见并删掉;建完会读回指向核对,没核对上不会说已开启)。"
                 "只有桌面版弹得出去,命令行/网页版会如实说明弹不了,绝不假装已开启。"
                 "两条默认行为要说清:窗口正在前台时桌面不重复弹(聊天栏那条已经看得见),"
                 "同一条内容 ~90 秒内只响一次(免得重复推的提醒刷屏)。"
@@ -689,8 +693,11 @@ def build_default_registry() -> list[Tool]:
             parameters={
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["status", "on", "off", "test"],
-                               "description": "status=看状态(默认);on/off=开关;test=发一条测试"},
+                    "action": {"type": "string",
+                               "enum": ["status", "on", "off", "test",
+                                        "startup_on", "startup_off"],
+                               "description": "status=看状态(默认);on/off=开关;test=发一条测试;"
+                                              "startup_on/startup_off=开机自启开/关"},
                     "kind": {"type": "string",
                              "description": "可选:只开关这一类提醒(briefing 今日简报 / class 课前 / "
                                             "schedule 课程 / reminders 待办 / calendar 校历 / "

@@ -26,6 +26,7 @@ def _isolate_app_dir(tmp_path, monkeypatch):
 _TOAST_CALLS: list[dict] = []
 _REAL_TOAST = tray._toast
 _REAL_IDENTITY = tray.register_notify_identity
+_REAL_STARTUP_PATH = tray.startup_path    # 默认被下面的夹具清空,少数用例要真身
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +44,10 @@ def _no_real_notify(monkeypatch):
     monkeypatch.setattr(tray, "_LAST", {"ok": None, "channel": "",
                                         "verified": None, "kind": "",
                                         "msg": "还没发过"})
+    # v0.9.26 同一套路:开机自启也是"起 PowerShell 动本机文件",默认判为
+    # "这台机器没有「启动」文件夹" —— 它在 `_run_ps` 之前就会返回,不会真起进程。
+    # 要测自启的用例各自用 `_startup_env` 覆盖回来。
+    monkeypatch.setattr(tray, "startup_path", lambda: "")
 
 
 def _real_toast(monkeypatch):
@@ -887,3 +892,344 @@ def test_desktop_notify_tool_test_explains_no_channel(monkeypatch):
     monkeypatch.setattr(tray, "_seen", {})
     out = tray.desktop_notify(None, action="test")
     assert out.startswith("这条测试通知没能发出") and "PowerShell" in out
+
+
+# ============================================== 开机自动启动(v0.9.26)
+#
+# 一条红线:这些测试**绝不碰真机的「启动」文件夹**,也绝不真起 PowerShell ——
+# 全都把 `startup_path` 钉到 tmp_path、把 `_run_ps` 换成替身。
+
+class FakePS:
+    """替身 `_run_ps`:照那两个真脚本的样子**动临时目录里的文件**。
+
+    建快捷方式 → 真的在临时「启动」文件夹里落一个同名占位文件;读回 → 按文件在不在
+    答 `MISSING` / `TARGET=<指向>`。这样 `startup_present()`(纯文件检查)和
+    `startup_status()`(读指向)在测试里说的是同一套事实,不会两边各演一遍。
+    两个脚本都含 `CreateShortcut`,靠**只有读回脚本才会打印的 `TARGET=`** 区分 ——
+    于是"建完有没有真去读回来核对"从实现细节变成了被测行为。
+    """
+
+    def __init__(self, lnk, target=None, fail=None):
+        self.lnk = lnk
+        self.target = target            # None = 建成后就指向传进去的 YX_TARGET
+        self.fail = fail                # 演 PowerShell 那一层失败
+        self.calls: list[tuple[str, dict]] = []
+
+    def __call__(self, script, env_extra, timeout=None, need_ok=True):
+        import os
+        env = dict(env_extra)
+        self.calls.append((script, env))
+        if self.fail is not None:
+            return dict(self.fail)
+        if "TARGET=" in script:                         # 读回
+            if not os.path.isfile(str(self.lnk)):
+                return {"ok": True, "out": "MISSING"}
+            return {"ok": True, "out": "TARGET=" + (self.target or "")}
+        self.lnk.parent.mkdir(parents=True, exist_ok=True)   # 建快捷方式
+        self.lnk.write_text("占位", encoding="utf-8")
+        if self.target is None:
+            self.target = env.get("YX_TARGET", "")
+        return {"ok": True, "out": "OK"}
+
+    def made(self):
+        return [c for c in self.calls if "TARGET=" not in c[0]]
+
+
+def _startup_env(monkeypatch, tmp_path, fake=None, target=None, installed=False):
+    """把「启动」文件夹钉到临时目录 + 换上 `_run_ps` 替身,返回 (.lnk 路径, 替身)。
+
+    `installed=True` 先把那个占位 .lnk 落下去 —— "已经开着"这件事在替身里和真
+    脚本一样是**文件在不在**,不是另设一个布尔。
+    """
+    lnk = tmp_path / "Startup" / tray.STARTUP_NAME
+    if installed:
+        lnk.parent.mkdir(parents=True, exist_ok=True)
+        lnk.write_text("占位", encoding="utf-8")
+    monkeypatch.setattr(tray, "startup_path", lambda: str(lnk))
+    fake = fake or FakePS(lnk, target=target)
+    monkeypatch.setattr(tray, "_run_ps", fake)
+    return lnk, fake
+
+
+def test_launch_target_carries_the_background_flag(monkeypatch):
+    """自启只该让学长在跑,不该开机糊一窗口的界面。"""
+    import sys
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", r"C:\Apps\引路学长.exe")
+    exe, args, wd = tray.launch_target()
+    assert exe == r"C:\Apps\引路学长.exe"
+    assert args == tray.BACKGROUND_FLAG and tray.BACKGROUND_FLAG in args
+    assert wd == r"C:\Apps"
+
+
+def test_launch_target_dev_uses_pythonw_and_script(monkeypatch):
+    """开发态:参数是"脚本路径 + 进托盘标记",脚本路径要带引号(路径有空格也不裂)。"""
+    import os
+    import sys
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    exe, args, wd = tray.launch_target()
+    assert os.path.basename(exe) in ("pythonw.exe", os.path.basename(sys.executable))
+    assert "gui_main.py" in args
+    assert args.startswith('"') and tray.BACKGROUND_FLAG in args.split('"')[-1]
+    assert wd and os.path.isdir(wd)
+
+
+def test_starts_hidden_only_when_the_flag_is_on_argv(monkeypatch):
+    import sys
+    monkeypatch.setattr(sys, "argv", ["gui_main.py", "--background"])
+    assert tray.starts_hidden() is True
+    monkeypatch.setattr(sys, "argv", ["gui_main.py"])
+    assert tray.starts_hidden() is False
+    assert tray.starts_hidden([]) is False
+    assert tray.starts_hidden([tray.BACKGROUND_FLAG]) is True
+
+
+def test_startup_path_follows_appdata_and_none_without_it(monkeypatch, tmp_path):
+    import os
+    monkeypatch.setattr(tray, "startup_path", _REAL_STARTUP_PATH)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    p = tray.startup_path()
+    assert p.endswith(os.path.join("Startup", tray.STARTUP_NAME))
+    assert "Microsoft" in p and str(tmp_path) in p
+    monkeypatch.delenv("APPDATA")
+    assert tray.startup_path() == ""
+    # 没有 APPDATA(或不是 Windows)必须"开不了",而不是建到别处去
+    fake = FakePS(tmp_path / "Startup" / tray.STARTUP_NAME)
+    monkeypatch.setattr(tray, "_run_ps", fake)
+    st = tray.startup_status()
+    assert st["supported"] is False and st["installed"] is False
+    r = tray.set_startup(True)
+    assert r["ok"] is False and "启动" in r["msg"]
+    assert fake.calls == []                           # 一次 PowerShell 都没起
+
+
+def test_startup_present_never_spawns_powershell(monkeypatch, tmp_path):
+    """托盘每次右键都要画勾选态 —— 那一下绝不能冷启动 PowerShell。"""
+    monkeypatch.setattr(tray, "startup_path",
+                        lambda: str(tmp_path / "Startup" / tray.STARTUP_NAME))
+
+    def boom(*a, **k):
+        raise AssertionError("startup_present 不该起 PowerShell")
+
+    monkeypatch.setattr(tray, "_run_ps", boom)
+    assert tray.startup_present() is False
+    (tmp_path / "Startup").mkdir(parents=True)
+    (tmp_path / "Startup" / tray.STARTUP_NAME).write_text("", encoding="utf-8")
+    assert tray.startup_present() is True
+
+
+def test_startup_status_reads_missing_foreign_and_ours(monkeypatch, tmp_path):
+    import os
+    exe, _a, _w = tray.launch_target()
+
+    _startup_env(monkeypatch, tmp_path)
+    st = tray.startup_status()
+    assert st["installed"] is False and st["ours"] is False
+    assert st["want"] == exe
+
+    # 别人放了同名快捷方式:装上了但不是我们的 —— 后面"关"的时候不能误删
+    _startup_env(monkeypatch, tmp_path, target=r"C:\Other\notepad.exe",
+                 installed=True)
+    st = tray.startup_status()
+    assert st["installed"] is True and st["ours"] is False
+    assert st["target"] == r"C:\Other\notepad.exe"
+
+    _startup_env(monkeypatch, tmp_path, installed=True,
+                 target=exe.upper().replace(os.path.basename(exe),
+                                            os.path.basename(exe).upper()))
+    assert tray.startup_status()["ours"] is True        # Windows 路径不分大小写
+
+    _startup_env(monkeypatch, tmp_path, installed=True,
+                 fake=FakePS(tmp_path / "Startup" / tray.STARTUP_NAME,
+                             fail={"ok": False, "skipped": "no_powershell",
+                                   "msg": "没有 PowerShell"}))
+    assert tray.startup_status()["installed"] is False   # 读不到就当作没装
+
+
+def test_set_startup_only_says_yes_after_reading_the_link_back(monkeypatch,
+                                                               tmp_path):
+    """建出来 ≠ 开好了:必须读回 .lnk 的指向、确认是本应用才算数。"""
+    lnk = tmp_path / "Startup" / tray.STARTUP_NAME
+    monkeypatch.setattr(tray, "startup_path", lambda: str(lnk))
+    exe, _a, _w = tray.launch_target()
+
+    lnk, fake = _startup_env(monkeypatch, tmp_path)      # 建成后就指向 YX_TARGET
+    r = tray.set_startup(True)
+    assert r["ok"] is True and r["enabled"] is True
+    assert r["target"] == exe and lnk.exists()
+    assert tray.startup_present() is True
+    assert len(fake.made()) == 1 and len(fake.calls) - len(fake.made()) == 2
+
+    # 脚本回 OK 但 .lnk 指向别人 → 不敢算已开启
+    _startup_env(monkeypatch, tmp_path, target=r"C:\Elsewhere\x.exe")
+    r = tray.set_startup(True)
+    assert r["ok"] is False and r["enabled"] is False
+    assert "指向不对" in r["msg"]
+
+
+def test_set_startup_passes_text_only_through_pure_string_env(monkeypatch,
+                                                              tmp_path):
+    """v0.9.25 那条坑的回归:env 里塞 Path 会让 Windows 建进程当场抛 TypeError,
+    而图标不存在那一支测不到 —— 所以这里让图标"真的存在"再逐个查类型。
+
+    走**真的** `_run_ps`(只换掉 subprocess.run),把 -EncodedCommand 解回脚本文本
+    来区分"建快捷方式"和"读回指向":这样连"建完有没有再读一次"都一起验了。
+    """
+    import base64
+    import subprocess as sp
+    # 只钉路径,**不**换 `_run_ps`:这一条要走的正是真的 `_run_ps` + 假 subprocess
+    lnk = tmp_path / "Startup" / tray.STARTUP_NAME
+    monkeypatch.setattr(tray, "startup_path", lambda: str(lnk))
+    calls = []
+    made = {}
+
+    def fake_run(argv, **kw):
+        env = kw["env"]
+        script = base64.b64decode(argv[-1]).decode("utf-16-le")
+        calls.append({"argv": list(argv), "env": dict(env), "script": script})
+        if "TARGET=" in script:                      # 读回:照建的时候说
+            return FakeProc(out=f"TARGET={made.get('target', '')}\r\n".encode())
+        made["target"] = env["YX_TARGET"]
+        lnk.parent.mkdir(parents=True, exist_ok=True)
+        lnk.write_text("占位", encoding="utf-8")
+        return FakeProc()                            # stdout = "OK"
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    _fake_ps(tmp_path, monkeypatch)
+    icon = _fake_icon(tmp_path, monkeypatch)          # resource_path 返回 Path
+    r = tray.set_startup(True)
+    assert r["ok"] is True and lnk.exists()
+    made_call = [c for c in calls if "TARGET=" not in c["script"]]
+    assert len(calls) == 3 and len(made_call) == 1    # 先看现状 → 建 → 再读回核对
+    seen = made_call[0]
+    assert any(a == "-EncodedCommand" for a in seen["argv"])
+    assert {"YX_LNK", "YX_TARGET", "YX_ARGS", "YX_WORKDIR", "YX_DESC",
+            "YX_ICON"} <= set(seen["env"])
+    assert all(isinstance(k, str) and isinstance(v, str)
+               for k, v in seen["env"].items()), \
+        {k: type(v).__name__ for k, v in seen["env"].items()
+           if not isinstance(v, str)}
+    assert seen["env"]["YX_ICON"] == str(icon)        # 是字符串,不是 Path 对象
+    assert tray.STARTUP_NAME not in " ".join(seen["argv"])    # 中文名字不进 argv
+    assert "TARGET=" in calls[-1]["script"]           # 最后那次是读回来核对
+
+
+def test_set_startup_close_never_deletes_a_foreign_shortcut(monkeypatch,
+                                                            tmp_path):
+    lnk, _f = _startup_env(monkeypatch, tmp_path, installed=True,
+                           target=r"C:\Other\thing.exe")
+    r = tray.set_startup(False)
+    assert r["ok"] is False and r["enabled"] is True
+    assert "不动别人的文件" in r["msg"]
+    assert lnk.exists()                                  # 删了不可恢复,所以没删
+
+    # 是我们的那个才动手
+    exe = tray.launch_target()[0]
+    lnk, _f = _startup_env(monkeypatch, tmp_path, installed=True, target=exe)
+    r = tray.set_startup(False)
+    assert r["ok"] is True and r["enabled"] is False
+    assert not lnk.exists() and tray.startup_present() is False
+    # 本来就没开:如实说"本来就没开",不报错也不甩锅
+    assert tray.set_startup(False)["msg"] == "本来就没开"
+
+
+def test_set_startup_reports_powershell_failure(monkeypatch, tmp_path):
+    _startup_env(monkeypatch, tmp_path,
+                 fake=FakePS(tmp_path / "Startup" / tray.STARTUP_NAME,
+                             fail={"ok": False, "skipped": "ps",
+                                   "msg": "退出码 1:找不到驱动器"}))
+    r = tray.set_startup(True)
+    assert r["ok"] is False and r["enabled"] is False
+    assert "退出码 1" in r["msg"]
+    assert tray.startup_present() is False              # 没开就是没开
+
+
+def test_tray_menu_toggle_flips_autostart(tray_icon, monkeypatch):
+    """托盘那一下点的是"翻转当前状态",不是"永远开"。"""
+    c, _icon, _ui = tray_icon
+    calls = []
+    monkeypatch.setattr(tray, "startup_present", lambda: False)
+    monkeypatch.setattr(tray, "set_startup",
+                        lambda on: (calls.append(on), {"ok": True,
+                                                       "enabled": on})[1])
+    c._tray_toggle_startup()
+    assert calls == [True]
+    monkeypatch.setattr(tray, "startup_present", lambda: True)
+    c._tray_toggle_startup()
+    assert calls == [True, False]
+
+
+def test_tray_menu_toggle_logs_the_real_failure(tray_icon, monkeypatch):
+    """菜单勾上却没真开成,日志要说清原因(否则下次开机才发现是空的)。"""
+    c, _icon, _ui = tray_icon
+    monkeypatch.setattr(tray, "startup_present", lambda: False)
+    monkeypatch.setattr(tray, "set_startup",
+                        lambda on: {"ok": False, "enabled": False,
+                                    "msg": "PowerShell 没建成"})
+    c._tray_toggle_startup()
+    tail = tray._ensure_parent(tray.app_path(tray.LOG_FILE)
+                               ).read_text(encoding="utf-8")
+    assert "开机自启 → 开 (失败: PowerShell 没建成)" in tail
+
+
+# ---------------------------------------------------------------- 工具入口
+
+def test_desktop_notify_tool_startup_on_and_off(tray_icon, monkeypatch, tmp_path):
+    lnk, _f = _startup_env(monkeypatch, tmp_path)
+    out = tray.desktop_notify(None, action="startup_on")
+    assert "已开启开机自启" in out and tray.STARTUP_NAME in out
+    assert lnk.exists() and tray.startup_present() is True
+    out = tray.desktop_notify(None, action="startup_off")
+    assert "已关掉开机自启" in out
+    assert not lnk.exists() and tray.startup_present() is False
+
+
+def test_desktop_notify_tool_startup_failure_is_not_played_off(tray_icon,
+                                                               monkeypatch,
+                                                               tmp_path):
+    """回「已开启」而其实没开 = 用户下次开机才发现提醒全哑,所以必须回失败。"""
+    lnk, _f = _startup_env(monkeypatch, tmp_path, installed=True,
+                           target=r"C:\Other\a.exe")
+    out = tray.desktop_notify(None, action="startup_off")
+    assert "开机自启没能关掉" in out and "不动别人的文件" in out
+    assert "现在的提醒一条没少" in out
+    assert lnk.exists()
+
+
+def test_desktop_notify_tool_startup_without_startup_folder(monkeypatch):
+    """没有「启动」文件夹的环境:说开不了,而不是"已开启"。"""
+    monkeypatch.setattr(tray, "startup_path", lambda: "")
+    out = tray.desktop_notify(None, action="startup_on")
+    assert "没能打开" in out and "启动" in out
+
+
+def test_desktop_notify_tool_status_reports_autostart(tray_icon, monkeypatch,
+                                                     tmp_path):
+    _startup_env(monkeypatch, tmp_path)
+    out = tray.desktop_notify(None, action="status")
+    assert "开机自启:没开" in out
+    exe = tray.launch_target()[0]
+    _startup_env(monkeypatch, tmp_path, installed=True, target=exe)
+    assert "开机自启:已开启" in tray.desktop_notify(None, action="status")
+    _startup_env(monkeypatch, tmp_path, installed=True,
+                 target=r"C:\Other\b.exe")
+    out = tray.desktop_notify(None, action="status")
+    assert "开机自启:没开" in out and "不是本应用" in out
+
+
+def test_desktop_notify_tool_unknown_action_lists_autostart(tray_icon):
+    out = tray.desktop_notify(None, action="开机")
+    assert "未知的 action" in out
+    assert "startup_on" in out and "startup_off" in out
+
+
+def test_start_in_tray_is_honest_when_tray_missing(tray_icon, monkeypatch):
+    """藏不进托盘就必须回 False:调用方据此把窗口显示出来,别留个隐形进程。"""
+    c, _icon, _ui = tray_icon
+    assert tray.start_in_tray() is True          # 夹具里 _ensure_icon 已可用
+    c2, _ui2 = _controller()
+    c2._ensure_icon = lambda: False
+    monkeypatch.setattr(tray, "_CONTROLLER", c2)
+    assert tray.start_in_tray() is False
+    monkeypatch.setattr(tray, "_CONTROLLER", None)
+    assert tray.start_in_tray() is False

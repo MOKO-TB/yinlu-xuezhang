@@ -28,8 +28,16 @@ SAMPLES = [
 
 @pytest.fixture(autouse=True)
 def _app_dir(tmp_path, monkeypatch):
-    from minicode import paths
+    """每条测试:独立的 APP_DIR + 空白的「今天推过了」账本 + 绝不真弹桌面通知。
+
+    `_mem_pushed` 是模块级的:不清掉的话上一条测试记的键会漏到下一条,
+    "今天没推过"凭空变成"今天推过了" —— 全量跑和单跑结果不一样,最难查。
+    """
+    from minicode import paths, tray
     monkeypatch.setattr(paths, "APP_DIR", tmp_path / "app")
+    monkeypatch.setattr(proactive, "_mem_pushed", set())
+    monkeypatch.setattr(proactive, "_mem_day", "")
+    monkeypatch.setattr(tray, "notify", lambda *a, **k: {"ok": True})
     yield
 
 
@@ -304,3 +312,193 @@ def test_push_proactive_ignores_desktop_layer_exceptions(monkeypatch):
     bridge, ui = _push_bridge()
     proactive._push_proactive(bridge, "class", text="要上课了")
     assert ui.events and ui.events[0]["text"] == "要上课了"
+
+
+# ============================== 落盘去重账本 + 开机补发(v0.9.26)
+
+CLASS_KEY = "2026-09-22T08:00:高等数学"
+YESTERDAY = date(2026, 9, 21)
+
+
+def _restart():
+    """模拟"关掉学长再打开":内存集全清,只有落盘的账本还在。"""
+    proactive._mem_pushed.clear()
+    proactive._mem_day = ""
+
+
+def _ledger() -> dict:
+    return json.loads(proactive.pushed_path().read_text(encoding="utf-8"))
+
+
+def _fake_briefing(monkeypatch, payload=None):
+    """`payload=None` 才用默认内容 —— 传 {} 就是"今天真没内容",别被 or 吃掉。"""
+    from minicode import briefing
+    monkeypatch.setattr(briefing, "build", lambda *a, **k: (
+        {"text": "今天三节课,午后有雨"} if payload is None else payload))
+
+
+# ---------------------------------------------------------------- 账本本身
+
+def test_mark_pushed_survives_a_restart():
+    """去重集原来只在内存里:重启后同一节课会再弹一次。落盘就是为了这条。"""
+    assert proactive.mark_pushed("class", CLASS_KEY) is True
+    assert _ledger()["keys"] == [f"{date.today().isoformat()}|class|{CLASS_KEY}"]
+    _restart()
+    assert proactive.was_pushed("class", CLASS_KEY) is True
+
+
+def test_ledger_is_day_scoped_and_tolerates_garbage():
+    """昨天的账不挡今天;文件坏了/有杂项一律当"没推过"(宁可重弹不可漏弹)。"""
+    assert proactive.mark_pushed("class", CLASS_KEY, day=YESTERDAY) is True
+    assert proactive.was_pushed("class", CLASS_KEY, day=YESTERDAY) is True
+    assert proactive.was_pushed("class", CLASS_KEY) is False      # 今天没推过
+
+    proactive.pushed_path().write_text("这不是 JSON", encoding="utf-8")
+    assert proactive.load_pushed() == []
+    proactive.pushed_path().write_text(json.dumps({"date": "1999-01-01",
+                                                   "keys": ["x"]}),
+                                       encoding="utf-8")
+    assert proactive.load_pushed() == []                          # 跨天整份作废
+    proactive.pushed_path().write_text(json.dumps(
+        {"date": proactive._day_key(), "keys": ["好", 42, None]}), encoding="utf-8")
+    assert proactive.load_pushed() == ["好"]                      # 非字符串条目丢掉
+
+
+def test_ledger_caps_the_file_length():
+    """一天最多记 PUSHED_CAP 条:账本不能无限长,淘汰最老的。"""
+    for i in range(proactive.PUSHED_CAP + 20):
+        assert proactive.mark_pushed("class", f"k{i}") is True
+    keys = _ledger()["keys"]
+    assert len(keys) == proactive.PUSHED_CAP
+    assert keys[-1] == f"{proactive._day_key()}|class|k{proactive.PUSHED_CAP + 19}"
+    assert not any(k.endswith("|k0") for k in keys)
+
+
+def test_mark_pushed_falls_back_to_memory_when_the_file_is_unwritable(monkeypatch,
+                                                                      tmp_path):
+    """只读目录/装在 Program Files 里时写不进账本:如实返回 False,但本次运行
+    仍然不重复弹 —— 不能假装"记住了",也不能因此漏推。"""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("我是文件不是目录", encoding="utf-8")
+    monkeypatch.setattr(proactive, "pushed_path",
+                        lambda: blocker / "pushed-today.json")
+    assert proactive.mark_pushed("class", CLASS_KEY) is False
+    assert proactive.was_pushed("class", CLASS_KEY) is True       # 内存兜底
+    _restart()
+    assert proactive.was_pushed("class", CLASS_KEY) is False      # 重启后确实忘了
+
+
+def test_fallen_back_keys_get_written_when_the_dir_recovers(monkeypatch, tmp_path):
+    """目录恢复可写后,兜底过的键要补进账本 —— 不能"能写了却把之前记的丢了"。"""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("我是文件不是目录", encoding="utf-8")
+    real = proactive.pushed_path
+    monkeypatch.setattr(proactive, "pushed_path",
+                        lambda: blocker / "pushed-today.json")
+    assert proactive.mark_pushed("class", CLASS_KEY) is False     # 只能靠内存
+    monkeypatch.setattr(proactive, "pushed_path", real)           # 现在能写了
+    assert proactive.mark_pushed("class", "k2") is True
+    assert proactive._mem_pushed == set()                         # 写成功就交还给账本
+    proactive._mem_day = ""
+    assert proactive.was_pushed("class", CLASS_KEY) is True       # 兜底那条真进了账本
+
+
+# ---------------------------------------------------------------- 简报按天一条
+
+def test_push_briefing_pushes_once_per_day(monkeypatch):
+    _fake_briefing(monkeypatch)
+    bridge, ui = _push_bridge()
+    assert proactive.push_briefing(bridge) is True
+    assert ui.events[0]["kind"] == "briefing"
+    assert proactive.briefing_pushed_today() is True
+
+    assert proactive.push_briefing(bridge) is False        # 下午再开不重来第二条
+    _restart()
+    assert proactive.briefing_pushed_today() is True       # 账本落了盘
+    assert proactive.push_briefing(bridge) is False
+    assert proactive.push_briefing(bridge, force=True) is True   # 手动物力推
+    assert len(ui.events) == 2
+
+
+def test_yesterdays_briefing_does_not_silence_today(monkeypatch):
+    proactive.mark_pushed("briefing", "2026-09-21", day=YESTERDAY)
+    _fake_briefing(monkeypatch)
+    bridge, ui = _push_bridge()
+    assert proactive.push_briefing(bridge) is True
+    assert len(ui.events) == 1
+
+
+def test_a_failed_briefing_does_not_consume_the_day(monkeypatch):
+    """没真推成就不许占用"今天已推":否则简报一崩,今天再也不会有一条简报。"""
+    from minicode import briefing
+
+    def boom(*a, **k):
+        raise ConnectionError("聚合炸了")
+
+    monkeypatch.setattr(briefing, "build", boom)
+    bridge, _ui = _push_bridge()
+    assert proactive.push_briefing(bridge) is False
+    assert proactive.briefing_pushed_today() is False
+    monkeypatch.setattr(briefing, "build", lambda *a, **k: {})
+    assert proactive.push_briefing(bridge) is False              # 今天真没内容
+    assert proactive.briefing_pushed_today() is False
+    _fake_briefing(monkeypatch)
+    assert proactive.push_briefing(bridge) is True
+
+
+# ---------------------------------------------------------------- 开机补发
+
+def _missed_class(monkeypatch):
+    """一节课已经开课 12 分钟、且没提醒过 —— 正是"8:50 才开机"的现场。"""
+    from minicode import schedule
+    monkeypatch.setattr(schedule, "late_class_note", lambda *a, **k: {
+        "text": "错过的提醒:高等数学 08:00 已开课(过了约 12 分钟)",
+        "title": "错过的提醒", "key": CLASS_KEY})
+
+
+def test_catch_up_backfills_briefing_and_the_missed_class_once(monkeypatch):
+    _fake_briefing(monkeypatch)
+    _missed_class(monkeypatch)
+    bridge, ui = _push_bridge()
+    assert proactive.catch_up(bridge) == {"briefing": True, "class": CLASS_KEY}
+    assert [e["kind"] for e in ui.events] == ["briefing", "class"]
+    assert proactive.was_pushed("class", CLASS_KEY) is True
+
+    _restart()                                                   # 手滑又开一次
+    assert proactive.catch_up(bridge) == {"briefing": False, "class": ""}
+    assert len(ui.events) == 2                                   # 一条没重复
+
+
+def test_catch_up_skips_a_class_the_on_time_reminder_already_gave(monkeypatch):
+    """补发与"快上课了"共用去重键:先到点提醒过的课,开机不再补一条。"""
+    _fake_briefing(monkeypatch)
+    _missed_class(monkeypatch)
+    assert proactive.mark_pushed("class", CLASS_KEY) is True     # 到点提醒弹过了
+    bridge, ui = _push_bridge()
+    out = proactive.catch_up(bridge)
+    assert out == {"briefing": True, "class": ""}
+    assert [e["kind"] for e in ui.events] == ["briefing"]
+
+
+def test_catch_up_has_nothing_to_say_and_stays_quiet(monkeypatch):
+    """没课/课早就上完/今天没简报内容 → 三个都不推,也不报错。"""
+    _fake_briefing(monkeypatch, payload={})
+    from minicode import schedule
+    monkeypatch.setattr(schedule, "late_class_note", lambda *a, **k: None)
+    bridge, ui = _push_bridge()
+    assert proactive.catch_up(bridge) == {"briefing": False, "class": ""}
+    assert ui.events == []
+
+
+def test_catch_up_never_breaks_the_watchdog(monkeypatch):
+    """补发是加分项:两个数据源一起炸也只能静默,不能把看门狗线程带走。"""
+    from minicode import briefing, schedule
+
+    def boom(*a, **k):
+        raise RuntimeError("数据源炸了")
+
+    monkeypatch.setattr(briefing, "build", boom)
+    monkeypatch.setattr(schedule, "late_class_note", boom)
+    bridge, ui = _push_bridge()
+    assert proactive.catch_up(bridge) == {"briefing": False, "class": ""}
+    assert ui.events == []
