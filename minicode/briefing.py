@@ -66,14 +66,21 @@ def _reminders_bits(today: date, detail: list[str]) -> str | None:
     if not near:
         return None
 
-    def _when(it: dict) -> str:
+    def _when(it: dict, clock_too: bool = False) -> str:
         d = int(it.get("days_left", 0))
-        return f"已过截止 {-d} 天" if d < 0 else ("今天截止" if d == 0 else f"还有 {d} 天")
+        base = f"已过截止 {-d} 天" if d < 0 else ("今天截止" if d == 0 else f"还有 {d} 天")
+        # 卡片短句只在"就是今天"时带钟点(省字);明细永远带 —— 用户记下的
+        # "明天 09:00" 丢了就白记了。没记钟点的条目两处都不出现时间。
+        clock = str(it.get("due_at") or "")[11:16]
+        if clock and (clock_too or d == 0):
+            return f"{base} {clock}"
+        return base
 
     top = near[0]
     short = f"待办 {len(near)} 件临期({top['title']} {_when(top)})"
     detail.append("【临期待办】\n" + "\n".join(
-        f"- {it['title']}(截止 {_when(it)}){it.get('note') or ''}" for it in near[:5]))
+        f"- {it['title']}(截止 {_when(it, clock_too=True)}){it.get('note') or ''}"
+        for it in near[:5]))
     return short
 
 

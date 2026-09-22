@@ -191,7 +191,7 @@ def main() -> None:
     # 任何异常都在模块里吞掉 —— 这是个锦上添花的功能,绝不阻塞/拖垮窗口
     from minicode import proactive
     proactive.start_loop(bridge)
-    proactive.start_class_loop(bridge)   # 课前到点提醒:独立的 5 分钟细轮询
+    proactive.start_tick_loop(bridge)    # 到点提醒:课前 + 待办到点,同一条 5 分钟细轮询
 
     try:
         # func 在 GUI 线程启动后于独立线程执行:补开 WebView2 右键菜单 + 接管关窗

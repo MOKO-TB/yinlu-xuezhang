@@ -98,6 +98,20 @@ def test_reminders_counts_nearest_first():
     assert "【临期待办】" in b["ask"]
 
 
+def test_briefing_shows_the_clock_only_for_todays_deadline():
+    """「今天 17:00 截止」比"今天截止"能提前把人推出门;但没记钟点就不许编。"""
+    reminders.add("交奖学金材料", due=TODAY.isoformat(), at="17:00")
+    reminders.add("明天的事", due=(TODAY + timedelta(days=1)).isoformat(), at="09:00")
+    b = briefing.build(TODAY)
+    assert "交奖学金材料 今天截止 17:00" in b["text"]
+    assert "09:00" not in b["text"]                    # 短句只说最紧那条
+    assert "明天的事(截止 还有 1 天 09:00)" in b["ask"]   # 明细带上用户记的钟点
+    reminders.delete("r1")
+    reminders.add("只说了今天", due=TODAY.isoformat())
+    b = briefing.build(TODAY)
+    assert "只说了今天(截止 今天截止)" in b["ask"]      # 没记钟点就不许跟一个时间
+
+
 def test_calendar_nearest_event(monkeypatch):
     events = [{"name": "中秋节", "start": "2026-09-25", "kind": "holiday"},
               {"name": "四六级口试", "start": "2026-09-12", "kind": "exam"}]

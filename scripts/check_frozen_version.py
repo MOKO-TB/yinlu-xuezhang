@@ -97,7 +97,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.tools.shell": ("py_script", "_py_runtime_command"),
     "minicode.model_catalog": ("_context_breakdown", "vision_forced"),
     # ---- v0.9.17:截止提醒 ----
-    "minicode.reminders": ("reminder", "add", "due_soon", "parse_due"),
+    "minicode.reminders": ("reminder", "add", "due_soon", "parse_due",
+                           # v0.9.29:待办带钟点 → 到点前 20 分钟催(漏收 = 记进去了
+                           # 但那条细轮询压根不看它,表现是"到点没反应")
+                           "parse_clock", "parse_when", "upcoming_due",
+                           "late_due", "DUE_LEAD_MINUTES", "LATE_WINDOW_MINUTES"),
     # ---- v0.9.18:注入防御(provenance 是函数内 import,必须核它真进包了) ----
     "minicode.provenance": ("wrap", "strip_marks", "is_external",
                             "contains_external", "log_escalation"),
@@ -134,7 +138,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # ---- v0.9.16/17/20:主动推荐 + 新版本检查 + 今日简报(合并成一个键,
     #      避免 dict 重复键 last-wins 让早先的 needle 悄悄漏检) ----
     "minicode.proactive": ("check_once", "fetch_latest", "start_loop", "clean_title",
-                           "check_update", "push_briefing", "start_class_loop",
+                           "check_update", "push_briefing", "start_tick_loop",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",
@@ -148,6 +152,8 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            #  action=log 读出来永远是"还没有记录")
                            "_push_once", "_round", "_push_calendar",
                            "_push_reminders", "_push_today_class", "_note_payload",
+                           # v0.9.29:课前那条细轮询泛化成"到点提醒器"(课前 + 待办)
+                           "_push_class", "_push_due", "_tick",
                            "WATCHDOG_LOG", "watchdog_log_path",
                            "wd_log", "wd_log_tail"),
     # ---- v0.9.23:教务课表导入(整套新模块,漏收 = 点「导入课表」直接报错) ----

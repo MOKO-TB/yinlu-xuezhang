@@ -77,7 +77,8 @@ def save_state(state: dict) -> None:
 
 # -------------------------------------------------- 今天已经推过哪些提醒(按天)
 #
-# 为什么单独一份:`start_class_loop` 的去重集原来是**内存里的 set**,`last_day`
+# 为什么单独一份:`start_tick_loop`(v0.9.29 前叫 `start_class_loop`)的去重集原来是
+# **内存里的 set**,`last_day`
 # 也是内存的 —— 一重启就清空。于是两种失败同时发生:①8:40 那条课前提醒没赶上
 # (机器开着机/学长没在跑),重启后**永远不会补**;②8:50 重启,同一节课**再弹一次**。
 # 落盘 + 按天滚动同时解决这两件:补发知道谁没弹过,去重知道谁弹过了。
@@ -401,7 +402,8 @@ def desktop_text(kind: str, payload: dict) -> str | None:
         title = str(first.get("title") or "").strip()
         if not title:
             return None
-        due = str(first.get("due") or "").strip()
+        due = (str(first.get("due_at") or "").replace("T", " ").strip()
+               or str(first.get("due") or "").strip())
         left = first.get("days_left")
         tail = ""
         if due and isinstance(left, int):
@@ -566,6 +568,7 @@ def _push_reminders(bridge) -> bool:
     key = "+".join(str(i.get("id", "")) for i in shown)
     return _push_once(bridge, "reminders", key, items=[
         {"id": i["id"], "title": i["title"], "due": i.get("due", ""),
+         "due_at": i.get("due_at", ""),
          "days_left": i["days_left"], "note": i.get("note", "")} for i in shown])
 
 
@@ -581,6 +584,49 @@ def _push_today_class(bridge) -> bool:
         return False
     return _push_once(bridge, "schedule", f"{note.get('day')}|{note.get('head')}",
                       **note)
+
+
+def _push_class(bridge, now=None) -> bool:
+    """课前 20 分钟那一条:内容全来自课表,课表没写钟点的课不参与。"""
+    try:
+        from minicode import schedule as _schedule
+        note = _schedule.upcoming_class(now=now, lead_minutes=CLASS_LEAD_MINUTES)
+    except Exception as e:
+        wd_log(f"fail class [-]:{type(e).__name__} {e}")
+        return False
+    if not note:
+        return False
+    return _push_once(bridge, "class", note["key"], log_skip=False,
+                      **_note_payload(note))
+
+
+def _push_due(bridge, now=None) -> bool:
+    """待办到点:`reminder` 记的事只要写了钟点,也走这条细轮询,和上课一个节奏。
+
+    类别仍用 `reminders` 而不是新起一个 `due` —— 用户 `desktop_notify` 里能开关的
+    那七类是既有事实,凭空多一类他关不掉(set_notify 认不出新 kind),而"到点催"
+    和"临期催"本来就是一回事,只是精确程度不同。
+    """
+    try:
+        from minicode import reminders as _reminders
+        note = _reminders.upcoming_due(now=now)
+    except Exception as e:
+        wd_log(f"fail reminders [-]:{type(e).__name__} {e}")
+        return False
+    if not note:
+        return False
+    return _push_once(bridge, "reminders", note["key"], log_skip=False,
+                      **_note_payload(note))
+
+
+def _tick(bridge, now=None) -> dict:
+    """细轮询一轮:课程与待办各自判、各自记日志,一边抛异常不拖累另一边。
+
+    抽成函数是 v0.9.28 那条老规矩的延续:**循环体里的判断必须能直接测**,
+    否则"到点没催"这种问题只能真的等到点。
+    """
+    return {"class": _push_class(bridge, now=now),
+            "due": _push_due(bridge, now=now)}
 
 
 def _round(bridge) -> dict:
@@ -649,18 +695,20 @@ CLASS_LEAD_MINUTES = 20             # 开课前多久提醒(一节课通常 40-4
 
 
 def catch_up(bridge) -> dict:
-    """开机补发(启动后第一轮做一次):把"今天该知道但没赶上"的两件补上。
+    """开机补发(启动后第一轮做一次):把"今天该知道但没赶上"的三件补上。
 
     - **今日简报**:今天从来没推过就补一条(早上没开机,下午打开学长还看得到
       今天几节课、要不要带伞)。已经推过就绝不再来一条。
     - **错过的课**:有节课**已经开课但还在补发窗口内**(默认 60 分钟)且没提醒过,
       补一条「错过的提醒」。同一节课与到点提醒共用去重键,先弹了"快上课了"
       就不会再弹这条,反过来也一样。
+    - **刚过期的待办**:同上,只不过对象是 `reminder` 里写了钟点的那几条
+      (「17:00 前交」结果 17:30 才打开学长)。已经到点催过的不再补。
 
-    只做这两件,不把过去每节课都补一遍(那只会变成刷屏);任何异常静默 ——
-    补发是加分项,不能把看门狗弄崩。
+    只做这三件,不把过去每节课/每条逾期都补一遍(那只会变成刷屏);任何异常
+    静默 —— 补发是加分项,不能把看门狗弄崩。
     """
-    out = {"briefing": False, "class": ""}
+    out = {"briefing": False, "class": "", "due": ""}
     try:
         out["briefing"] = push_briefing(bridge)
     except Exception as e:
@@ -676,13 +724,26 @@ def catch_up(bridge) -> dict:
             out["class"] = note["key"]
     except Exception as e:
         wd_log(f"fail catch_up [错过的课]:{type(e).__name__}")
+    try:
+        from minicode import reminders as _reminders
+        note = _reminders.late_due()
+        if not note:
+            wd_log("skip catch_up [过期待办]:没有刚过期还在窗口内的事项")
+        elif was_pushed("reminders", note["key"]):
+            wd_log(f"skip catch_up [{note['key']}]:到点提醒已弹过")
+        elif _push_once(bridge, "reminders", note["key"], **_note_payload(note)):
+            out["due"] = note["key"]
+    except Exception as e:
+        wd_log(f"fail catch_up [过期待办]:{type(e).__name__}")
     return out
 
 
-def start_class_loop(bridge) -> None:
-    """课前到点提醒线程:每 ~5 分钟看一次有没有课在 20 分钟内开课。
+def start_tick_loop(bridge) -> None:
+    """到点提醒线程:每 ~5 分钟看一次「有没有课在 20 分钟内开课 / 有事在 20 分钟内到期」。
 
-    与 start_loop 分开跑(主循环 6 小时一次,太粗做不到"快上课了")。
+    v0.9.29 起这条线程不再只盯着课表:`reminder` 里写了钟点的待办也走同一个节奏
+    (见 `_tick`)。与 start_loop 分开跑(主循环 6 小时一次,太粗做不到"快上课了")。
+
     去重键落盘在 `pushed-today.json`(按天滚动),**不再用内存 set** —— 内存集
     一重启就空,于是"错过的那条永远不补"和"同一节课重启后再弹一次"会同时发生。
     异常不往外抛,但**每轮结果都往 watchdog.log 记一行**(v0.9.28:这条线程
@@ -690,21 +751,17 @@ def start_class_loop(bridge) -> None:
     """
     def run() -> None:
         time.sleep(FIRST_DELAY_SECONDS)
-        wd_log(f"class loop start [每 {CLASS_TICK_SECONDS // 60} 分钟看一次,"
-               f"提前 {CLASS_LEAD_MINUTES} 分钟]")
+        wd_log(f"tick loop start [每 {CLASS_TICK_SECONDS // 60} 分钟看一次,"
+               f"提前 {CLASS_LEAD_MINUTES} 分钟:课前 + 待办到点]")
         try:
             catch_up(bridge)             # 先补今天错过的,再进入正常轮询
         except Exception as e:
             wd_log(f"round error [补发]:{type(e).__name__} {e}")
         while True:
             try:
-                from minicode import schedule as _schedule
-                note = _schedule.upcoming_class(lead_minutes=CLASS_LEAD_MINUTES)
-                if note:
-                    _push_once(bridge, "class", note["key"], log_skip=False,
-                               **_note_payload(note))
+                _tick(bridge)
             except Exception as e:
-                wd_log(f"round error [课前]:{type(e).__name__} {e}")
+                wd_log(f"round error [到点]:{type(e).__name__} {e}")
             time.sleep(CLASS_TICK_SECONDS)
 
-    threading.Thread(target=run, daemon=True, name="yinluxs-class").start()
+    threading.Thread(target=run, daemon=True, name="yinluxs-due").start()

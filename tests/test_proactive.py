@@ -457,27 +457,66 @@ def _missed_class(monkeypatch):
         "title": "错过的提醒", "key": CLASS_KEY})
 
 
+def _missed_due(monkeypatch, note=None):
+    """一条刚过期还在窗口内的待办(「17:00 前交」结果 17:30 才打开学长)。"""
+    from minicode import reminders
+    monkeypatch.setattr(reminders, "late_due", lambda *a, **k: note)
+
+
+DUE_LATE = {"text": "已过点:交实验报告 截止 17:00(过了约 30 分钟)",
+            "title": "待办已过期", "key": "r1|2026-09-22T17:00"}
+
+
 def test_catch_up_backfills_briefing_and_the_missed_class_once(monkeypatch):
     _fake_briefing(monkeypatch)
     _missed_class(monkeypatch)
+    _missed_due(monkeypatch)
     bridge, ui = _push_bridge()
-    assert proactive.catch_up(bridge) == {"briefing": True, "class": CLASS_KEY}
+    assert proactive.catch_up(bridge) == {"briefing": True, "class": CLASS_KEY,
+                                          "due": ""}
     assert [e["kind"] for e in ui.events] == ["briefing", "class"]
     assert proactive.was_pushed("class", CLASS_KEY) is True
 
     _restart()                                                   # 手滑又开一次
-    assert proactive.catch_up(bridge) == {"briefing": False, "class": ""}
+    assert proactive.catch_up(bridge) == {"briefing": False, "class": "",
+                                          "due": ""}
     assert len(ui.events) == 2                                   # 一条没重复
+
+
+def test_catch_up_backfills_an_expired_todo(monkeypatch):
+    """到点没赶上(机器没开),开机第一条就该补上 —— 和错过的课同一条路。"""
+    _fake_briefing(monkeypatch, payload={})
+    from minicode import schedule
+    monkeypatch.setattr(schedule, "late_class_note", lambda *a, **k: None)
+    _missed_due(monkeypatch, DUE_LATE)
+    bridge, ui = _push_bridge()
+    assert proactive.catch_up(bridge) == {"briefing": False, "class": "",
+                                          "due": DUE_LATE["key"]}
+    assert [e["kind"] for e in ui.events] == ["reminders"]
+    assert ui.events[0]["title"] == "待办已过期"                 # 卡片抬头说清是哪类
+
+
+def test_catch_up_skips_a_todo_the_on_time_reminder_already_gave(monkeypatch):
+    """补发到点提醒过的待办不能再补一条过期 —— 两边共用那个 `id|到期时刻` 键。"""
+    _fake_briefing(monkeypatch, payload={})
+    from minicode import schedule
+    monkeypatch.setattr(schedule, "late_class_note", lambda *a, **k: None)
+    _missed_due(monkeypatch, DUE_LATE)
+    assert proactive.mark_pushed("reminders", DUE_LATE["key"]) is True
+    bridge, ui = _push_bridge()
+    assert proactive.catch_up(bridge)["due"] == ""
+    assert ui.events == []
 
 
 def test_catch_up_skips_a_class_the_on_time_reminder_already_gave(monkeypatch):
     """补发与"快上课了"共用去重键:先到点提醒过的课,开机不再补一条。"""
     _fake_briefing(monkeypatch)
     _missed_class(monkeypatch)
+    _missed_due(monkeypatch)
     assert proactive.mark_pushed("class", CLASS_KEY) is True     # 到点提醒弹过了
     bridge, ui = _push_bridge()
     out = proactive.catch_up(bridge)
-    assert out == {"briefing": True, "class": ""}
+    assert out == {"briefing": True, "class": "", "due": ""}
     assert [e["kind"] for e in ui.events] == ["briefing"]
 
 
@@ -486,22 +525,26 @@ def test_catch_up_has_nothing_to_say_and_stays_quiet(monkeypatch):
     _fake_briefing(monkeypatch, payload={})
     from minicode import schedule
     monkeypatch.setattr(schedule, "late_class_note", lambda *a, **k: None)
+    _missed_due(monkeypatch)
     bridge, ui = _push_bridge()
-    assert proactive.catch_up(bridge) == {"briefing": False, "class": ""}
+    assert proactive.catch_up(bridge) == {"briefing": False, "class": "",
+                                          "due": ""}
     assert ui.events == []
 
 
 def test_catch_up_never_breaks_the_watchdog(monkeypatch):
-    """补发是加分项:两个数据源一起炸也只能静默,不能把看门狗线程带走。"""
-    from minicode import briefing, schedule
+    """补发是加分项:三个数据源一起炸也只能静默,不能把看门狗线程带走。"""
+    from minicode import briefing, reminders, schedule
 
     def boom(*a, **k):
         raise RuntimeError("数据源炸了")
 
     monkeypatch.setattr(briefing, "build", boom)
     monkeypatch.setattr(schedule, "late_class_note", boom)
+    monkeypatch.setattr(reminders, "late_due", boom)
     bridge, ui = _push_bridge()
-    assert proactive.catch_up(bridge) == {"briefing": False, "class": ""}
+    assert proactive.catch_up(bridge) == {"briefing": False, "class": "",
+                                          "due": ""}
     assert ui.events == []
 
 
@@ -638,3 +681,107 @@ def test_round_logs_a_broken_source_instead_of_vanishing(monkeypatch):
     assert out["calendar"] == 1                 # 一类炸不影响另一类
     rows = "\n".join(proactive.wd_log_tail(10))
     assert "fail reminders" in rows and "fail schedule" in rows
+
+
+# ============ 到点提醒器:课前 + 待办到点同一条细轮询(v0.9.29 B 批)
+#
+# 这一节钉的是"扩展到所有临期事项"那半条路。最容易做错的四件:
+# ①新那一路忘了走按天账本(重启就重复催);②把待办到点发成用户关不掉的第八类;
+# ③`key` 混进 payload 撞成守护线程里的 TypeError(课前提醒整条消失,还看不见报错);
+# ④两路里的一路炸了把另一路一起带走。
+
+DUE_SOON_NOTE = {"text": "快到点了:交实验报告 截止 17:00(还有约 10 分钟)",
+                 "ask": "交实验报告 在 17:00 截止,还有约 10 分钟,我现在该做什么?",
+                 "title": "待办到点", "id": "r1", "name": "交实验报告",
+                 "time": "17:00", "minutes_left": 10,
+                 "key": "r1|2026-09-22T17:00"}
+CLASS_SOON = {"text": "快上课了:高等数学 08:00 开始(还有约 15 分钟)",
+              "ask": "把要带的东西列一下", "title": "快上课了",
+              "name": "高等数学", "time": "08:00", "location": "A203",
+              "minutes_left": 15, "key": "2026-09-22T08:00:高等数学"}
+
+
+def _stub_tick(monkeypatch, *, cls=CLASS_SOON, due=DUE_SOON_NOTE):
+    """按住到点提醒器的两个数据源,只留"该不该推"这一件真的东西。"""
+    from minicode import reminders, schedule
+    monkeypatch.setattr(schedule, "upcoming_class", lambda *a, **k: cls)
+    monkeypatch.setattr(reminders, "upcoming_due", lambda *a, **k: due)
+
+
+def test_push_due_goes_out_as_the_reminders_kind_the_user_can_toggle(monkeypatch):
+    """类别必须是既有的 `reminders`:凭空多一类他关不掉,到点催就成了强制打扰。"""
+    _stub_tick(monkeypatch, cls=None)
+    bridge, ui = _push_bridge()
+    assert proactive._push_due(bridge) is True
+    assert ui.events[0]["kind"] == "reminders"
+    assert ui.events[0]["title"] == "待办到点"
+    assert "17:00" in ui.events[0]["text"]
+    assert "key" not in ui.events[0]                 # 去重键不是要显示的内容
+
+
+def test_push_due_is_day_scoped_so_a_restart_cannot_double_pop(monkeypatch):
+    _stub_tick(monkeypatch, cls=None)
+    bridge, ui = _push_bridge()
+    assert proactive._push_due(bridge) is True
+    _restart()
+    assert proactive._push_due(bridge) is False      # 重启:同一刻不再催第二遍
+    assert proactive.was_pushed("reminders", DUE_SOON_NOTE["key"]) is True
+    assert len(ui.events) == 1
+
+
+def test_a_new_deadline_time_rearms_the_push(monkeypatch):
+    """去重键带到期时刻:用户把 17:00 改成 18:00,那条新截止还得催得到。"""
+    later = {**DUE_SOON_NOTE, "key": "r1|2026-09-22T18:00"}
+    _stub_tick(monkeypatch, cls=None, due=later)
+    bridge, ui = _push_bridge()
+    assert proactive._push_due(bridge) is True
+    assert proactive._push_due(bridge) is False
+    assert len(ui.events) == 1
+
+
+def test_push_due_stays_quiet_without_a_clock(monkeypatch):
+    """只有日期的事项由按天那一路管,细轮询这里不能凭空造一个时刻出来。"""
+    _stub_tick(monkeypatch, cls=None, due=None)
+    bridge, ui = _push_bridge()
+    assert proactive._push_due(bridge) is False
+    assert ui.events == []
+
+
+def test_tick_pushes_class_and_todo_independently(monkeypatch):
+    """两路各推各的:一节课和一条待办同时在 20 分钟内,该听到两条。"""
+    _stub_tick(monkeypatch)
+    bridge, ui = _push_bridge()
+    assert proactive._tick(bridge) == {"class": True, "due": True}
+    assert [e["kind"] for e in ui.events] == ["class", "reminders"]
+
+
+def test_tick_survives_one_broken_source(monkeypatch):
+    """课表读炸了不能连累待办到点 —— 一条线程管两类,就得两类各自兜住。"""
+    from minicode import reminders, schedule
+    monkeypatch.setattr(schedule, "upcoming_class",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("课表坏了")))
+    monkeypatch.setattr(reminders, "upcoming_due", lambda *a, **k: DUE_SOON_NOTE)
+    bridge, ui = _push_bridge()
+    assert proactive._tick(bridge) == {"class": False, "due": True}
+    assert [e["kind"] for e in ui.events] == ["reminders"]
+    assert any("fail class" in r for r in proactive.wd_log_tail(10))
+
+
+def test_the_tick_loop_is_what_the_gui_starts():
+    """改名的那一头:线程改名了却没改调用点 = 打包版没有任何到点提醒。"""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "gui_main.py"
+           ).read_text(encoding="utf-8")
+    assert "start_tick_loop" in src and "start_class_loop" not in src
+
+
+def test_desktop_text_shows_the_clock_when_the_todo_has_one():
+    """同一件事两处各写一套会各说各话:桌面通知跟着 `due_at` 走。"""
+    items = [{"id": "r1", "title": "交实验报告", "due": "2026-09-22",
+              "due_at": "2026-09-22T17:00", "days_left": 0, "note": ""}]
+    assert proactive.desktop_text("reminders", {"items": items}) \
+        == "交实验报告(2026-09-22 17:00,还有 0 天)"
+    # 只有日期的条目不编钟点
+    items[0]["due_at"] = ""
+    assert proactive.desktop_text("reminders", {"items": items}) \
+        == "交实验报告(2026-09-22,还有 0 天)"

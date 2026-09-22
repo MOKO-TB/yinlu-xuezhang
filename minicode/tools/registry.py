@@ -609,8 +609,11 @@ def build_default_registry() -> list[Tool]:
                 "待办/截止日期提醒(存本机 reminders.json,启动时学长会主动催)。"
                 "用户说「提醒我 X 月 X 日交材料」「别忘了周五要报名」「我有哪些事没做完」时用:"
                 "action=add 记一条(title 必填,due 给 2026-10-08 / 10-08 这类能确定的日期,"
-                "说不准就不填——绝不猜日期);action=list 看清单;action=finish/delete 带 item_id。"
-                "临期(3 天内)与逾期事项会在启动时主动推送。"
+                "说不准就不填——绝不猜日期);"
+                "action=list 看清单;action=finish/delete 带 item_id。"
+                "催的精度取决于你手上有确切信息到哪一层:只有日期 → 临期(3 天内)按天催;"
+                "日期 + 钟点(at)都确凿 → 到点前 20 分钟催一次,错过了开机还能补一条;"
+                "钟点说不准(用户只说「3点」没讲上午下午)就**别填 at**,按天催比猜错时间好。"
             ),
             parameters={
                 "type": "object",
@@ -621,6 +624,10 @@ def build_default_registry() -> list[Tool]:
                     "due": {"type": "string",
                             "description": "add 用:截止日期(2026-10-08 / 2026/10/8 / 10-08;"
                                            "说不准就留空,不要猜)"},
+                    "at": {"type": "string",
+                           "description": "add 用:截止钟点(17:00 / 下午5点 / 中午12点半)。"
+                                          "只在用户明确说过时间时才填;光「3点」这类歧义写法"
+                                          "填了也不会生效,不如留空按天催"},
                     "note": {"type": "string", "description": "add 用:补充说明(可选)"},
                     "item_id": {"type": "string",
                                 "description": "finish/delete 用:提醒的 id(如 r3,清单里能看到)"},
