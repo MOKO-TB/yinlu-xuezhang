@@ -498,6 +498,12 @@
   function setData(d) {
     data = d || null;
     if (!data || !(data.items || []).length) return;
+    // 标题跟着后端走:面板说"是哪份校区数据"应由下发的 payload 决定,
+    // 而不是写死在 HTML 里(写死了换校区就会继续挂肇庆的名字)。
+    if (data.title) {
+      $("mapTitle").textContent = data.title.startsWith("🗺")
+        ? data.title : "🗺 " + data.title;
+    }
     byNo = new Map((data.items || []).map((it) => [it.no, it]));
     const stage = $("mapStage");
     stage.textContent = "";

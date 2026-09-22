@@ -3171,7 +3171,7 @@ function renderTaskMetrics(m) {
                       : "能力表没登记这个模型能看图,默认只给文件路径;点一下可强制发图"}">`
     + (vis ? (m.supports_vision ? "多模态" : "多模态·手动") : "纯文本") + "</span>"
     + (knownWin ? `<span class="cap win">${fmtCtx(m.context_window)}</span>` : "");
-  if (canVisionToggle) {
+  if (canToggle) {
     $("tmVision").addEventListener("click", () => {
       if (m.supports_vision) { toast("该模型本身支持看图,不用手动开"); return; }
       pywebview.api.set_vision(!forced).then(r => {

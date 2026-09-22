@@ -124,6 +124,13 @@ cd /d/game/mini-code
 #                                                           v0.9.31 再 +13:新增 `tests/test_content_skills.py`(四份内容技能的口径关键字 + 模板 compile/exec 行为),
 #                                                           代码只动了 `skills/` 与文档,`minicode/` 一行没改(`collect-only` 实测 1236)。
 ./.venv/Scripts/python.exe scripts/check_frontend_js.py    # 前端语法自检(抽内联 script 交 node --check,几秒钟)
+./.venv/Scripts/python.exe scripts/e2e_ui_init.py          # 开机冒烟(真 Chromium,12 项):boot() 必须**跑完整** + 地图真画出来。
+#                                                           v0.9.22 把 renderTaskMetrics 里一个守卫名写错(用了没声明的 canVisionToggle),
+#                                                           它在 boot() 中途抛错被最外层 catch 成一行小字,后面的 CampusMap.setData/
+#                                                           会话列表/首页建议全没执行 —— 免安装版地图因此空白了一整轮,而当时**所有 e2e 全绿**
+#                                                           (没一支去看 hint 和地图)。`node --check` 也抓不到:那不是语法错。
+#                                                           口径同 e2e_ui_v0927:payload 出自真后端(campus.frontend_payload +
+#                                                           model_catalog.session_metrics),不手抄形状;需 PYTHONIOENCODING=utf-8
 ./.venv/Scripts/python.exe scripts/check_docs.py           # 文档/数据边界对账:抬头版本 == __version__、每份本机状态文件是否同时在 .gitignore 与 build_exe 清理清单、§2 是否该归档(三条也进了 tests/test_docs_check.py,所以 pytest 会自动跑)
 ./.venv/Scripts/python.exe scripts/check_docs.py --collect  # 提交前多跑一次:真跑 pytest --collect-only,把 §7 写的基线数和实测对一遍(慢十几秒;v0.9.27 就是没人核,1188 与 1142 漂了一整轮)
 ./.venv/Scripts/python.exe scripts/e2e_fake_server.py      # CLI 端到端(假 SSE 服务器)
