@@ -60,7 +60,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                       # v0.9.25 修:Win11 不显示托盘气球,真通道是 WinRT toast
                       # (漏收 = 装好的包又回到"通知永远看不见")
                       "_toast", "_balloon", "register_notify_identity",
-                      "_powershell", "AUMID"),
+                      "_powershell", "AUMID",
+                      # v0.9.25 修第二轮:显示名要写在注册表默认值上、图标路径
+                      # 必须 file:///(漏收 = 装好的包通知顶着一串英文、没图标)
+                      "_file_uri"),
     "minicode.reasoning": ("reasoning_snapshot", "get_capability",
                            "apply_reasoning_choice"),
     "minicode.session": ("to_markdown", "search_logs", "export_filename"),

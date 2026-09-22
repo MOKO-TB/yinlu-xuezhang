@@ -197,7 +197,16 @@ def set_notify(enabled: bool, kind: str = "") -> dict:
 # **一行记录都没有**:气球(balloon)在 Win11 上已经不被显示。
 # 同一时刻改走 WinRT Toast,库里立刻出现 handler=`yinlu.xuezhang.app` 的记录。
 # 结论:主通道 = WinRT Toast;气球只当 Win10 的退路,并且**如实标未核实**。
-AUMID = "yinlu.xuezhang.app"      # 通知的"应用身份"(AppUserModelId)
+#
+# 显示名/图标从哪来(2026-09-22 真机截图实测,两个都踩过):
+# - 名字取的是下面这坨注册表键的**默认值**(只写 `DisplayName` 不算);
+# - Windows **第一次见到某个 AUMID 时**就把它的显示名/图标缓存进通知库
+#   (`wpndatabase.db` 的 `NotificationHandler`),之后再改注册表**刷不回来**。
+#   `yinlu.xuezhang.app` 正是"只会写 DisplayName"那会儿建的,所以它永远顶着
+#   一串英文 —— 只能换一个新身份,故下面用 `.desktop`。
+# - 顺序因此是硬要求:`notify()` 先 `register_notify_identity()` 再 `_toast()`,
+#   反过来就等于把裸 AUMID 焊死在用户机器上。
+AUMID = "yinlu.xuezhang.desktop"  # 通知的"应用身份"(AppUserModelId)
 AUMID_NAME = "引路学长"            # 不登记就只显示上面那串英文
 AUMID_ICON = ("assets", "toast-icon.png")
 AUMID_REG = r"Software\Classes\AppUserModelId\%s" % AUMID   # HKCU,免管理员
@@ -241,12 +250,28 @@ def _powershell() -> str:
                         "powershell.exe")
 
 
+def _file_uri(path) -> str:
+    """把本地图片路径写成 `file:///` URI。
+
+    WinRT 的 `<image src>` 对非打包应用只认 `file:///` 或 `http(s)`;**裸盘符
+    路径会被静默丢掉** —— 通知照弹、不报错,就是没有图标(真机截图才发现的)。
+    注册表里的 `IconUri` 同理。
+    """
+    import os
+    return "file:///" + os.path.abspath(str(path)).replace("\\", "/")
+
+
 def register_notify_identity(force: bool = False) -> dict:
     """把 AUMID 登记到 HKCU:让通知显示成「引路学长」+ 我们的图标。
 
-    这是非打包应用拿通知身份的官方路子(不需要管理员)。登记只为好看,
-    **失败绝不拦通知** —— 写不进注册表(禁用注册表编辑、组策略)时照样发,
-    只是那一条会顶着一串英文身份。全程只写自己这一坨键,不碰别家。
+    写三样:键的**默认值**(shell 渲染时读的就是它)、`DisplayName`(老代码
+    路径按名字查)、`IconUri`(`file:///` 形式,裸盘符路径会被静默丢掉)。
+
+    这是非打包应用拿通知身份的官方路子(不需要管理员),而且**必须在第一次
+    发通知之前**登记完:Windows 见到新 AUMID 的那一次就把显示名/图标缓存进
+    通知库,之后再改注册表刷不回来(真机上旧身份就是这么被焊成一串英文的)。
+    登记只为好看,**失败绝不拦通知** —— 写不进注册表(禁用注册表编辑、组策略)
+    时照样发,只是那一条会顶着一串英文身份。全程只写自己这一坨键,不碰别家。
     """
     global _identity_done
     import os
@@ -257,9 +282,12 @@ def register_notify_identity(force: bool = False) -> dict:
         icon = resource_path(*AUMID_ICON)
         if not os.path.isfile(icon):
             icon = ""
-        want = {"DisplayName": AUMID_NAME}
+        # 默认值(不是 DisplayName)才是 shell 渲染通知时读的那个名字:只写
+        # DisplayName 时,真机上通知顶部仍然顶着 `yinlu.xuezhang.app` 一串英文。
+        # 两处一起写,DisplayName 留给按名字查的老代码路径。
+        want = {"": AUMID_NAME, "DisplayName": AUMID_NAME}
         if icon:
-            want["IconUri"] = str(icon)
+            want["IconUri"] = _file_uri(icon)
         if not force:
             try:                            # 已经登记对了就不重复写
                 with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUMID_REG) as k:
@@ -295,7 +323,8 @@ def _toast(title: str, body: str, tag: str = "") -> dict:
     env = {k: str(v) for k, v in dict(
         os.environ, YX_AUMID=AUMID, YX_TITLE=str(title or AUMID_NAME),
         YX_BODY=str(body), YX_TAG=str(tag or ""),
-        YX_ICON=str(icon) if os.path.isfile(icon) else "").items()}
+        # 必须是 file:/// 形式:裸路径会让 <image src> 静默失效(通知没图标)
+        YX_ICON=_file_uri(icon) if os.path.isfile(icon) else "").items()}
     encoded = base64.b64encode(_TOAST_PS.encode("utf-16-le")).decode("ascii")
     argv = [exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
             "-EncodedCommand", encoded]

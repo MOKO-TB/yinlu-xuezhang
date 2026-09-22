@@ -670,7 +670,8 @@ def test_toast_puts_user_text_only_in_the_environment(tmp_path, monkeypatch):
                for k, v in seen["env"].items()), \
         {k: type(v).__name__ for k, v in seen["env"].items()
            if not isinstance(v, str)}
-    assert seen["env"]["YX_ICON"] == str(icon)
+    # 图标必须是 file:/// 形式:裸路径进 <image src> 会静默没有图标(真机截图)
+    assert seen["env"]["YX_ICON"] == tray._file_uri(icon)
     assert seen["timeout"] == tray._TOAST_TIMEOUT
     assert seen["creationflags"] & tray._NO_WINDOW      # 别闪黑框
     assert real_run is not fake_run
@@ -776,21 +777,42 @@ def test_register_notify_identity_writes_only_our_own_key(monkeypatch):
     assert tray.register_notify_identity() == {"ok": True}
     assert fake.created == [tray.AUMID_REG]                 # 只碰自己那一坨
     vals = {n: v for _k, n, v in fake.written}
+    # 默认值才是 shell 渲染通知时读的那个名字 —— 只写 DisplayName 时真机上
+    # 通知顶部仍然显示 `yinlu.xuezhang.desktop` 一串英文(截图实证)
+    assert vals[""] == "引路学长"
     assert vals["DisplayName"] == "引路学长"
-    assert set(vals) <= {"DisplayName", "IconUri"}
+    assert vals["IconUri"].startswith("file:///")
+    assert set(vals) <= {"", "DisplayName", "IconUri"}
 
 
 def test_register_notify_identity_skips_when_already_right(monkeypatch):
     _real_identity(monkeypatch)
-    fake = FakeWinreg({tray.AUMID_REG: {"DisplayName": "引路学长",
-                                        "IconUri": str(tray.resource_path(
-                                            *tray.AUMID_ICON))}})
+    icon = tray.resource_path(*tray.AUMID_ICON)
+    fake = FakeWinreg({tray.AUMID_REG: {"": "引路学长",
+                                        "DisplayName": "引路学长",
+                                        "IconUri": tray._file_uri(icon)}})
     _use_fake_winreg(monkeypatch, fake)
     monkeypatch.setattr(tray, "_identity_done", False)
     r = tray.register_notify_identity()
     assert r["ok"] is True and r["skipped"] == "registered"
     assert fake.written == []                               # 不重复写
     assert tray._identity_done is True
+
+
+def test_aumid_is_not_the_burned_in_old_identity():
+    """Windows 在**第一次见到 AUMID** 时就把显示名缓存进通知库,之后改注册表
+    刷不回来。`yinlu.xuezhang.app` 是"只会写 DisplayName"那会儿建的,已经焊死
+    成一串英文 —— 沿用等于让所有老用户永远看不到「引路学长」。"""
+    assert tray.AUMID != "yinlu.xuezhang.app"
+    assert tray.AUMID_REG.endswith(tray.AUMID)
+
+
+def test_file_uri_is_what_winrt_image_src_accepts(tmp_path):
+    """裸盘符路径喂给 <image src> 会**静默**不显示图标,所以统一走 file:///。"""
+    got = tray._file_uri(tmp_path / "assets" / "toast-icon.png")
+    assert got.startswith("file:///")
+    assert "\\" not in got
+    assert got.endswith("toast-icon.png")
 
 
 def test_register_notify_identity_failure_is_logged_not_raised(monkeypatch):
