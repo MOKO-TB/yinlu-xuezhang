@@ -123,8 +123,16 @@ def write_user_files(dist: Path) -> None:
                   "pushed-today.json",
                   # v0.9.27 本机作息表(自己学校教务处那张表的抄录,属使用者本人环境状态:
                   # 随包发出去既对别人没用,又会让他一空档直接按你的钟点算)
-                  "period-times.json"):
+                  "period-times.json",
+                  # v0.9.28 看门狗运行日志(本机弹过哪些提醒、为什么没弹的记录)
+                  "watchdog.log",
+                  # v0.9.28 对账脚本查出的三处漏网(见 scripts/check_docs.py):
+                  # weather.json 是用户自选城市(weather.py 的 CITY_FILE),含位置;
+                  # web-usage.log 是局域网问答版的发问记录 + 来源 IP,更不能外发。
+                  "weather.json", "web-usage.log"):
         (dist / _name).unlink(missing_ok=True)
+    # 同上:问答版的会话目录(构建机若真跑过 web_server,这里面就是本机对话)
+    shutil.rmtree(dist / "web-sessions", ignore_errors=True)
     # v0.9.23:可见浏览器跑过教务导入后,这个 profile 目录里就是**真实的登录态**
     # (cookie / sessionStorage)。随包发给同学 = 把自己的教务账号交出去。
     shutil.rmtree(dist / "browser-profile", ignore_errors=True)
@@ -231,7 +239,14 @@ def write_user_files(dist: Path) -> None:
         "   每节课起止时刻录一次(存在本机 period-times.json,不上传),之后才会说\n"
         "   「10:00~11:40 有空」,也才好按钟点安排学习。填了还能「不填了」退回按节次。\n"
         "   两条硬口径:那天不在学期内(开学前/假期)不会说成「整天空着」;某节课没写\n"
-        "   节次的那天会直说「空档算不准」,请你把节次补进课表,而不是给个好看的假答案。\n",
+        "   节次的那天会直说「空档算不准」,请你把节次补进课表,而不是给个好看的假答案。\n"
+        "18. 提醒到底发没发,现在有据可查:每一次推送的决定(推了 / 被拦下 / 没推成)都记在\n"
+        "   数据目录的 watchdog.log 里,**只记是哪一类提醒、去重用的那个键、结论**,绝不记通知\n"
+        "   正文。觉得「提醒没发」或「弹了好几遍」,直接这么跟学长说就行,它会读日志回话\n"
+        "   (desktop_notify 的 log 动作)。这一轮还修了两件实际问题:①校历倒计时、临期待办、\n"
+        "   今天的课以前**每轮都重判一遍**,所以你当天重启一次学长它们就又弹一遍,现在和\n"
+        "   课前提醒一样按天去重;②一条提醒**两个渠道都没送到**时不再记成「今天已推过」,\n"
+        "   下一轮会再试,不会因为一次失败就整天哑掉。\n",
         encoding="utf-8",
     )
 

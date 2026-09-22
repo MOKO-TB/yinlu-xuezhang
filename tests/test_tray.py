@@ -894,6 +894,19 @@ def test_desktop_notify_tool_test_explains_no_channel(monkeypatch):
     assert out.startswith("这条测试通知没能发出") and "PowerShell" in out
 
 
+def test_desktop_notify_tool_log_answers_why_no_reminder(tmp_path, monkeypatch):
+    """"提醒怎么没发"要能用嘴问到:action=log 就是读看门狗那份运行日志。"""
+    from minicode import paths, proactive
+    monkeypatch.setattr(paths, "APP_DIR", tmp_path / "app")
+    monkeypatch.setattr(proactive, "_logged_since_trim", 0)
+    assert "还没有留下一行运行记录" in tray.desktop_notify(None, action="log")
+
+    proactive.wd_log("skip calendar [国庆|2026-10-01]:今天已推过")
+    out = tray.desktop_notify(None, action="log")
+    assert "skip calendar" in out and "push=真推了" in out
+    assert "watchdog.log" in out                       # 告诉用户文件在哪
+
+
 # ============================================== 开机自动启动(v0.9.26)
 #
 # 一条红线:这些测试**绝不碰真机的「启动」文件夹**,也绝不真起 PowerShell ——

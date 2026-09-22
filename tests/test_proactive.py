@@ -37,6 +37,7 @@ def _app_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "APP_DIR", tmp_path / "app")
     monkeypatch.setattr(proactive, "_mem_pushed", set())
     monkeypatch.setattr(proactive, "_mem_day", "")
+    monkeypatch.setattr(proactive, "_logged_since_trim", 0)
     monkeypatch.setattr(tray, "notify", lambda *a, **k: {"ok": True})
     yield
 
@@ -502,3 +503,138 @@ def test_catch_up_never_breaks_the_watchdog(monkeypatch):
     bridge, ui = _push_bridge()
     assert proactive.catch_up(bridge) == {"briefing": False, "class": ""}
     assert ui.events == []
+
+
+# ============ 每类都走按天账本 + 看门狗运行日志(v0.9.28 A 批)
+#
+# 这一节钉的是同一件失败:提醒**只按"本次运行"去重**,于是"重启一次就再弹一遍"
+# 和"连着开三天只弹第一天"同时成立。v0.9.26 给今日简报和课前提醒上了按天账本,
+# 但 校历/待办/今天的课 三类当时留在内存标志里 —— 这里把剩下的半条路补完。
+
+ALERT = {"name": "国庆", "days_left": 5, "start": "2026-10-01"}
+TODO = [{"id": "r1", "title": "交实验报告", "due": "2026-09-25",
+         "days_left": 3, "note": ""}]
+FIRST_CLASS = {"text": "课表:今天第一节课 08:00 高等数学", "ask": "把今天的课列全",
+               "day": "2026-09-22", "head": "今天"}
+
+
+def _stub_round_sources(monkeypatch, *, near=None, note=None, alerts=None):
+    """把 `_round` 的六个外部源都按住,只留"该不该推"这一件真的东西。"""
+    monkeypatch.setattr(proactive, "briefing_pushed_today", lambda day=None: False)
+    monkeypatch.setattr(proactive, "push_briefing", lambda b, force=False: False)
+    monkeypatch.setattr(proactive, "calendar_alerts",
+                        lambda *a, **k: list(alerts or []))
+    monkeypatch.setattr(proactive, "check_once", lambda state=None: [])
+    monkeypatch.setattr(proactive, "check_update", lambda cur: None)
+    from minicode import reminders, schedule
+    monkeypatch.setattr(reminders, "due_soon", lambda *a, **k: list(near or []))
+    monkeypatch.setattr(schedule, "next_class_note", lambda today=None: note)
+
+
+def test_push_once_is_day_scoped_for_the_three_late_kinds():
+    """重启不能再让 校历/待办/今天的课 各多弹一条(以前只有简报和课前有这层锁)。"""
+    bridge, ui = _push_bridge()
+    assert proactive._push_once(bridge, "calendar", "国庆|2026-10-01", **ALERT) is True
+    assert proactive._push_once(bridge, "reminders", "r1", items=TODO) is True
+    assert proactive._push_once(bridge, "schedule", "2026-09-22|今天", **FIRST_CLASS) is True
+    assert len(ui.events) == 3
+
+    _restart()                                  # 关掉学长再打开
+    for kind, key, payload in (("calendar", "国庆|2026-10-01", ALERT),
+                               ("reminders", "r1", {"items": TODO}),
+                               ("schedule", "2026-09-22|今天", FIRST_CLASS)):
+        assert proactive._push_once(bridge, kind, key, **payload) is False
+    assert len(ui.events) == 3
+
+
+def test_a_new_day_asks_again(monkeypatch):
+    """账本还是昨天的 → 今天算"没推过":连着开着的进程第二天仍会催一次。"""
+    bridge, ui = _push_bridge()
+    proactive._push_once(bridge, "calendar", "国庆|2026-10-01", **ALERT)
+    data = json.loads(proactive.pushed_path().read_text(encoding="utf-8"))
+    assert data["date"] == date.today().isoformat()
+    data["date"] = YESTERDAY.isoformat()        # 时间往前走了一天
+    proactive.pushed_path().write_text(json.dumps(data), encoding="utf-8")
+    assert proactive._push_once(bridge, "calendar", "国庆|2026-10-01", **ALERT) is True
+    assert len(ui.events) == 2
+
+
+def test_push_once_does_not_consume_the_day_when_nothing_arrived(monkeypatch):
+    """两路都没送到就不许占用今天这一格 —— 否则这一类今天永远补不回来。"""
+    monkeypatch.setattr(proactive, "push_desktop",
+                        lambda kind, payload: {"ok": False, "skipped": "no_channel"})
+    bridge, ui = _push_bridge(broken=True)
+    assert proactive._push_once(bridge, "reminders", "r1", items=TODO) is False
+    assert ui.events == []
+    assert proactive.was_pushed("reminders", "r1") is False
+
+
+def test_push_once_logs_the_decision_and_keeps_the_content_out():
+    """日志要说清"推没推、为什么",但通知正文(课名/待办标题)一个字都不进。"""
+    bridge, _ui = _push_bridge()
+    proactive._push_once(bridge, "reminders", "r1", items=TODO)
+    proactive._push_once(bridge, "reminders", "r1", items=TODO)
+    raw = proactive.watchdog_log_path().read_text(encoding="utf-8")
+    rows = proactive.wd_log_tail(10)
+    assert any(r.split()[2] == "push" and "reminders" in r for r in rows)
+    assert any("今天已推过" in r for r in rows)
+    assert "交实验报告" not in raw and "高等数学" not in raw
+
+
+def test_watchdog_log_trims_to_the_cap(monkeypatch):
+    """日志能救命,但不能无限长:超上限只留最近的 LOG_CAP_LINES 行。"""
+    monkeypatch.setattr(proactive, "LOG_CAP_LINES", 30)
+    monkeypatch.setattr(proactive, "LOG_TRIM_EVERY", 5)
+    for i in range(40):
+        proactive.wd_log(f"round line {i}")
+    rows = proactive.watchdog_log_path().read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 30
+    assert rows[0].endswith("round line 10") and rows[-1].endswith("round line 39")
+    assert proactive.wd_log_tail(3) == rows[-3:]
+
+
+def test_wd_log_tail_is_quiet_before_the_first_line():
+    assert proactive.wd_log_tail(30) == []
+
+
+def test_round_nags_once_per_day_not_once_per_round(monkeypatch):
+    """一轮推齐三类,同一天的第二轮一条都不再来。"""
+    _stub_round_sources(monkeypatch, near=TODO, note=FIRST_CLASS, alerts=[ALERT])
+    bridge, ui = _push_bridge()
+    out = proactive._round(bridge)
+    assert sorted(e["kind"] for e in ui.events) == ["calendar", "reminders",
+                                                    "schedule"]
+    assert out["calendar"] == 1 and out["reminders"] is True and out["schedule"] is True
+
+    proactive._round(bridge)                    # 6 小时后的下一轮
+    _restart()
+    proactive._round(bridge)                    # 中间还重启过一次
+    assert len(ui.events) == 3
+
+
+def test_round_lets_the_briefing_cover_the_singles_and_says_so(monkeypatch):
+    """简报已推过 → 三条单条让路,但**要在日志里写明是被简报顶掉的**,不是没跑。"""
+    _stub_round_sources(monkeypatch, near=TODO, note=FIRST_CLASS, alerts=[ALERT])
+    monkeypatch.setattr(proactive, "briefing_pushed_today", lambda day=None: True)
+    bridge, ui = _push_bridge()
+    assert proactive._round(bridge) == {"briefing": True}
+    assert ui.events == []
+    assert any("今日简报已覆盖" in r for r in proactive.wd_log_tail(10))
+
+
+def test_round_logs_a_broken_source_instead_of_vanishing(monkeypatch):
+    """数据源炸了表现为"什么也没发生" —— 至少要在日志里留下是哪一类炸的。"""
+    _stub_round_sources(monkeypatch, alerts=[ALERT])
+    from minicode import reminders, schedule
+
+    def boom(*a, **k):
+        raise RuntimeError("文件坏了")
+
+    monkeypatch.setattr(reminders, "due_soon", boom)
+    monkeypatch.setattr(schedule, "next_class_note", boom)
+    bridge, ui = _push_bridge()
+    out = proactive._round(bridge)
+    assert out["reminders"] is False and out["schedule"] is False
+    assert out["calendar"] == 1                 # 一类炸不影响另一类
+    rows = "\n".join(proactive.wd_log_tail(10))
+    assert "fail reminders" in rows and "fail schedule" in rows

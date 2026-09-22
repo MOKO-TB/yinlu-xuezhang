@@ -1017,5 +1017,21 @@ def desktop_notify(ctx, action: str = "status", kind: str = "",
         return ("这条测试通知没能发出:" + r.get("msg", r.get("skipped", ""))
                 + "\n原因也写在数据目录里的 tray.log;"
                   "主动提醒仍会显示在聊天窗口顶部那条提示栏里。")
-    return (f"未知的 action「{action}」,"
-            "可用:status / on / off / test / startup_on / startup_off")
+    if action == "log":
+        from minicode import proactive          # 函数内引:proactive 也会引 tray
+        rows = proactive.wd_log_tail(30)
+        path = proactive.watchdog_log_path()
+        if not rows:
+            return ("看门狗还没有留下一行运行记录(" + str(path) + ")。\n"
+                    "通常是这三种情况之一:这个形态没跑桌面版看门狗(命令行/网页版)、"
+                    "启动还不到 15 秒、或这台机器的数据目录写不进去。"
+                    "先用 action=test 自证通知通道通不通。")
+        return ("最近 " + str(len(rows)) + " 条提醒运行记录(" + str(path) + "):\n"
+                + "\n".join(rows)
+                + "\n读法:每行开头 push=真推了 / skip=被拦下(后面就是原因)/ "
+                  "fail=想推但两路都没送到 / round error=这一轮抛异常。"
+                  "「今天已推过」是按天账本(pushed-today.json)在去重,"
+                  "「今日简报已覆盖」是简报把单条提醒顶掉了。"
+                  "日志里只有类别和去重键,没有通知正文。")
+    return (f"未知的 action「{action}」,可用:status / on / off / test / "
+            "startup_on / startup_off / log")

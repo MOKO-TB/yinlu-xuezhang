@@ -90,3 +90,8 @@ _build_*.log
 
 # v0.9.27 本机作息表(自己学校那张节次时刻表,属使用者环境状态,不进仓库)
 /period-times.json
+# v0.9.28 看门狗运行日志(本机弹过哪些提醒,不进仓库)
+/watchdog.log
+
+# v0.9.28 自选城市(weather.py):位置信息,对别人没用,不进仓库
+/weather.json

@@ -172,6 +172,64 @@ def mark_pushed(kind: str, key: str = "", day: "date | None" = None) -> bool:
             return False
 
 
+# ------------------------------------------------- 看门狗运行日志(v0.9.28 A 批)
+#
+# 为什么需要它:`start_loop` 的循环体是 `except Exception: pass`,6 小时一轮,
+# 原来一整轮跑完**什么现场都不留** —— 用户报"课前提醒没发"或"同一条弹了三遍",
+# 唯一能看的东西是内存里那几个已经随重启消失的 `*_done` 标志。这份日志只回答
+# 三个问题:这一轮跑了哪几类、每类推没推、没推是哪一道闸门拦的(今天已推过 /
+# 简报已覆盖 / 没内容 / 界面推炸 / 桌面没弹 / 账本没落盘 / 这轮抛异常)。
+# **只记类别 + 去重键 + 结论,绝不记正文**(课名、通知标题是个人内容,而这份
+# 日志是最可能被截图发给维护者看的文件)。
+WATCHDOG_LOG = "watchdog.log"
+LOG_CAP_LINES = 400              # 一轮十几行,400 行 ≈ 几天;超了只留最近的
+LOG_TRIM_EVERY = 20              # 每写这么多行才回头收一次盘(不必每行重读文件)
+_log_lock = threading.Lock()
+_logged_since_trim = 0
+
+
+def watchdog_log_path() -> Path:
+    return app_path(WATCHDOG_LOG)
+
+
+def wd_log(msg: str) -> None:
+    """记一行现场。写不进去就丢掉 —— 日志不能把提醒本身弄崩。"""
+    global _logged_since_trim
+    try:
+        with _log_lock:
+            path = watchdog_log_path()
+            path.parent.mkdir(parents=True, exist_ok=True)      # 首启可能还没有任何文件
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+            _logged_since_trim += 1
+            if _logged_since_trim >= LOG_TRIM_EVERY:
+                _logged_since_trim = 0
+                lines = path.read_text(encoding="utf-8").splitlines()
+                if len(lines) > LOG_CAP_LINES:
+                    tmp = path.with_suffix(".tmp")
+                    tmp.write_text("\n".join(lines[-LOG_CAP_LINES:]) + "\n",
+                                   encoding="utf-8")
+                    tmp.replace(path)
+    except Exception:
+        pass
+
+
+def wd_log_tail(lines: int = 30) -> list[str]:
+    """看门狗日志最后几行;没有日志回空列表(不是报错)。"""
+    try:
+        rows = watchdog_log_path().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    return rows[-max(1, int(lines)):]
+
+
+def _desktop_outcome(result: dict) -> str:
+    """把 push_desktop 的返回值拍成日志里那几个字,别把整坨 dict 写进日志。"""
+    if result.get("ok"):
+        return f"桌面{'已弹' if result.get('verified') else '交给系统'}({result.get('channel') or '?'})"
+    return f"桌面没弹({result.get('skipped') or result.get('msg') or '?'})"
+
+
 def clean_title(raw: str) -> str:
     """从列表页锚文本里提出干净标题:剥日期前缀,在通知类结尾词处截断。
 
@@ -386,12 +444,62 @@ def push_desktop(kind: str, payload: dict) -> dict:
         return {"ok": False, "skipped": "error", "msg": f"{type(e).__name__}"}
 
 
-def _push_proactive(bridge, kind: str, **payload) -> None:
+def _push_proactive(bridge, kind: str, **payload) -> dict:
+    """把一条推送同时发到「聊天顶部提示栏」和「桌面通知」,返回两路各自的结果。
+
+    两路彼此独立:界面推炸了桌面照发,桌面炸了也不影响聊天里那条 —— 返回值
+    只给日志用(v0.9.28),调用方原先都忽略它,所以改成有返回值不影响老代码。
+    """
+    ui_ok = True
     try:
         bridge.ui.push("proactive", kind=kind, **payload)
     except Exception:
-        pass
-    push_desktop(kind, payload)
+        ui_ok = False
+    return {"ui": ui_ok, "desktop": push_desktop(kind, payload)}
+
+
+def _note_payload(note: dict) -> dict:
+    """课前提醒那条 dict 里的 `key` 是**去重键**,不是要显示的内容。
+
+    `_push_once` 的 key 是位置参数,再把整个 note 当 `**payload` 传进去就会撞成
+    "got multiple values for argument 'key'" —— 而且炸在守护线程里,表现为
+    "课前提醒一条都没发",这正是本轮要消灭的那类故障。
+    """
+    return {k: v for k, v in note.items() if k != "key"}
+
+
+def _push_once(bridge, kind: str, key: str, *, log_skip: bool = True,
+               **payload) -> bool:
+    """今天没推过的才推这一条,并把结论记进看门狗日志;返回是否真推了。
+
+    去重键**按天**落在 `pushed-today.json`(v0.9.26 起有这份账本),所以:
+    - 同一天内重启三次学长 → 只弹一条(原来重启一次就再来一条);
+    - 进程连着开三天 → 每天各催一次(原来只在启动那一回提醒,第二天就哑了)。
+
+    一条硬规矩:**什么都没送到用户手里时不占用今天这一格**(界面推炸且桌面
+    也没弹)—— 否则这一类今天永远补不回来。
+
+    `log_skip=False` 给**高频轮询**的调用方(课前那条线程每 5 分钟问一次):
+    已经推过之后的每次"跳过"都记一行,一天几百行会把 400 行的日志上限刷满,
+    真正有用的那几行反而被挤出去 —— 第一次的 `push class [...]` 已经说明问题了。
+    """
+    if was_pushed(kind, key):
+        if log_skip:
+            wd_log(f"skip {kind} [{key}]:今天已推过")
+        return False
+    r = _push_proactive(bridge, kind, **payload)
+    desk = r["desktop"]
+    if not r["ui"] and not desk.get("ok"):
+        wd_log(f"fail {kind} [{key}]:两路都没送到({_desktop_outcome(desk)}),"
+               "不占用今天这一格")
+        return False
+    line = (f"push {kind} [{key}]:提示栏{'已推' if r['ui'] else '推失败'} · "
+            f"{_desktop_outcome(desk)}")
+    if mark_pushed(kind, key):
+        wd_log(line)
+    else:
+        wd_log(line + " · 账本没落盘(重启可能再弹)")
+    return True
 
 
 def briefing_pushed_today(day: "date | None" = None) -> bool:
@@ -411,84 +519,124 @@ def push_briefing(bridge, force: bool = False) -> bool:
     """
     key = _day_key()
     if not force and briefing_pushed_today():
+        wd_log("skip briefing [今日]:账本说今天已推过")
         return False
     try:
         from minicode import briefing as _briefing
         b = _briefing.build()
-    except Exception:
+    except Exception as e:
+        wd_log(f"fail briefing [今日]:聚合抛异常 {type(e).__name__}(不占用今天)")
         return False
     if not b:
+        wd_log("skip briefing [今日]:今天没课/没待办/没校历,不推空卡")
         return False
     with _push_lock:
         if not force and was_pushed("briefing", key):
-            return False           # 另一条线程刚推过
+            wd_log("skip briefing [今日]:另一条线程刚推过")
+            return False         # 另一条线程刚推过
         mark_pushed("briefing", key)
-    _push_proactive(bridge, "briefing", **b)
+    r = _push_proactive(bridge, "briefing", **b)
+    wd_log(f"push briefing [今日]:提示栏{'已推' if r['ui'] else '推失败'} · "
+           + _desktop_outcome(r["desktop"]))
     return True
 
 
+def _push_calendar(bridge) -> int:
+    """校历倒计时:7 天内的事件,每个事件每天最多催一条。"""
+    pushed = 0
+    for alert in calendar_alerts():
+        if _push_once(bridge, "calendar", f"{alert.get('name')}|{alert.get('start')}",
+                      name=alert["name"], days_left=alert["days_left"],
+                      start=alert["start"]):
+            pushed += 1
+    return pushed
+
+
+def _push_reminders(bridge) -> bool:
+    """临期/逾期待办:按「今天弹的是哪几件」去重 —— 清单变了就该再催一次。"""
+    try:
+        from minicode import reminders as _reminders
+        near = _reminders.due_soon()
+    except Exception as e:
+        wd_log(f"fail reminders [{_day_key()}]:清单读不出来 {type(e).__name__}")
+        return False
+    if not near:
+        return False
+    shown = near[:5]
+    key = "+".join(str(i.get("id", "")) for i in shown)
+    return _push_once(bridge, "reminders", key, items=[
+        {"id": i["id"], "title": i["title"], "due": i.get("due", ""),
+         "days_left": i["days_left"], "note": i.get("note", "")} for i in shown])
+
+
+def _push_today_class(bridge) -> bool:
+    """今天/明天第一节课:去重键带上具体那一天,所以连着开机三天会催三天。"""
+    try:
+        from minicode import schedule as _schedule
+        note = _schedule.next_class_note()
+    except Exception as e:
+        wd_log(f"fail schedule [{_day_key()}]:课表读不出来 {type(e).__name__}")
+        return False
+    if not note:
+        return False
+    return _push_once(bridge, "schedule", f"{note.get('day')}|{note.get('head')}",
+                      **note)
+
+
+def _round(bridge) -> dict:
+    """看门狗一轮:每一类各自判「今天没推过才推」,结论都记进 watchdog.log。
+
+    单独抽出来是**为了能直接测**:这些判断原来全埋在 `run()` 的 `while True` +
+    `sleep(6h)` 里,想验一条"重启后会不会再弹一遍"只能真的反复开关窗口 ——
+    这就是"提醒出问题难定位"的根。
+
+    今日简报排最前:今天推过简报(本次推的、或上一回运行推的),课表/待办/校历
+    三条单条就不再重复打扰 —— 内容已经在卡里了。
+    """
+    out: dict[str, object] = {}
+    briefing_covered = briefing_pushed_today() or push_briefing(bridge)
+    out["briefing"] = briefing_covered
+    state = load_state()
+    if state.get("enabled", True):
+        if briefing_covered:
+            wd_log("skip calendar/reminders/schedule [今日]:今日简报已覆盖")
+        else:
+            out["calendar"] = _push_calendar(bridge)
+        items = check_once(state)          # 新通知按"已见标题"去重(另一份持久快照)
+        if items:
+            r = _push_proactive(bridge, "notices", items=items[:4],
+                                total=len(items))
+            out["notices"] = len(items)
+            wd_log(f"push notices [{len(items)} 条]:提示栏"
+                   f"{'已推' if r['ui'] else '推失败'} · " + _desktop_outcome(r["desktop"]))
+    from minicode import __version__
+    update = check_update(__version__)     # 内部已把断网/改版全吞成 None
+    if update:
+        out["update"] = _push_once(bridge, "update",
+                                   str(update.get("version") or ""), **update)
+    if not briefing_covered:
+        out["reminders"] = _push_reminders(bridge)
+        out["schedule"] = _push_today_class(bridge)
+    return out
+
+
 def start_loop(bridge, interval_hours: float | None = None) -> None:
-    """启动后台看门狗线程(gui_main 调一次;测试/CLI 不调它就不存在)。"""
+    """启动后台看门狗线程(gui_main 调一次;测试/CLI 不调它就不存在)。
+
+    这里只管延迟、节奏和"别把窗口弄崩",一轮里做什么全在 `_round()`。
+    """
 
     def run() -> None:
         time.sleep(FIRST_DELAY_SECONDS)
-        calendar_done = False
-        reminders_done = False
-        schedule_done = False
-        update_done = False
-        briefing_done = False
-        briefing_pushed = False
+        hours = interval_hours or DEFAULT_INTERVAL_HOURS
+        wd_log(f"loop start [间隔 {hours}h]")
         while True:
             try:
-                # 今日简报:一轮循环里最先跑。推成功则 课表/待办/校历 三条
-                # 单条推送本轮不再打扰(内容已在简报里);事件类(新通知/
-                # 新版本/课前到点)不受影响。
-                if not briefing_done:
-                    # 今天推过就算"已覆盖":否则下午重开时 push_briefing 返回
-                    # False 会让下面三条单条推送又来一遍。
-                    briefing_pushed = briefing_pushed_today() or push_briefing(bridge)
-                    briefing_done = True
-                state = load_state()
-                if state.get("enabled", True):
-                    if not calendar_done and not briefing_pushed:
-                        for alert in calendar_alerts():
-                            _push_proactive(
-                                bridge, "calendar", name=alert["name"],
-                                days_left=alert["days_left"],
-                                start=alert["start"])
-                        calendar_done = True       # 每次运行只提醒一回
-                    items = check_once(state)
-                    if items:
-                        shown = items[:4]
-                        _push_proactive(bridge, "notices", items=shown,
-                                        total=len(items))
-                if not update_done:                # 新版本检查与通知开关无关
-                    from minicode import __version__
-                    update = check_update(__version__)
-                    if update:
-                        _push_proactive(bridge, "update", **update)
-                    update_done = True
-                if not reminders_done:             # 临期/逾期待办:每次运行一回
-                    if not briefing_pushed:
-                        from minicode import reminders as _reminders
-                        near = _reminders.due_soon()
-                        if near:
-                            _push_proactive(bridge, "reminders", items=[
-                                {"id": i["id"], "title": i["title"],
-                                 "due": i.get("due", ""),
-                                 "days_left": i["days_left"],
-                                 "note": i.get("note", "")} for i in near[:5]])
-                    reminders_done = True
-                if not schedule_done:              # 今天/明天第一节课:每次运行一回
-                    if not briefing_pushed:
-                        from minicode import schedule as _schedule
-                        note = _schedule.next_class_note()
-                        if note:
-                            _push_proactive(bridge, "schedule", **note)
-                    schedule_done = True
-            except Exception:
-                pass                        # 看门狗的任何意外都不许冒出来
-            hours = interval_hours or DEFAULT_INTERVAL_HOURS
+                _round(bridge)
+            except Exception as e:
+                # 看门狗的任何意外都不许冒出来影响窗口,**但必须留下一行** ——
+                # 静默吞掉异常正是"提醒没发却查不到"的那半边原因。
+                wd_log(f"round error [-]:{type(e).__name__} {e}")
             time.sleep(max(1, float(hours)) * 3600)
 
     thread = threading.Thread(target=run, daemon=True,
@@ -515,17 +663,19 @@ def catch_up(bridge) -> dict:
     out = {"briefing": False, "class": ""}
     try:
         out["briefing"] = push_briefing(bridge)
-    except Exception:
-        pass
+    except Exception as e:
+        wd_log(f"fail catch_up [简报]:{type(e).__name__}")
     try:
         from minicode import schedule as _schedule
         note = _schedule.late_class_note()
-        if note and not was_pushed("class", note["key"]):
-            _push_proactive(bridge, "class", **note)
-            mark_pushed("class", note["key"])
+        if not note:
+            wd_log("skip catch_up [错过的课]:没有已开课且还在补发窗口内的课")
+        elif was_pushed("class", note["key"]):
+            wd_log(f"skip catch_up [{note['key']}]:到点提醒已弹过")
+        elif _push_once(bridge, "class", note["key"], **_note_payload(note)):
             out["class"] = note["key"]
-    except Exception:
-        pass
+    except Exception as e:
+        wd_log(f"fail catch_up [错过的课]:{type(e).__name__}")
     return out
 
 
@@ -535,23 +685,26 @@ def start_class_loop(bridge) -> None:
     与 start_loop 分开跑(主循环 6 小时一次,太粗做不到"快上课了")。
     去重键落盘在 `pushed-today.json`(按天滚动),**不再用内存 set** —— 内存集
     一重启就空,于是"错过的那条永远不补"和"同一节课重启后再弹一次"会同时发生。
-    任何异常一律吞掉。
+    异常不往外抛,但**每轮结果都往 watchdog.log 记一行**(v0.9.28:这条线程
+    出问题时的表现是"什么也没发生",不留现场就永远只能猜)。
     """
     def run() -> None:
         time.sleep(FIRST_DELAY_SECONDS)
+        wd_log(f"class loop start [每 {CLASS_TICK_SECONDS // 60} 分钟看一次,"
+               f"提前 {CLASS_LEAD_MINUTES} 分钟]")
         try:
             catch_up(bridge)             # 先补今天错过的,再进入正常轮询
-        except Exception:
-            pass
+        except Exception as e:
+            wd_log(f"round error [补发]:{type(e).__name__} {e}")
         while True:
             try:
                 from minicode import schedule as _schedule
                 note = _schedule.upcoming_class(lead_minutes=CLASS_LEAD_MINUTES)
-                if note and not was_pushed("class", note["key"]):
-                    _push_proactive(bridge, "class", **note)
-                    mark_pushed("class", note["key"])
-            except Exception:
-                pass
+                if note:
+                    _push_once(bridge, "class", note["key"], log_skip=False,
+                               **_note_payload(note))
+            except Exception as e:
+                wd_log(f"round error [课前]:{type(e).__name__} {e}")
             time.sleep(CLASS_TICK_SECONDS)
 
     threading.Thread(target=run, daemon=True, name="yinluxs-class").start()

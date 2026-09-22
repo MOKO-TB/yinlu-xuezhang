@@ -70,7 +70,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                       "startup_status", "set_startup", "launch_target",
                       "STARTUP_NAME", "BACKGROUND_FLAG", "starts_hidden",
                       # 漏收 = 自启时窗口藏不进托盘也没人把它显示回来(隐形进程)
-                      "start_in_tray"),
+                      "start_in_tray",
+                      # v0.9.28:action=log 读看门狗运行日志(漏收 = 「提醒为什么
+                      # 没发」在装好的包里永远只能靠猜)
+                      "wd_log_tail", "watchdog_log_path"),
     "minicode.reasoning": ("reasoning_snapshot", "get_capability",
                            "apply_reasoning_choice"),
     "minicode.session": ("to_markdown", "search_logs", "export_filename"),
@@ -139,7 +142,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # "错过的那条永远不补、弹过的那条再弹一次")
                            "PUSHED_FILE", "pushed_path", "load_pushed",
                            "was_pushed", "mark_pushed",
-                           "briefing_pushed_today", "catch_up"),
+                           "briefing_pushed_today", "catch_up",
+                           # v0.9.28:校历/待办/今天的课 也走按天账本 + 看门狗运行日志
+                           # (漏收 = 一天内重启就重复弹,且用户说"提醒没发"时
+                           #  action=log 读出来永远是"还没有记录")
+                           "_push_once", "_round", "_push_calendar",
+                           "_push_reminders", "_push_today_class", "_note_payload",
+                           "WATCHDOG_LOG", "watchdog_log_path",
+                           "wd_log", "wd_log_tail"),
     # ---- v0.9.23:教务课表导入(整套新模块,漏收 = 点「导入课表」直接报错) ----
     "minicode.schedule_import": ("ImportFlow", "parse_grid", "summarize",
                                  "clear_login_state", "GRID_JS", "_norm_periods",

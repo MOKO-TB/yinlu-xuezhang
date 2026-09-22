@@ -703,6 +703,10 @@ def build_default_registry() -> list[Tool]:
                 "(用户说「开机后忘了打开学长所以没收到提醒」「让它开机就自己起来」时用;"
                 "实现是在当前用户的「启动」文件夹放一个快捷方式,不写注册表,用户能自己"
                 "看见并删掉;建完会读回指向核对,没核对上不会说已开启)。"
+                "**用户报「提醒没发」「同一条弹了好几遍」时用 action=log**:读看门狗的运行"
+                "日志(数据目录 watchdog.log),里面每一行是「哪一类、推了还是被哪道闸门拦下"
+                "了、拦下或失败的原因」,只有类别与去重键、不含通知正文;拿着它就能说清"
+                "是「今天已推过」「今日简报已覆盖」「没内容」还是「两路都没送到」。"
                 "只有桌面版弹得出去,命令行/网页版会如实说明弹不了,绝不假装已开启。"
                 "两条默认行为要说清:窗口正在前台时桌面不重复弹(聊天栏那条已经看得见),"
                 "同一条内容 ~90 秒内只响一次(免得重复推的提醒刷屏)。"
@@ -712,9 +716,10 @@ def build_default_registry() -> list[Tool]:
                 "properties": {
                     "action": {"type": "string",
                                "enum": ["status", "on", "off", "test",
-                                        "startup_on", "startup_off"],
+                                        "startup_on", "startup_off", "log"],
                                "description": "status=看状态(默认);on/off=开关;test=发一条测试;"
-                                              "startup_on/startup_off=开机自启开/关"},
+                                              "startup_on/startup_off=开机自启开/关;"
+                                              "log=读看门狗运行日志(查「没提醒」或「重复弹」)"},
                     "kind": {"type": "string",
                              "description": "可选:只开关这一类提醒(briefing 今日简报 / class 课前 / "
                                             "schedule 课程 / reminders 待办 / calendar 校历 / "
