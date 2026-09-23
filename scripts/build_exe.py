@@ -129,7 +129,10 @@ def write_user_files(dist: Path) -> None:
                   # v0.9.28 对账脚本查出的三处漏网(见 scripts/check_docs.py):
                   # weather.json 是用户自选城市(weather.py 的 CITY_FILE),含位置;
                   # web-usage.log 是局域网问答版的发问记录 + 来源 IP,更不能外发。
-                  "weather.json", "web-usage.log"):
+                  "weather.json", "web-usage.log",
+                  # v0.9.32 情绪日记:全 app 最私密的一份本机记录,随包发出去就是把自己的
+                  # 心情史交给别人(连同原子写留下的半截 .tmp)。导出才是显式动作。
+                  "mood.json", "mood.json.tmp"):
         (dist / _name).unlink(missing_ok=True)
     # 同上:问答版的会话目录(构建机若真跑过 web_server,这里面就是本机对话)
     shutil.rmtree(dist / "web-sessions", ignore_errors=True)

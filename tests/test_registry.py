@@ -12,7 +12,7 @@ def test_registry_contents():
                      "use_skill", "plan",
                      "search_knowledge", "campus_calendar", "gpa_calc",
                      "kb_suggest", "library_search", "library_guide", "memory",
-                     "reminder", "schedule", "desktop_notify", "get_weather",
+                     "reminder", "mood", "schedule", "desktop_notify", "get_weather",
                      "map_find_place", "map_show_list", "map_highlight_building",
                      "map_drop_pin", "map_clear"]
     assert len(set(names)) == len(names)
@@ -51,6 +51,8 @@ def test_read_only_flags():
         "plan": False,
         "memory": False,
         "reminder": False,           # 待办提醒写本机清单文件,要确认
+        "mood": False,               # 情绪记录写本机 mood.json:全 app 最私密的一份,
+                                     # 每一次落盘都该在确认框里看得见(与 reminder 同级)
         "schedule": False,           # 课表存本机文件,同上(保存动作本身即用户授意)
         "desktop_notify": False,     # 会改提醒开关(写 notify-pref.json)、还能往桌面弹东西:
                                      # 与 schedule/reminder 同级先确认

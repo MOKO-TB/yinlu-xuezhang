@@ -98,3 +98,7 @@ _build_*.log
 
 # v0.9.30 导入迁移包前的原件备份(migrate-backup/<时间戳>/,本机副本,绝不进仓库)
 /migrate-backup/
+
+# v0.9.32 情绪日记(整个 app 里最私密的一份本机记录;连同原子写的半截文件)
+/mood.json
+/mood.json.tmp

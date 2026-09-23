@@ -15,6 +15,13 @@ hint 和地图,所以这条 bug 一路绿着发到了 Release 里。
 2. 断言初始化没报错 **且** 报错之后的每一步都真的执行到了(桥上有调用记录)。
 3. 断言地图拿到数据后画得出来(#mapStage 里有 svg、图例徽章数对得上建筑类别),
    并且点顶栏「地图」能开面板 —— 这是用户判断"地图能用"的唯一依据。
+4. v0.9.32 起还盯**情绪面板**:`mood_review` / `mood_help` 的 payload 由**真 bridge**
+   现算(先把 `paths.APP_DIR` 指到临时目录再塞三条记录 —— 否则会去读写开发者自己的
+   `mood.json`)。断言的是"界面摆的就是后端算的":五档标签来自 `SCORE_LABELS`、
+   `#moBody` 逐字等于 `weekly_review` 的文本、保存必须叫到桥上的 `mood_log`、
+   求助文本里既有 `HELP_FACTS`(地址)又没有**给模型的转述规矩**、也不许出现任何
+   7 位以上数字串,而「删除全部」第一次点**不得**叫 `mood_clear`。
+   (往 STUB_JS 塞 JSON 记得写 `() => (@@X@@)`:箭头函数体以 `{` 开头会被当代码块。)
 
 跑法(项目根目录,需要 PYTHONIOENCODING=utf-8 否则中文断言在 GBK 控制台炸):
     PYTHONIOENCODING=utf-8 .venv\\Scripts\\python.exe scripts\\e2e_ui_init.py
@@ -43,6 +50,7 @@ def build_info() -> dict:
     from minicode.config import Config, Provider
     from minicode.gui_bridge import create_app
     from minicode.model_catalog import session_metrics
+    from minicode import paths
     from tests.test_gui_bridge import FakeLLM, FakeWindow
 
     tmp = Path(tempfile.mkdtemp(prefix="yx-init-"))
@@ -58,6 +66,29 @@ def build_info() -> dict:
                               bridge._current.llm_override)
     payload = campus.frontend_payload()
     assert payload["items"], "campus-index.json 里一个建筑都没有,这支测试就没意义了"
+
+    # 情绪面板同理:回顾文本与标签由真 bridge.mood_review() 现算(往临时数据目录
+    # 里塞三天记录),求助文本来自真 bridge.mood_help()。手抄一份"我以为的形状"
+    # 只会让这支测试一直绿着,而面板里其实什么都渲染不出来。
+    global MOOD, HELP
+    from datetime import date, timedelta
+    from minicode import mood as _mood
+    paths.APP_DIR = tmp / "app"
+    paths.APP_DIR.mkdir(parents=True, exist_ok=True)
+    today = date.today()
+    _mood.save_entries([
+        {"date": (today - timedelta(days=d)).isoformat(), "score": s, "note": n,
+         "created_at": f"{(today - timedelta(days=d)).isoformat()} 21:00"}
+        for d, s, n in ((2, 4, "把答辩稿交上去了"),
+                        (1, 3, "还行,就是没睡够"),
+                        (0, 5, "跑完三公里,人活过来了"))
+    ])
+    MOOD = bridge.mood_review(7)
+    HELP = bridge.mood_help()
+    assert MOOD.get("ok") and MOOD.get("labels"), "后端 mood_review 没给出标签"
+    assert MOOD.get("count") == 3, f"该回读到 3 天,实际 {MOOD.get('count')}"
+    assert HELP.get("ok") and "博雅楼" in HELP.get("text", ""), "求助文本没读出来"
+
     return {
         "version": "0.9.32", "app_name": "引路学长",
         "permission_mode": "confirm",
@@ -76,6 +107,10 @@ def build_info() -> dict:
 
 
 INFO = build_info()
+# 只声明不赋值:上面 build_info() 已经把真后端 payload 写进这两个名字了,
+# 这里再 `= {}` 会把它自己清掉。
+MOOD: dict      # 真 bridge.mood_review(7) 的返回
+HELP: dict      # 真 bridge.mood_help() 的返回
 # boot() 里 renderTaskMetrics **之后**必须发生的调用;少一个就是初始化半路死了
 AFTER_METRICS = ["refresh_sessions", "get_suggestions", "get_recent_projects",
                  "get_reasoning", "get_plan"]
@@ -94,6 +129,8 @@ const __RET__ = {
   get_schedule_view: () => ({ok: true, schedule: null}),
   get_session_metrics: () => ({ok: false}),
   refresh_sessions: () => ({ok: true}),
+  mood_review: () => (@@MOOD@@),
+  mood_help: () => (@@HELP@@),
 };
 const __API__ = {
   get_info: () => Promise.resolve(window.__INFO__),
@@ -155,7 +192,9 @@ def _launch(p):
 def main() -> int:
     from playwright.sync_api import sync_playwright
 
-    stub = STUB_JS.replace("@@INFO@@", json.dumps(INFO, ensure_ascii=False))
+    stub = (STUB_JS.replace("@@INFO@@", json.dumps(INFO, ensure_ascii=False))
+            .replace("@@MOOD@@", json.dumps(MOOD, ensure_ascii=False))
+            .replace("@@HELP@@", json.dumps(HELP, ensure_ascii=False)))
     url, shutdown = _serve(FRONTEND)
     failures: list[str] = []
 
@@ -219,6 +258,57 @@ def main() -> int:
                   and "命中" in page.locator("#mapSearchInfo").inner_text(),
                   "地图里搜「图书馆」出得来候选列表(数据真的可用,不是空壳)")
 
+            # ---- 情绪面板(v0.9.32):界面摆的必须是后端算出来的那几行 ----
+            page.click("#btnMood")
+            page.wait_for_timeout(350)
+            check(page.locator("#moodOverlay.show").count() == 1,
+                  "点顶栏「🌱 心情」面板打开了")
+            chips = page.locator("#moScores .mo-sc")
+            check(chips.count() == 6,
+                  f"分数格子 {chips.count()} 个(五档 + 「只写一句话」)")
+            label4 = str(MOOD["labels"]["4"])
+            check(label4 in chips.nth(3).inner_text()
+                  and chips.nth(3).get_attribute("title") == label4,
+                  f"「4 分」这格的文案「{label4}」来自后端 SCORE_LABELS,不是 HTML 写死的")
+            check(page.locator("#moBody").inner_text().strip() == MOOD["text"].strip(),
+                  "回顾区显示的是后端 weekly_review 现算的那段文字")
+            check("记了 3 天" in page.locator("#moMeta").inner_text(),
+                  "#moMeta 的回读天数来自后端 count(3)")
+            check("没睡够" in page.locator("#moBody").inner_text()
+                  and "答辩稿" in page.locator("#moBody").inner_text(),
+                  "你自己记的那几句话原样回读得出来(不是只报个平均分)")
+            chips.nth(3).click()
+            check(page.locator("#moScores .mo-sc.on").count() == 1,
+                  "点一格分数会选中(再点取消,不会一屏全是选中态)")
+            page.fill("#moNote", "e2e 冒烟:今晚睡得还行")
+            page.click("#btnMoSave")
+            page.wait_for_timeout(350)
+            after2 = page.evaluate("() => window.__AFTER__")
+            check("mood_log" in after2, "保存走的是桥上的 mood_log(不是前端自己拼个假成功)")
+            check(page.locator("#moNote").input_value() == "",
+                  "记完清空输入框,不把你刚写的那句留在原地")
+            page.click("#btnMoHelp")
+            page.wait_for_timeout(350)
+            help_txt = page.locator("#moHelp").inner_text()
+            check(page.locator("#moHelp").is_visible() and "博雅楼" in help_txt,
+                  "求助去处显示的是后端 HELP_FACTS(地址那条来自学校公众号)")
+            check("转述上面这段" not in help_txt,
+                  "给模型看的转述规矩没有漏进给人看的界面")
+            import re as _re
+            check(not _re.search(r"\d{7,}", help_txt),
+                  "求助文本里没有任何 7 位以上数字串(没核实过的号码绝不出现)")
+            before = page.evaluate("() => window.__AFTER__.filter(x => x === 'mood_clear').length")
+            page.click("#btnMoClear")
+            page.wait_for_timeout(250)
+            check("再点一次" in page.locator("#btnMoClear").inner_text(),
+                  "「删除全部」第一次点只是问一遍(按钮自己变成确认态)")
+            check(page.evaluate("() => window.__AFTER__.filter(x => x === 'mood_clear').length")
+                  == before, "第一次点确实没删:桥没被叫过")
+            page.click("#btnMoClose")
+            page.wait_for_timeout(250)
+            check(page.locator("#moodOverlay.show").count() == 0,
+                  "关闭面板收起弹窗(并清掉草稿与确认态)")
+
             browser.close()
     finally:
         shutdown()
@@ -229,7 +319,7 @@ def main() -> int:
         for f in failures:
             print("  ✗ " + f)
         return 1
-    print("开机冒烟:初始化跑完整、地图拿得到数据 —— 通过")
+    print("开机冒烟:初始化跑完整、地图拿得到数据、情绪面板摆的是后端算的那几行 —— 通过")
     return 0
 
 

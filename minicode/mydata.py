@@ -108,6 +108,10 @@ TABLE: tuple[Entry, ...] = (
           note="每节上下课钟点,空档看板按它算"),
     Entry("reminders.json", "待办与截止日期", PERSONAL, True, restart=True,
           note="「提醒我 X 号交材料」记在这里"),
+    Entry("mood.json", "情绪日记", PERSONAL, False,
+          note="一天一条的自己。**刻意不进迁移包**:这是整个 app 里最私密的一份,"
+               "不该顺手躺在一个可能被打进压缩包、发到云盘的「搬家文件」里;"
+               "要带去新机器请用情绪面板的「导出」自己存、自己拷"),
     Entry("kb/reviewed.json", "人工核实过的知识", PERSONAL, True,
           note="你在候选面板点过「并入」的内容"),
     Entry("skills", "自己添加的技能", PERSONAL, True, kind="family", pattern="*.md",

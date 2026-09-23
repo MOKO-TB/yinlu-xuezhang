@@ -330,12 +330,18 @@ def check_once(state: dict | None = None) -> list[dict]:
 
 def calendar_alerts(today: date | None = None,
                     within_days: int = 7) -> list[dict]:
-    """7 天内要到点的校历事件(倒计时提醒的数据源)。"""
+    """7 天内要到点的校历事件(倒计时提醒的数据源)。
+
+    **只认学校定过的日子**:校历里 `repeat: yearly` 那些"按往年月日推出来的"下一次
+    (calendar.expand_repeats 标的 projected)在这里一律剔掉。列表里带着口径展示没问题,
+    但拿一个我们自己推的日子去"还有 3 天"主动推人,就是在替学校编日期。
+    """
     from minicode import calendar as campus_calendar
     events, _src = campus_calendar.load_events()
     today = today or date.today()
-    rows = campus_calendar.upcoming(events, today, limit=3,
-                                    within_days=within_days)
+    rows = [e for e in campus_calendar.upcoming(events, today, limit=3,
+                                                within_days=within_days)
+            if not e.get("projected")]
     return [{"name": str(e.get("name") or ""),
              "start": str(e.get("start") or ""),
              "days_left": int(e.get("days_left") or 0)} for e in rows]

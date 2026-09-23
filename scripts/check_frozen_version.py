@@ -50,7 +50,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "mydata_inventory", "mydata_export",
                             "mydata_import_pick", "mydata_import_apply",
                             "mydata_forget_import", "mydata_open_dir",
-                            "_ask_open_path"),
+                            "_ask_open_path",
+                            # v0.9.32:情绪面板五根线(漏一条 = 点了按钮没反应)
+                            "mood_review", "mood_log", "mood_export",
+                            "mood_clear", "mood_help"),
     # v0.9.30:迁移包整模块是新文件,漏收 = 装好的包连面板都打不开
     "minicode.mydata": ("inventory", "pack_plan", "export_package", "read_package",
                         "import_pick", "import_apply", "forget_preview",
@@ -101,7 +104,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "list_candidates", "review_candidate", "_merge_into_kb",
                         "REVIEWED_KB_FILE"),
     "minicode.calendar": ("campus_calendar", "calendar_payload",
-                          "calendar_prompt_section"),
+                          "calendar_prompt_section",
+                          # v0.9.32:「每年重复」事件(漏收 = 心理普查那类年度事件不再投影)
+                          "is_yearly", "expand_repeats", "_shift_year"),
+    # v0.9.32:情绪日记。HELP_FACTS(给人看)/ HELP_CAVEATS(只对模型说)两段都得在 ——
+    # 合并在一个常量里,面板就会把"绝不许编号码"这类内部规矩摆到用户面前。
+    "minicode.mood": ("log", "weekly_review", "list_recent", "export_text", "clear_all",
+                      "mood_prompt_section", "mood", "load_entries", "save_entries",
+                      "CRISIS_WORDS", "HELP_FACTS", "HELP_CAVEATS", "HELP_BLOCK"),
     "minicode.gpa": ("gpa_calc",),
     "minicode.tools.crawl": ("web_search", "_resolve_redirect"),
     # ---- v0.9.15:上下文面板 + py_script ----

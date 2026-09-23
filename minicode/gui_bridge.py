@@ -241,6 +241,26 @@ class PublicApi:
         """在资源管理器里打开数据目录。"""
         return self._b.mydata_open_dir()
 
+    def mood_review(self, days: int = 7) -> dict:
+        """情绪面板:最近一周自己记了什么(现读现给,桥里不留副本)。"""
+        return self._b.mood_review(days)
+
+    def mood_export(self) -> dict:
+        """情绪记录另存为文本文件(先弹"另存为")。"""
+        return self._b.mood_export()
+
+    def mood_clear(self) -> dict:
+        """清空本机情绪记录(前端已两次确认)。"""
+        return self._b.mood_clear()
+
+    def mood_log(self, score=None, note: str = "") -> dict:
+        """情绪面板快捷记一句(一天一条,同一天覆盖)。"""
+        return self._b.mood_log(score, note)
+
+    def mood_help(self) -> dict:
+        """「想找人聊聊」:学校心理中心的已核实去处(只给人看的那段)。"""
+        return self._b.mood_help()
+
     def search_sessions(self, query: str = "") -> dict:
         """侧栏搜索:在所有历史会话留档里找关键词。"""
         return self._b.search_sessions(query)
@@ -1910,6 +1930,75 @@ class Bridge:
         except OSError as e:
             return {"ok": False, "msg": f"打不开数据目录:{type(e).__name__}"}
         return {"ok": True, "path": str(target)}
+
+    # ------------------------------------------------------------ 情绪日记(v0.9.32)
+    #
+    # 面板要什么就给什么,一律**现读现给**:桥里不缓存任何一条情绪记录,
+    # 关掉面板这台进程里就没有第二份副本。删除只有面板上那一下点击能触发。
+
+    def mood_review(self, days: int = 7) -> dict:
+        """情绪面板 payload:最近一周的回顾文本 + 条数(只回读,不写)。"""
+        from minicode import mood as _mood
+        try:
+            n = max(1, int(days or 7))
+        except (TypeError, ValueError):
+            n = 7
+        r = _mood.weekly_review(days=n)
+        return {"ok": bool(r.get("ok")), "days": n,
+                "count": int(r.get("count") or 0), "text": str(r.get("text") or ""),
+                "labels": {str(k): v for k, v in _mood.SCORE_LABELS.items()}}
+
+    def mood_export(self) -> dict:
+        """把全部情绪记录另存成文本文件(先弹"另存为",取消就什么都不做)。"""
+        from minicode import mood as _mood
+        body = _mood.export_text()
+        if not body:
+            return {"ok": False, "msg": "还没记过情绪,没有可导出的内容"}
+        name = f"我的情绪记录-{time.strftime('%Y%m%d-%H%M')}.md"
+        window = getattr(self.ui, "window", None)
+        if window is not None:
+            target = self._ask_save_path(name,
+                                         file_types=("Markdown 文件 (*.md)",
+                                                     "所有文件 (*.*)"))
+            if target is None:
+                return {"ok": False, "msg": "已取消导出"}
+        else:
+            out_dir = Path(self.workspace) / "exports"
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                return {"ok": False, "msg": f"创建导出目录失败:{exc}"}
+            target = out_dir / name
+        try:
+            Path(target).write_text(body, encoding="utf-8")
+        except OSError as exc:
+            return {"ok": False, "msg": f"写入失败:{exc}"}
+        self.ui.push("info", text=f"情绪记录已导出:{target}")
+        return {"ok": True, "path": str(target), "name": Path(target).name,
+                "count": len(_mood.load_entries())}
+
+    def mood_clear(self) -> dict:
+        """清空本机情绪记录(前端已两次确认;这一步没有备份,提示里说清楚)。"""
+        from minicode import mood as _mood
+        r = _mood.clear_all()
+        if r.get("ok"):
+            self.ui.push("info", text="情绪记录已清空。")
+        return r
+
+    def mood_log(self, score=None, note: str = "") -> dict:
+        """面板上的快捷记录:一天一条,同一天再记就是覆盖(mood.log 里会说清)。
+
+        msg 只含**给人看**的那段求助内容;转述规矩(HELP_CAVEATS)留给工具返回给模型。
+        """
+        from minicode import mood as _mood
+        r = _mood.log(score=score, note=str(note or ""))
+        return {"ok": bool(r.get("ok")), "msg": str(r.get("msg") or ""),
+                "crisis": bool(r.get("crisis"))}
+
+    def mood_help(self) -> dict:
+        """「想找人聊聊」这段摆给人看:只给事实,不给模型看的转述规矩。"""
+        from minicode import mood as _mood
+        return {"ok": True, "text": _mood.HELP_FACTS}
 
     def search_sessions(self, query: str = "") -> dict:
         """侧栏搜索:在所有历史会话留档里找关键词。

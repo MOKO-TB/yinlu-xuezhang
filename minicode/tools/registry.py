@@ -4,7 +4,7 @@ from __future__ import annotations
 from minicode import growth
 from minicode import calendar as school_calendar
 from minicode import reminders, tray
-from minicode import campus, gpa, kb, library, library_guide, memory, planning, schedule, site_parse, skills, weather
+from minicode import campus, gpa, kb, library, library_guide, memory, mood, planning, schedule, site_parse, skills, weather
 from minicode.tools import browser as browser_tools
 from minicode.tools import crawl, fs, search, shell
 from minicode.tools.base import Tool
@@ -637,6 +637,45 @@ def build_default_registry() -> list[Tool]:
                 "required": ["action"],
             },
             handler=reminders.reminder,
+        ),
+        Tool(
+            name="mood",
+            description=(
+                "情绪日记(存本机 mood.json,一天一条)。**这不是心理评估,也不是治疗**:"
+                "只回读同学自己记的东西,绝不下诊断、不说「你这是抑郁症」、不建议吃什么药。\n"
+                "action=log 记一条:note 一句话就够(「今天实验搞崩了,烦」);score 只在"
+                "他自己给了 1~5 时才填,**不要替他打分**;day 可写「今天」「昨天」或 2026-09-22,"
+                "认不出的日期不猜。同一天再记会覆盖前一条(回复里会说明覆盖了什么)。\n"
+                "action=review 回看这一周(默认 7 天,可给 days);action=list 看清单;"
+                "action=export 导出全部原文给他;action=delete 删掉某一天(day 指定);"
+                "action=help 拿「学校心理健康教育中心在哪、怎么找」这段求助信息。\n"
+                "两条硬规矩:①**不做连续打卡** —— 没有连续天数、没有断签,漏记不是问题,"
+                "也不要催他记;②他写下自伤/活不下去这类话时,先接住人,再把 action=help "
+                "那段**照原样**说给他 —— 里面号码那行已经写明"
+                "「这里没有一个核实过的号码」,照实这么说就行,**绝对不要编一个电话号码**,"
+                "并告诉他此刻有危险就打 120/110 或去急诊。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["log", "review", "list", "export", "delete", "help"],
+                               "description": "log=记一条;review=看这一周;list=清单;"
+                                              "export=导出全文;delete=删某天;help=求助去处"},
+                    "note": {"type": "string", "description": "log 用:今天怎么样,一句话"},
+                    "score": {"type": "integer",
+                              "description": "log 用:1~5,他自己给的分(别替他打)"},
+                    "day": {"type": "string",
+                            "description": "log/delete 用:哪天(今天/昨天/2026-09-22;"
+                                           "认不出就不填,默认今天)"},
+                    "days": {"type": "integer",
+                             "description": "review/list 用:往回看几天(默认 7)"},
+                    "reason": {"type": "string",
+                               "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
+                },
+                "required": ["action"],
+            },
+            handler=mood.mood,
         ),
         Tool(
             name="schedule",

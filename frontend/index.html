@@ -351,6 +351,30 @@ try {
   .md-opt{ display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--text-2);
            margin-right:auto; }
 
+  /* ---------------- 情绪日记面板(v0.9.32) ----------------
+     这个面板刻意没有:连续天数、火焰图标、「你已经 N 天没记了」。
+     记不记是可选的 —— 一旦它变成不能断的东西,记录本身就成了新的压力源。 */
+  .mo-log{ margin-bottom:12px; padding:10px 12px; border-radius:11px;
+           background:var(--glass-strong); border:1px solid var(--line-soft); }
+  .mo-t{ font-size:11.5px; color:var(--text-2); line-height:1.6; margin-bottom:7px; }
+  .mo-scores{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:7px; }
+  .mo-sc{ font-size:11.5px; padding:4px 10px; border-radius:var(--r-full); cursor:pointer;
+          background:var(--glass-lite); border:1px solid var(--line-soft); color:var(--text-1); }
+  .mo-sc.on{ color:var(--primary-text); background:var(--primary-light);
+             border-color:var(--primary); font-weight:600; }
+  .mo-note{ width:100%; font-size:12.5px; line-height:1.6; padding:6px 9px; box-sizing:border-box;
+            border-radius:8px; background:var(--glass-lite);
+            border:1px solid var(--line-soft); color:var(--text-1); resize:vertical; }
+  .mo-form{ display:flex; justify-content:flex-end; margin-top:7px; }
+  .mo-cat{ font-size:11.5px; font-weight:600; color:var(--text-2); margin:0 0 4px; }
+  .mo-text{ font-size:12.5px; color:var(--text-1); line-height:1.85; white-space:pre-wrap;
+            word-break:break-word; }
+  .mo-empty{ font-size:12px; color:var(--text-2); line-height:1.8; }
+  .mo-help{ margin-top:12px; padding:10px 12px; border-radius:11px; font-size:12px;
+            line-height:1.85; white-space:pre-wrap; word-break:break-word; color:var(--text-1);
+            background:var(--primary-light); border:1px solid var(--line-soft); }
+  .mo-fine{ font-size:10.5px; color:var(--text-3); line-height:1.7; margin-top:10px; }
+
   /* ---------------- 教务课表导入三步向导(v0.9.23) ---------------- */
   .jw-steps{ display:flex; gap:6px; margin:2px 0 10px; }
   .jw-step{ flex:1; font-size:11px; color:var(--text-3); padding:6px 8px; text-align:center;
@@ -1349,6 +1373,7 @@ try {
       <span class="modelpill" id="modelPill"></span>
       <button id="btnMap" title="打开/收起校园地图(肇庆校区)">🗺 地图</button>
       <button id="btnSchedule" title="查看/导入我的课表(本机存储)">📅 课表</button>
+      <button id="btnMood" title="情绪日记:一句话记一下,每周回头看看(只回读、不诊断;数据只在本机)。也可以直接在对话里说「今天 3 分,因为…」">🌱 心情</button>
       <button id="btnPlan" title="查看当前任务计划(plans/plan.md):做到哪步、哪几步能接着做">🗂 计划<span class="pl-n" id="plPill"></span></button>
       <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐ 技能</button>
       <button id="btnUsage" title="查看每日 token 消耗">📊 用量</button>
@@ -1559,6 +1584,39 @@ try {
               title="选一个迁移包:先看逐条预览(会写哪些、本机更新所以保留哪些),你点头才落盘;替换前的原件先备份进 migrate-backup">导入迁移包</button>
       <button class="b-no" id="btnMdOpen" title="在资源管理器里打开数据目录">打开数据目录</button>
       <button class="b-no" id="btnMdClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- v0.9.32:情绪日记 —— 一句话记一下,每周原样回读。只回读、不诊断,也不催记录 -->
+<div class="overlay" id="moodOverlay">
+  <div class="dialog" style="width:620px">
+    <div class="sc-head">
+      <h3>🌱 情绪日记</h3>
+      <span class="sc-week" id="moMeta"></span>
+    </div>
+    <div class="sc-body">
+      <div class="mo-log">
+        <div class="mo-t">今天怎么样?选个分、写一句话都行(同一天再记会覆盖前一条)。</div>
+        <div class="mo-scores" id="moScores"></div>
+        <textarea class="mo-note" id="moNote" rows="2"
+                  placeholder="例:上午答辩练习被打断三次,有点挫败"></textarea>
+        <div class="mo-form"><button class="b-yes" id="btnMoSave">记下来</button></div>
+      </div>
+      <div class="mo-cat">最近一周(下面这些是你自己记的话,学长只回读、不评价)</div>
+      <div id="moBody" class="mo-text"></div>
+      <div id="moHelp" class="mo-help" style="display:none"></div>
+      <div class="mo-fine">记录只存在本机 mood.json:不进对话历史、不进迁移包、不随安装包外发。
+        这里没有任何评估或诊断 —— 学长不是医生,这些文字也不能当医疗建议用。
+        真要看状况,请找学校心理中心或医院(点下面「想找人聊聊」)。</div>
+    </div>
+    <div class="btns">
+      <button class="b-no" id="btnMoHelp"
+              title="学校心理健康教育中心:地址、预约口径、朋辈咨询 —— 只列核实过的,没核实的号码直说没核实">想找人聊聊</button>
+      <button class="b-no" id="btnMoExport" title="把全部记录另存成一个文本文件(自己选存到哪)">导出</button>
+      <button class="b-no" id="btnMoClear"
+              title="删掉本机全部情绪记录。这一步没有备份:要先留底请先点「导出」">删除全部</button>
+      <button class="b-no" id="btnMoClose">关闭</button>
     </div>
   </div>
 </div>
@@ -4206,6 +4264,151 @@ $("btnMdClose").addEventListener("click", closeMyData);
 $("myDataOverlay").addEventListener("click", (e) => {
   if (e.target.id === "myDataOverlay") closeMyData();
 });
+
+/* ---------------- 情绪日记面板(v0.9.32) ----------------
+   两个记录入口:这一格,或者直接在对话里说一句(模型用 mood 工具记)。
+   面板只回读你自己记的内容 + 导出/删除,不做连续天数、不做"该记了"的催。 */
+let moData = null;        // {days, count, text, labels}
+let moScore = null;       // 选中但还没提交的分数
+let moHelpText = "";      // 求助去处:第一次点开才要,之后复用
+let moClearAt = 0;        // 「删除全部」两次确认的计时
+const MO_CLEAR_GAP = 8000;
+
+const moApi = () => (window.pywebview && pywebview.api && pywebview.api.mood_review)
+  ? pywebview.api : null;
+
+function renderMoScores() {
+  const labels = (moData && moData.labels) || {};
+  const chips = [1, 2, 3, 4, 5].map(n => `<button class="mo-sc${moScore === n ? " on" : ""}"`
+    + ` data-n="${n}" title="${esc(labels[n] || "")}">${n} 分${labels[n] ? " · " + esc(labels[n]) : ""}</button>`);
+  chips.push(`<button class="mo-sc${moScore === 0 ? " on" : ""}" data-n="0"`
+    + ` title="不给分,只留一句话">只写一句话</button>`);
+  $("moScores").innerHTML = chips.join("");
+}
+
+function renderMood() {
+  if (moData) {
+    $("moBody").textContent = moData.text || "";
+    $("moMeta").textContent = `最近 ${moData.days} 天 · 记了 ${moData.count} 天`;
+  } else {
+    $("moBody").innerHTML = '<div class="mo-empty">没读到记录(学长那边没接上)</div>';
+    $("moMeta").textContent = "";
+  }
+  renderMoScores();
+}
+
+function moReload() {
+  const api = moApi();
+  if (!api) return;
+  api.mood_review().then(r => { moData = (r && r.ok) ? r : null; renderMood(); })
+    .catch(() => { moData = null; renderMood(); });
+}
+
+function openMood() {
+  const api = moApi();
+  if (!api) { toast("这个功能只在桌面版有"); return; }
+  api.mood_review().then(r => {
+    moData = (r && r.ok) ? r : null;
+    renderMood();
+    $("moodOverlay").classList.add("show");
+  }).catch(() => toast("情绪记录没读出来(学长那边没接上)", true));
+}
+
+function moSave() {
+  const api = moApi();
+  if (!api) { toast("这个功能只在桌面版有"); return; }
+  const note = $("moNote").value.trim();
+  if (!note && (moScore === null || moScore === 0)) {
+    toast("给个分或写一句话,总得留一个"); return;
+  }
+  api.mood_log(moScore || null, note).then(r => {
+    if (!r) { toast("没记下:学长那边没接上", true); return; }
+    if (!r.ok) { toast(r.msg || "没记下", true); return; }
+    if (r.crisis) {
+      // 不评判、不讲道理:把"可以找谁"摆到眼前就够了。
+      moShowHelp(true);
+      toast("记下了。想找人聊聊这件事,我把它摆在下面了");
+    } else {
+      toast((r.msg || "记下了").slice(0, 90));
+    }
+    $("moNote").value = "";
+    moScore = null;
+    moReload();
+  }).catch(() => toast("没记下(学长那边没接上)", true));
+}
+
+function moShowHelp(on) {
+  const box = $("moHelp");
+  if (!on) { box.style.display = "none"; return; }
+  const show = () => { box.textContent = moHelpText; box.style.display = "block";
+                       box.scrollIntoView({ block: "nearest" }); };
+  if (moHelpText) { show(); return; }
+  const api = moApi();
+  if (!api) { toast("这个功能只在桌面版有"); return; }
+  api.mood_help().then(r => {
+    if (!r || !r.ok) { toast("求助去处没读出来", true); return; }
+    moHelpText = r.text || "";
+    show();
+  }).catch(() => toast("求助去处没读出来", true));
+}
+
+function moExport() {
+  const api = moApi();
+  if (!api) { toast("这个功能只在桌面版有"); return; }
+  toast("正在导出(会先问你要存到哪)…");
+  api.mood_export().then(r => {
+    if (!r) { toast("导出没成功:学长那边没接上", true); return; }
+    toast(r.ok ? `已导出:${r.name}` : (r.msg || "导出没成功"), !r.ok);
+  }).catch(() => toast("导出没成功(学长那边没接上)", true));
+}
+
+function moClear() {
+  const api = moApi();
+  if (!api) { toast("这个功能只在桌面版有"); return; }
+  const btn = $("btnMoClear");
+  if (!moClearAt || Date.now() - moClearAt > MO_CLEAR_GAP) {
+    moClearAt = Date.now();
+    btn.textContent = `真的删掉这 ${moData ? moData.count : 0} 天?再点一次`;
+    toast("这一步没有备份:要先留底请先点「导出」", true);
+    return;
+  }
+  moClearAt = 0;
+  btn.textContent = "删除全部";
+  api.mood_clear().then(r => {
+    if (!r || !r.ok) { toast((r && r.msg) || "删除没成功", true); return; }
+    toast(r.msg || "已清空");
+    moShowHelp(false);
+    moReload();
+  }).catch(() => toast("删除没成功(学长那边没接上)", true));
+}
+
+function closeMood() {
+  moClearAt = 0;
+  $("btnMoClear").textContent = "删除全部";
+  $("moNote").value = "";
+  moScore = null;
+  moShowHelp(false);
+  $("moodOverlay").classList.remove("show");
+}
+
+$("btnMood").addEventListener("click", openMood);
+$("btnMoClose").addEventListener("click", closeMood);
+$("moodOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "moodOverlay") closeMood();
+});
+$("moScores").addEventListener("click", (e) => {
+  const b = e.target.closest(".mo-sc");
+  if (!b) return;
+  const n = parseInt(b.dataset.n, 10);
+  moScore = (moScore === n) ? null : n;
+  renderMoScores();
+});
+$("btnMoSave").addEventListener("click", moSave);
+$("btnMoHelp").addEventListener("click", () => {
+  if ($("moHelp").style.display === "block") moShowHelp(false); else moShowHelp(true);
+});
+$("btnMoExport").addEventListener("click", moExport);
+$("btnMoClear").addEventListener("click", moClear);
 
 /* ---------------- 计划面板(v0.9.24) ----------------
    plans/plan.md 就是计划模式的唯一状态(文件即状态),这里只负责把它读出来摆好:

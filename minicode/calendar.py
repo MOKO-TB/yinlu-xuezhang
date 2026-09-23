@@ -19,6 +19,7 @@ from minicode.paths import app_path, resource_path
 
 CALENDAR_FILE = "kb/school-calendar.json"
 UPCOMING_DAYS = 120        # "接下来有什么"的默认 lookahead(约一学期)
+YEARLY_LOOKAHEAD = 370     # 每年重复事件的 lookahead:一整圈,保证"下一次"总在视野里
 DEFAULT_LIMIT = 8
 
 KIND_LABELS = {
@@ -57,6 +58,46 @@ def _parse_date(value) -> date | None:
         return None
 
 
+def _shift_year(d: date, year: int) -> date:
+    """把日期搬到另一年的同月同日;2/29 落到非闰年时收在 2/28,不抛异常。"""
+    try:
+        return d.replace(year=year)
+    except ValueError:
+        return d.replace(year=year, day=28)
+
+
+def is_yearly(e: dict) -> bool:
+    return str(e.get("repeat") or "").strip().lower() == "yearly"
+
+
+def expand_repeats(events: list[dict], today: date) -> list[dict]:
+    """把 repeat=yearly 的事件投影成"去年/今年/明年各一次"的具体日期。
+
+    为什么要有这个:心理普查、运动会、社团招新这类事**每年都有,但没人每年去
+    改校历文件**。校历里记一次月日,往后每年自动有个倒计时;真换了日期,改的
+    还是那一条。投影出来的条目一律带 `projected` 与 `anchor`,输出时必须说明
+    "这是按某年那条推的,不是今年的官方通知" —— 否则就是在替学校编日期。
+    """
+    out: list[dict] = []
+    for e in events:
+        start = _parse_date(e.get("start"))
+        if not is_yearly(e):
+            out.append(e)
+            continue
+        if start is None:
+            out.append(e)          # 没锚点日期:交给 pending,不替它编一个
+            continue
+        end = _parse_date(e.get("end")) or start
+        span = max(0, (end - start).days)
+        for dy in (-1, 0, 1):
+            s = _shift_year(start, today.year + dy)
+            out.append({**e,
+                        "start": s.isoformat(),
+                        "end": (s + timedelta(days=span)).isoformat() if span else "",
+                        "projected": True, "anchor": str(e.get("start"))})
+    return out
+
+
 def days_left(start: date, today: date) -> int:
     return (start - today).days
 
@@ -64,7 +105,7 @@ def days_left(start: date, today: date) -> int:
 def _enrich(events: list[dict], today: date) -> list[dict]:
     """补上解析好的日期与倒计时字段(不修改原数据)。"""
     out = []
-    for e in events:
+    for e in expand_repeats(events, today):
         start = _parse_date(e.get("start"))
         end = _parse_date(e.get("end")) or start
         item = {**e, "start_date": start, "end_date": end}
@@ -75,10 +116,24 @@ def _enrich(events: list[dict], today: date) -> list[dict]:
 
 
 def upcoming(events: list[dict], today: date, limit: int = DEFAULT_LIMIT,
-             within_days: int = UPCOMING_DAYS) -> list[dict]:
-    """还没开始的未来事件,按日期升序。"""
-    rows = [e for e in _enrich(events, today)
-            if e.get("start_date") and 0 <= e["days_left"] <= within_days]
+             within_days: int = UPCOMING_DAYS,
+             yearly_within: int | None = None) -> list[dict]:
+    """还没开始的未来事件,按日期升序。
+
+    `yearly_within`:每年重复的条目要不要用更宽的窗口。**默认不放宽**,由调用方明说。
+    为什么:列表视图("接下来有什么")该让 5·25 这类每年例行的事常驻 —— 不放宽的话
+    它在 9 月是 248 天后,超出 120 天窗口,于是**每年都有的事反而常年不出现**;
+    但 7 天倒计时那类窄窗口**绝不能**放宽 —— 我们推出来的日子不是学校通知过的日子,
+    拿它去"还有 3 天"地推人,就是在替学校编日期。
+    """
+    def _ok(e: dict) -> bool:
+        if not e.get("start_date") or e["days_left"] < 0:
+            return False
+        cap = (max(within_days, yearly_within) if yearly_within and e.get("projected")
+               else within_days)
+        return e["days_left"] <= cap
+
+    rows = [e for e in _enrich(events, today) if _ok(e)]
     rows.sort(key=lambda e: e["start_date"])
     return rows[:max(1, limit)]
 
@@ -108,7 +163,11 @@ def _fmt_event(e: dict, today: date) -> str:
     left = e.get("days_left")
     when = f"{span}(还有 {left} 天)" if left and left > 0 else (
         f"{span}(进行中)" if left == 0 else span)
-    lines = [f"- {name} [{kind}] {when}"]
+    lines = [f"- {name} [{kind}]"
+             + (" [每年重复]" if e.get("projected") else "") + f" {when}"]
+    if e.get("projected"):
+        lines.append(f"  口径:这条按校历里 {e.get('anchor')} 那次的月日推出来的,"
+                     "今年具体哪天还没有官方通知 —— 说日子时带上这层意思。")
     if e.get("note"):
         lines.append(f"  说明: {e['note']}")
     if e.get("source"):
@@ -121,7 +180,7 @@ def format_for_model(events: list[dict], today: date, limit: int = DEFAULT_LIMIT
     if not events:
         return ("校历数据为空(kb/school-calendar.json 没有条目)。"
                 "用户问放假/考试时间时,如实说「校历里还没录入,以学校教务处通知为准」,不要编日期。")
-    ups = upcoming(events, today, limit=limit)
+    ups = upcoming(events, today, limit=limit, yearly_within=YEARLY_LOOKAHEAD)
     now = current(events, today)
     pends = pending(events)
     blocks = []
@@ -145,13 +204,16 @@ def calendar_payload(limit: int = 3, today: date | None = None) -> list[dict]:
     events, _src = load_events()
     today = today or date.today()
     out = []
-    for e in upcoming(events, today, limit=limit):
+    for e in upcoming(events, today, limit=limit, yearly_within=YEARLY_LOOKAHEAD):
         out.append({
             "name": str(e.get("name") or ""),
             "start": str(e.get("start") or ""),
             "kind": str(e.get("kind") or ""),
             "days_left": int(e.get("days_left") or 0),
             "note": str(e.get("note") or "")[:60],
+            # 投影出来的日子不是今年的官方通知:首页 chip 要能区分这两件事
+            "projected": bool(e.get("projected")),
+            "anchor": str(e.get("anchor") or ""),
         })
     return out
 

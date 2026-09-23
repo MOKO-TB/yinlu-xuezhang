@@ -26,7 +26,12 @@ TODAY = date(2026, 9, 19)
 
 
 def test_seed_file_in_repo_is_wellformed():
-    """仓库里的真实种子文件:条目齐全、日期可解析、都有来源(不编日期的底线)。"""
+    """仓库里的真实种子文件:条目齐全、日期可解析、都有来源(不编日期的底线)。
+
+    日期只允许一种例外:**每年例行**且明确还待核实的事(如新生心理测评 —— 学校
+    还没发今年的通知)。这种条目走 pending 口径:工具只报名字并说"以通知为准"。
+    除此之外每一条都必须有可解析的日期。
+    """
     from minicode.paths import resource_path
     data = json.loads(
         resource_path("kb/school-calendar.json").read_text(encoding="utf-8"))
@@ -35,7 +40,11 @@ def test_seed_file_in_repo_is_wellformed():
     for e in events:
         assert e.get("name") and e.get("source") and e.get("credibility")
         assert e.get("kind") in cal.KIND_LABELS
-        assert cal._parse_date(e.get("start")) is not None
+        if cal._parse_date(e.get("start")) is not None:
+            continue
+        assert str(e.get("repeat") or "").lower() == "yearly", e["name"]
+        assert str(e.get("credibility") or "").startswith("B"), e["name"]
+        assert "还没录入" in str(e.get("note") or ""), e["name"]
 
 
 def test_upcoming_sorted_with_days_left():
@@ -99,6 +108,65 @@ def test_tool_upcoming_lists_and_honesty():
     out2 = cal.campus_calendar(None, action="query", query="中秋",
                                today=date(2026, 9, 26))
     assert "中秋节" in out2 and "进行中" in out2
+
+
+def test_shift_year_keeps_feb29_legal():
+    assert cal._shift_year(date(2024, 2, 29), 2026) == date(2026, 2, 28)
+    assert cal._shift_year(date(2026, 5, 25), 2027) == date(2027, 5, 25)
+
+
+def test_expand_repeats_only_touches_yearly_events():
+    """一次性事件绝不能被"投影"到今年 —— 那等于替学校编了一个日期。"""
+    ev = [{"name": "5·25 活动月", "start": "2024-05-25", "kind": "event",
+           "repeat": "yearly"},
+          {"name": "校庆", "start": "2024-11-08", "kind": "event"}]
+    out = cal.expand_repeats(ev, TODAY)
+    names = [e["name"] for e in out]
+    assert names.count("校庆") == 1
+    assert "2026-11-08" not in [e["start"] for e in out if e["name"] == "校庆"]
+    yearly = [e for e in out if e["name"] == "5·25 活动月"]
+    assert [e["start"] for e in yearly] == ["2025-05-25", "2026-05-25", "2027-05-25"]
+    assert all(e["projected"] and e["anchor"] == "2024-05-25" for e in yearly)
+
+
+def test_expand_repeats_keeps_span():
+    ev = [{"name": "校运会", "start": "2025-11-20", "end": "2025-11-22",
+           "kind": "event", "repeat": "yearly"}]
+    row = next(e for e in cal.expand_repeats(ev, date(2026, 9, 19))
+               if e["start"] == "2026-11-20")
+    assert row["end"] == "2026-11-22"
+
+
+def test_yearly_output_labels_the_projection():
+    """给模型看的那段必须自带口径:这是推出来的,不是今年通知过的。"""
+    _write([{"name": "5·25 活动月", "start": "2026-05-25", "kind": "event",
+             "repeat": "yearly", "credibility": "A", "source": "学校公众号"}])
+    out = cal.campus_calendar(None, today=date(2027, 3, 1))
+    assert "2027-05-25" in out and "[每年重复]" in out
+    assert "口径" in out and "2026-05-25" in out        # 锚点那次的日期也写出来
+
+
+def test_yearly_window_widens_only_for_the_listing():
+    """列表可以放宽(每年例行的事该常驻);倒计时那种窄窗口绝不放宽。"""
+    ev = [{"name": "5·25 活动月", "start": "2026-05-25",
+           "kind": "event", "repeat": "yearly"},
+          {"name": "补考报名", "start": "2027-06-01", "kind": "deadline"}]
+    today = date(2026, 9, 19)
+    assert cal.UPCOMING_DAYS < 248 <= cal.YEARLY_LOOKAHEAD
+    listed = cal.upcoming(ev, today, limit=8, yearly_within=cal.YEARLY_LOOKAHEAD)
+    got = {e["name"] for e in listed}
+    assert "5·25 活动月" in got          # 248 天后:每年例行的事不该因此消失
+    assert "补考报名" not in got         # 255 天后的一次性事件仍按 120 天窗口
+    # 7 天倒计时:推出来的日子**不配**进去(那不是学校通知过的日子)
+    assert cal.upcoming(ev, today, limit=3, within_days=7) == []
+
+
+def test_yearly_without_a_date_goes_to_pending():
+    """心理普查这类"每年都有、今年日期还没发"的条目:只报名字,绝不投影出日期。"""
+    ev = [{"name": "新生心理测评", "start": "", "kind": "deadline",
+           "repeat": "yearly"}]
+    assert cal.upcoming(ev, TODAY) == []
+    assert [e["name"] for e in cal.pending(ev)] == ["新生心理测评"]
 
 
 def test_payload_for_home_chips():
