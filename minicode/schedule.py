@@ -614,8 +614,10 @@ def view(today: date | None = None) -> dict:
         # 没课表也要报有没有备份:清错了的那一回,「换回上一版」是唯一的退路
         return {"registered": False, "can_undo": prev_path().exists()}
     today = today or date.today()
+    from minicode import walk        # 延迟导入:walk 顶层依赖本模块,放在文件头会成环
     wk = week_of(today, data)
     times = load_period_times()
+    walk_index = walk.campus_index()     # 一次刷新只读一遍地图索引
     monday = today - timedelta(days=today.weekday())
     span = [monday + timedelta(days=i) for i in range(7)]
     overlay = _week_overlay(span)
@@ -623,6 +625,7 @@ def view(today: date | None = None) -> dict:
     def _pack(day: date) -> dict:
         iso = day.isoformat()
         slot = free_slots(day, data, times)
+        risk = walk.day_risks(day, data, times, walk_index)
         return {"date": iso,
                 "weekday": "一二三四五六日"[day.weekday()],
                 "week": week_of(day, data),
@@ -631,6 +634,10 @@ def view(today: date | None = None) -> dict:
                 "gaps": slot["gaps"], "all_day_free": slot["all_day_free"],
                 "in_term": slot["in_term"], "unknown": slot["unknown"],
                 "class_count": slot["class_count"], "note": slot["note"],
+                # 换楼/同节冲突同样只由后端算:面板自己比字符串就会跟回话口径漂开
+                "walks": risk["items"], "clashes": risk["clashes"],
+                "walk_skipped": risk["skipped"],
+                "walk_index_ready": risk["index_ready"],
                 "items": overlay["due_map"].get(iso, []),
                 "events": overlay["event_map"].get(iso, [])}
 
@@ -641,6 +648,8 @@ def view(today: date | None = None) -> dict:
             "week": wk,
             # 面板顶部那句话的口径开关:填过作息表才允许说"几点到几点有空"
             "clock": bool(times.get("total")),
+            # 地图索引缺了就没法判断换楼:顶层给一次,面板不必七天各提示一遍
+            "walk_index_ready": bool((walk_index or {}).get("buildings")),
             "period_times": {"filled": bool(times.get("total")),
                              "total": times.get("total") or 0,
                              "source": times.get("source") or ""},
@@ -1070,6 +1079,14 @@ def schedule_prompt_section() -> str:
                  "只想先看差、先不落盘用 action=diff;存错了用 action=undo 换回上一版。")
     lines.append("- 本周空档(学长算好的,不是心算):\n"
                  + format_week_gaps(week_gaps(), limit=2))
+    from minicode import walk        # 延迟导入:walk 顶层依赖本模块,放在文件头会成环
+    walks = walk.upcoming_lines(days=2, data=data)
+    if walks:
+        lines.append("- 要换教学楼的课(只列节次上紧接着的;分钟数只有填过本机作息表才给):\n"
+                     + "\n".join(walks))
+        lines.append("- 被问「来不及吗/要不要早点走」只照上面那几行说事实(哪两栋、中间几分钟),"
+                     "**绝不替他估「走一趟要几分钟」**——校园地图是手绘示意图、没有比例尺。"
+                     "要说位置就用 map_highlight_building 把这两栋一起框出来,让他自己看。")
     lines.append("- 「我这周什么时候有空」「周三能约吗」直接照上面那几行回答;"
                  "上面标着没填作息表时只能说\"第几节到第几节空着\",**不要**报成几点到几点,"
                  "也别把\"不在学期内\"的那天说成空闲。同学想要钟点口径,让他把教务处作息表贴过来"
@@ -1079,8 +1096,8 @@ def schedule_prompt_section() -> str:
 
 def schedule(ctx, action: str = "save", term_start: str = "",
              classes=None, when: str = "", periods=None, source: str = "") -> str:
-    """schedule 工具处理器:save(存)/show(看某天)/free(看空档)/diff(比对不写)/
-    undo(回滚)/times(看作息表)/save_times(存作息表)/clear(清空)。"""
+    """schedule 工具处理器:save(存)/show(看某天)/free(看空档)/risk(看换楼的课)/
+    diff(比对不写)/undo(回滚)/times(看作息表)/save_times(存作息表)/clear(清空)。"""
     action = (action or "save").strip().lower()
     if action == "save":
         ok, msg = save(term_start, classes or [])
@@ -1120,6 +1137,23 @@ def schedule(ctx, action: str = "save", term_start: str = "",
             return ('错误: free 的 when 要具体日期(2026-09-23)、"week"(本周)或'
                     '"next"(下周)。')
         return format_free_slots(free_slots(day))
+    if action == "risk":
+        from minicode import walk        # 延迟导入:walk 顶层依赖本模块,放在文件头会成环
+        spec = str(when or "").strip().lower()
+        if spec in ("", "week", "本周"):
+            return walk.format_week_risks(walk.week_risks())
+        if spec in ("next", "next_week", "下周"):
+            return walk.format_week_risks(walk.week_risks(date.today() + timedelta(days=7)))
+        if spec in ("today", "今天"):
+            day = date.today()
+        elif spec in ("tomorrow", "明天"):
+            day = date.today() + timedelta(days=1)
+        else:
+            day = _parse_date(spec)
+            if day is None:
+                return ('错误: risk 的 when 要具体日期(2026-09-23)、"今天"/"明天"、'
+                        '"week"(本周)或 "next"(下周)。')
+        return walk.format_risks(walk.day_risks(day))
     if action == "times":
         times = load_period_times()
         if not times.get("total"):
@@ -1138,5 +1172,5 @@ def schedule(ctx, action: str = "save", term_start: str = "",
         ok, msg = save_period_times(rows, source)
         return msg if ok else "存作息表没成功:" + msg
     return ("错误: 未知 action。可用: save(存课表)/show(看某天课)/free(查空档,"
-            "when 传日期或 week)/times(看作息表)/save_times(存作息表)/"
-            "diff(比对不写)/undo(回滚)/clear(清空)。")
+            "when 传日期或 week)/risk(看要换教学楼的课,when 同上)/times(看作息表)/"
+            "save_times(存作息表)/diff(比对不写)/undo(回滚)/clear(清空)。")

@@ -293,6 +293,25 @@ try {
   .sc-off{ font-size:10px; padding:3px 5px; margin-bottom:4px; border-radius:6px;
            color:var(--text-3); text-align:center; border:1px dashed var(--line-soft); }
   .sc-more{ font-size:9.5px; color:var(--text-3); text-align:center; }
+  /* ---- v0.9.35 走堂换楼提示:数据全部出自后端 walk.day_risks,前端不比字符串 ---- */
+  .sc-walk{ display:flex; align-items:center; gap:8px; font-size:11.5px; line-height:1.55;
+            padding:6px 9px; margin-bottom:5px; border-radius:8px;
+            border-left:2px solid var(--warning); background:var(--warning-bg);
+            color:var(--text-1); }
+  .sc-walk .w-txt{ flex:1; min-width:0; }
+  .sc-walk .w-txt b{ color:var(--warning); font-weight:700; }
+  .sc-walk .w-txt em{ font-style:normal; color:var(--text-3); }
+  .sc-walk button{ flex:none; border:1px solid var(--line-soft); background:transparent;
+                   color:var(--text-3); font-size:11px; line-height:1; padding:4px 6px;
+                   border-radius:8px; cursor:pointer; }
+  .sc-walk button:hover{ color:var(--primary-text); border-color:var(--primary); }
+  .sc-walkchip{ font-size:10px; line-height:1.3; padding:3px 5px; margin-bottom:4px;
+                border-radius:6px; border-left:2px solid var(--warning);
+                background:var(--warning-bg); color:var(--text-1);
+                overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sc-clash{ font-size:10.5px; line-height:1.4; padding:4px 6px; margin-bottom:4px;
+             border-radius:6px; background:var(--danger-bg); color:var(--text-2); }
+  .sc-skipped{ font-size:11px; color:var(--text-3); margin-top:6px; line-height:1.7; }
   .sc-todo,.sc-evt{ font-size:10px; line-height:1.3; padding:3px 5px; margin-bottom:4px;
                     border-radius:6px; background:var(--glass-strong); color:var(--text-2);
                     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -4072,6 +4091,47 @@ function scTail(day) {
     `<div class="sc-evt" title="${esc(ev.span || ev.name)}">📌 ${esc(ev.name)}</div>`).join("");
   return items + events;
 }
+/* ---- v0.9.35 走堂换楼 ----
+   行文字全部由后端 walk.day_risks 算好(楼名是它按地图索引唯一解析的),
+   前端只做排版:在这儿比字符串就会长出第二个版本的"要不要赶"。 */
+function scWalkTitle(it) {
+  const bits = [`${it.prev.span}「${it.prev.name}」在${it.prev.building} → `
+                + `${it.curr.span}「${it.curr.name}」在${it.curr.building}`];
+  if (it.clock) bits.push(`两节之间 ${it.minutes} 分钟`);
+  if (it.gap_periods) bits.push(`中间空 ${it.gap_periods} 节`);
+  if (it.adjacency === "both") bits.push("地图索引里这两栋互为相邻");
+  if (!it.clock) bits.push("没填作息表,说不到几点");
+  return bits.join(" · ");
+}
+function scWalkRow(it, title) {
+  return `<div class="sc-walk" title="${esc(title)}"><span class="w-txt">⚠ `
+    + `${esc(it.prev.span)}→${esc(it.curr.span)} `
+    + `${it.no_gap ? "<b>紧接着换楼</b>" : "<b>要换楼</b>"} `
+    + `${esc(it.prev.building)} → ${esc(it.curr.building)}`
+    + ` <em>${it.clock ? `中间 ${it.minutes} 分钟` : "只按节次"}</em></span>`
+    + `<button class="sc-walkmap" data-a="${esc(it.prev.building)}" data-b="${esc(it.curr.building)}" `
+    + `title="在地图上把这两栋一起框出来">🗺</button></div>`;
+}
+function scWalkRows(day) {
+  const walks = day.walks || [];
+  const rows = walks.slice(0, 4).map(it => scWalkRow(it, scWalkTitle(it)));
+  if (walks.length > 4)
+    rows.push(`<div class="sc-more">另有 ${walks.length - 4} 处换楼没列出</div>`);
+  const clash = (day.clashes || []).slice(0, 3).map(c =>
+    `<div class="sc-clash" title="同一节排了两门课:这是课表本身撞了,不是走路问题">`
+    + `⚡ ${esc(c.label)}:${esc(c.a.name)} / ${esc(c.b.name)}</div>`).join("");
+  const skipped = (day.walk_skipped || []).length
+    ? `<div class="sc-skipped">有 ${day.walk_skipped.length} 门课的地点判不出是哪栋楼,`
+      + `没参与换楼判断(${esc(day.walk_skipped.map(s => s.name).join("、"))})。`
+      + `楼名写全一点(如「J1至善楼」)就能判了。</div>` : "";
+  if (!rows.length && !clash && !skipped) return "";
+  return `<div class="sc-freehead">走堂</div>` + rows.join("") + clash + skipped;
+}
+function scWalkChip(col) {
+  const walks = col.walks || [];
+  if (!walks.length) return "";
+  return `<div class="sc-walkchip" title="${esc(scWalkTitle(walks[0]))}">⚠ ${walks.length} 处换楼</div>`;
+}
 function scDayPanel(day, emptyText) {
   const gaps = (day.gaps || []).slice().sort((a, b) => b.periods - a.periods);
   const free = !day.in_term ? `<div class="sc-note">那天不在本学期内(开学前/假期)。
@@ -4095,11 +4155,14 @@ function scDayPanel(day, emptyText) {
     ? `<div class="sc-freehead">校历安排</div>` + (day.events || []).map(ev =>
         `<div class="sc-freerow"><span>📌 ${esc(ev.name)}</span>
            <b>${esc(ev.span || "")}</b></div>`).join("") : "";
+  const walkPart = day.walk_index_ready === false && day.class_count
+    ? `<div class="sc-skipped">地图建筑索引不在,这天判不了要不要换楼(课程清单本身不受影响)。</div>`
+    : scWalkRows(day);
   return `<div class="sc-dayhead">周${esc(day.weekday)} · ${esc(day.date)}
       ${day.week ? ` · 第 ${day.week} 周` : ""}
       <button class="sc-back" data-act="week" style="display:${
         scheduleTab.startsWith("day:") ? "" : "none"}">← 回到本周</button></div>`
-    + scList(day.classes, emptyText) + free + todos + evts;
+    + scList(day.classes, emptyText) + walkPart + free + todos + evts;
 }
 function scTimesForm() {
   const pt = (scheduleData && scheduleData.period_times) || {};
@@ -4153,7 +4216,7 @@ function renderSchedule() {
       return `<div class="sc-col${col.date === todayIso ? " today" : ""}" data-day="${k}"
           title="点开看这天的空档与要交的东西">
         <h5>周${esc(col.weekday || "一二三四五六日"[k - 1])}</h5>${cells}
-        <div class="sc-gaps">${scGapChips(col, 2)}${scTail(col)}</div></div>`;
+        <div class="sc-gaps">${scWalkChip(col)}${scGapChips(col, 2)}${scTail(col)}</div></div>`;
     }).join("") + `</div>
       <div class="sc-note">本周按第 ${scheduleData.week || "?"} 周排课(单双周已过滤);
       没写钟点的课只显示节次。${scheduleData.overdue ? `另有 ${scheduleData.overdue} 条待办已逾期。` : ""}
@@ -4248,6 +4311,15 @@ function scAct(name) {
   }
 }
 $("scBody").addEventListener("click", (e) => {
+  // v0.9.35 走堂换楼:点开真的把两栋一起框出来(楼名是后端唯一解析过的,
+  // 地图里搜不到的那栋由 showPlaces 如实说明,前端不猜位置也不悄悄少画)
+  const w = e.target.closest(".sc-walkmap");
+  if (w) {
+    if (!window.CampusMap || !CampusMap.showPlaces) { toast("地图不可用"); return; }
+    $("scheduleOverlay").classList.remove("show");
+    CampusMap.showPlaces([w.dataset.a || "", w.dataset.b || ""]);
+    return;
+  }
   // v0.9.21 课表↔地图:有地点的课一键在校园地图上定位(搜不到会如实说明,不猜)
   const b = e.target.closest(".sc-map");
   if (b) {

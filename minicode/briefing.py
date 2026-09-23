@@ -3,7 +3,8 @@
 课表、天气、待办、校历原本各推各的,同学一天收到好几条提醒,却拼不出
 今天的全貌。本模块在启动看门狗第一轮把它们**聚合成一次推送**(proactive
 kind="briefing"):
-- 课表:今天几节课、最早一节几点在哪(没登记钟点的课只报节次,绝不编时间);
+- 课表:今天几节课、最早一节几点在哪(没登记钟点的课只报节次,绝不编时间),
+  外加今天有几处要换教学楼(地点判不出是哪栋楼的课不参与,也不硬凑一个数);
 - 天气:只读首页 chip 那份缓存,绝不为简报当场等网络(没缓存就省略这段);
 - 待办:临期与逾期的件数加最急一件;
 - 校历:7 天内最近的一件倒计时。
@@ -43,6 +44,18 @@ def _schedule_bits(today: date, detail: list[str]) -> tuple[str, str] | None:
         loc = f" · {first['location']}" if first.get("location") else ""
         short = f"今天 {len(rows)} 节课,最早 {name_part}{loc}"
     detail.append("【今天日程】" + _schedule.format_day(today, data))
+    from minicode import walk as _walk
+    risk = _walk.day_risks(today, data)
+    if risk.get("items"):
+        short += f",{len(risk['items'])} 处要换教学楼"
+        for it in risk["items"][:3]:
+            detail.append("· 换楼:" + _walk.item_text(it))
+        if risk.get("items_more"):
+            detail.append(f"· 另有 {risk['items_more']} 处没列出")
+    if risk.get("clashes"):
+        detail.append(f"· 另有 {len(risk['clashes'])} 处同一节排了两门课(课表本身撞了)")
+    for s in (risk.get("skipped") or [])[:2]:
+        detail.append(f"· {s['name']} 的地点判不出是哪栋楼:{s['why']}")
     return head, short
 
 

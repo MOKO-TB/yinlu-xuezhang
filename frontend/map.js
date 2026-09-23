@@ -417,21 +417,66 @@
       .replace(/[A-Za-z0-9]{0,4}\d{1,4}[室号楼层房]?$/, "").trim();
   }
 
+  /* 一个地点的搜法:原样搜不到就剥掉教室号再搜("思齐楼B203"→"思齐楼")。
+     带回 `used`:搜索框要显示的是**真搜到的那个写法**,不然用户看不到学长剥了字。 */
+  function lookup(q) {
+    const hits = searchItems(q);
+    if (hits.length) return { hits, used: q };
+    const bare = stripRoom(q);
+    if (bare && bare !== q) {
+      const again = searchItems(bare);
+      if (again.length) return { hits: again, used: bare };
+    }
+    return { hits: [], used: q };
+  }
+
+  /* 两栋(或多栋)一起框出来:课表面板的走堂提示点一下就走到这儿。
+     楼名是后端按索引唯一解析出来的,这里只负责画;真在地图上找不到时
+     要明说找不到哪一栋,不能悄悄少画一栋让人以为"就这一栋"。 */
+  function showPlaces(names) {
+    const want = (names || []).map((n) => String(n || "").trim()).filter(Boolean);
+    if (!want.length || !svg) return false;
+    openPanel();
+    activeCat = "";
+    renderLegend();
+    $("mapSearch").value = "";
+    $("mapSearchInfo").textContent = "";
+    const hits = [];
+    const gone = [];
+    want.forEach((n) => {
+      const got = lookup(n);
+      if (!got.hits.length) { gone.push(n); return; }
+      got.hits.forEach((h) => { if (hits.indexOf(h) < 0) hits.push(h); });
+    });
+    if (!hits.length) {
+      boxes = [];
+      drawBoxes();
+      renderNotice({ level: "warn", title: "地图上没登记这些楼",
+        text: `「${gone.join("、") || want.join("、")}」在手绘地图的索引里没有 —— 不猜位置。` });
+      return false;
+    }
+    boxes = hits;
+    boxColor = "orange";
+    drawBoxes();
+    const bb = bboxOfItems(hits);
+    if (bb) fitTo(bb);
+    $("mapSub").textContent = `${hits.length} 处:${hits.map((h) => h.name).join("、")}`;
+    renderCard(hits.slice(0, 6), true);
+    renderNotice(gone.length ? { level: "warn", title: "有一栋没登记",
+      text: `「${gone.join("、")}」在手绘地图的索引里没有,只框出了找到的那几栋。` } : null);
+    return true;
+  }
+
   function findPlace(query) {
+    if (Array.isArray(query)) return showPlaces(query);
     const q = String(query || "").trim();
     if (!q || !svg) return false;
     openPanel();
     activeCat = "";
     renderLegend();
-    $("mapSearch").value = q;
-    let hits = searchItems(q);
-    if (!hits.length) {
-      const bare = stripRoom(q);
-      if (bare && bare !== q) {
-        hits = searchItems(bare);
-        if (hits.length) $("mapSearch").value = bare;
-      }
-    }
+    const got = lookup(q);
+    $("mapSearch").value = got.used;
+    const hits = got.hits;
     if (!hits.length) {
       boxes = [];
       drawBoxes();
@@ -631,7 +676,7 @@
 
   window.CampusMap = {
     setData, apply, open: openPanel, close: closePanel, toggle: togglePanel,
-    isOpen, fitAll, closeLightbox, reset, findPlace,
+    isOpen, fitAll, closeLightbox, reset, findPlace, showPlaces,
     zoom: (f) => { view.k = Math.max(0.5, Math.min(8, view.k * f)); applyView(); },
   };
 })();

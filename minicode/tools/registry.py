@@ -691,21 +691,25 @@ def build_default_registry() -> list[Tool]:
                 "start_time(课表里有才填),location,teacher});之后问「今天有什么课」直接照登记回答。"
                 "action=show 看某天课(when 传日期,默认今天);action=free 查空档"
                 "(when 传日期看那天、传 week/留空看本周、传 next 看下下周 —— 照它算好的回答,别心算);"
-                "action=times 看本机作息表填了没、action=save_times 把同学给的教务处作息表存下来"
+                "action=risk 看哪些课之间要换教学楼(when 同 free,也认 今天/明天):"
+                "它按课表地点 + 校园地图建筑索引算,只报「哪两栋、中间隔几节、填过作息表才给分钟数」,"
+                "**不许替同学估「走一趟要几分钟」**(手绘地图没有比例尺);要说位置就 map_highlight_building "
+                "把两栋一起框出来;action=times 看本机作息表填了没、action=save_times 把同学给的教务处作息表存下来"
                 "(一次性,之后空档才会带钟点);action=diff 把 classes 与本机已存课表"
                 "比对(不写文件,先让同学看清新增/变动/取消);action=undo 换回上一版课表;"
                 "action=clear 清空。save 覆盖时会自动附上与上一版的变动清单,直接照着向同学念一遍。"
-                "课表里没写钟点的课只报第几节,绝不编具体时间;没填作息表时空档同理只说第几节。"
+                "课表里没写钟点的课只报第几节,绝不编具体时间;没填作息表时空档与换楼同理只说第几节。"
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "action": {"type": "string",
-                               "enum": ["save", "show", "free", "diff", "undo",
+                               "enum": ["save", "show", "free", "risk", "diff", "undo",
                                         "times", "save_times", "clear"],
                                "description": "save=存/覆盖课表;show=看某天;free=查空档;"
-                                              "diff=与已存课表比对(不写);undo=回滚到上一版;"
-                                              "times=看本机作息表;save_times=存作息表;clear=清空"},
+                                              "risk=查要换教学楼的课;diff=与已存课表比对(不写);"
+                                              "undo=回滚到上一版;times=看本机作息表;"
+                                              "save_times=存作息表;clear=清空"},
                     "term_start": {"type": "string",
                                    "description": "save 用:第 1 周周一的日期(2026-09-07),向同学问清,不要猜"},
                     "classes": {"type": "array",
@@ -720,8 +724,9 @@ def build_default_registry() -> list[Tool]:
                                     "teacher": {"type": "string"},
                                 }}},
                     "when": {"type": "string",
-                             "description": "show/free 用:日期(2026-09-22)。free 也接受"
-                                            " week(本周,默认)与 next(下周)"},
+                             "description": "show/free/risk 用:日期(2026-09-22)。free 与 risk"
+                                            " 还接受 week(本周,默认)、next(下周);"
+                                            "risk 另认「今天」「明天」"},
                     "periods": {"type": "array",
                                 "description": "save_times 用:按第 1 节往后排的作息表,"
                                                "每项 {start,end}(如 {start:'08:00',end:'08:45'}),"

@@ -1,4 +1,5 @@
 """个人课表(minicode/schedule.py):周次解析/推算、存取校验、看门狗文案、工具回环。"""
+import re
 from datetime import date
 
 import pytest
@@ -659,6 +660,63 @@ def test_view_counts_overdue_separately_and_survives_broken_sources(monkeypatch)
                         lambda: (_ for _ in ()).throw(OSError("读不动")))
     view = schedule.view(TODAY_MON)                   # 校历读不了不能连累课表面板
     assert view["overdue"] == 1 and view["week_grid"]["1"]["events"] == []
+
+
+# ------------------------------------------------ 走堂换楼接进工具/面板/提示词(v0.9.35)
+
+def _walk_rows(day=1):
+    """同一天的两节紧接课、分处两栋真楼(楼名取自真地图索引)。"""
+    return [_row(periods="1-2", day=day, location="J1至善楼"),
+            _row("大学英语", day, "3-4", location="S5致用楼")]
+
+
+def _this_monday():
+    from datetime import timedelta
+    return date.today() - timedelta(days=date.today().weekday())
+
+
+def test_tool_risk_action_names_both_buildings_without_inventing_minutes():
+    assert schedule.save("2026-09-07", _walk_rows())[0]
+    out = schedule.schedule(None, action="risk", when="2026-09-07")
+    assert "J1至善楼" in out and "S5致用楼" in out
+    assert "要换楼" in out
+    assert not re.search(r"\d+\s*分钟", out)        # 没填作息表:给不出分钟数字(那句提醒除外)
+
+
+def test_tool_risk_action_covers_week_and_rejects_vague_when():
+    monday = _this_monday()
+    assert schedule.save(monday.isoformat(), _walk_rows())[0]
+    out = schedule.schedule(None, action="risk")            # 不传 when = 本周
+    assert "本周(第 1 周" in out and monday.isoformat() in out
+    from datetime import timedelta
+    assert (monday + timedelta(days=7)).isoformat() in \
+        schedule.schedule(None, action="risk", when="next")
+    assert "错误" in schedule.schedule(None, action="risk", when="下周三")
+
+
+def test_view_carries_walk_facts_for_the_panel():
+    assert schedule.save("2026-09-07", _walk_rows() + [
+        _row("体育课", 3, "1-2", location="田径场")])[0]
+    view = schedule.view(TODAY_MON)
+    assert view["walk_index_ready"] is True
+    mon, wed = view["week_grid"]["1"], view["week_grid"]["3"]
+    assert [(i["prev"]["building"], i["curr"]["building"]) for i in mon["walks"]] == \
+        [("J1至善楼", "S5致用楼")]
+    assert mon["walks"][0]["no_gap"] is True
+    assert wed["walks"] == [] and wed["walk_skipped"][0]["name"] == "体育课"
+
+
+def test_prompt_section_injects_walk_lines_only_when_there_is_one():
+    day = date.today().weekday() + 1                # 注入看的是真"今天/明天",不能写死周几
+    assert schedule.save(_this_monday().isoformat(), _walk_rows(day))[0]
+    text = schedule.schedule_prompt_section()
+    assert "要换教学楼的课" in text and "J1至善楼 → S5致用楼" in text
+    assert "绝不替他估" in text                     # 不许模型自己补"走几分钟"
+
+    assert schedule.save(_this_monday().isoformat(), [
+        _row(periods="1-2", day=day, location="J1至善楼101"),
+        _row("大学英语", day, "3-4", location="J1至善楼205")])[0]
+    assert "要换教学楼" not in schedule.schedule_prompt_section()   # 同一栋换教室:一行都不注入
 
 # ---------------------------------------------------------------- 桥与门面
 

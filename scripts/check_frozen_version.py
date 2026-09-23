@@ -154,11 +154,21 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "PERIOD_TIMES_FILE", "load_period_times",
                           "save_period_times", "_parse_periods", "_row_periods",
                           "free_slots", "week_gaps", "format_week_gaps",
-                          "format_free_slots", "_week_overlay"),
+                          "format_free_slots", "_week_overlay",
+                          # v0.9.35:走堂预警接进工具/提示词/面板(漏收 = 装好的包
+                          # 里 walk 模块在但没人调,问"赶不赶得及"仍靠模型心算)
+                          "risk 的 when", "upcoming_lines", "walk_index_ready",
+                          "walk_skipped"),
     "minicode.weather": ("weather_card", "umbrella_tip", "refresh_async",
                          "get_weather"),
     # ---- v0.9.19:拖拽上传(字节落盘,绕开 WebView2 拿不到本地路径) ----
     "minicode.attachments": ("save_dropped_bytes", "unique_target"),
+    # ---- v0.9.35:走堂换楼预警整模块(漏收 = 装好的包里"要不要早点出发"
+    #      全退回模型心算,分钟数/no_gap 口径全丢)----
+    "minicode.walk": ("day_risks", "week_risks", "format_risks", "format_week_risks",
+                      "upcoming_lines", "worst_item", "item_text", "place_of",
+                      "adjacency", "campus_index", "_index", "_walks", "_clashes",
+                      "MAX_ITEMS", "MAX_SKIPPED", "_NO_INDEX"),
     # ---- v0.9.20:今日简报聚合 + 推送去重 ----
     "minicode.briefing": ("build", "_schedule_bits", "_weather_bits",
                           "_reminders_bits", "_calendar_bits"),
