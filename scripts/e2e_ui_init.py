@@ -19,8 +19,9 @@ hint 和地图,所以这条 bug 一路绿着发到了 Release 里。
    现算(先把 `paths.APP_DIR` 指到临时目录再塞三条记录 —— 否则会去读写开发者自己的
    `mood.json`)。断言的是"界面摆的就是后端算的":五档标签来自 `SCORE_LABELS`、
    `#moBody` 逐字等于 `weekly_review` 的文本、保存必须叫到桥上的 `mood_log`、
-   求助文本里既有 `HELP_FACTS`(地址)又没有**给模型的转述规矩**、也不许出现任何
-   7 位以上数字串,而「删除全部」第一次点**不得**叫 `mood_clear`。
+   求助文本里既有 `HELP_FACTS`(地址)又没有**给模型的转述规矩**,而号码**只允许**是学校
+   心理中心公众号原文里那几个(白名单同 `tests/test_mood.py`),而「删除全部」第一次点
+   **不得**叫 `mood_clear`。
    (往 STUB_JS 塞 JSON 记得写 `() => (@@X@@)`:箭头函数体以 `{` 开头会被当代码块。)
 5. v0.9.33 起还盯**对话流里的计划卡片**:状态由真 plan 工具改出来的 `plan_changed`
    payload 驱动。断言四件事 —— 开机时**不补画**(上一轮没标完的计划不该在新会话
@@ -336,8 +337,9 @@ def main() -> int:
             check("转述上面这段" not in help_txt,
                   "给模型看的转述规矩没有漏进给人看的界面")
             import re as _re
-            check(not _re.search(r"\d{7,}", help_txt),
-                  "求助文本里没有任何 7 位以上数字串(没核实过的号码绝不出现)")
+            shown = set(_re.findall(r"\d{7,}", help_txt))
+            check(shown <= {"2610529", "2211222", "81899120"} and "0758-2610529" in help_txt,
+                  "求助文本里的号码只可能是学校原文那几个(面板不显示没核实过的号)")
             before = page.evaluate("() => window.__AFTER__.filter(x => x === 'mood_clear').length")
             page.click("#btnMoClear")
             page.wait_for_timeout(250)

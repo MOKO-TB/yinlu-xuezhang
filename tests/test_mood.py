@@ -4,7 +4,8 @@
 - 只回读用户自己记的东西:不诊断、不替用户打分、不编日期;
 - 认不出的日期/分数就明说认不出,绝不猜一个填进去;
 - 刻意没有连续天数 / 打卡 / "你已经 N 天没记了"这类催法;
-- 自伤这类话触发指路,而指路那段里**没有**没核实过的电话号码;
+- 自伤这类话触发指路,而指路那段的号码**只能是学校心理中心公众号原文里那几个**
+  (白名单钉在本文件里,多一个少一个都红);
 - 记录只在本机 mood.json,原子写、能一键导出、能一键清空。
 """
 import json
@@ -171,12 +172,22 @@ def test_everyday_venting_is_not_treated_as_crisis():
     assert r["ok"] and not r.get("crisis")
 
 
-def test_help_text_contains_no_invented_phone_number():
-    """没核实过的号码绝不出现:整段求助里不能有 7 位以上连续数字(日期除外)。"""
-    body = mood.HELP_FACTS + mood.HELP_CAVEATS
-    digits = re.findall(r"\d{7,}", body)
-    assert digits == []
-    assert "没核实" in mood.HELP_FACTS or "没有一个核实过的号码" in mood.HELP_FACTS
+def test_help_text_only_carries_verified_phone_numbers():
+    """号码只能来自那份原文:白名单写死在这里,代码里多出一个号就红。
+
+    来源:学校「广州应用科技学院心理中心」公众号 2025-03-06《这里,有你的依靠 |
+    心理健康教育中心简介》。把白名单独立写在测试里(而不是从 HELP_FACTS 里读)是刻意的
+    —— 编错一个号码可能把人在最脆弱的时候导向空号,所以想加号码必须**同时**改这里,
+    改的人就会被迫去看一眼原文。
+    """
+    verified = {"2610529", "2211222", "81899120"}      # 0758-2610529 / 0758-2211222 / 020-81899120
+    digits = re.findall(r"\d{7,}", mood.HELP_FACTS + mood.HELP_CAVEATS)
+    assert set(digits) <= verified, f"求助文本里出现了没核实过的号码:{digits}"
+    assert set(digits) == verified, f"核实过的号码不该凭空消失:{digits}"
+    assert "0758-2610529" in mood.HELP_FACTS        # 电话预约
+    assert "12356" in mood.HELP_FACTS               # 全国统一 24 小时心理援助热线
+    assert "2025-03-06" in mood.HELP_FACTS          # 写清出处,便于日后复核
+    assert "绝对不要" in mood.HELP_CAVEATS
 
 
 def test_help_facts_and_caveats_stay_separate():
