@@ -24,7 +24,11 @@ for i, body in enumerate(blocks, start=1):
                                      encoding="utf-8") as fh:
         fh.write(body)
         tmp = fh.name
-    proc = subprocess.run(["node", "--check", tmp], capture_output=True, text=True)
+    proc = subprocess.run(["node", "--check", tmp], capture_output=True, text=True,
+                          # 不写 encoding 时按本机 locale(中文 Windows = GBK)解:
+                          # node 报的是 UTF-8 源码里的中文标识符,解不开就整个丢掉,
+                          # 界面上只剩一个没有原因的 ✗(v0.9.37 就是这么撞上的)。
+                          encoding="utf-8", errors="replace")
     if proc.returncode == 0:
         print(f"  ✓ 块 {i}({len(body)} 字符)")
     else:

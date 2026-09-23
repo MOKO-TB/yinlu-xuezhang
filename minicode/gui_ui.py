@@ -7,8 +7,12 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 
+from minicode import toolsum
 from minicode.tools.base import Tool
+
+LIVE_CAP = 200            # 实时表最多记多少条(只丢已完成的最老行,在跑的永不丢)
 
 
 class GuiUI:
@@ -17,6 +21,13 @@ class GuiUI:
         self.stop_requested = False       # 停止按钮:在下一个输出增量处抛中断
         self.confirm_handler = None       # Bridge.confirm_tool,由 create_app 注入
         self._send_lock = threading.Lock()
+        # ---- 实时表(v0.9.37):每个工具调用的**真实**开始/结束时刻。
+        # 会话消息里没有时间戳(留档只有会话开始那一行),所以"跑了多久"这件事
+        # 只有在这里记一次才可能是真的。记不到的行(并行子代理被 _QuietUI 吞掉的、
+        # 上一版程序记的)一律不给时间 —— 面板宁可少说,不许编。
+        self._live: list[dict] = []
+        self._live_open: list[dict] = []   # 栈:子代理的工具套在外面那层里面
+        self._live_lock = threading.Lock()
 
     def attach(self, window) -> None:
         self.window = window
@@ -55,11 +66,16 @@ class GuiUI:
         self.push("finish_stream")
 
     def tool_start(self, tool: Tool, args: dict) -> None:
-        self.push("tool_start", name=tool.name, summary=self._arg_summary(tool, args),
+        summary = self._arg_summary(tool, args)
+        # 先记账再推事件:窗口正关着的时候 push 会被吞掉,但那一步真的在跑,
+        # 监控栏下一次自己扫表就该看得见它。
+        self._live_begin(tool.name, summary)
+        self.push("tool_start", name=tool.name, summary=summary,
                   trust=getattr(tool, "trust", "local"))
 
     def tool_done(self, tool: Tool, result: str) -> None:
         failed = result.startswith(("错误", "工具执行出错", "用户拒绝"))
+        self._live_end(tool.name, not failed)
         self.push("tool_done", ok=not failed,
                   error_preview="" if not failed else result[:300])
 
@@ -109,22 +125,77 @@ class GuiUI:
 
     @staticmethod
     def _arg_summary(tool: Tool, args: dict) -> str:
-        name = tool.name.rsplit("·", 1)[-1]      # 子代理的工具名带类型前缀
-        if name == "bash":
-            s = str(args.get("command", ""))
-        elif name in ("write_file", "edit_file", "read_file"):
-            s = str(args.get("path", ""))
-        elif name == "browser_open":
-            s = str(args.get("url", ""))         # 卡片上直接看到要开哪个网址
-        elif name == "browser_eval":
-            s = "JS: " + " ".join(str(args.get("js", "")).split())
-        elif name == "browser_click":
-            s = str(args.get("target", ""))
-        elif name == "browser_fill":
-            keys = list((args.get("fields") or {}).keys())
-            s = "填表单: " + "、".join(str(k) for k in keys[:6]) + ("…" if len(keys) > 6 else "")
-        elif name in ("browser_screenshot", "browser_close", "browser_status"):
-            s = str(args.get("path", "")) or "当前页面"
-        else:
-            s = "  ".join(f"{k}={str(v)[:40]}" for k, v in args.items())
-        return s[:160]
+        # 口径收在 toolsum 一处:监控栏的时间线是拿**会话消息里的原始参数**复算
+        # 同一句话来对号的,两边各写一份就会对不上(表现为同一次调用两栏说法不同)。
+        return toolsum.summarize(tool.name, args)
+
+    # ------------------------------------------------------------ 实时表
+
+    def _live_begin(self, name: str, summary: str) -> None:
+        row = {"name": str(name or ""), "summary": str(summary or ""),
+               "start": time.time(), "end": None, "ok": None}
+        with self._live_lock:
+            self._live.append(row)
+            self._live_open.append(row)
+
+    def _live_end(self, name: str, ok: bool) -> None:
+        """收栈:优先收同名那层(子代理的工具名带类型前缀,外层是 task)。
+        对不上就收最上面一层 —— 宁可时间记在"最后开始的那个"上,也不让栈漏了
+        永远收不回:一旦漏了,面板会一直显示"某步在跑"而它其实早就结束了。"""
+        now = time.time()
+        with self._live_lock:
+            stack = self._live_open
+            if not stack:
+                return
+            target = None
+            for row in reversed(stack):
+                if toolsum.short_name(row["name"]) == toolsum.short_name(name):
+                    target = row
+                    break
+            target = target or stack[-1]
+            target["end"] = now
+            target["ok"] = bool(ok)
+            stack.remove(target)
+            # 只丢已完成的最老行:在跑的行丢了面板就再也找不到它了
+            if len(self._live) > LIVE_CAP:
+                for row in list(self._live):
+                    if row["end"] is not None:
+                        self._live.remove(row)
+                        if len(self._live) <= LIVE_CAP:
+                            break
+
+    def live_rows(self) -> list[dict]:
+        """实时表快照(按开始先后)。给 activity 的时间线配对用。"""
+        with self._live_lock:
+            return [dict(r) for r in self._live]
+
+    def live_now(self) -> dict | None:
+        """此刻真正在跑的最深一层 + **真实**已耗时;没有在跑给 None。"""
+        with self._live_lock:
+            if not self._live_open:
+                return None
+            row = dict(self._live_open[-1])
+        row["elapsed"] = max(0, int(time.time() - float(row["start"])))
+        return row
+
+    def live_reset(self) -> None:
+        """清空实时表:清空会话/换会话时调,别让上一段任务的"在跑"挂在这一栏。"""
+        with self._live_lock:
+            self._live = []
+            self._live_open = []
+
+    def live_abandon(self) -> int:
+        """回合结束时收掉还开着的行(停止键 / 中断会让 `tool_done` 不被调用)。
+
+        不这么做的话「此刻在跑」会永远挂着那一步:用户明明按了停止,监控栏还在
+        转圈 —— 这比没有时间更糟,因为它说的是一件正在发生而其实没发生的事。
+        """
+        now = time.time()
+        with self._live_lock:
+            n = len(self._live_open)
+            for row in self._live_open:
+                row["end"] = now
+                row["ok"] = False
+                row["abandoned"] = True
+            self._live_open = []
+        return n

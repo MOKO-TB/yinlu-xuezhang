@@ -118,25 +118,11 @@ class TerminalUI:
         ))
 
     def _arg_summary(self, tool: Tool, args: dict) -> str:
-        name = tool.name.rsplit("·", 1)[-1]      # 子代理的工具名带类型前缀
-        if name == "bash":
-            s = args.get("command", "")
-        elif name in ("write_file", "edit_file", "read_file"):
-            s = str(args.get("path", ""))
-        elif name == "browser_open":
-            s = str(args.get("url", ""))
-        elif name == "browser_eval":
-            s = "JS: " + " ".join(str(args.get("js", "")).split())[:100]
-        elif name == "browser_click":
-            s = str(args.get("target", ""))
-        elif name == "browser_fill":
-            keys = list((args.get("fields") or {}).keys())
-            s = "填表单: " + "、".join(str(k) for k in keys[:6]) + ("…" if len(keys) > 6 else "")
-        elif name in ("browser_screenshot", "browser_close", "browser_status"):
-            s = str(args.get("path", "")) or "当前页面"
-        else:
-            s = "  ".join(f"{k}={str(v)[:40]}" for k, v in args.items())
-        return s[:120]
+        # 与 GuiUI 同一口径(minicode.toolsum),只是终端一行更窄。
+        # 原来这里自己抄了一份 if/elif,已经和 GUI 那份差在截断长度上 ——
+        # 再被时间线抄第三份,就会出现"终端说改了 a.py、监控栏写着别的"。
+        from minicode import toolsum
+        return toolsum.summarize(tool.name, args, limit=120)
 
     # ------------------------------------------------------------ 权限确认
 

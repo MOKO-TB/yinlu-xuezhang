@@ -56,10 +56,31 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "mood_clear", "mood_help",
                             # v0.9.34:右侧「本次会话」面板两根线(漏 get_activity =
                             # 点开一栏空白;漏 reveal_file = 产出行点不动,只能看)
-                            "get_activity", "reveal_file"),
+                            "get_activity", "reveal_file",
+                            # v0.9.37:任务监控栏的开合与折叠偏好(漏 get_monitor_pref =
+                            # 每次开机都回到默认收起,「记住我的选择」这句成了空话;
+                            # 漏 set_monitor_pref = 点段头有反应但下次全忘)
+                            "get_monitor_pref", "set_monitor_pref"),
     # v0.9.34:活动面板的数据源整模块(漏收 = 装好的包右边那一栏永远"读不出来")
+    # v0.9.37:这一栏改叫「任务监控」,多了此刻与时间线两段(漏 timeline =
+    # 那一整段消失,用户仍然只能看到五组按类别堆的行,看不到"先做了什么、
+    # 哪一步失败了";漏 now_line = 正在跑那一步永远不显示)
     "minicode.activity": ("session_activity", "GROUPS", "FAILED_PREFIXES",
-                          "FILE_TOOLS", "URL_TOOLS", "QUERY_TOOLS"),
+                          "FILE_TOOLS", "URL_TOOLS", "QUERY_TOOLS",
+                          "timeline", "now_line", "_turn_split", "_pair_times",
+                          "TURN_LIMIT", "TURNS_LIMIT"),
+    # v0.9.37:工具口径只有一份真相 —— 聊天里的工具卡片、右侧时间线、实时表三处
+    # 都调它。漏收 = 三处措辞各自漂移(时间线里写「读取」,卡片里写「读文件」),
+    # 而配对靠的是同一个 summarize 结果,漂了就再也对不上,行行都显示不了耗时。
+    "minicode.toolsum": ("summarize", "verb", "short_name", "agent_type",
+                         "SUBAGENT_PREFIX_SEP"),
+    # v0.9.37:折叠偏好整模块(漏收 = 点段头直接抛异常,整栏打不开)
+    "minicode.monitor": ("read_pref", "write_pref", "pref_path", "SECTIONS",
+                         "DEFAULTS", "PREF_FILE", "_clean_folded"),
+    # v0.9.37:实时耗时表(漏 live_rows = 时间线一行时刻都没有;漏 live_abandon =
+    # 按了停止还在转圈,那一行永远装作在跑)
+    "minicode.gui_ui": ("live_rows", "live_now", "live_abandon", "_live_begin",
+                        "_live_end", "LIVE_CAP"),
     # v0.9.30:迁移包整模块是新文件,漏收 = 装好的包连面板都打不开
     "minicode.mydata": ("inventory", "pack_plan", "export_package", "read_package",
                         "import_pick", "import_apply", "forget_preview",

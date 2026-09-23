@@ -189,6 +189,12 @@ class PublicApi:
     def get_activity(self) -> dict:
         return self._b.get_activity()
 
+    def get_monitor_pref(self) -> dict:
+        return self._b.get_monitor_pref()
+
+    def set_monitor_pref(self, is_open=None, folded_json: str = "") -> dict:
+        return self._b.set_monitor_pref(is_open, folded_json)
+
     def reveal_file(self, path: str) -> dict:
         return self._b.reveal_file(path)
 
@@ -723,23 +729,63 @@ class Bridge:
                     "msg": f"读取计划失败:{type(exc).__name__}: {exc}"}
         return {"ok": True, "dispatch_text": dispatch_text(state), **state}
 
-    # ------------------------------------------------------------ 活动面板
+    # ------------------------------------------------------------ 任务监控栏
 
     def get_activity(self) -> dict:
-        """右侧「本次会话」面板的数据:这一轮真的调过哪些工具、产出还在不在磁盘上。
+        """右侧「任务监控」栏的数据:这一轮真调过哪些工具、按先后排成时间线、
+        此刻在跑哪一步、产出还在不在磁盘上。
 
         为什么在前端数不行:它手里只有**渲染过的事件流**,刷新一次、切一次会话就没了,
         而且工具卡片上显示的是省略过的文本。真数据在 `session.messages` 里(完整参数、
         完整回话),所以归类这件事整个放在 `minicode.activity.session_activity`
         (纯函数,好测)。这里只负责把当前会话递过去。
+        时刻是唯一例外:消息里没有 Timestamp,只有 `GuiUI` 那张实时表记过真实开始
+        与结束 —— 所以递的是**当前会话那个 UI** 的表(每会话一份,后台会话的进度
+        不会串进你正在看的这一栏)。
         聚合逻辑再怎么坏都不该让界面打不开,所以异常兜成 ok:False 带一句原因。
         """
         from minicode.activity import session_activity
+        ui = getattr(self._current, "ui", None)
+        live = getattr(ui, "live_rows", None)
+        now = getattr(ui, "live_now", None)
         try:
-            return session_activity(self.session.messages, workspace=self.workspace)
+            return session_activity(
+                self.session.messages, workspace=self.workspace,
+                live=live() if callable(live) else None,
+                now=now() if callable(now) else None,
+                busy=bool(getattr(self._current, "busy", False)))
         except Exception as exc:
-            return {"ok": False, "groups": [], "summary": {}, "empty": True,
+            return {"ok": False, "groups": [], "timeline": {}, "now": None,
+                    "summary": {}, "empty": True,
                     "msg": f"读取会话活动失败:{type(exc).__name__}: {exc}"}
+
+    # ------------------------------------------------------------ 任务监控栏偏好
+
+    def get_monitor_pref(self) -> dict:
+        """这一栏开没开、哪几段被折叠过(纯本机界面偏好,不含任何内容数据)。"""
+        from minicode import monitor
+        return {"ok": True, **monitor.read_pref()}
+
+    def set_monitor_pref(self, is_open=None, folded_json: str = "") -> dict:
+        """记住用户对这一栏的开关/折叠。`is_open` 传 None = 这次只改折叠状态。
+
+        `folded_json` 是增量(只带点过的那一段),否则用户折了「计划」再折「产出」
+        会把「计划」又弹开 —— 那是"记不住"级别的假。
+        """
+        from minicode import monitor
+        folded = None
+        if folded_json:
+            try:
+                folded = json.loads(folded_json)
+            except (TypeError, ValueError):
+                folded = None
+        try:
+            val = None if is_open is None else (
+                str(is_open).strip().lower() in ("true", "1", "yes")
+                if isinstance(is_open, str) else bool(is_open))
+        except (TypeError, ValueError):
+            val = None
+        return {"ok": True, **monitor.write_pref(open_=val, folded=folded)}
 
     # ------------------------------------------------------------ 工作区
 
@@ -2089,6 +2135,11 @@ class Bridge:
             runner.ui.push("error", text=f"内部错误: {type(e).__name__}: {e}")
         finally:
             runner.busy = False
+            # 中断/停止会让 `tool_done` 根本不被调用:实时表里那一步还开着,
+            # 监控栏就会永远转圈。回合结束了,统一收成"已中断"。
+            abandon = getattr(runner.ui, "live_abandon", None)
+            if callable(abandon):
+                abandon()
             runner.ui.push("busy", value=False)
             self._push_sessions()
 

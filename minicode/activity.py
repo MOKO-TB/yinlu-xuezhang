@@ -1,5 +1,10 @@
 """本次会话的「活动」聚合:把这一轮真的做过什么归成几类,喂给右侧面板(v0.9.34)。
 
+v0.9.37 起这一栏叫「任务监控」,多了两样:**按真实先后的时间线**(`timeline`,
+回答"它先做了什么、哪一步失败了")和**此刻在跑哪一步**(`now_line`)。
+时刻这一列只可能来自 GUI 的实时表(`gui_ui.GuiUI.live_rows`)—— 会话消息里
+压根没有时间戳,所以没记到的行一律不给时间,而不是拿刷新时刻凑一个。
+
 为什么在后端算,不让前端自己数:前端手里只有**渲染过的事件流**,一刷新、一切会话就没了,
 而且它看到的是截断后的展示文本(工具卡片为了省地方会把路径中段省略)。真数据在
 `session.messages` 里 —— 工具调用的完整参数(路径、网址、任务描述)与完整结果(成功 /
@@ -25,7 +30,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from minicode import provenance
+from minicode import provenance, toolsum
 
 CLIP = 160                # 单行主标题/副标题的截断长度
 DETAIL_MAX = 4000         # 点开才看的全文(子代理报告、记忆内容)
@@ -297,7 +302,8 @@ def _extract_web(calls, results) -> list[dict]:
 
 
 def _badge(status: str) -> str:
-    return {"running": "进行中", "failed": "失败", "ok": "完成"}.get(status, status)
+    return {"running": "进行中", "failed": "失败", "ok": "完成",
+            "stale": "已中断"}.get(status, status)
 
 
 def _extract_sources(calls, results) -> list[dict]:
@@ -364,10 +370,211 @@ def _extract_memory(calls, results) -> list[dict]:
     return items
 
 
+# ------------------------------------------------------- 时间线(v0.9.37)
+
+TURN_LIMIT = 12         # 一轮最多列几行(和类别那套一样:再多就是噪声)
+TURNS_LIMIT = 8         # 面板最多往回翻几轮
+TIMELINE_DETAIL = 1200  # 时间线一行点开能看的全文长度
+
+
+def _turn_split(messages) -> list[dict]:
+    """按用户发言把上下文切成轮次,返回 [{"n", "title", "cids": [调用 id…]}]。
+
+    只认 `role=user` 这条真实边界 —— 一次"帮我改课表"到学长说完话就是一轮。
+    没有用户发言(比如刚恢复的半截上下文)也照样归到第 1 轮,不丢调用。
+    """
+    turns: list[dict] = []
+
+    def open_turn(title: str = "") -> dict:
+        t = {"n": len(turns) + 1, "title": title, "cids": []}
+        turns.append(t)
+        return t
+
+    cur: dict | None = None
+    n_calls = 0
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        if role == "user":
+            cur = open_turn(_clip(_content_text(m.get("content")), 60))
+        elif role == "assistant":
+            if cur is None:
+                cur = open_turn("")
+            for call in m.get("tool_calls") or []:
+                name = str((call.get("function") or {}).get("name") or "")
+                if not name:
+                    continue
+                # 没 id 的兜底键必须和 `_call_index` 同一条规则(全局第几次调用),
+                # 否则两边算出来的键对不上,这一行会在时间线里凭空消失 = 少报。
+                cid = str(call.get("id") or "") or f"{name}#{n_calls}"
+                cur["cids"].append(cid)
+                n_calls += 1
+    return turns
+
+
+def _content_text(content) -> str:
+    """用户消息可能是多模态数组:只取文字部分(图片那格没什么可标题化的)。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(str(i.get("text")) for i in content
+                        if isinstance(i, dict) and i.get("type") == "text")
+    return ""
+
+
+def _pair_times(rows: list[dict], live: list[dict] | None) -> int:
+    """把实时表里的真实时刻配到时间线行上。**配不上就不配**(返回配对数)。
+
+    为什么能配:`tool_start` 推的摘要与这里从消息里复算的摘要是同一个函数
+    (`toolsum.summarize`)算出来的,同一次调用必然同字。指针只往前走,所以
+    "同一个文件读三次"会一一对上,不会三次都领第一次的时间。
+    """
+    if not live:
+        return 0
+    j, matched = 0, 0
+    for row in rows:
+        for k in range(j, len(live)):
+            cand = live[k]
+            if str(cand.get("name") or "") != row["tool"]:
+                continue
+            if str(cand.get("summary") or "") != row["raw"]:
+                continue
+            row["start"], row["end"], row["dur"] = (
+                cand.get("start"), cand.get("end"), _dur(cand))
+            j = k + 1
+            matched += 1
+            break
+    return matched
+
+
+def _dur(entry: dict):
+    start, end = entry.get("start"), entry.get("end")
+    if start is None or end is None:
+        return None
+    return max(0, int(round(float(end) - float(start))))
+
+
+def _clock(epoch) -> str:
+    if epoch is None:
+        return ""
+    try:
+        return time.strftime("%H:%M:%S", time.localtime(float(epoch)))
+    except (OSError, OverflowError, ValueError, TypeError):
+        return ""
+
+
+def _timeline_action(row: dict, result: str) -> dict | None:
+    """一行的点击去处:能开文件夹就开、能开网页就开、否则看这一行的原文。"""
+    args = row.get("args") or {}
+    name = toolsum.short_name(row["tool"])
+    if name in FILE_TOOLS and str(args.get("path") or "").strip():
+        return {"type": "reveal", "label": "打开所在文件夹",
+                "path": str(args["path"]).strip()}
+    url = str(args.get("url") or "").strip()
+    if name in URL_TOOLS and url:
+        return {"type": "open", "url": url}
+    if result:
+        return {"type": "detail", "label": "看这一步的原文",
+                "text": result[:TIMELINE_DETAIL]}
+    return None
+
+
+def timeline(messages, workspace=None, live=None, busy=True) -> dict:
+    """按**真实先后**排的任务时间线:每次工具调用一行,按用户发言切成轮次。
+
+    与上面那五类(`session_activity` 的 groups)是两种问法:类别回答"这一轮总共
+    产出/查过什么",时间线回答"它先做了什么、后做了什么、哪一步失败了"。
+    两边都从同一份 `session.messages` 里数,不会一个说 12 次一个说 9 次。
+
+    诚实口径三条:①轮次上的次数永远是**真总数**,`MAX/TURN_LIMIT` 截断只少列行、
+    并写明"另有 N 次没列出";②时刻只来自 GUI 实时表,没记到的行不给时间
+    (并行子代理的内部工具、上一版程序跑的都算没记到);③在跑的那一步单独标,
+    不和"已经失败"混在一个数里。
+    """
+    calls, results, _order = _call_index(messages)
+    rows: list[dict] = []
+    for turn in _turn_split(messages):
+        for cid in turn["cids"]:
+            call = calls.get(cid)
+            if not call:
+                continue
+            name, args = call["name"], call["args"]
+            summary = toolsum.summarize(name, args)
+            result = results.get(cid)
+            if result is not None:
+                status = "failed" if _failed(result) else "ok"
+            else:
+                status = "running" if busy else "stale"
+            rows.append({"key": f"t:{cid}", "cid": cid, "tool": name,
+                         "turn": turn["n"], "turn_title": turn["title"],
+                         "verb": toolsum.verb(name, args),
+                         "raw": summary, "summary": _clip(summary),
+                         "args": args,
+                         "status": status, "badge": _badge(status),
+                         "start": None, "end": None, "dur": None,
+                         "result": result if isinstance(result, str) else ""})
+    _pair_times(rows, live)
+    by_turn: dict[int, list[dict]] = {}
+    for row in rows:
+        by_turn.setdefault(row["turn"], []).append(row)
+    turns = []
+    for n, items in sorted(by_turn.items(), reverse=True):
+        counts = {"running": 0, "failed": 0, "stale": 0}
+        for r in items:
+            if r["status"] in counts:
+                counts[r["status"]] += 1
+        title = items[0]["turn_title"]
+        when = _clock(items[0].get("start"))
+        # 轮与轮之间最新在上;**轮内按先后顺序读下来** —— 时间线存在的理由就是
+        # "它先做了什么、后做了什么",轮内再倒过来就没人能顺着看了。
+        # 截断保留这一轮最近的 TURN_LIMIT 行(少列行,不少报次数)。
+        shown = items[-TURN_LIMIT:]
+        for r in shown:
+            r["action"] = _timeline_action(r, r["result"])
+        for r in items:
+            # 时刻只可能是空串:实时表没记到的行(并行子代理内部、上一版程序跑的)
+            # 就不显示时间。宁可少一列,不许拿"现在"凑一个。
+            r["time"] = _clock(r.get("start"))
+            r["dur_text"] = f"{r['dur']}s" if r.get("dur") is not None else ""
+            for k in ("args", "result", "cid", "raw", "turn_title", "end", "dur"):
+                r.pop(k, None)
+        turns.append({"n": n, "title": title,
+                      "calls": len(items), "errors": counts["failed"],
+                      "running": counts["running"], "stale": counts["stale"],
+                      "when": when,
+                      "items": shown,
+                      "more": max(0, len(items) - len(shown))})
+    hidden = max(0, len(turns) - TURNS_LIMIT)
+    return {"turns": turns[:TURNS_LIMIT], "turns_total": len(turns),
+            "turns_more": hidden, "calls": len(rows),
+            "errors": sum(1 for r in rows if r["status"] == "failed"),
+            "running": sum(1 for r in rows if r["status"] == "running"),
+            "stale": sum(1 for r in rows if r["status"] == "stale")}
+
+
+def now_line(now: dict | None) -> dict | None:
+    """「此刻在跑哪一步」那一行。没有真的在跑的东西就给 None,前端整段不显示。"""
+    if not now or now.get("start") is None:
+        return None
+    name = str(now.get("name") or "")
+    summary = str(now.get("summary") or "")
+    return {"tool": name, "verb": toolsum.verb(name),
+            "title": _clip(summary) or toolsum.verb(name),
+            "agent_type": toolsum.agent_type(name),
+            "start": _clock(now.get("start")),
+            "elapsed": max(0, int(now.get("elapsed") or 0))}
+
+
 # ------------------------------------------------------------------ 对外入口
 
-def session_activity(messages, workspace=None) -> dict:
-    """把会话消息聚合成右侧面板要的那份字典(纯函数,不碰磁盘以外的东西)。"""
+def session_activity(messages, workspace=None, live=None, now=None, busy=True) -> dict:
+    """把会话消息聚合成右侧面板要的那份字典(纯函数,不碰磁盘以外的东西)。
+
+    `busy` = 这个会话此刻还在不在跑。它决定"没有回话的那一步"算进行中还是算
+    已中断:用户按了停止之后,`tool_done` 不会再来到,消息里那条调用就永远没有
+    回话 —— 这时还写"写入中"就是谎话。
+    """
     calls, results, order = _call_index(messages)
     groups = {
         "subagents": _extract_subagents(calls, results),
@@ -381,14 +588,28 @@ def session_activity(messages, workspace=None) -> dict:
     out, total = [], 0
     for key, label, icon in GROUPS:
         rows = list(reversed(groups[key]))
+        if not busy:
+            for r in rows:
+                if r.get("status") == "running":
+                    r["status"], r["badge"] = "stale", "已中断"
         total += len(rows)
         out.append({"key": key, "label": label, "icon": icon,
                     "count": len(rows), "items": rows[:GROUP_LIMIT],
                     "more": max(0, len(rows) - GROUP_LIMIT)})
     errors = sum(1 for cid in order if cid in results and _failed(results[cid]))
-    running = sum(1 for cid in order if cid not in results)
+    silent = [cid for cid in order if cid not in results]
+    running = len(silent) if busy else 0
+    interrupted = 0 if busy else len(silent)
+    # 时间线与上面五类同源同一份消息:两处各数一次就会出现"卡片说 12 次、
+    # 时间线只有 9 行"那种自相矛盾。live 没传(终端/网页版)时行照排,只是没时间。
+    line = timeline(messages, workspace=workspace, live=live, busy=busy)
     return {"ok": True, "groups": out,
+            "timeline": line, "now": now_line(now) if busy else None,
+            # 「统计于 HH:MM:SS」的那个数:是**这次算**的时刻,不是动作发生的时刻
+            "updated_at": time.strftime("%H:%M:%S", time.localtime()),
             "summary": {"calls": len(order), "errors": errors, "running": running,
+                        "interrupted": interrupted,
+                        "busy": bool(busy),
                         "workspace": _rel(workspace, None) if workspace else ""},
             # 前端拿它排"哪一类该显示";空类直接不渲染,不摆一屏"暂无"
-            "empty": total == 0}
+            "empty": total == 0 and not line["calls"]}

@@ -76,6 +76,7 @@ _build_*.log
 
 # v0.9.22 关窗偏好与托盘诊断日志(本机状态)+ 数据目录写探针
 /close-pref.json
+/monitor-pref.json
 /tray.log
 /.write-probe.tmp
 

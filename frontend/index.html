@@ -465,6 +465,7 @@ try {
   /* ---------------- 主区 ---------------- */
   .main{ display:flex; flex-direction:column; min-width:0; min-height:0; }
   .topbar{ display:flex; align-items:center; gap:8px; padding:10px 16px;
+           flex-wrap:wrap;                 /* 右边栏/地图挤进来时换行,而不是把按钮压扁 */
            border-bottom:1px solid var(--line-soft); background:var(--glass);
            backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
   /* 工作区标识:可点开工作区弹窗(Agent 在哪个文件夹里干活) */
@@ -481,7 +482,7 @@ try {
   .topbar button, .topbar select{
     background:var(--glass-lite); color:var(--text-2); border:1px solid var(--line-soft);
     border-radius:var(--r-full); padding:5px 14px; font-size:12px; font-weight:700;
-    cursor:pointer; transition:.15s;
+    cursor:pointer; transition:.15s; white-space:nowrap;
   }
   .topbar button:hover{ border-color:var(--primary); color:var(--primary-text);
                         transform:translateY(-1px); }
@@ -1359,15 +1360,16 @@ try {
   .app.act-open{ grid-template-columns:260px 1fr 300px; }   /* 与上面 map 让位的 300px 同值 */
   body.act-open .map-panel{ right:300px; }        /* 两栏并排时地图不压住活动面板 */
   .act-head{ display:flex; align-items:center; gap:6px; padding:12px 12px 6px; }
-  .act-head b{ font-size:13px; color:var(--text-1); }
-  .act-sum{ margin-left:auto; font-size:11px; color:var(--text-3);
-            font-variant-numeric:tabular-nums; }
+  .act-head b{ font-size:13px; color:var(--text-1); white-space:nowrap; }
+  .act-sum{ margin-left:auto; font-size:11px; color:var(--text-3); min-width:0;
+            text-align:right; font-variant-numeric:tabular-nums; }
   .act-ib{ border:1px solid transparent; background:transparent; cursor:pointer;
            color:var(--text-3); font-size:12px; border-radius:8px; padding:2px 6px; }
   .act-ib:hover{ color:var(--primary-text); border-color:var(--line-soft);
                  background:var(--primary-light); }
   .act-body{ flex:1; min-height:0; overflow-y:auto; padding:2px 8px 10px; }
-  .act-sec{ margin:8px 0 2px; }
+  .act-sec,.act-sect{ margin:8px 0 2px; }
+  .act-sectbody{ padding-left:2px; }
   .act-cap{ display:flex; align-items:baseline; gap:6px; padding:2px 4px 4px;
             font-size:11.5px; color:var(--text-3); }
   .act-cap b{ font-size:12px; color:var(--text-2); font-weight:800; }
@@ -1406,6 +1408,54 @@ try {
   html.dark .act-row:hover{ background:rgba(90,180,229,.10); }
   @media (prefers-reduced-motion: reduce){
     .act-row.running .act-dot{ animation:none; border-top-color:var(--primary); }
+  }
+  /* ---- v0.9.37 任务监控:段可折叠、轮可折叠、此刻在跑真转圈 ----
+     折叠状态存在后端 monitor-pref.json 里(段级),轮级只活在本次打开期间:
+     轮次每跑一步都在变,记到磁盘上明天就对不上了。 */
+  .act-cap.fold{ cursor:pointer; border-radius:8px; padding:3px 4px; }
+  .act-cap.fold:hover{ background:var(--primary-light); color:var(--primary-text); }
+  .act-caret{ width:9px; display:inline-block; font-size:9px; color:var(--text-3); }
+  .act-sect.folded .act-sectbody{ display:none; }
+  .act-now{ display:flex; align-items:flex-start; gap:8px; padding:7px 8px;
+            border:1px solid var(--line-soft); border-radius:10px;
+            background:var(--primary-light); }
+  .act-g{ width:11px; height:11px; margin-top:2px; border-radius:99px; flex:none;
+          border:2px solid var(--primary); border-top-color:transparent;
+          animation:tkSpin .9s linear infinite; }
+  .act-now .act-t{ font-size:12.5px; }
+  .act-now .act-m{ flex:1; min-width:0; }
+  .act-turnhead .act-time{ margin-left:auto; }
+  .act-idle{ padding:5px 8px; font-size:11.5px; color:var(--text-3); line-height:1.6; }
+  .act-time{ font-size:10px; color:var(--text-3); font-variant-numeric:tabular-nums;
+             white-space:nowrap; }
+  .act-turn{ margin:4px 0 6px; }
+  .act-turnhead{ display:flex; align-items:baseline; gap:6px; padding:4px 5px;
+                 font-size:11px; color:var(--text-3); cursor:pointer;
+                 border-radius:8px; border:1px solid transparent; }
+  .act-turnhead:hover{ background:var(--primary-light); border-color:var(--line-soft); }
+  .act-turnhead b{ font-size:11.5px; color:var(--text-2); font-weight:700; }
+  .act-turnhead .act-q{ font-weight:400; color:var(--text-3); font-size:10.5px;
+                        overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+                        max-width:150px; }
+  .act-turn.folded .act-rows{ display:none; }
+  .act-turn.err .act-turnhead b{ color:var(--danger); }
+  .plm{ display:flex; flex-direction:column; gap:3px; }
+  .plm-bar{ height:4px; border-radius:99px; background:var(--line-soft); overflow:hidden;
+            margin:2px 4px 5px; }
+  .plm-bar i{ display:block; height:100%; background:var(--primary); border-radius:99px; }
+  .plm-row{ display:grid; grid-template-columns:11px 1fr auto; gap:8px; align-items:start;
+            padding:4px 6px; border-radius:9px; border:1px solid transparent;
+            cursor:pointer; }
+  .plm-row:hover{ background:var(--primary-light); border-color:var(--line-soft); }
+  .plm-row .act-t{ font-size:12px; }
+  .plm-row.run .act-dot{ background:transparent; border:2px solid var(--primary);
+                         border-top-color:transparent; animation:tkSpin .9s linear infinite; }
+  .plm-row.done .act-dot{ background:var(--success); }
+  .plm-row.failed .act-dot{ background:var(--danger); }
+  .plm-row.pending .act-dot{ background:var(--text-3); }
+  .plm-row.blocked .act-dot{ background:transparent; border:2px solid var(--warning); }
+  @media (prefers-reduced-motion: reduce){
+    .act-g, .plm-row.run .act-dot{ animation:none; border-top-color:var(--primary); }
   }
   /* 技能详情与添加表单:字段行,与模型管理弹窗同款节奏 */
   .skform{ border-top:1px solid var(--line-soft); margin-top:12px; padding-top:12px; }
@@ -1518,7 +1568,7 @@ try {
       <button id="btnSchedule" title="查看/导入我的课表(本机存储)">📅 课表</button>
       <button id="btnMood" title="情绪日记:一句话记一下,每周回头看看(只回读、不诊断;数据只在本机)。也可以直接在对话里说「今天 3 分,因为…」">🌱 心情</button>
       <button id="btnPlan" title="查看当前任务计划(plans/plan.md):做到哪步、哪几步能接着做">🗂 计划<span class="pl-n" id="plPill"></span></button>
-      <button id="btnActivity" title="本次会话都真做过什么:子代理、产出文件、查过的网页与来源、记忆改动(每一行都点得动)">🧭 动态<span class="pl-n" id="actPill"></span></button>
+      <button id="btnActivity" title="右侧「任务监控」栏(Ctrl+Shift+M):此刻在跑哪一步、计划做到哪、按先后排的时间线、产出的文件与查过的网页(每一行都点得动)">🛰 监控<span class="pl-n" id="actPill"></span></button>
       <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐ 技能</button>
       <button id="btnUsage" title="查看每日 token 消耗">📊 用量</button>
       <button id="btnExport" title="把当前会话导出成 Markdown(方便贴进文档或发给同学)">⬇ 导出</button>
@@ -1575,18 +1625,20 @@ try {
     </div>
   </section>
 
-  <!-- 右侧「本次会话」活动面板(v0.9.34):第三列,只在 .app.act-open 时占位。
-       内容全部来自后端 get_activity() 扫当前会话消息,前端不做任何"数一数"的推断。 -->
+  <!-- 右侧「任务监控」栏(v0.9.34 起, v0.9.37 改版):第三列,只在 .app.act-open 时占位。
+       四段全部来自后端:现在/时间线/五类来自 get_activity() 扫当前会话消息,
+       计划来自 get_plan() 读 plans/plan.md。前端一行都不自己数、也不猜时间。 -->
   <aside class="activity" id="activity">
     <div class="act-head">
-      <b>🧭 本次会话</b>
+      <b>🛰 任务监控</b>
       <span class="act-sum" id="actSum"></span>
       <button class="act-ib" id="btnActRefresh" title="重新统计一遍">↻</button>
-      <button class="act-ib" id="btnActClose" title="收起这一栏">✕</button>
+      <button class="act-ib" id="btnActClose" title="收起这一栏(Ctrl+Shift+M 再展开)">✕</button>
     </div>
     <div class="act-body" id="actBody"></div>
-    <div class="act-foot">只列当前上下文里还看得见的工具动作(压缩过的早期内容会进摘要)。
-      点一行才做事:打开链接 / 定位文件 / 看全文 / 把追问填回输入框。</div>
+    <div class="act-foot">「现在」只在这轮真有工具在跑时出现;「时间线」按先后排,
+      时刻来自本机实时表 —— 没记到的行宁可不显示时间,也不拿刷新那一刻凑。
+      点一行才做事:定位文件 / 打开链接 / 看这一步的原文 / 把追问填回输入框。</div>
   </aside>
 </div>
 
@@ -2228,6 +2280,14 @@ document.addEventListener("keydown", ev => {
     const k = String(ev.key || "").toLowerCase();
     if (k === "k") { ev.preventDefault(); openProvDlg(); return; }
     if (k === "n") { ev.preventDefault(); $("btnNewTask").click(); return; }
+  }
+  // Ctrl+Shift+M(v0.9.37):收起/展开右侧「任务监控」栏。单列 Ctrl+M 是 WebView2
+  // 的缩放一类保留组合,也是浏览器"移动标签"的习惯,所以加 Shift 避让。
+  if (ev.ctrlKey && ev.shiftKey && !ev.altKey
+      && String(ev.key || "").toLowerCase() === "m") {
+    ev.preventDefault();
+    setActivityOpen(!actOpen);
+    return;
   }
   if (ev.key !== "Escape") return;
   hideSelBar();
@@ -4662,6 +4722,9 @@ $("btnMoClear").addEventListener("click", moClear);
    「派发到输入框」是刻意保守的做法:只把"接着做哪几步"拼成一条指令填回输入框,
    由你按发送;不自动发、也不并发派子代理(并发写文件会互相踩、确认门会串)。 */
 let planData = null;
+// 监控栏「计划」段用的就是这一份。声明放在这里(而不是下面监控栏那一节):
+// renderPlan 会在栏的代码跑到之前被调用,let 的绑定那时还没初始化 = 整栏白屏。
+let actPlan = null;
 const planApi = () => (window.pywebview && pywebview.api && pywebview.api.get_plan)
   ? pywebview.api : null;
 
@@ -4686,6 +4749,10 @@ function plList(nums, steps) {
 
 function renderPlan(r) {
   planData = r || null;
+  // 监控栏的「计划」段与这个弹窗**同源同一份数据**:一次 get_plan 两处用,
+  // 各读各的就会出现"弹窗说 3/5、栏里摆 2/5"那种自相矛盾。
+  actPlan = r || null;
+  actRerender();
   const pill = $("plPill");
   if (pill) pill.textContent = (r && r.has_plan && r.total) ? ` ${r.done}/${r.total}` : "";
   const body = $("plBody"), cols = $("plCols"), note = $("plNote"), btn = $("btnPlanDispatch");
@@ -4880,20 +4947,33 @@ function markPlanCardIdle() {
 }
 
 
-/* ---------------- 右侧「本次会话」活动面板(v0.9.34) ----------------
-   用户看图 p2 点名要右边这一栏,并立了规矩:「是要真正能使用的不能只用于装饰」。
-   落到实现上是四条:
+/* ---------------- 右侧「任务监控」栏(v0.9.34 起,v0.9.37 四段改版) ----------------
+   用户看图 p1 点名要"可以隐藏也可以展开的任务监管",立的还是那条规矩:
+   「是要真正能使用的不能只用于装饰」。落到实现上是六条:
    ①**数字一律由后端算**:`get_activity()` 扫的是当前会话的消息(完整参数 + 完整回话),
-     前端一行都不自己数 —— 它手里只有渲染过的事件流,刷新一次就没了(见 minicode/activity.py)。
-   ②**没做过的一类不渲染**:空组直接不出现,不摆一排"暂无"占地方。
-   ③**没有动作的行不给"能点"的样子**:后端只在真有办法时才给 action(文件已经不在磁盘上
+     计划段读 plans/plan.md;前端一行都不自己数 —— 它手里只有渲染过的事件流,刷新一次就没了。
+   ②**时刻只可能来自 GUI 实时表**:没记到的行不显示时间(并行子代理的内部工具、上一版
+     程序跑的都算没记到)。走针那一下是把后端给的秒数往上加,不是重猜一个开始时间。
+   ③**没做过的一段不渲染**:空段、空组直接不出现,不摆一屏"暂无"占地方。
+   ④**没有动作的行不给"能点"的样子**:后端只在真有办法时才给 action(文件已经不在磁盘上
      就不给"打开所在文件夹"),前端据此加 .plain 去掉 pointer 与 hover。
-   ④**全程 textContent 建节点**:这一栏显示的是工具参数与网页正文里的字符串,
+   ⑤**折叠记到磁盘**:段级状态在 monitor-pref.json(与关窗偏好同类,纯界面偏好),
+     轮级只活在本次打开期间 —— 轮次每跑一步都在变,记到磁盘上明天就对不上了。
+   ⑥**全程 textContent 建节点**:这一栏显示的是工具参数与网页正文里的字符串,
      用 innerHTML 拼就等于把"搜索关键词"当成 HTML 塞进页面。 */
 let actOpen = false;
-let actRows = {};              // key -> 行数据(点行时回查,长文本不进 DOM 属性)
+let actRows = {};              // key -> 行数据(时间线与五类共用;长文本不进 DOM 属性)
 let actTimer = null;
+let actTick = null;            // 「已跑 N 秒」那一格的走针
+let actFolded = {};            // 段折叠:后端 monitor-pref.json 里那份
+let actTurnFold = {};          // 轮折叠:只在这次打开期间有效
+let actData = null;            // 上一次后端算好的整份(点折叠时原地重画,不敲桥)
+let actPrefDone = false;       // 没读回偏好之前不写盘:否则等于把默认值冒充成用户的选择
 const ACT_ORDER = ["subagents", "files", "web", "sources", "memory"];
+
+function activityApi() {
+  return window.pywebview && window.pywebview.api;
+}
 
 function actEl(spec, text) {
   const isStr = typeof spec === "string";
@@ -4903,16 +4983,50 @@ function actEl(spec, text) {
   return el;
 }
 
+// ---------------- 偏好:这一栏开没开、哪几段被折叠过(全都记在 monitor-pref.json)
+
+function actFoldWrite(key, folded) {
+  actFolded[key] = !!folded;
+  const api = activityApi();
+  if (!api || !api.set_monitor_pref || !actPrefDone) return;
+  const patch = {};
+  patch[key] = !!folded;                    // 只带点过的那一段:整份回写会把另外三段弹开
+  api.set_monitor_pref(null, JSON.stringify(patch)).catch(() => {});
+}
+
+async function actPrefPull() {
+  const api = activityApi();
+  if (!api || !api.get_monitor_pref) return;
+  let r = null;
+  try {
+    r = await api.get_monitor_pref();
+  } catch (e) { return; }                   // 桥没就绪:开机那几百毫秒,下一轮事件会再管
+  if (!r || !r.ok) return;
+  actPrefDone = true;
+  actFolded = r.folded || {};
+  if (!!r.open !== actOpen) setActivityOpen(!!r.open);   // 上次收起就收起,上次展开就展开
+}
+
 function setActivityOpen(on) {
-  actOpen = !!on;
+  on = !!on;
+  if (on === actOpen) { if (on) activityRefresh(); return; }
+  actOpen = on;
   const appEl = document.querySelector(".app");
   if (appEl) appEl.classList.toggle("act-open", actOpen);
   document.body.classList.toggle("act-open", actOpen);
   $("btnActivity").setAttribute("aria-expanded", actOpen ? "true" : "false");
+  // 开关先记账再走下面的分支:收起那条路原来提前 return,于是"上次是收起的"
+  // 永远存不下来 —— 记住开、忘记关,等于没记住(e2e 第 11 项钉的就是这个)。
+  const api = activityApi();
+  if (api && api.set_monitor_pref && actPrefDone) {
+    api.set_monitor_pref(on, "").catch(() => {});
+  }
   if (!actOpen) {
     clearTimeout(actTimer);
+    actTickStop();
     $("actBody").textContent = "";
     actRows = {};
+    actData = null;
     $("actPill").textContent = "";
     return;
   }
@@ -4925,8 +5039,9 @@ function activitySchedule(delay) {
   actTimer = setTimeout(activityRefresh, delay || 400);
 }
 
-function activityApi() {
-  return window.pywebview && window.pywebview.api;
+// 计划段变了(plan_changed)或折叠状态变了:拿手里这份数据原地重画,不为这个敲桥
+function actRerender() {
+  if (actOpen && actData) renderActivity(actData);
 }
 
 async function activityRefresh() {
@@ -4939,10 +5054,12 @@ async function activityRefresh() {
     return;
   }
   if (!data || !data.ok) {
+    actTickStop();
     actRows = {};
+    actData = null;
     $("actBody").textContent = (data && data.msg)
-      ? "读不出本次会话的活动:" + data.msg
-      : "读不出本次会话的活动(稍后点 ↻ 再试一次)";
+      ? "读不出这轮的任务监控:" + data.msg
+      : "读不出这轮的任务监控(稍后点 ↻ 再试一次)";
     return;
   }
   renderActivity(data);
@@ -4962,38 +5079,229 @@ function actRowEl(item) {
   return row;
 }
 
-function renderActivity(data) {
-  const body = $("actBody");
-  body.textContent = "";
-  actRows = {};
-  const sum = data.summary || {};
-  const bits = [];
-  if (sum.calls) bits.push(sum.calls + " 次工具调用");
-  if (sum.errors) bits.push(sum.errors + " 处失败");
-  if (sum.running) bits.push(sum.running + " 个在跑");
-  $("actSum").textContent = bits.join(" · ");
-  $("actPill").textContent = sum.running ? String(sum.running) : "";
+// ---------------- 「此刻」段:正在跑哪一步 + 真已耗时(没在跑就明说没在跑)
 
+function actTickStop() {
+  if (actTick) { clearInterval(actTick); actTick = null; }
+}
+
+// 走针只把后端算好的秒数往前推,不重新猜开始时刻;桥一时没回话也不会跳出个假数字
+function actTickStart(base) {
+  const t0 = Date.now();
+  actTick = setInterval(() => {
+    const span = $("actNowElapsed");
+    if (!span) { actTickStop(); return; }
+    span.textContent = "已跑 " + (base + Math.floor((Date.now() - t0) / 1000)) + " 秒";
+  }, 1000);
+}
+
+function buildNow(parent, data) {
+  const sum = data.summary || {};
+  const now = data.now;
+  if (now) {
+    const row = actEl("act-now");
+    row.appendChild(actEl({ cls: "act-g" }));
+    const mid = actEl({ cls: "act-m" });
+    mid.appendChild(actEl("act-t", (now.verb || now.tool) + ": " + (now.title || "")));
+    const bits = [];
+    if (now.agent_type) bits.push("子代理 " + now.agent_type);
+    bits.push(now.start ? "开始于 " + now.start : "开始时刻没记到(并行子代理或上一版程序跑的)");
+    mid.appendChild(actEl("act-s", bits.join(" · ")));
+    row.appendChild(mid);
+    const el = actEl("act-time", "已跑 " + now.elapsed + " 秒");
+    el.id = "actNowElapsed";
+    row.appendChild(el);
+    parent.appendChild(row);
+    actTickStart(now.elapsed);
+    return 1;
+  }
+  parent.appendChild(actEl("act-idle", sum.busy
+    ? "这一轮在等模型说话,此刻没有正在执行的工具。工具一跑起来这里会自己转起来。"
+    : "这一轮没有正在执行的工具 —— 会话没在跑。"
+      + (sum.interrupted ? ` 已停下,${sum.interrupted} 次调用没有回话(标为已中断)。` : "")));
+  return 1;
+}
+
+// ---------------- 「计划」段:把 plans/plan.md 的步骤摆进监控栏,点一行开完整面板
+
+function plmLook(s) {
+  if (s.status === "done") return ["done", "完成"];
+  if (s.status === "failed") return ["failed", "失败"];
+  if (s.status === "in_progress") return ["run", "进行中"];
+  if (s.blocked) return ["blocked", "被卡住"];
+  if (s.ready) return ["pending", "可做"];
+  return ["pending", "待办"];
+}
+
+function buildPlan(parent) {
+  const r = actPlan;
+  if (!r) return 0;                                   // 还没读到:不猜,这一段先不出现
+  if (!r.ok) {
+    parent.appendChild(actEl("act-idle", "计划读不出来:" + (r.msg || "未知原因")));
+    return 1;
+  }
+  if (!r.has_plan || !(r.steps || []).length) return 0;   // 没计划就别摆一段"暂无"
+  const pct = r.total ? Math.round(r.done * 100 / r.total) : 0;
+  const bar = actEl("plm-bar");
+  const fill = document.createElement("i");
+  fill.style.width = pct + "%";
+  bar.appendChild(fill);
+  parent.appendChild(bar);
+  const wrap = actEl("plm");
+  for (const s of r.steps || []) {
+    const k = plmLook(s);
+    const row = actEl({ cls: "plm-row " + k[0] });
+    row.title = "点开计划面板:看依赖、备注,或把「接着做哪几步」填进输入框";
+    row.appendChild(actEl({ cls: "act-dot" }));
+    const mid = actEl({ cls: "act-m" });
+    mid.appendChild(actEl("act-t", `${s.n}. ${s.title || "(没标题)"}`));
+    if (s.detail) mid.appendChild(actEl("act-s", s.detail));
+    row.appendChild(mid);
+    row.appendChild(actEl("act-badge", k[1]));
+    wrap.appendChild(row);
+  }
+  parent.appendChild(wrap);
+  parent.appendChild(actEl("act-more", `${r.done}/${r.total} 已完成 · 点任一行展开计划面板`));
+  return (r.steps || []).length;
+}
+
+// ---------------- 「时间线」段:按轮次折叠,轮内保持先后顺序
+
+function actTlRowEl(item) {
+  const row = actEl({ cls: "act-row " + (item.status || "ok") });
+  if (!item.action || !item.action.type) row.classList.add("plain");
+  row.dataset.k = String(item.key || "");
+  const mid = actEl({ cls: "act-m" });
+  mid.appendChild(actEl("act-t", item.summary || item.tool || "(没参数)"));
+  const bits = [];
+  if (item.time) bits.push(item.time);                 // 没记到时刻 = 不显示,不拿刷新那一刻凑
+  if (item.dur_text) bits.push("用时 " + item.dur_text);
+  if (bits.length) mid.appendChild(actEl("act-s", bits.join(" · ")));
+  row.appendChild(actEl({ cls: "act-dot" }));
+  row.appendChild(mid);
+  // 徽章:平时是"这一步在做什么";不平时把状态一起写上 —— 光靠圆点颜色,
+  // 色弱的人与"截图发给同学"的场景里根本分不出失败还是完成。
+  const abnormal = item.status && item.status !== "ok" && item.badge;
+  row.appendChild(actEl("act-badge",
+    (item.verb || "") + (abnormal ? ((item.verb ? " · " : "") + item.badge) : "")));
+  return row;
+}
+
+function actTurnOpen(n, newest) {
+  const k = "T" + n;
+  if (k in actTurnFold) return !!actTurnFold[k];
+  return n === newest;              // 默认只展开最新一轮,老轮次收着但一点就开
+}
+
+function buildTimeline(parent, tl) {
+  const turns = tl.turns || [];
+  if (!turns.length) return 0;
+  const newest = turns[0] ? turns[0].n : -1;
+  turns.forEach((t, i) => {
+    const turn = actEl("act-turn");
+    if (!actTurnOpen(t.n, newest)) turn.classList.add("folded");
+    const head = actEl("act-turnhead");
+    head.appendChild(actEl("act-caret", turn.classList.contains("folded") ? "▸" : "▾"));
+    const bits = [`执行工具 ${t.calls} 次`];    // 次数永远是**真总数**,截断只少列行
+    if (t.errors) bits.push(`其中 ${t.errors} 次失败`);
+    if (t.running) bits.push(`${t.running} 次在跑`);
+    if (t.stale) bits.push(`${t.stale} 次已中断`);
+    head.appendChild(actEl({ tag: "b" }, bits.join(",")));
+    if (t.title) head.appendChild(actEl("act-q", "「" + t.title + "」"));
+    if (t.when) head.appendChild(actEl("act-time", t.when));
+    head.dataset.turn = String(t.n);
+    if (t.errors) turn.classList.add("err");
+    turn.appendChild(head);
+    const rows = actEl("act-rows");
+    for (const item of t.items || []) {
+      actRows[String(item.key || "")] = item;
+      rows.appendChild(actTlRowEl(item));
+    }
+    if (t.more) rows.appendChild(actEl("act-more", `另有 ${t.more} 次没列出(这一轮共 ${t.calls} 次)`));
+    turn.appendChild(rows);
+    parent.appendChild(turn);
+    if (i === 0 && turns.length > 1) {
+      // 上一轮留着当历史,但别让人以为这一栏只统计了最新一轮
+      parent.appendChild(actEl("act-more", "下面几轮是之前几次的追问,点标题行展开"));
+    }
+  });
+  if (tl.turns_more) parent.appendChild(actEl("act-more", `另有 ${tl.turns_more} 轮没列出`));
+  return turns.length;
+}
+
+// ---------------- 「产出与来源」段:v0.9.34 那五类,原样收进一段
+
+function buildGroups(parent, data) {
   const groups = (data.groups || [])
     .filter(g => g && g.count > 0 && (g.items || []).length)
     .sort((x, y) => ACT_ORDER.indexOf(x.key) - ACT_ORDER.indexOf(y.key));
-  if (!groups.length) {
-    body.appendChild(actEl("act-empty",
-      "这一轮还没有要汇报的动作。派子代理、写文件、查网页、记记忆之后,它们会自己出现在这里 —— 每一行都点得动。"));
-    return;
-  }
   for (const g of groups) {
-    const sec = actEl("act-sec");
+    // 每一类是一块(.act-sec):标题 + 它自己的行 + 截断提示。
+    // 段级折叠是这一轮新加的一层,类别那层原来就有 DOM 结构,
+    // 拆散了 v0.9.34 那支 e2e 就没法再断"类目按后端给的顺序排"。
+    const sec = actEl({ cls: "act-sec" });
+    sec.dataset.group = String(g.key || "");
     const cap = actEl("act-cap");
     cap.appendChild(actEl({ tag: "b" }, g.label));
-    cap.appendChild(actEl("act-n", g.count > 1 ? g.count + " 条" : ""));
     sec.appendChild(cap);
     for (const item of g.items || []) {
       actRows[String(item.key || "")] = item;
       sec.appendChild(actRowEl(item));
     }
-    if (g.more) sec.appendChild(actEl("act-more", `另有 ${g.more} 条没列出`));
-    body.appendChild(sec);
+    if (g.more) sec.appendChild(actEl("act-more", `另有 ${g.more} 条没列出(共 ${g.count} 条)`));
+    parent.appendChild(sec);
+  }
+  return groups.reduce((n, g) => n + g.count, 0);
+}
+
+// 一段:标题可点(折叠状态记在 monitor-pref.json),内容交给 builder 填
+function actSect(key, label, countText, builder) {
+  const bodyEl = actEl({ cls: "act-sectbody" });
+  const n = builder(bodyEl);
+  if (!n) return null;                        // 这一段没做过的事:整段不出现
+  const sec = actEl("act-sect");
+  const folded = !!actFolded[key];
+  if (folded) sec.classList.add("folded");
+  const cap = actEl("act-cap fold");
+  cap.dataset.sect = key;
+  cap.title = folded ? "展开这一段" : "折叠这一段";
+  cap.appendChild(actEl("act-caret", folded ? "▸" : "▾"));
+  cap.appendChild(actEl({ tag: "b" }, label));
+  cap.appendChild(actEl("act-n", countText || ""));
+  sec.appendChild(cap);
+  sec.appendChild(bodyEl);
+  return sec;
+}
+
+function renderActivity(data) {
+  actData = data;
+  const body = $("actBody");
+  body.textContent = "";
+  actRows = {};
+  actTickStop();
+  const sum = data.summary || {};
+  const bits = [];
+  if (sum.calls) bits.push(sum.calls + " 次工具调用");
+  if (sum.errors) bits.push(sum.errors + " 处失败");
+  if (sum.running) bits.push(sum.running + " 个在跑");
+  if (sum.interrupted) bits.push(sum.interrupted + " 个已中断");
+  if (data.updated_at) bits.push("统计于 " + data.updated_at);
+  $("actSum").textContent = bits.join(" · ");
+  $("actPill").textContent = sum.running ? String(sum.running) : "";
+
+  const tl = data.timeline || {};
+  const secs = [
+    actSect("now", "⏱ 此刻", data.now ? "正在执行" : "", b => buildNow(b, data)),
+    actSect("plan", "🗂 计划", actPlan && actPlan.total ? `${actPlan.done}/${actPlan.total}` : "",
+      b => buildPlan(b)),
+    actSect("timeline", "🧾 时间线", tl.calls ? tl.calls + " 次调用" : "",
+      b => buildTimeline(b, tl)),
+    actSect("groups", "📦 产出与来源", "", b => buildGroups(b, data)),
+  ].filter(Boolean);
+  for (const s of secs) body.appendChild(s);
+  if (!secs.length || data.empty) {
+    body.appendChild(actEl("act-empty",
+      "这一轮还没有要汇报的动作。派子代理、写文件、查网页、记记忆之后,它们会自己出现在这里 —— 每一行都点得动。"));
   }
 }
 
@@ -5033,6 +5341,28 @@ function actRun(item, row) {
 }
 
 $("actBody").addEventListener("click", (ev) => {
+  // 段标题:折叠/展开这一段,状态记进 monitor-pref.json(明天开机还是这个样子)
+  const cap = ev.target.closest(".act-cap.fold");
+  if (cap) {
+    const key = cap.dataset.sect || "";
+    const sec = cap.closest(".act-sect");
+    const folded = sec.classList.toggle("folded");     // true = 现在这一折是折上的
+    sec.querySelector(".act-caret").textContent = folded ? "▸" : "▾";
+    cap.title = folded ? "展开这一段" : "折叠这一段";
+    actFoldWrite(key, folded);
+    return;
+  }
+  // 轮标题:只影响这一次打开 —— 轮次每跑一步都在变,记到磁盘上明天就对不上了
+  const head = ev.target.closest(".act-turnhead");
+  if (head) {
+    const turn = head.closest(".act-turn");
+    const folded = turn.classList.toggle("folded");
+    head.querySelector(".act-caret").textContent = folded ? "▸" : "▾";
+    actTurnFold["T" + (head.dataset.turn || "")] = !folded;
+    return;
+  }
+  // 计划行:整段都在说"做到哪了",点开还是那个能看依赖、能派发的面板(不在这里另造一套)
+  if (ev.target.closest(".plm-row")) { openPlanDlg(); actRerender(); return; }
   const row = ev.target.closest(".act-row");
   if (!row) return;
   const item = actRows[row.dataset.k || ""];
@@ -5040,7 +5370,7 @@ $("actBody").addEventListener("click", (ev) => {
 });
 $("btnActivity").addEventListener("click", () => setActivityOpen(!actOpen));
 $("btnActClose").addEventListener("click", () => setActivityOpen(false));
-$("btnActRefresh").addEventListener("click", () => activityRefresh());
+$("btnActRefresh").addEventListener("click", () => { actTurnFold = {}; activityRefresh(); });
 
 
 /* ---------------- 教务课表导入向导(v0.9.23) ----------------
@@ -5719,6 +6049,7 @@ window.addEventListener("DOMContentLoaded", () => {
       loadProjects();      // 侧栏项目面板(最近工作区)
       loadReasoning();     // 思考档位按钮
       loadPlan();          // 计划角标:工作区里已有计划时开窗就看得见进度
+      actPrefPull();       // 任务监控栏:上次收起还是展开、哪几段折着(v0.9.37)
     }).catch(e => {
       $("hint").textContent = "界面初始化失败:" + String(e).slice(0, 80);
     });

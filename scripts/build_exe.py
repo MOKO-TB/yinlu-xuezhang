@@ -114,6 +114,8 @@ def write_user_files(dist: Path) -> None:
                   "notice-watch.json", "injection-events.log",
                   # v0.9.22 关窗偏好与托盘诊断日志(本机状态,不外发)
                   "close-pref.json", "tray.log",
+                  # v0.9.37 任务监控栏的开合/折叠偏好(纯本机界面状态)
+                  "monitor-pref.json",
                   # v0.9.23 首次运行向导的「不再显示」偏好(纯本机状态)
                   "onboarding.json",
                   # v0.9.25 桌面提醒的开关与类别偏好(同样是纯本机状态)

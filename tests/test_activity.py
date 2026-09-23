@@ -69,18 +69,28 @@ def test_empty_session_yields_an_all_empty_payload(tmp_path):
         ["subagents", "files", "web", "sources", "memory"]
     assert all(g["count"] == 0 for g in act["groups"])
     assert act["summary"] == {"calls": 0, "errors": 0, "running": 0,
+                              "interrupted": 0, "busy": True,
                               "workspace": str(tmp_path).replace("\\", "/")}
+    # 时间线也要有结构(前端照它建段,缺键就是一次 undefined)
+    assert act["timeline"]["turns"] == [] and act["timeline"]["calls"] == 0
+    assert act["now"] is None and act["updated_at"]
 
 
-def test_read_only_tools_do_not_appear(tmp_path):
-    """读文件/看计划不是"动作":面板上出现它们就纯属噪声,一类都不许沾。"""
-    s = _session(tmp_path, [
-        [{"id": "a", "name": "read_file", "args": {"path": "a.py"}, "result": "x"}],
-        [{"id": "b", "name": "plan", "args": {"action": "read"}, "result": "计划…"}],
-        [{"id": "c", "name": "glob", "args": {"pattern": "*.md"}, "result": "a.md"}],
-    ])
+def test_read_only_tools_are_not_categories_but_are_on_the_timeline(tmp_path):
+    """读文件/看计划不是"产出":五类里一行都不许沾(否则面板全是噪声);
+    但时间线**必须**看得见它们 —— 用户问的是"它先做了什么后做了什么",
+    把 read_file 藏起来就是少报,而且那一行本来就点得开(看这一步的原文)。"""
+    s = _session(tmp_path, [[
+        {"id": "a", "name": "read_file", "args": {"path": "a.py"}, "result": "x"},
+        {"id": "b", "name": "plan", "args": {"action": "read"}, "result": "计划…"},
+        {"id": "c", "name": "glob", "args": {"pattern": "*.md"}, "result": "a.md"},
+    ]])
     act = activity.session_activity(s.messages, workspace=tmp_path)
-    assert act["empty"] is True and act["summary"]["calls"] == 3
+    assert all(g["count"] == 0 for g in act["groups"])   # 五类全空
+    assert act["empty"] is False                         # 但这一栏有话说
+    assert act["summary"]["calls"] == 3
+    rows = [r for t in act["timeline"]["turns"] for r in t["items"]]
+    assert [r["verb"] for r in rows] == ["读文件", "计划", "找文件"]
 
 
 # ------------------------------------------------------------------ 产出:去磁盘核
@@ -356,3 +366,149 @@ def test_public_api_forwards_the_activity_names():
     assert list(inspect.signature(PublicApi.reveal_file).parameters) == \
         ["self", "path"]
     assert list(inspect.signature(PublicApi.get_activity).parameters) == ["self"]
+
+
+# ------------------------------------------- 时间线与实时表(v0.9.37 任务监控)
+
+
+def _live(name, args, start, end=None, ok=None):
+    """按 `toolsum.summarize` 造一条实时表记录 —— 配对靠的就是这同一句话。"""
+    from minicode import toolsum
+    return {"name": name, "summary": toolsum.summarize(name, args),
+            "start": start, "end": end, "ok": ok}
+
+
+def _turns(act):
+    return act["timeline"]["turns"]
+
+
+def _rows(act, turn_index=0):
+    return _turns(act)[turn_index]["items"]
+
+
+def test_timeline_reads_oldest_to_newest_within_a_turn(tmp_path):
+    """时间线存在的理由就是"先做了什么、后做了什么":轮内必须按真实先后排。"""
+    s = _session(tmp_path, [[
+        {"id": "1", "name": "read_file", "args": {"path": "walk.py"}, "result": "ok"},
+        {"id": "2", "name": "edit_file", "args": {"path": "walk.py"}, "result": "ok"},
+        {"id": "3", "name": "bash", "args": {"command": "pytest"}, "result": "ok"},
+    ]])
+    act = activity.session_activity(s.messages, workspace=tmp_path)
+    assert [r["verb"] for r in _rows(act)] == ["读文件", "改文件", "跑命令"]
+    assert [r["summary"] for r in _rows(act)] == ["walk.py", "walk.py", "pytest"]
+
+
+def test_newest_turn_sits_on_top_and_carries_the_user_question(tmp_path):
+    """轮与轮之间最新在上,而且每一轮要写清是**哪句话**引出来的。"""
+    s = Session("sys", log_dir=None, workspace=Path(tmp_path))
+    for i, (name, args) in enumerate([("read_file", {"path": "a.py"}),
+                                      ("web_search", {"query": "课表"})]):
+        s.add_user(f"第二个问题 {i}")
+        s.add_assistant(_assistant([{"id": f"c{i}", "name": name, "args": args}]))
+        s.add_tool_result(f"c{i}", name, "结果")
+    act = activity.session_activity(s.messages, workspace=tmp_path)
+    turns = _turns(act)
+    assert [t["n"] for t in turns] == [2, 1]
+    assert turns[0]["title"].startswith("第二个问题 1")
+    assert turns[0]["items"][0]["verb"] == "搜网页"
+
+
+def test_turn_count_is_the_real_total_even_when_rows_are_capped(tmp_path):
+    """列出来最多 12 行是刻意的,但轮次上的次数**不许因为截断变小**。"""
+    calls = [{"id": str(i), "name": "read_file",
+              "args": {"path": f"f{i}.py"}, "result": "x"} for i in range(15)]
+    s = _session(tmp_path, [calls])
+    act = activity.session_activity(s.messages, workspace=tmp_path)
+    t = _turns(act)[0]
+    assert t["calls"] == 15 and len(t["items"]) == 12 and t["more"] == 3
+    assert act["timeline"]["calls"] == 15
+
+
+def test_failed_running_and_interrupted_are_three_different_counts(tmp_path):
+    """失败、在跑、被中断是三件事,混成一个数就等于把风险说小或把死人说活。"""
+    s = _session(tmp_path, [[
+        {"id": "a", "name": "read_file", "args": {"path": "a"}, "result": "x"},
+        {"id": "b", "name": "bash", "args": {"command": "boom"}, "result": "错误: 失败"},
+        {"id": "c", "name": "bash", "args": {"command": "hang"}},
+    ]])
+    t = _turns(activity.session_activity(s.messages, workspace=tmp_path))[0]
+    assert (t["calls"], t["errors"], t["running"], t["stale"]) == (3, 1, 1, 0)
+    assert t["items"][2]["badge"] == "进行中"
+    # 回合已经结束(按了停止):没有回话的那一步不能再写"进行中"
+    t2 = _turns(activity.session_activity(s.messages, workspace=tmp_path,
+                                          busy=False))[0]
+    assert (t2["running"], t2["stale"]) == (0, 1)
+    assert t2["items"][2]["badge"] == "已中断"
+    assert t2["items"][2]["status"] == "stale"
+
+
+def test_live_times_pair_onto_rows_and_unmatched_rows_stay_silent(tmp_path):
+    """时刻只可能是实时表给的:配得上的行有时间和时长,配不上的**留空**。"""
+    s = _session(tmp_path, [[
+        {"id": "a", "name": "read_file", "args": {"path": "a.py"}, "result": "x"},
+        {"id": "b", "name": "bash", "args": {"command": "pytest -q"}, "result": "y"},
+    ]])
+    live = [_live("read_file", {"path": "a.py"}, 1_700_000_000, 1_700_000_007, True)]
+    act = activity.session_activity(s.messages, workspace=tmp_path, live=live)
+    rows = _rows(act)
+    assert rows[0]["time"] and rows[0]["dur_text"] == "7s"
+    assert rows[1]["time"] == "" and rows[1]["dur_text"] == ""
+    # 完全没实时表(终端/网页版/上一版程序):整条时间线一个时间都不许有
+    plain = _rows(activity.session_activity(s.messages, workspace=tmp_path))
+    assert all(r["time"] == "" for r in plain)
+
+
+def test_same_call_twice_pairs_in_order_not_both_to_the_first(tmp_path):
+    """同一个文件读两次:两次各有各的时间。都领第一次的 = 面板在编故事。"""
+    s = _session(tmp_path, [[
+        {"id": "a", "name": "read_file", "args": {"path": "a.py"}, "result": "x"},
+        {"id": "b", "name": "read_file", "args": {"path": "a.py"}, "result": "x"},
+    ]])
+    live = [_live("read_file", {"path": "a.py"}, 100, 103, True),
+            _live("read_file", {"path": "a.py"}, 500, 509, True)]
+    rows = _rows(activity.session_activity(s.messages, workspace=tmp_path, live=live))
+    assert [r["dur_text"] for r in rows] == ["3s", "9s"]
+
+
+def test_now_line_only_exists_when_something_is_actually_running(tmp_path):
+    """「此刻在跑」那一句:没有真在跑的东西就给 None,前端整段不显示。"""
+    now = {"name": "explore·bash", "summary": "pytest", "start": 1_700_000_000,
+           "end": None, "elapsed": 42}
+    line = activity.now_line(now)
+    assert line["verb"] == "跑命令" and line["elapsed"] == 42
+    assert line["agent_type"] == "explore" and line["start"].startswith(("1", "0"))
+    assert activity.now_line(None) is None
+    assert activity.now_line({"name": "bash", "summary": "x", "start": None}) is None
+    # 回合已经结束:再旧的"在跑"也不算在跑
+    s = _session(tmp_path, [[{"id": "a", "name": "bash", "args": {"command": "ls"}}]])
+    act = activity.session_activity(s.messages, workspace=tmp_path,
+                                   live=[dict(now)], now=now, busy=False)
+    assert act["now"] is None
+
+
+def test_subagent_tools_are_named_with_their_type_visible(tmp_path):
+    """子代理内部那些 `explore·read_file` 行:动作词要认得,类型要看得见。"""
+    from minicode import toolsum
+    assert toolsum.short_name("explore·read_file") == "read_file"
+    assert toolsum.verb("explore·read_file") == "读文件"
+    assert toolsum.agent_type("explore·read_file") == "explore"
+    # 没收录的名字(MCP 那种)原样显示,**不猜**它是干什么的
+    assert toolsum.verb("github·create_issue") == "github·create_issue"
+
+
+def test_every_timeline_row_that_can_do_something_does(tmp_path):
+    """一行点下去要有真去处:写过文件的去开文件夹、开过网页的去开网址、
+    其余的看这一步的原文。什么也做不了的行不给"能点"的样子。"""
+    (tmp_path / "out.md").write_text("内容", encoding="utf-8")
+    s = _session(tmp_path, [[
+        {"id": "a", "name": "write_file", "args": {"path": "out.md"}, "result": "写好了"},
+        {"id": "b", "name": "browser_open",
+         "args": {"url": "https://jwc.example.edu.cn/a"}, "result": "打开了"},
+        {"id": "c", "name": "read_file", "args": {"path": "nope.md"}, "result": "文件内容"},
+        {"id": "d", "name": "glob", "args": {"pattern": "*.md"}},
+    ]])
+    rows = _rows(activity.session_activity(s.messages, workspace=tmp_path))
+    assert rows[0]["action"]["type"] == "reveal"
+    assert rows[1]["action"]["url"] == "https://jwc.example.edu.cn/a"
+    assert rows[2]["action"]["type"] == "detail" and "文件内容" in rows[2]["action"]["text"]
+    assert rows[3]["action"] is None          # 还没回话:什么也点不动

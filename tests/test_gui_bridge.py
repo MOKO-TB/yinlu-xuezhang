@@ -823,3 +823,104 @@ def test_plan_writes_push_plan_changed_to_the_window(config, tmp_path):
     before = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
     bridge.get_plan()
     assert (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8") == before
+
+
+# ------------------------------------------- 任务监控:实时表与时间线(v0.9.37)
+
+def _tool(name="bash"):
+    from minicode.tools.base import Tool
+    return Tool(name=name, description="", parameters={}, handler=lambda ctx, **k: "ok")
+
+
+def test_live_table_records_the_real_start_and_end():
+    """「跑了多久」只有在这里记一次才可能是真的:开始/结束都是真实钟点。"""
+    from minicode.gui_ui import GuiUI
+    ui = GuiUI()
+    ui.attach(FakeWindow())
+    t = _tool("bash")
+    ui.tool_start(t, {"command": "pytest -q"})
+    now = ui.live_now()
+    assert now["name"] == "bash" and now["summary"] == "pytest -q"
+    assert now["elapsed"] >= 0
+    ui.tool_done(t, "全部通过")
+    assert ui.live_now() is None                 # 结束了就不许再挂着"在跑"
+    row = ui.live_rows()[-1]
+    assert row["ok"] is True and row["end"] >= row["start"]
+
+
+def test_live_table_nesting_closes_the_inner_call_first():
+    """子代理内部工具套在 `task` 里面:先开始的后结束,收栈不能收错。"""
+    from minicode.gui_ui import GuiUI
+    ui = GuiUI()
+    outer, inner = _tool("task"), _tool("explore·read_file")
+    ui.tool_start(outer, {"type": "explore"})
+    ui.tool_start(inner, {"path": "a.py"})
+    assert ui.live_now()["name"] == "explore·read_file"
+    ui.tool_done(inner, "内容")
+    assert ui.live_now()["name"] == "task"       # 外层还在跑,不能跟着收掉
+    ui.tool_done(outer, "报告")
+    assert ui.live_now() is None
+    assert [r["name"] for r in ui.live_rows()] == ["task", "explore·read_file"]
+
+
+def test_abandoned_call_is_closed_instead_of_spinning_forever():
+    """按停止时 `tool_done` 根本不会来到:回合一结束就要把它收成"中断"。
+
+    不收的话监控栏会永远转圈 —— 那是比"没有时间"更糟的谎:它说有一件事正在发生,
+    而它早就停了。
+    """
+    from minicode.gui_ui import GuiUI
+    ui = GuiUI()
+    t = _tool("bash")
+    ui.tool_start(t, {"command": "很久的命令"})
+    assert ui.live_now() is not None
+    assert ui.live_abandon() == 1
+    assert ui.live_now() is None
+    assert ui.live_rows()[-1]["abandoned"] is True
+
+
+def test_failed_tool_records_ok_false_with_the_same_prefix_rule():
+    """成败判据与 `tool_done` 推给前端的那一份必须是同一个口径,否则两栏会打架。"""
+    from minicode.gui_ui import GuiUI
+    ui = GuiUI()
+    t = _tool("bash")
+    ui.tool_start(t, {"command": "boom"})
+    ui.tool_done(t, "错误: 命令失败")
+    assert ui.live_rows()[-1]["ok"] is False
+
+
+def test_live_table_drops_oldest_finished_rows_only():
+    """超长回合会截断,但**在跑的那一条永不丢** —— 丢了面板就再也找不到它。"""
+    from minicode import gui_ui
+    ui = gui_ui.GuiUI()
+    t = _tool("bash")
+    for i in range(gui_ui.LIVE_CAP + 5):
+        ui.tool_start(t, {"command": f"c{i}"})
+        ui.tool_done(t, "ok")
+    assert len(ui.live_rows()) <= gui_ui.LIVE_CAP + 1
+    ui.tool_start(t, {"command": "还在跑"})
+    for i in range(gui_ui.LIVE_CAP + 5):
+        ui.tool_start(_tool("read_file"), {"path": f"p{i}"})
+        ui.tool_done(_tool("read_file"), "ok")
+    assert ui.live_now()["summary"] == "还在跑"
+
+
+def test_monitor_activity_carries_real_times_after_a_real_turn(config, tmp_path):
+    """走一遍真的回合:时间线那几行领到的时刻来自实时表,回合结束后不再有"在跑"。"""
+    llm = FakeLLM([AssistantTurn(tool_calls=[_write_call()]),
+                   AssistantTurn(text="写好了")])
+    bridge, window, _ = make(config, tmp_path, llm)
+    bridge.send_task("写 gui.txt")
+    assert wait_until(lambda: any(e["type"] == "confirm_request" for e in window.events))
+    bridge.confirm_reply("yes")
+    assert wait_until(lambda: not bridge._busy)
+
+    act = bridge.get_activity()
+    turn = act["timeline"]["turns"][0]
+    assert turn["calls"] == 1 and turn["errors"] == 0
+    row = turn["items"][0]
+    assert row["verb"] == "写文件" and row["summary"] == "gui.txt"
+    assert row["time"] and row["status"] == "ok"
+    assert row["action"]["type"] == "reveal"        # 点一下真去开所在文件夹
+    assert act["now"] is None and act["summary"]["running"] == 0
+    assert act["updated_at"]

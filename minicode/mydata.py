@@ -130,6 +130,8 @@ TABLE: tuple[Entry, ...] = (
     Entry("notify-pref.json", "桌面提醒开关", PREF, True, restart=True,
           note="七类提醒各自开在哪一档"),
     Entry("close-pref.json", "关窗时怎么办", PREF, True),
+    Entry("monitor-pref.json", "任务监控栏开合", PREF, True,
+          note="这一栏展开还是收起、哪几段被折叠过 —— 纯界面偏好,不含任务内容"),
     Entry("onboarding.json", "向导「不再显示」", PREF, True),
     Entry("weather.json", "常驻城市", PREF, True,
           note="首页天气 chip 按这个城市查"),

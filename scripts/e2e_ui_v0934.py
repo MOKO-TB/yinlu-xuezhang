@@ -123,6 +123,10 @@ def build_payloads():
     record([{"id": "u3", "name": "search_knowledge",
              "args": {"query": "绩点算错"}, "result": "知识库无匹配"}])
 
+    # v0.9.37 起「没有回话」分两档:会话还在跑 = 在跑,会话已经停了 = 已中断。
+    # 这里那条 t2 的语义就是"刚派出去还没回来",所以取数前把 busy 立起来,
+    # 否则角标那条断言与"最新那行是在跑"会一起红(那是口径变了,不是面板坏了)。
+    bridge._current.busy = True
     first = bridge.get_activity()
     assert first["ok"] and not first["empty"], f"初版 payload 是空的:{first}"
 
@@ -284,7 +288,7 @@ def main() -> int:
                   "在跑的数量落在顶栏角标上")
 
             # ---- 3. 类目:有内容的才出现,没做过的不摆"暂无" ----
-            caps = page.locator("#actBody .act-cap b").all_inner_texts()
+            caps = page.locator("#actBody .act-sec > .act-cap b").all_inner_texts()
             check(caps == ["子代理", "产出", "网页查阅", "来源"],
                   f"类目按后端给的顺序排,且只列有内容的:{caps}")
             body_text = page.locator("#actBody").inner_text()
@@ -348,7 +352,7 @@ def main() -> int:
             page.click("#btnActRefresh")
             page.wait_for_function("() => [...document.querySelectorAll('#actBody .act-row')]"
                                    ".some(r => r.className.indexOf('missing') >= 0)")
-            caps2 = page.locator("#actBody .act-cap b").all_inner_texts()
+            caps2 = page.locator("#actBody .act-sec > .act-cap b").all_inner_texts()
             check("记忆" in caps2, f"真记了一条记忆后,类目里才长出'记忆':{caps2}")
             check("16:9" in page.locator("#actBody").inner_text(),
                   "记忆那一行写的是真存进去的那句话")
