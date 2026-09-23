@@ -53,7 +53,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "_ask_open_path",
                             # v0.9.32:情绪面板五根线(漏一条 = 点了按钮没反应)
                             "mood_review", "mood_log", "mood_export",
-                            "mood_clear", "mood_help"),
+                            "mood_clear", "mood_help",
+                            # v0.9.34:右侧「本次会话」面板两根线(漏 get_activity =
+                            # 点开一栏空白;漏 reveal_file = 产出行点不动,只能看)
+                            "get_activity", "reveal_file"),
+    # v0.9.34:活动面板的数据源整模块(漏收 = 装好的包右边那一栏永远"读不出来")
+    "minicode.activity": ("session_activity", "GROUPS", "FAILED_PREFIXES",
+                          "FILE_TOOLS", "URL_TOOLS", "QUERY_TOOLS"),
     # v0.9.30:迁移包整模块是新文件,漏收 = 装好的包连面板都打不开
     "minicode.mydata": ("inventory", "pack_plan", "export_package", "read_package",
                         "import_pick", "import_apply", "forget_preview",

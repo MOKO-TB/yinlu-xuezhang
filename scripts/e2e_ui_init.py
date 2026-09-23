@@ -113,7 +113,7 @@ def build_info() -> dict:
     assert PLAN["running"] == [1] and PLAN["total"] == 3, f"计划状态不对:{PLAN}"
 
     return {
-        "version": "0.9.33", "app_name": "引路学长",
+        "version": "0.9.34", "app_name": "引路学长",
         "permission_mode": "confirm",
         "permission_modes": [{"value": "confirm", "label": "变更前确认"}],
         "session_key": "s1", "model": "test-model", "active_provider": "test",

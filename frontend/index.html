@@ -1323,6 +1323,65 @@ try {
     /* 不转了也得看得出"这步在跑":给个实心内环 */
     .tk-row.run .tk-g{ border-top-color:var(--primary); box-shadow:inset 0 0 0 2px var(--primary-light); }
   }
+  /* ---------------- 右侧「本次会话」活动面板(v0.9.34) ----------------
+     第三条网格列,默认 0 宽(display:none)不占地方;开了才把聊天区挤窄。
+     为什么不用浮层:用户要的是"右边一直能看到这轮在做什么",浮层每次要点开。
+     代价是地图那类 fixed 浮层要让位 —— 见下面 body.act-open .map-panel。 */
+  .activity{ display:none; flex-direction:column; min-height:0; min-width:0;
+             border-left:1px solid var(--line-soft); background:var(--glass);
+             backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
+  .app.act-open .activity{ display:flex; }
+  .app.act-open{ grid-template-columns:260px 1fr 300px; }   /* 与上面 map 让位的 300px 同值 */
+  body.act-open .map-panel{ right:300px; }        /* 两栏并排时地图不压住活动面板 */
+  .act-head{ display:flex; align-items:center; gap:6px; padding:12px 12px 6px; }
+  .act-head b{ font-size:13px; color:var(--text-1); }
+  .act-sum{ margin-left:auto; font-size:11px; color:var(--text-3);
+            font-variant-numeric:tabular-nums; }
+  .act-ib{ border:1px solid transparent; background:transparent; cursor:pointer;
+           color:var(--text-3); font-size:12px; border-radius:8px; padding:2px 6px; }
+  .act-ib:hover{ color:var(--primary-text); border-color:var(--line-soft);
+                 background:var(--primary-light); }
+  .act-body{ flex:1; min-height:0; overflow-y:auto; padding:2px 8px 10px; }
+  .act-sec{ margin:8px 0 2px; }
+  .act-cap{ display:flex; align-items:baseline; gap:6px; padding:2px 4px 4px;
+            font-size:11.5px; color:var(--text-3); }
+  .act-cap b{ font-size:12px; color:var(--text-2); font-weight:800; }
+  .act-cap .act-n{ margin-left:auto; font-variant-numeric:tabular-nums; }
+  .act-row{ display:grid; grid-template-columns:11px 1fr auto; gap:8px;
+            align-items:start; padding:6px 6px; border-radius:10px;
+            border:1px solid transparent; cursor:pointer; }
+  .act-row:hover{ background:var(--primary-light); border-color:var(--line-soft); }
+  .act-row.plain{ cursor:default; }               /* 没有可点动作的行不装得能点 */
+  .act-row.plain:hover{ background:transparent; border-color:transparent; }
+  .act-dot{ width:9px; height:9px; margin-top:4px; border-radius:99px;
+            background:var(--text-3); }
+  .act-row.ok .act-dot{ background:var(--success); }
+  .act-row.running .act-dot{ background:transparent; border:2px solid var(--primary);
+                             border-top-color:transparent; animation:tkSpin .9s linear infinite; }
+  .act-row.failed .act-dot{ background:var(--danger); }
+  .act-row.missing .act-dot{ background:transparent; border:2px solid var(--warning); }
+  .act-t{ font-size:12.5px; color:var(--text-1); word-break:break-all; line-height:1.45; }
+  .act-row.failed .act-t, .act-row.missing .act-t{ color:var(--text-2); }
+  .act-s{ font-size:10.5px; color:var(--text-3); margin-top:1px; word-break:break-all; }
+  .act-badge{ font-size:10px; color:var(--text-3); white-space:nowrap;
+              border:1px solid var(--line-soft); border-radius:99px; padding:1px 6px;
+              align-self:start; margin-top:2px; }
+  .act-row.running .act-badge{ color:var(--primary-text); border-color:var(--primary); }
+  .act-row.failed .act-badge{ color:var(--danger); border-color:var(--danger); }
+  .act-row.missing .act-badge{ color:var(--warning); border-color:var(--warning); }
+  .act-detail{ grid-column:2 / -1; margin-top:5px; padding:7px 9px; max-height:230px;
+               overflow-y:auto; white-space:pre-wrap; font-size:11.5px; line-height:1.6;
+               color:var(--text-2); background:var(--surface);
+               border:1px solid var(--line-soft); border-radius:9px;
+               font-variant-ligatures:none; }
+  .act-more{ padding:3px 6px; font-size:10.5px; color:var(--text-3); }
+  .act-empty{ padding:16px 8px; font-size:12px; color:var(--text-3); line-height:1.7; }
+  .act-foot{ padding:8px 12px 10px; border-top:1px dashed var(--line-soft);
+             font-size:10px; color:var(--text-3); line-height:1.6; }
+  html.dark .act-row:hover{ background:rgba(90,180,229,.10); }
+  @media (prefers-reduced-motion: reduce){
+    .act-row.running .act-dot{ animation:none; border-top-color:var(--primary); }
+  }
   /* 技能详情与添加表单:字段行,与模型管理弹窗同款节奏 */
   .skform{ border-top:1px solid var(--line-soft); margin-top:12px; padding-top:12px; }
   .skform .frow label{ width:64px; }
@@ -1434,6 +1493,7 @@ try {
       <button id="btnSchedule" title="查看/导入我的课表(本机存储)">📅 课表</button>
       <button id="btnMood" title="情绪日记:一句话记一下,每周回头看看(只回读、不诊断;数据只在本机)。也可以直接在对话里说「今天 3 分,因为…」">🌱 心情</button>
       <button id="btnPlan" title="查看当前任务计划(plans/plan.md):做到哪步、哪几步能接着做">🗂 计划<span class="pl-n" id="plPill"></span></button>
+      <button id="btnActivity" title="本次会话都真做过什么:子代理、产出文件、查过的网页与来源、记忆改动(每一行都点得动)">🧭 动态<span class="pl-n" id="actPill"></span></button>
       <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐ 技能</button>
       <button id="btnUsage" title="查看每日 token 消耗">📊 用量</button>
       <button id="btnExport" title="把当前会话导出成 Markdown(方便贴进文档或发给同学)">⬇ 导出</button>
@@ -1489,6 +1549,20 @@ try {
       <div class="hint" id="hint"></div>
     </div>
   </section>
+
+  <!-- 右侧「本次会话」活动面板(v0.9.34):第三列,只在 .app.act-open 时占位。
+       内容全部来自后端 get_activity() 扫当前会话消息,前端不做任何"数一数"的推断。 -->
+  <aside class="activity" id="activity">
+    <div class="act-head">
+      <b>🧭 本次会话</b>
+      <span class="act-sum" id="actSum"></span>
+      <button class="act-ib" id="btnActRefresh" title="重新统计一遍">↻</button>
+      <button class="act-ib" id="btnActClose" title="收起这一栏">✕</button>
+    </div>
+    <div class="act-body" id="actBody"></div>
+    <div class="act-foot">只列当前上下文里还看得见的工具动作(压缩过的早期内容会进摘要)。
+      点一行才做事:打开链接 / 定位文件 / 看全文 / 把追问填回输入框。</div>
+  </aside>
 </div>
 
 <aside class="map-panel" id="mapPanel" aria-hidden="true">
@@ -2489,6 +2563,14 @@ window.__gcodeEvent = function (e) {
       && e.type !== "workspace") {   // 工作区是全局状态,不属于某个会话
     if (e.type === "info" && e.text) toast(e.text);   // 后台的提示仍然要让用户看到
     return;
+  }
+  // 活动面板(v0.9.34)只在开着的时候跟着工具事件防抖刷新:一次调用开始/结束都会让
+  // "本轮做了什么"多一行或改一行状态。放在上面那道"后台会话不往当前视图里画"的闸
+  // **之后** —— 别的会话在跑什么,不该混进你正在看的这一栏。
+  if (actOpen && (e.type === "tool_start" || e.type === "tool_done"
+                  || e.type === "busy" || e.type === "cleared"
+                  || e.type === "resumed" || e.type === "workspace")) {
+    activitySchedule(e.type === "tool_start" ? 900 : 300);
   }
   switch (e.type) {
     case "text_delta": {
@@ -4702,6 +4784,169 @@ function markPlanCardIdle() {
       + " —— 跟学长说一句该标 done 还是 failed";
   }
 }
+
+
+/* ---------------- 右侧「本次会话」活动面板(v0.9.34) ----------------
+   用户看图 p2 点名要右边这一栏,并立了规矩:「是要真正能使用的不能只用于装饰」。
+   落到实现上是四条:
+   ①**数字一律由后端算**:`get_activity()` 扫的是当前会话的消息(完整参数 + 完整回话),
+     前端一行都不自己数 —— 它手里只有渲染过的事件流,刷新一次就没了(见 minicode/activity.py)。
+   ②**没做过的一类不渲染**:空组直接不出现,不摆一排"暂无"占地方。
+   ③**没有动作的行不给"能点"的样子**:后端只在真有办法时才给 action(文件已经不在磁盘上
+     就不给"打开所在文件夹"),前端据此加 .plain 去掉 pointer 与 hover。
+   ④**全程 textContent 建节点**:这一栏显示的是工具参数与网页正文里的字符串,
+     用 innerHTML 拼就等于把"搜索关键词"当成 HTML 塞进页面。 */
+let actOpen = false;
+let actRows = {};              // key -> 行数据(点行时回查,长文本不进 DOM 属性)
+let actTimer = null;
+const ACT_ORDER = ["subagents", "files", "web", "sources", "memory"];
+
+function actEl(spec, text) {
+  const isStr = typeof spec === "string";
+  const el = document.createElement((isStr ? "" : (spec && spec.tag)) || "div");
+  el.className = isStr ? spec : ((spec && spec.cls) || "");
+  if (text !== undefined && text !== null) el.textContent = text;
+  return el;
+}
+
+function setActivityOpen(on) {
+  actOpen = !!on;
+  const appEl = document.querySelector(".app");
+  if (appEl) appEl.classList.toggle("act-open", actOpen);
+  document.body.classList.toggle("act-open", actOpen);
+  $("btnActivity").setAttribute("aria-expanded", actOpen ? "true" : "false");
+  if (!actOpen) {
+    clearTimeout(actTimer);
+    $("actBody").textContent = "";
+    actRows = {};
+    $("actPill").textContent = "";
+    return;
+  }
+  activityRefresh();
+}
+
+function activitySchedule(delay) {
+  if (!actOpen) return;                 // 关着就不敲桥:没人看的时候统计是白费
+  clearTimeout(actTimer);
+  actTimer = setTimeout(activityRefresh, delay || 400);
+}
+
+function activityApi() {
+  return window.pywebview && window.pywebview.api;
+}
+
+async function activityRefresh() {
+  const api = activityApi();
+  if (!api || !api.get_activity) return;
+  let data = null;
+  try {
+    data = await api.get_activity();
+  } catch (e) { /* 桥还没就绪(开机头几百毫秒)或有别的东西在抢:下一轮事件会再刷 */
+    return;
+  }
+  if (!data || !data.ok) {
+    actRows = {};
+    $("actBody").textContent = (data && data.msg)
+      ? "读不出本次会话的活动:" + data.msg
+      : "读不出本次会话的活动(稍后点 ↻ 再试一次)";
+    return;
+  }
+  renderActivity(data);
+}
+
+function actRowEl(item) {
+  const row = actEl({ cls: "act-row " + (item.status || "ok") });
+  const a = item.action;
+  if (!a || !a.type) row.classList.add("plain");
+  row.dataset.k = String(item.key || "");
+  const mid = actEl({ cls: "act-m" });
+  mid.appendChild(actEl("act-t", item.title || "(没标题)"));
+  if (item.sub) mid.appendChild(actEl("act-s", item.sub));
+  row.appendChild(actEl({ cls: "act-dot" }));
+  row.appendChild(mid);
+  row.appendChild(actEl("act-badge", item.badge || ""));
+  return row;
+}
+
+function renderActivity(data) {
+  const body = $("actBody");
+  body.textContent = "";
+  actRows = {};
+  const sum = data.summary || {};
+  const bits = [];
+  if (sum.calls) bits.push(sum.calls + " 次工具调用");
+  if (sum.errors) bits.push(sum.errors + " 处失败");
+  if (sum.running) bits.push(sum.running + " 个在跑");
+  $("actSum").textContent = bits.join(" · ");
+  $("actPill").textContent = sum.running ? String(sum.running) : "";
+
+  const groups = (data.groups || [])
+    .filter(g => g && g.count > 0 && (g.items || []).length)
+    .sort((x, y) => ACT_ORDER.indexOf(x.key) - ACT_ORDER.indexOf(y.key));
+  if (!groups.length) {
+    body.appendChild(actEl("act-empty",
+      "这一轮还没有要汇报的动作。派子代理、写文件、查网页、记记忆之后,它们会自己出现在这里 —— 每一行都点得动。"));
+    return;
+  }
+  for (const g of groups) {
+    const sec = actEl("act-sec");
+    const cap = actEl("act-cap");
+    cap.appendChild(actEl({ tag: "b" }, g.label));
+    cap.appendChild(actEl("act-n", g.count > 1 ? g.count + " 条" : ""));
+    sec.appendChild(cap);
+    for (const item of g.items || []) {
+      actRows[String(item.key || "")] = item;
+      sec.appendChild(actRowEl(item));
+    }
+    if (g.more) sec.appendChild(actEl("act-more", `另有 ${g.more} 条没列出`));
+    body.appendChild(sec);
+  }
+}
+
+// 一行的点击:四类动作,全部是真的会发生事情的那一种
+function actRun(item, row) {
+  const a = item.action || {};
+  const api = activityApi();
+  if (!a.type || !api) return;
+  if (a.type === "open") {
+    if (a.url && api.open_url) api.open_url(a.url).catch(() => {});
+    return;
+  }
+  if (a.type === "reveal") {
+    if (!api.reveal_file) return;
+    api.reveal_file(a.path).then(r => {
+      if (r && r.ok === false) {
+        toast(r.msg || "打不开那个位置", true);
+        activitySchedule(0);            // 拒绝多半因为文件已经没了:让面板自己改口
+      }
+    }).catch(() => {});
+    return;
+  }
+  if (a.type === "fill") {
+    const input = $("input");
+    input.value = a.text || "";
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 180) + "px";
+    input.focus();
+    toast("把这句追问填回输入框了 —— 你改一下再发");
+    return;
+  }
+  if (a.type === "detail") {
+    const old = row.querySelector(".act-detail");
+    if (old) { old.remove(); return; }
+    row.appendChild(actEl("act-detail", a.text || "(这条没有内容)"));
+  }
+}
+
+$("actBody").addEventListener("click", (ev) => {
+  const row = ev.target.closest(".act-row");
+  if (!row) return;
+  const item = actRows[row.dataset.k || ""];
+  if (item) actRun(item, row);
+});
+$("btnActivity").addEventListener("click", () => setActivityOpen(!actOpen));
+$("btnActClose").addEventListener("click", () => setActivityOpen(false));
+$("btnActRefresh").addEventListener("click", () => activityRefresh());
 
 
 /* ---------------- 教务课表导入向导(v0.9.23) ----------------

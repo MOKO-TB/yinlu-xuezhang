@@ -186,6 +186,12 @@ class PublicApi:
     def open_url(self, url: str) -> dict:
         return self._b.open_url(url)
 
+    def get_activity(self) -> dict:
+        return self._b.get_activity()
+
+    def reveal_file(self, path: str) -> dict:
+        return self._b.reveal_file(path)
+
     def get_providers(self) -> dict:
         return self._b.get_providers()
 
@@ -716,6 +722,24 @@ class Bridge:
                     "dispatch_text": "",
                     "msg": f"读取计划失败:{type(exc).__name__}: {exc}"}
         return {"ok": True, "dispatch_text": dispatch_text(state), **state}
+
+    # ------------------------------------------------------------ 活动面板
+
+    def get_activity(self) -> dict:
+        """右侧「本次会话」面板的数据:这一轮真的调过哪些工具、产出还在不在磁盘上。
+
+        为什么在前端数不行:它手里只有**渲染过的事件流**,刷新一次、切一次会话就没了,
+        而且工具卡片上显示的是省略过的文本。真数据在 `session.messages` 里(完整参数、
+        完整回话),所以归类这件事整个放在 `minicode.activity.session_activity`
+        (纯函数,好测)。这里只负责把当前会话递过去。
+        聚合逻辑再怎么坏都不该让界面打不开,所以异常兜成 ok:False 带一句原因。
+        """
+        from minicode.activity import session_activity
+        try:
+            return session_activity(self.session.messages, workspace=self.workspace)
+        except Exception as exc:
+            return {"ok": False, "groups": [], "summary": {}, "empty": True,
+                    "msg": f"读取会话活动失败:{type(exc).__name__}: {exc}"}
 
     # ------------------------------------------------------------ 工作区
 
@@ -1703,6 +1727,35 @@ class Bridge:
         import webbrowser
         webbrowser.open(url)
         return {"ok": True}
+
+    def reveal_file(self, path: str) -> dict:
+        """在系统文件管理器里**定位**一个文件(活动面板「打开所在文件夹」)。
+
+        只做定位,不双击打开文件 —— 该用什么软件打开是用户的事,替他猜只会弹出
+        一个他没打算开的窗口。路径过一遍沙箱分级:敏感目录(BLOCKED)与工作区内的
+        凭据文件(SECRET)都不给定位,免得一个"顺手看看"的按钮把人带到 key 面前。
+        """
+        import subprocess
+        import sys
+        from minicode.sandbox import BLOCKED, SECRET, classify_path
+        raw = (path or "").strip()
+        if not raw:
+            return {"ok": False, "msg": "没说要打开哪个文件"}
+        if sys.platform != "win32":
+            return {"ok": False, "msg": "定位文件目前只在 Windows 版可用"}
+        grade, p = classify_path(self.workspace, raw, home=Path.home())
+        if grade == BLOCKED:
+            return {"ok": False, "msg": "这个位置不在可打开的范围内"}
+        if grade == SECRET:
+            return {"ok": False, "msg": "凭据类文件不在文件管理器里替你定位"}
+        try:
+            if not p.exists():
+                return {"ok": False, "msg": f"这个文件已经不在了:{p.name}"}
+        except OSError as exc:
+            return {"ok": False, "msg": f"读不到这个路径:{exc}"}
+        # /select, 对文件和目录都适用(目录会被它在上一级里选中),不必分两支
+        subprocess.Popen(["explorer", "/select,", str(p)])
+        return {"ok": True, "msg": f"已在文件管理器里定位:{p.name}"}
 
     def get_asset(self, rel_path: str) -> dict:
         """把工作区 skills/ 下的图片等静态资产转成 data URL,供聊天里的图片显示
