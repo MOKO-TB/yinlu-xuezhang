@@ -199,7 +199,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                      "make_transport", "_iter_sse", "_safe_url", "_usable_url",
                      "_norm_transport"),
     # ---- v0.9.24:计划面板(漏收 = 顶栏「🗂 计划」点开永远说没计划) ----
-    "minicode.planning": ("plan_state", "dispatch_text", "notify_plan"),
+    # v0.9.33:对话流里的计划卡片靠 in_progress/running 画出"正在做哪一步"
+    # (漏收 = 卡片只剩一堆待办和勾,转圈的那一行永远不出现)
+    "minicode.planning": ("plan_state", "dispatch_text", "notify_plan",
+                          "in_progress", "running"),
 }
 
 

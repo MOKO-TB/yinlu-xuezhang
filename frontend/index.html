@@ -1250,6 +1250,7 @@ try {
   .pl-step.s-done{ opacity:.66; }
   .pl-step.s-failed{ border-left-color:#c04a4a; }
   .pl-step.s-blocked{ border-left-color:#c8801a; }
+  .pl-step.s-run{ border-left-color:#1f7ac2; background:#f2f8fd; }
   .pl-t{ display:flex; align-items:flex-start; gap:8px; font-size:13px;
          color:var(--text-1); line-height:1.6; }
   .pl-t .nm{ flex:1; min-width:0; }
@@ -1261,9 +1262,67 @@ try {
   .pl-badge.b-done{ color:#127a3d; background:#e6f6ec; border-color:#8fd6ac; }
   .pl-badge.b-failed{ color:#a33; background:#fbeaea; border-color:#e6b3b3; }
   .pl-badge.b-blocked{ color:#8a5b00; background:var(--warning-bg); border-color:#e0a42d; }
+  .pl-badge.b-run{ color:#155e8a; background:#e7f1fb; border-color:#9cc6ea; }
+  html.dark .pl-badge.b-run{ color:#9BD6F5; background:rgba(90,180,229,.16);
+                             border-color:rgba(90,180,229,.45); }
+  html.dark .pl-step.s-run{ border-left-color:#5AB4E5; background:rgba(90,180,229,.08); }
   .pl-meta{ margin-top:5px; font-size:10.5px; color:var(--text-3); line-height:1.6; }
   .pl-note{ margin-top:5px; padding-top:5px; border-top:1px dashed var(--line-soft);
             font-size:11px; color:var(--text-2); line-height:1.6; }
+  /* 计划内联卡片(v0.9.33):计划不再只活在顶栏弹窗里 —— 做到哪一步要摆在对话流里,
+     用户不用为了"看进度"再点一次。状态仍然只归 plan 工具(卡片只读,点标题开面板看详情)。 */
+  .tk{ max-width:600px; margin:10px 0 14px; border:1px solid var(--line-soft);
+       border-radius:var(--r-l); background:var(--glass-lite); padding:10px 13px 9px;
+       animation:tkIn .18s ease; }
+  @keyframes tkIn{ from{ opacity:0; transform:translateY(3px) } to{ opacity:1 } }
+  .tk-head{ display:flex; align-items:baseline; gap:8px; cursor:pointer; }
+  .tk-head:hover .tk-goal{ color:var(--primary-text); }
+  .tk-goal{ flex:1; min-width:0; font-size:12.5px; font-weight:650; color:var(--text-1);
+            overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tk-pct{ flex:none; font-size:10.5px; color:var(--text-3); font-variant-numeric:tabular-nums; }
+  .tk-bar{ height:4px; border-radius:999px; background:var(--glass); border:1px solid var(--line-soft);
+           overflow:hidden; margin:7px 0 8px; }
+  .tk-bar i{ display:block; height:100%; width:0; background:var(--primary);
+             transition:width .25s ease; }
+  .tk-row{ display:flex; gap:8px; align-items:flex-start; font-size:12.5px;
+           line-height:1.6; color:var(--text-2); padding:2.5px 0; }
+  .tk-g{ flex:none; width:15px; height:15px; margin-top:1px; border-radius:50%;
+         border:1.5px solid var(--line); color:transparent; font-size:9.5px; line-height:1;
+         display:flex; align-items:center; justify-content:center; }
+  .tk-nm{ flex:1; min-width:0; }
+  .tk-tag{ flex:none; font-size:9.5px; color:var(--text-3); }
+  .tk-row.done{ color:var(--text-3); }
+  .tk-row.done .tk-g{ border-color:#3aa76d; background:#3aa76d; color:#fff; }
+  .tk-row.run{ color:var(--text-1); font-weight:600; }
+  .tk-row.run .tk-g{ border-color:var(--primary); border-top-color:transparent;
+                     animation:tkSpin .75s linear infinite; }
+  @keyframes tkSpin{ to{ transform:rotate(360deg) } }
+  .tk-row.failed .tk-g{ border-color:#c04a4a; color:#c04a4a; }
+  .tk-row.failed{ color:#a33; }
+  .tk-row.blocked .tk-g{ border-color:#c8801a; color:#8a5b00; }
+  .tk-foot{ margin-top:6px; padding-top:6px; border-top:1px dashed var(--line-soft);
+            font-size:10.5px; color:var(--text-3); line-height:1.6; }
+  .tk.full .tk-foot{ color:#127a3d; }
+  .tk.broken .tk-foot{ color:#a33; }
+  /* 深色底上 #a33/#8a5b00/#127a3d 这几档"浅色主题用的深色"会糊成一片,
+     换成语义色变量(暮色主题里它们本来就是提亮过的) */
+  html.dark .tk-row.failed{ color:#FF9A9E; }
+  html.dark .tk-row.failed .tk-g, html.dark .tk.broken .tk-foot{ color:var(--danger); }
+  html.dark .tk-row.failed .tk-g{ border-color:var(--danger); }
+  html.dark .tk-row.blocked .tk-g{ border-color:var(--warning); color:var(--warning); }
+  html.dark .tk-row.done .tk-g{ background:var(--success); border-color:var(--success);
+                                 color:#06281a; }
+  html.dark .tk.full .tk-foot{ color:var(--success); }
+  /* 回合结束还挂着「进行中」:转圈停下来、圈补成实心琥珀环 = "停在这儿了",
+     和"正在做"的青色缺口环一眼分得开 */
+  .tk.idle .tk-row.run .tk-g{ animation:none; border-color:var(--warning);
+                              border-top-color:var(--warning); }
+  .tk.idle .tk-row.run{ color:var(--text-2); font-weight:500; }
+  @media (prefers-reduced-motion: reduce){
+    .tk, .tk-row.run .tk-g{ animation:none; }
+    /* 不转了也得看得出"这步在跑":给个实心内环 */
+    .tk-row.run .tk-g{ border-top-color:var(--primary); box-shadow:inset 0 0 0 2px var(--primary-light); }
+  }
   /* 技能详情与添加表单:字段行,与模型管理弹窗同款节奏 */
   .skform{ border-top:1px solid var(--line-soft); margin-top:12px; padding-top:12px; }
   .skform .frow label{ width:64px; }
@@ -2415,8 +2474,15 @@ window.__gcodeEvent = function (e) {
     if (document.getElementById("skillsOverlay").classList.contains("show")) loadSkills();
     return;
   }
-  // 计划文件是"工作区一个 plans/plan.md",不是"一会话一个":后台会话写计划也要刷角标
-  if (e.type === "plan_changed") { renderPlan({ ok: true, ...e }); return; }
+  // 计划文件是"工作区一个 plans/plan.md",不是"一会话一个":后台会话写计划也要刷角标。
+  // 但对话流里那张内联卡片归"正在做这件事的会话"——后台任务的进度条不该插进你眼下的对话,
+  // 那会让你以为自己在做的任务突然多出几步没见过的步骤。
+  if (e.type === "plan_changed") {
+    const p = { ok: true, ...e };
+    renderPlan(p);
+    if (!currentSessionKey || e.session === currentSessionKey) renderPlanCard(p);
+    return;
+  }
   // 后台会话的事件:不往当前视图里画(切回去时会用 resumed 重建)
   if (e.session && currentSessionKey && e.session !== currentSessionKey
       && e.type !== "cleared" && e.type !== "resumed"
@@ -2639,10 +2705,13 @@ function setBusy(v) {
   $("btnSend").style.display = v ? "none" : "block";
   $("btnStop").style.display = v ? "block" : "none";
   if (!v && cur) { renderAssistant(true); cur = null; }
+  if (!v) markPlanCardIdle();   // 这一轮结束了:还挂着「进行中」的步骤不能再转圈
 }
 
 function renderHistory(messages) {
   chat.innerHTML = "";
+  livePlanCard = null;   // 整段对话被换掉:旧卡片节点已经不在 DOM 里了
+  livePlanKey = "";
   cur = null;
   userSeq = 0;
   lastUserQ = "";
@@ -4424,6 +4493,7 @@ const planApi = () => (window.pywebview && pywebview.api && pywebview.api.get_pl
 function plLook(s) {
   if (s.status === "done") return { cls: "s-done", badge: "b-done", text: "完成" };
   if (s.status === "failed") return { cls: "s-failed", badge: "b-failed", text: "失败" };
+  if (s.status === "in_progress") return { cls: "s-run", badge: "b-run", text: "进行中" };
   if (s.blocked) return { cls: "s-blocked", badge: "b-blocked", text: "被卡住" };
   if (s.ready) return { cls: "s-ready", badge: "b-ready", text: "可做" };
   return { cls: "", badge: "", text: "待办" };
@@ -4520,6 +4590,119 @@ $("btnPlanDispatch").addEventListener("click", () => {
   input.focus();
   toast("已把「接着做哪几步」填进输入框 —— 你过一眼再按发送");
 });
+
+/* ---------------- 计划内联卡片(v0.9.33) ----------------
+   计划一有变化就在对话流里落一张清单,不用为了"做到哪了"再点一次顶栏。
+   四条口径跟着 v0.9.24 那条"文件即状态"走:
+   ①卡片**只读** —— 状态仍只归 plan 工具,两边都能改就会互相盖,而且模型看不见
+     你在界面上偷偷拧过的那一下;点标题行只是打开面板看依赖与备注。
+   ②**一个计划一张卡**:目标 + 步数没变就原地更新(一次任务只有一张在动),
+     换了目标或改了步数才另起一张,上一张留在原处当历史。
+   ③只有**实时事件**会画它:开机、换工作区、手动刷新都不补画。上一轮没标完的计划
+   在顶栏角标上看得见(3/5),但不该在新会话开头贴一张正在转圈的清单——那是假的。
+   ④一轮结束还有步骤挂着「进行中」→ 转圈停住并说明是哪几步(setBusy(false) 里收口)。 */
+let livePlanCard = null;
+let livePlanKey = "";
+
+function tkRowCls(s) {
+  if (s.status === "done") return "done";
+  if (s.status === "in_progress") return "run";
+  if (s.status === "failed") return "failed";
+  if (s.blocked) return "blocked";
+  return "";
+}
+
+function tkGlyph(s) {
+  if (s.status === "done") return "✓";
+  if (s.status === "failed") return "✕";
+  if (s.blocked) return "!";
+  return "";                       // 进行中是转圈、未开始是空心圈,都不写字
+}
+
+function tkTag(s) {
+  if (s.status === "in_progress") return "进行中";
+  if (s.blocked) return "被卡住";
+  if (s.status === "failed") return "失败";
+  return "";
+}
+
+function tkFoot(r) {
+  const failed = r.failed || [];
+  const running = r.running || [];
+  const settled = (r.done + failed.length) >= r.total;
+  if (failed.length) {
+    const blocked = (r.blocked || []).length;
+    return `第 ${failed.join("、")} 步失败`
+      + (blocked ? `,后面 ${blocked} 步已被挡住` : "")
+      + " —— 跟学长说清是重做这一步还是改计划";
+  }
+  if (settled) return `计划已完成 ${r.done}/${r.total}`;
+  return `步骤 ${r.done}/${r.total}`
+    + (running.length ? ` · 正在做第 ${running.join("、")} 步` : "")
+    + " · 点标题看依赖与备注";
+}
+
+// 只由**实时**的 plan_changed 事件画这张卡片。开机/换工作区时不补画:那份计划里
+// 挂着「进行中」的那一步,是上一轮模型忘了标 done(或中途出错留下的),开机就转圈
+// 等于对用户说"现在正在做",而它什么都没在做。角标(3/5)已经够回答"做到哪了"。
+function renderPlanCard(r) {
+  if (!r || !r.ok || !r.has_plan || !r.total) return;
+  const failed = r.failed || [];
+  const settled = (r.done + failed.length) >= r.total;
+  const key = String(r.goal || "") + "#" + r.total;
+  let card = (livePlanCard && livePlanCard.isConnected && livePlanKey === key)
+    ? livePlanCard : null;
+  if (!card) {
+    card = document.createElement("div");
+    card.className = "tk";
+    card.innerHTML = `<div class="tk-head" title="点击查看完整计划(依赖与备注)">
+        <span class="tk-goal"></span><span class="tk-pct"></span></div>
+      <div class="tk-bar"><i></i></div>
+      <div class="tk-list"></div>
+      <div class="tk-foot"></div>`;
+    card.querySelector(".tk-head").addEventListener("click", openPlanDlg);
+    chat.appendChild(card);
+    livePlanKey = key;
+  }
+  livePlanCard = card;
+  // 卡片要始终跟在最新的动静后面:它是在某一步开始时插进对话的,而同一轮的回答
+  // 还会往那个气泡里续写。不挪的话,"后来才做的事"会显示在进度条上面。
+  // 已在末尾时不再 appendChild——那会让节点重进 DOM、进场动画再放一遍(闪)。
+  if (chat.lastElementChild !== card) chat.appendChild(card);
+  card.classList.toggle("idle", false);
+  card.classList.toggle("full", settled && !failed.length);
+  card.classList.toggle("broken", !!failed.length);
+  card.querySelector(".tk-goal").textContent = "🗂 " + (r.goal || "未命名计划");
+  card.querySelector(".tk-pct").textContent = `${r.done}/${r.total}`;
+  card.querySelector(".tk-bar i").style.width
+    = Math.round(r.done * 100 / r.total) + "%";
+  card.querySelector(".tk-list").innerHTML = (r.steps || []).map(s => {
+    const tag = tkTag(s);
+    return `<div class="tk-row ${tkRowCls(s)}"><span class="tk-g">${tkGlyph(s)}</span>`
+      + `<span class="tk-nm">${s.n}. ${esc(s.title || "")}</span>`
+      + (tag ? `<span class="tk-tag">${tag}</span>` : "") + `</div>`;
+  }).join("");
+  card.querySelector(".tk-foot").textContent = tkFoot(r);
+  toBottom();
+}
+
+// 一轮跑完了,卡片上却还有「进行中」:模型没标 done(忘了、被打断、或出错了)。
+// 让它继续转圈就是对用户撒谎——停掉动画,并把"挂着的是哪几步"说出来,
+// 用户一句「第 2 步做完了/不做了」就能收口。
+function markPlanCardIdle() {
+  const card = livePlanCard;
+  if (!card || !card.isConnected) return;
+  const run = [...card.querySelectorAll(".tk-row.run .tk-nm")]
+    .map(el => el.textContent.trim()).filter(Boolean);
+  if (!run.length) return;
+  card.classList.add("idle");
+  const foot = card.querySelector(".tk-foot");
+  if (foot) {
+    foot.textContent += ` · 这一轮已经停下,${run.join("、")} 还挂着「进行中」`
+      + " —— 跟学长说一句该标 done 还是 failed";
+  }
+}
+
 
 /* ---------------- 教务课表导入向导(v0.9.23) ----------------
    三步各点一下,谁的事谁做:① 学长把教务登录页开在**看得见**的窗口里,

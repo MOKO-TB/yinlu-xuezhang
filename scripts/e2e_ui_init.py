@@ -22,6 +22,11 @@ hint 和地图,所以这条 bug 一路绿着发到了 Release 里。
    求助文本里既有 `HELP_FACTS`(地址)又没有**给模型的转述规矩**、也不许出现任何
    7 位以上数字串,而「删除全部」第一次点**不得**叫 `mood_clear`。
    (往 STUB_JS 塞 JSON 记得写 `() => (@@X@@)`:箭头函数体以 `{` 开头会被当代码块。)
+5. v0.9.33 起还盯**对话流里的计划卡片**:状态由真 plan 工具改出来的 `plan_changed`
+   payload 驱动。断言四件事 —— 开机时**不补画**(上一轮没标完的计划不该在新会话
+   开头转圈)、来一次真事件才画得出三行清单且「正在做第 N 步」写进脚注、
+   **别的会话**推的计划不会往这段对话里插卡片、一轮结束(`setBusy(false)`)还挂着
+   「进行中」的那一步会停转并被点名。这些都是"界面上看着能用"和"真能用"的分界。
 
 跑法(项目根目录,需要 PYTHONIOENCODING=utf-8 否则中文断言在 GBK 控制台炸):
     PYTHONIOENCODING=utf-8 .venv\\Scripts\\python.exe scripts\\e2e_ui_init.py
@@ -89,8 +94,26 @@ def build_info() -> dict:
     assert MOOD.get("count") == 3, f"该回读到 3 天,实际 {MOOD.get('count')}"
     assert HELP.get("ok") and "博雅楼" in HELP.get("text", ""), "求助文本没读出来"
 
+    # 计划卡片(v0.9.33):计划由**真 plan 工具**写进同一个工作区,状态也由它改,
+    # 面板数据再走真 bridge.get_plan()。手抄一份 payload 的话,plan_state 少吐一个
+    # running 字段这种 bug 就永远测不出来 —— 而卡片正是照那个字段画转圈的。
+    global PLAN
+    from minicode.planning import plan as _plan
+    from minicode.tools.base import ToolContext
+    global PCTX
+    PCTX = ToolContext(workspace=tmp, config=cfg)
+    _plan(PCTX, "write", goal="把答辩 PPT 做完", steps=[
+        {"title": "梳理答辩逻辑"},
+        {"title": "做幻灯片", "depends_on": [1]},
+        {"title": "排练一遍计时", "depends_on": [2]},
+    ])
+    _plan(PCTX, "update", step=1, status="in_progress")
+    PLAN = bridge.get_plan()
+    assert PLAN.get("ok") and PLAN.get("has_plan"), "get_plan 没读到刚写的计划"
+    assert PLAN["running"] == [1] and PLAN["total"] == 3, f"计划状态不对:{PLAN}"
+
     return {
-        "version": "0.9.32", "app_name": "引路学长",
+        "version": "0.9.33", "app_name": "引路学长",
         "permission_mode": "confirm",
         "permission_modes": [{"value": "confirm", "label": "变更前确认"}],
         "session_key": "s1", "model": "test-model", "active_provider": "test",
@@ -111,6 +134,23 @@ INFO = build_info()
 # 这里再 `= {}` 会把它自己清掉。
 MOOD: dict      # 真 bridge.mood_review(7) 的返回
 HELP: dict      # 真 bridge.mood_help() 的返回
+PLAN: dict      # 真 bridge.get_plan() 的返回(计划已写到临时工作区)
+# PCTX 同样只由 build_info() 赋值:这里再写一次 `PCTX = None` 就会把它清掉,
+# plan_event() 会在"None 上没有 workspace"上炸(和上面那条是同一个坑)。
+
+
+def plan_event(**updates) -> dict:
+    """按真 plan 工具改状态,返回后端在 plan_changed 里推的那一坨。
+
+    口径照 notify_plan:plan_state + dispatch_text + 会话键。
+    在测试里手拼 steps 是最省事的,但那也正是"后端改了形状、测试还绿着"的来路。
+    """
+    from minicode.planning import dispatch_text, plan as _plan, plan_state
+    for step, status in updates.items():
+        _plan(PCTX, "update", step=int(step), status=status)
+    st = plan_state(PCTX.workspace)
+    return {"type": "plan_changed", "session": "s1",
+            "dispatch_text": dispatch_text(st), **st}
 # boot() 里 renderTaskMetrics **之后**必须发生的调用;少一个就是初始化半路死了
 AFTER_METRICS = ["refresh_sessions", "get_suggestions", "get_recent_projects",
                  "get_reasoning", "get_plan"]
@@ -120,8 +160,8 @@ window.__E2E_CALLS__ = [];
 window.__INFO__ = @@INFO@@;
 window.__AFTER__ = [];
 const __RET__ = {
-  get_plan: () => ({ok: true, has_plan: false, steps: [], total: 0, done: 0,
-                    ready: [], blocked: [], failed: [], dispatch_text: ""}),
+  // 真后端算的那份计划:第 1 步还挂着「进行中」——正是"上一轮没标完就关窗"的现场
+  get_plan: () => (@@PLAN@@),
   get_recent_projects: () => ({ok: true, current: {}, default: {}, recent: []}),
   get_reasoning: () => ({visible: false, options: [], choice: "default"}),
   get_suggestions: () => ({suggestions: []}),
@@ -194,7 +234,8 @@ def main() -> int:
 
     stub = (STUB_JS.replace("@@INFO@@", json.dumps(INFO, ensure_ascii=False))
             .replace("@@MOOD@@", json.dumps(MOOD, ensure_ascii=False))
-            .replace("@@HELP@@", json.dumps(HELP, ensure_ascii=False)))
+            .replace("@@HELP@@", json.dumps(HELP, ensure_ascii=False))
+            .replace("@@PLAN@@", json.dumps(PLAN, ensure_ascii=False)))
     url, shutdown = _serve(FRONTEND)
     failures: list[str] = []
 
@@ -309,6 +350,73 @@ def main() -> int:
             check(page.locator("#moodOverlay.show").count() == 0,
                   "关闭面板收起弹窗(并清掉草稿与确认态)")
 
+            # ---- 计划内联卡片(v0.9.33):对话流里那张清单是真在跟着状态动 ----
+            check(page.locator(".tk").count() == 0,
+                  "开机时不补画卡片:上一轮挂着的「进行中」不会在新窗口里转圈")
+
+            def fire(ev):
+                page.evaluate("(e) => window.__gcodeEvent(e)", ev)
+
+            fire(plan_event())
+            card = page.locator(".tk")
+            check(card.count() == 1, "收到一次 plan_changed → 对话里出现一张计划卡片")
+            check(page.locator(".tk-row").count() == 3,
+                  "卡片里的行数 = 后端计划里的步数(3 步)")
+            check("把答辩 PPT 做完" in page.locator(".tk-goal").inner_text(),
+                  "卡片标题用的是后端给的计划目标")
+            check(page.locator(".tk-row").nth(0).evaluate("el => el.className")
+                  == "tk-row run", "第 1 步在数据里是 in_progress → 界面上那一行是「进行中」")
+            spin = page.locator(".tk-row.run .tk-g").evaluate(
+                "el => getComputedStyle(el).animationName")
+            check(spin == "tkSpin", f"进行中的那一圈真在转(animation-name={spin})")
+            foot = page.locator(".tk-foot").inner_text()
+            check("步骤 0/3" in foot and "正在做第 1 步" in foot,
+                  f"脚注报得清进度与正在做的步骤:{foot}")
+
+            fire(plan_event(**{"1": "done", "2": "in_progress"}))
+            check(page.locator(".tk").count() == 1,
+                  "同一个计划原地更新,不会每更新一次就多贴一张")
+            check(page.locator(".tk-row.done").count() == 1
+                  and page.locator(".tk-row.run").count() == 1,
+                  "第 1 步变成完成、第 2 步接上进行中")
+            check("步骤 1/3" in page.locator(".tk-foot").inner_text(),
+                  "脚注的已完成后跟着状态走")
+            check(page.locator(".tk-bar i").evaluate(
+                      "el => el.style.width") == "33%",
+                  "进度条宽度按 1/3 算(不是画出来的假动画)")
+
+            fire({**plan_event(**{"2": "failed"}), "session": "别的会话"})
+            check(page.locator(".tk").count() == 1
+                  and "步骤 1/3" in page.locator(".tk-foot").inner_text(),
+                  "别的会话推的计划不往这段对话里插卡片(角标照常刷新,因为计划文件是工作区的)")
+
+            fire(plan_event())          # 上一步已 failed:卡片要说明卡住了
+            foot = page.locator(".tk-foot").inner_text()
+            check(page.locator(".tk.broken").count() == 1
+                  and "失败" in foot and "已被挡住" in foot,
+                  f"上游失败:卡片变红并且说后面几步被挡住:{foot}")
+            check(page.locator(".tk-row.blocked").count() == 1,
+                  "被上游卡住的那一步在卡片里单独标出来(不与'待办'混成一类)")
+
+            fire(plan_event(**{"2": "in_progress"}))
+            page.evaluate("() => window.setBusy(false)")   # 这一轮结束了
+            check(page.locator(".tk.idle").count() == 1,
+                  "回合结束还有步骤挂着「进行中」→ 卡片进入'停下'态,不再假装在跑")
+            check(page.locator(".tk-row.run .tk-g").evaluate(
+                      "el => getComputedStyle(el).animationName") == "none",
+                  "转圈真的停了(animation-name: none)")
+            check("还挂着「进行中」" in page.locator(".tk-foot").inner_text(),
+                  "脚注点名了是哪一步停在这儿")
+
+            page.click(".tk-head")
+            page.wait_for_timeout(350)
+            check(page.locator("#planOverlay.show").count() == 1,
+                  "点卡片标题打开顶栏那个完整计划面板(卡片是入口,不是又一份状态)")
+            check(page.locator("#planOverlay .pl-step.s-run").count() == 1,
+                  "面板与卡片口径一致:同一步在两边都显示为「进行中」")
+            page.click("#btnPlanClose")
+            page.wait_for_timeout(200)
+
             browser.close()
     finally:
         shutdown()
@@ -319,7 +427,8 @@ def main() -> int:
         for f in failures:
             print("  ✗ " + f)
         return 1
-    print("开机冒烟:初始化跑完整、地图拿得到数据、情绪面板摆的是后端算的那几行 —— 通过")
+    print("开机冒烟:初始化跑完整、地图拿得到数据、情绪面板摆的是后端算的那几行、"
+          "计划卡片跟着真状态走 —— 通过")
     return 0
 
 

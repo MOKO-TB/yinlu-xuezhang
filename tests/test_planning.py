@@ -286,3 +286,103 @@ def test_notify_plan_without_a_ui_is_a_noop(tmp_path):
     notify_plan(ctx)                                     # 不该抛
     plan(ctx, "write", goal="g", steps=[{"title": "a"}, {"title": "b"}])
     assert plan_state(ctx.workspace)["total"] == 2
+
+
+# ------------------------------------------------ 进行中状态与内联卡片(v0.9.33)
+
+
+def test_in_progress_roundtrips_through_the_file(tmp_path):
+    """`[/]` 是这一轮新记号:写进去要读得回来,而且不能被当成"已完成"或"待办"。"""
+    ctx = _ctx(tmp_path)
+    _write_call(ctx)
+    r = plan(ctx, "update", step=1, status="in_progress")
+    assert "已标记第 1 步为 in_progress(0/3 完成)" in r
+    text = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    assert "- [/] 1. 设计数据结构" in text
+    parsed = parse_plan(text)
+    assert parsed["steps"][0]["status"] == "in_progress"
+    assert parsed["steps"][0]["done"] is False          # 半途的绝不冒充做完的
+    # 标别的步骤不能顺手把这一行的"进行中"抹掉
+    plan(ctx, "update", step=2, status="done")
+    after = parse_plan((tmp_path / "plans" / "plan.md").read_text(encoding="utf-8"))
+    assert [s["status"] for s in after["steps"]] == ["in_progress", "done", "pending"]
+
+
+def test_in_progress_is_not_ready(tmp_path):
+    """正在做的那一步不能再算进「现在能动」:两栏同时亮,用户就不知道到底在做什么。"""
+    ctx = _ctx(tmp_path)
+    plan(ctx, "write", goal="完成登录功能", steps=_DEP_STEPS)
+    plan(ctx, "update", step=1, status="in_progress")
+    st = plan_state(tmp_path)
+    assert st["running"] == [1] and st["ready"] == []
+    assert st["blocked"] == [] and st["failed"] == []
+    # 「进行中」的上游不算把下游卡住:只有 failed 才阻断,否则做一半看起来像做坏了
+    assert st["done"] == 0 and st["total"] == 4
+    plan(ctx, "update", step=1, status="done")
+    st = plan_state(tmp_path)
+    assert st["running"] == [] and st["ready"] == [2, 4]   # 标完 done 才把下游放出来
+
+
+def test_a_fresh_plan_has_an_empty_running_list(tmp_path):
+    """没有 plans/plan.md 时也要带 running:前端拿它拼脚注,缺字段就是一次 undefined。"""
+    st = plan_state(tmp_path)
+    assert st["running"] == []
+    ctx = _ctx(tmp_path)
+    _write_call(ctx)
+    assert plan_state(tmp_path)["running"] == []
+
+
+def test_scheduling_view_reports_running_even_without_dependencies(tmp_path):
+    """老早退条件只看依赖,于是"无依赖但正在做第 2 步"什么都不报 —— 卡片脚注就空了。"""
+    ctx = _ctx(tmp_path)
+    _write_call(ctx)                                     # 三步、无依赖
+    assert "[调度视图]" not in plan(ctx, "read")          # 没人动手时仍然没什么可报
+    r = plan(ctx, "update", step=2, status="in_progress")
+    assert "[调度视图]" in r
+    assert "进行中(已标 [/]" in r and "2. 实现后端接口" in r
+    assert "可执行(依赖已满足): 1. 设计数据结构, 3. 前端联调" in r   # 另外两步照旧列出
+
+
+def test_running_step_is_told_first_when_dispatching(tmp_path):
+    """「一键派发」的文案得先让模型把手上那一步收掉,否则它会又开一条新战线。"""
+    ctx = _ctx(tmp_path)
+    _write_call(ctx)                                     # 三步、无依赖
+    plan(ctx, "update", step=1, status="in_progress")
+    st = plan_state(tmp_path)
+    assert st["running"] == [1] and st["ready"] == [2, 3]
+    t = dispatch_text(st)
+    assert "第 1 步已标了进行中" in t and "先把它做完并标 done" in t
+    assert t.index("已标了进行中") < t.index("现在可以动手")
+    assert t.index("第 1 步") < t.index("第 2 步")        # 挂着的排最前,不是补在结尾
+
+
+def test_dispatch_still_names_the_running_step_when_nothing_is_ready(tmp_path):
+    """依赖链上游正在做时「可执行」是空的 —— 那句话更不能省,否则用户只能猜在做什么。"""
+    ctx = _ctx(tmp_path)
+    plan(ctx, "write", goal="完成登录功能", steps=_DEP_STEPS)
+    plan(ctx, "update", step=1, status="in_progress")
+    t = dispatch_text(plan_state(tmp_path))
+    assert "第 1 步已标了进行中" in t
+    assert "没有依赖已满足的步骤" in t
+
+
+def test_marking_in_progress_tells_the_model_to_close_it_out(tmp_path):
+    """界面上转着圈的那一行,如果模型转头就忘了标 done,就是在骗用户。"""
+    ctx = _ctx(tmp_path)
+    _write_call(ctx)
+    r = plan(ctx, "update", step=1, status="in_progress")
+    assert "界面上这一行现在显示为「进行中」" in r
+    assert "别让它一直挂在进行中" in r
+    # done 那条不必多这句嘴
+    assert "界面上这一行" not in plan(ctx, "update", step=1, status="done")
+
+
+def test_in_progress_reaches_the_ui_push(tmp_path):
+    """卡片是照着 plan_changed 的 payload 画的:running 没推出去 = 卡片永远不转圈。"""
+    ui = _UI()
+    ctx = ToolContext(workspace=tmp_path, config=None, ui=ui)
+    plan(ctx, "write", goal="g", steps=_DEP_STEPS)
+    plan(ctx, "update", step=1, status="in_progress")
+    payload = ui.events[-1][1]
+    assert payload["running"] == [1] and payload["ready"] == []
+    assert payload["steps"][0]["status"] == "in_progress"

@@ -712,6 +712,7 @@ class Bridge:
         except Exception as exc:      # 计划文件坏了/读不动都不该让面板打不开
             return {"ok": False, "has_plan": False, "goal": "", "steps": [],
                     "total": 0, "done": 0, "ready": [], "blocked": [], "failed": [],
+                    "running": [],
                     "dispatch_text": "",
                     "msg": f"读取计划失败:{type(exc).__name__}: {exc}"}
         return {"ok": True, "dispatch_text": dispatch_text(state), **state}

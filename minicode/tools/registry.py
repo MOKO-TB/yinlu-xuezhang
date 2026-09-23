@@ -400,11 +400,13 @@ def build_default_registry() -> list[Tool]:
                 "步骤可用 depends_on 声明依赖(如第 3 步 depends_on=[1,2]),"
                 "只有依赖全部完成的步骤才是「可执行」,互不依赖的可并行派子代理;"
                 "action=update:每完成一步标记 status=done(可附 note);"
+                "**动手做某一步之前先标 in_progress**,聊天里的计划卡片就会把那行"
+                "显示成「进行中」,做完再标 done;"
                 "失败的上游步骤标 status=failed,下游会被自动判为「被卡住」;"
-                "action=read:查看当前计划与调度视图(可执行/被卡住的步骤)。"
+                "action=read:查看当前计划与调度视图(进行中/可执行/被卡住的步骤)。"
                 "接到多文件/多阶段的复杂任务时应先建计划。"
-                "写完不必反复 read 念给用户:桌面版顶栏「🗂 计划」会实时显示"
-                "每一步的状态与进度,提醒用户看那里即可。"
+                "写完不必反复 read 念给用户:计划会以一张**内联清单**出现在对话里"
+                "(顶栏「🗂 计划」也同步显示每一步的状态与进度),提醒用户看那里即可。"
             ),
             parameters={
                 "type": "object",
@@ -419,8 +421,11 @@ def build_default_registry() -> list[Tool]:
                                   "depends_on": {"type": "array", "items": {"type": "integer"},
                                                  "description": "前置步骤编号;这些步骤完成后本步才可执行"}}}},
                     "step": {"type": "integer", "description": "action=update 时:步骤编号"},
-                    "status": {"type": "string", "enum": ["done", "pending", "failed"],
-                               "description": "action=update 时:新状态,默认 done;failed 表示这步没做成,下游会被判为卡住"},
+                    "status": {"type": "string",
+                               "enum": ["in_progress", "done", "pending", "failed"],
+                               "description": "action=update 时:新状态,默认 done。"
+                                              "动手做某一步之前先标 in_progress(聊天里的计划卡片会把它显示成"
+                                              "「进行中」那一行),做完立刻标 done;failed 表示这步没做成,下游会被判为卡住"},
                     "note": {"type": "string", "description": "action=update 时:可选备注"},
                 },
                 "required": ["action"],

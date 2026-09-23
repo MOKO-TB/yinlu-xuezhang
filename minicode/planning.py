@@ -14,15 +14,19 @@ from pathlib import Path
 from minicode.tools.base import ToolContext
 
 PLAN_REL = Path("plans") / "plan.md"
-STEP_RE = re.compile(r"^- \[([ xX!])\] (\d+)\. (.+)$")
+STEP_RE = re.compile(r"^- \[([ /xX!])\] (\d+)\. (.+)$")
 DEP_RE = re.compile(r"^- 依赖:\s*(.+)$")
 NOTE_RE = re.compile(r"^- 备注:\s*(.+)$")
 MAX_STEPS = 8
 
-# [ ] 待办 · [x] 完成 · [!] 失败(上游失败后由主代理显式标,用来阻断下游)
+# [ ] 待办 · [/] 进行中 · [x] 完成 · [!] 失败(上游失败后由主代理显式标,用来阻断下游)
+# "/" 这个记号不是随手挑的:它是单字符,parse_plan 那套正则照样吃得下;
+# 而"斜杠填一半"的视觉正好是"这步正在做"。别的渲染器不认识它也只会显示成未勾,
+# 不会把已完成/已失败的两类骗成人。
 MARKS = {False: " ", True: "x"}
-STATUS_TO_MARK = {"pending": " ", "done": "x", "failed": "!"}
-MARK_TO_STATUS = {" ": "pending", "x": "done", "X": "done", "!": "failed"}
+STATUS_TO_MARK = {"pending": " ", "in_progress": "/", "done": "x", "failed": "!"}
+MARK_TO_STATUS = {" ": "pending", "/": "in_progress",
+                  "x": "done", "X": "done", "!": "failed"}
 VALID_STATUS = set(STATUS_TO_MARK)
 
 
@@ -151,12 +155,18 @@ def blocked_steps(plan: dict) -> list[dict]:
 
 
 def scheduling_view(plan: dict, limit: int = 3) -> str:
-    """给模型看的调度摘要:现在做哪几步、哪几步被卡住。无依赖时返回空串。"""
+    """给模型看的调度摘要:哪几步在进行中、现在做哪几步、哪几步被卡住。
+    既没有依赖也没有进行中的步骤时返回空串(那就没什么可报的)。"""
     steps = plan.get("steps") or []
-    if not any(s["depends_on"] for s in steps):
+    running = [s for s in steps if s["status"] == "in_progress"]
+    if not any(s["depends_on"] for s in steps) and not running:
         return ""
     ready, blocked = ready_steps(plan), blocked_steps(plan)
     lines = ["", "[调度视图]"]
+    if running:
+        lines.append("* 进行中(已标 [/],先把这几步做完再标 done): "
+                     + ", ".join(f"{s['n']}. {s['title']}" for s in running[:limit])
+                     + ("" if len(running) <= limit else f" …等 {len(running)} 步"))
     if ready:
         lines.append("* 可执行(依赖已满足): "
                      + ", ".join(f"{s['n']}. {s['title']}" for s in ready[:limit])
@@ -183,7 +193,7 @@ def plan_state(workspace) -> dict:
     p = Path(workspace) / PLAN_REL
     empty = {"has_plan": False, "path": PLAN_REL.as_posix(), "goal": "",
              "steps": [], "total": 0, "done": 0,
-             "ready": [], "blocked": [], "failed": []}
+             "ready": [], "blocked": [], "failed": [], "running": []}
     if not p.exists():
         return empty
     plan = parse_plan(p.read_text(encoding="utf-8"))
@@ -198,6 +208,8 @@ def plan_state(workspace) -> dict:
             "steps": steps, "total": len(steps),
             "done": sum(1 for s in plan["steps"] if s["status"] == "done"),
             "ready": ready, "blocked": blocked,
+            "running": [s["n"] for s in plan["steps"]
+                        if s["status"] == "in_progress"],
             "failed": [s["n"] for s in plan["steps"] if s["status"] == "failed"]}
 
 
@@ -213,7 +225,11 @@ def dispatch_text(state: dict) -> str:
         return ""
     by_n = {s["n"]: s for s in steps}
     ready = [by_n[n] for n in (state.get("ready") or []) if n in by_n]
+    running = [by_n[n] for n in (state.get("running") or []) if n in by_n]
     head = f"按计划「{state.get('goal') or '未命名'}」继续。"
+    if running:
+        head += ("第 " + "、".join(str(s["n"]) for s in running)
+                 + " 步已标了进行中,先把它做完并标 done,再动别的。")
     if ready:
         listed = ";".join(
             f"第 {s['n']} 步 {s['title']}"
@@ -326,6 +342,9 @@ def _plan_update(ctx: ToolContext, step: int, status: str, note: str = "") -> st
 
     done_count = sum(1 for s in plan["steps"] if s["status"] == "done")
     lines = [f"已标记第 {step} 步为 {status}({done_count}/{len(plan['steps'])} 完成)。"]
+    if status == "in_progress":
+        lines[0] += (" 界面上这一行现在显示为「进行中」——这一步真做完后要标 done,"
+                     "做不成的话标 failed 并写清原因,别让它一直挂在进行中。")
     if done_count == len(plan["steps"]):
         lines[0] += " 全部步骤已完成!"
     view = scheduling_view(plan)
