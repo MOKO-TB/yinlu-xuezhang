@@ -90,6 +90,20 @@ def test_briefing_counts_only_real_building_changes():
     assert not re.search(r"\d+\s*分钟", walk_lines)   # 本机没填作息表:换楼行里不该有分钟数字
 
 
+def test_briefing_phrase_names_the_earliest_change_so_you_leave_in_time():
+    """出门前那一刻要的是一句能照着做的事,不是一个数字。"""
+    _save_schedule([
+        {"name": "高等数学", "day": 1, "periods": "1-2", "location": "J1至善楼"},
+        {"name": "大学英语", "day": 1, "periods": "3-4", "location": "S5致用楼"},
+        {"name": "数据结构", "day": 1, "periods": "5-6", "location": "J2明德楼"},
+    ])
+    b = briefing.build(TODAY)
+    assert "2 处要换教学楼" in b["text"]
+    assert "最早第 3 节上课前:J1至善楼 → S5致用楼" in b["text"]
+    # 没填作息表:简报那句里一个分钟数字都不许出现
+    assert not re.search(r"\d+\s*分钟", b["text"])
+
+
 def test_briefing_names_unplaceable_classes_instead_of_rounding_them_away():
     _save_schedule([
         {"name": "高等数学", "day": 1, "periods": "1-2", "location": "J1至善楼"},

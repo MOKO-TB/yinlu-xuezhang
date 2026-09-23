@@ -47,7 +47,7 @@ def _schedule_bits(today: date, detail: list[str]) -> tuple[str, str] | None:
     from minicode import walk as _walk
     risk = _walk.day_risks(today, data)
     if risk.get("items"):
-        short += f",{len(risk['items'])} 处要换教学楼"
+        short += "," + _walk.brief_phrase(risk)
         for it in risk["items"][:3]:
             detail.append("· 换楼:" + _walk.item_text(it))
         if risk.get("items_more"):

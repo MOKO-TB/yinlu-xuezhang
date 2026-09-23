@@ -635,12 +635,14 @@ def view(today: date | None = None) -> dict:
                 "in_term": slot["in_term"], "unknown": slot["unknown"],
                 "class_count": slot["class_count"], "note": slot["note"],
                 # 换楼/同节冲突同样只由后端算:面板自己比字符串就会跟回话口径漂开
-                "walks": risk["items"], "clashes": risk["clashes"],
+                "walks": risk["items"], "walk_total": walk.total_items(risk),
+                "clashes": risk["clashes"],
                 "walk_skipped": risk["skipped"],
                 "walk_index_ready": risk["index_ready"],
                 "items": overlay["due_map"].get(iso, []),
                 "events": overlay["event_map"].get(iso, [])}
 
+    grid = [_pack(day) for day in span]
     return {"registered": True,
             "term_start": data.get("term_start"),
             "updated_at": data.get("updated_at"),
@@ -650,13 +652,15 @@ def view(today: date | None = None) -> dict:
             "clock": bool(times.get("total")),
             # 地图索引缺了就没法判断换楼:顶层给一次,面板不必七天各提示一遍
             "walk_index_ready": bool((walk_index or {}).get("buildings")),
+            # 周视图那句汇总取的是**网格里这七天**,与每格那个 ⚠ 同一次计算
+            "walk_week": walk.week_summary(grid),
             "period_times": {"filled": bool(times.get("total")),
                              "total": times.get("total") or 0,
                              "source": times.get("source") or ""},
             "overdue": overlay["overdue"],
-            "today": _pack(today),
+            "today": grid[today.weekday()],
             "tomorrow": _pack(today + timedelta(days=1)),
-            "week_grid": {str(i + 1): _pack(day) for i, day in enumerate(span)}}
+            "week_grid": {str(i + 1): day for i, day in enumerate(grid)}}
 
 
 def _note_key(day: date, start_time: str, name: str) -> str:

@@ -298,3 +298,90 @@ def test_day_shape_mirrors_free_slots_vocabulary():
     for key in ("date", "weekday", "week", "registered", "in_term", "clock", "note"):
         assert key in res and key in free, key
     assert res["items"][0]["kind"] if res["items"] else True
+
+
+# ---------------------------------- 出门前那一刻 + 周汇总(v0.9.36 走堂第二步)
+
+def _two_buildings_and_a_third():
+    return _save([_class("高等数学", "1-2", "J1至善楼"),
+                  _class("大学英语", "3-4", "S5致用楼205"),
+                  _class("数据结构", "5-6", "S1格致楼")])
+
+
+def test_brief_phrase_names_the_earliest_change_not_the_tightest():
+    """简报短卡说的是"第一处在哪"(出门前用得上),不是"哪处最紧"(面板排序用那套)。"""
+    res = walk.day_risks(MON, _two_buildings_and_a_third())
+    phrase = walk.brief_phrase(res)
+    assert phrase.startswith("2 处要换教学楼")
+    assert "最早第 3 节上课前:J1至善楼 → S5致用楼" in phrase
+    assert not re.search(r"\d+\s*分钟", phrase), "没填作息表,这句里也不许出现分钟数"
+
+
+def test_brief_phrase_gives_minutes_only_after_the_timetable_is_filled():
+    data = _two_buildings_and_a_third()
+    _fill_times()
+    phrase = walk.brief_phrase(walk.day_risks(MON, data))
+    assert "中间 10 分钟" in phrase
+
+
+def test_brief_phrase_is_empty_when_nothing_to_walk():
+    data = _save([_class("高等数学", "1-2", "J1至善楼101"),
+                  _class("大学英语", "3-4", "J1至善楼205")])   # 同栋换教室
+    assert walk.brief_phrase(walk.day_risks(MON, data)) == ""
+
+
+def test_total_items_counts_what_the_display_cap_hides(monkeypatch):
+    """列出来最多几条是噪声考虑,但"几处"这个数字不许因此变小。
+
+    把 `MAX_ITEMS` 压到 2 来验这条:堆十几节课反而会被默认节次上限挡掉,
+    测的就不是截断而是"节次看不懂"了。
+    """
+    monkeypatch.setattr(walk, "MAX_ITEMS", 2)
+    data = _save([_class("A", "1-2", "J1至善楼"), _class("B", "3-4", "S5致用楼"),
+                  _class("C", "5-6", "S1格致楼"), _class("D", "7-8", "S5致用楼")])
+    res = walk.day_risks(MON, data)
+    assert len(res["items"]) == 2 and res["items_more"] == 1
+    assert walk.total_items(res) == 3            # A-B、B-C、C-D 三处前后脚
+    phrase = walk.brief_phrase(res)
+    assert phrase.startswith("3 处要换教学楼(另有 1 处没列出)")
+
+
+def test_week_summary_counts_days_and_picks_the_earlier_day_on_a_tie():
+    data = _save([_class("A", "1-2", "J1至善楼", day=1),
+                  _class("B", "3-4", "S5致用楼", day=1),
+                  _class("C", "1-2", "J1至善楼", day=2),
+                  _class("D", "3-4", "S5致用楼", day=2),
+                  _class("E", "5-6", "S1格致楼", day=2),
+                  _class("F", "1-2", "J1至善楼", day=6),
+                  _class("G", "3-4", "S5致用楼", day=6),
+                  _class("H", "5-6", "S1格致楼", day=6)])
+    s = walk.week_summary(walk.week_risks(MON, data)["days"])
+    assert s["days"] == 3 and s["total"] == 5
+    # 周二与周六都是 2 处:取靠前那天(我们没依据说"周几更要紧")
+    assert (s["worst_weekday"], s["worst_count"]) == ("二", 2)
+    assert s["worst_date"] == (MON + timedelta(days=1)).isoformat()
+
+
+def test_week_summary_of_a_quiet_week_is_all_zero():
+    data = _save([_class("A", "1-2", "J1至善楼101"), _class("B", "3-4", "J1至善楼205")])
+    s = walk.week_summary(walk.week_risks(MON, data)["days"])
+    assert s == {"days": 0, "total": 0, "worst_date": "", "worst_weekday": "",
+                 "worst_count": 0}
+
+
+def test_week_summary_accepts_the_panel_packed_shape():
+    """面板那条路给的是 pack(带 walk_total),工具回话给的是 day_risks 的结果 ——
+    两种形状必须算出同一个数,否则就是"角标 10 处、汇总 6 处"那种自相矛盾。"""
+    packs = [{"date": "2026-09-07", "weekday": "一", "walk_total": 10},
+             {"date": "2026-09-08", "weekday": "二", "walk_total": 3}]
+    assert walk.week_summary(packs) == {
+        "days": 2, "total": 13, "worst_date": "2026-09-07",
+        "worst_weekday": "一", "worst_count": 10}
+
+
+def test_week_risks_line_ends_with_the_summary_and_admits_no_clock():
+    data = _save([_class("A", "1-2", "J1至善楼", day=1),
+                  _class("B", "3-4", "S5致用楼", day=1)])
+    text = walk.format_week_risks(walk.week_risks(MON, data))
+    assert "本周 1 天要换楼、共 1 处" in text
+    assert not re.search(r"\d+\s*分钟", text)

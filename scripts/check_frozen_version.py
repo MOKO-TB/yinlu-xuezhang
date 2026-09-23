@@ -158,6 +158,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           # v0.9.35:走堂预警接进工具/提示词/面板(漏收 = 装好的包
                           # 里 walk 模块在但没人调,问"赶不赶得及"仍靠模型心算)
                           "risk 的 when", "upcoming_lines", "walk_index_ready",
+                          # v0.9.36:面板的处数与"本周最多那天"由后端一次算好(漏收 =
+                          # 徽章回退成列表长度、周视图那句汇总干脆不出现)
+                          "walk_total", "walk_week",
                           "walk_skipped"),
     "minicode.weather": ("weather_card", "umbrella_tip", "refresh_async",
                          "get_weather"),
@@ -168,10 +171,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.walk": ("day_risks", "week_risks", "format_risks", "format_week_risks",
                       "upcoming_lines", "worst_item", "item_text", "place_of",
                       "adjacency", "campus_index", "_index", "_walks", "_clashes",
+                      # v0.9.36:走堂第二步 —— 真实处数、出门前那一句、整周汇总
+                      # (漏收 = 简报与周视图那两句退化成"列表有几行报几处")
+                      "total_items", "brief_phrase", "week_summary",
                       "MAX_ITEMS", "MAX_SKIPPED", "_NO_INDEX"),
     # ---- v0.9.20:今日简报聚合 + 推送去重 ----
     "minicode.briefing": ("build", "_schedule_bits", "_weather_bits",
-                          "_reminders_bits", "_calendar_bits"),
+                          "_reminders_bits", "_calendar_bits",
+                          # v0.9.36:早上的桌面通知要说得出"最早那一处是哪两栋"
+                          "brief_phrase"),
     # ---- v0.9.16/17/20:主动推荐 + 新版本检查 + 今日简报(合并成一个键,
     #      避免 dict 重复键 last-wins 让早先的 needle 悄悄漏检) ----
     "minicode.proactive": ("check_once", "fetch_latest", "start_loop", "clean_title",

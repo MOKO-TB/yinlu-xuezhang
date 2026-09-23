@@ -304,6 +304,62 @@ def worst_item(day_res: dict) -> dict | None:
     return items[0] if items else None
 
 
+def total_items(day_res: dict) -> int:
+    """当天**总共**几处换楼(含被 `MAX_ITEMS` 截掉的那些)。
+
+    列出来最多 8 条是刻意的(再多就是噪声),但"几处"这个数字不许因为截断变小 ——
+    面板角标和简报都直接报它,少报等于把风险说小。
+    """
+    return len(day_res.get("items") or []) + int(day_res.get("items_more") or 0)
+
+
+def brief_phrase(day_res: dict) -> str:
+    """今日简报短卡里那半句:处数 + **最早那一处**(出门前该问"第一处在哪",
+    而不是"哪处最紧" —— 后者是 `worst_item`,给风险回话和面板排序用)。
+
+    没有换楼时返回空串,调用方据此什么也不加。分钟数只在填过作息表时出现,
+    两栋楼名一律原样用 `walk` 解析过的那两个,这里不重新拼也不猜。
+    """
+    items = day_res.get("items") or []
+    if not items:
+        return ""
+    first = min(items, key=lambda it: (it["to_period"], it["from_period"]))
+    more = int(day_res.get("items_more") or 0)
+    bits = [f"最早第 {first['to_period']} 节上课前:"
+            f"{first['prev']['building']} → {first['curr']['building']}"]
+    if first["clock"]:
+        bits.append(f"中间 {first['minutes']} 分钟")
+    return (f"{total_items(day_res)} 处要换教学楼"
+            + (f"(另有 {more} 处没列出)" if more else "")
+            + f"({'、'.join(bits)})")
+
+
+def week_summary(packed_days: list[dict]) -> dict:
+    """周视图顶部那句「这周几天要换楼、哪天最多」的素材。
+
+    收的是**已经算好的七天**(`schedule.view` 里每天的 pack,或 `day_risks` 的结果 ——
+    后者没有 `walk_total`,当场用 `total_items` 现算),绝不回读地图索引:面板刷新
+    一次只判一轮,这句汇总必须跟格子上那个 ⚠ 出自同一次计算。
+    并列最多时取**靠前的那天**(周一~周日顺序)—— 我们没依据说"周几更要紧"。
+    """
+    days = []
+    for d in packed_days:
+        total = d.get("walk_total")
+        if total is None:
+            total = total_items(d)
+        if total:
+            days.append((d, int(total)))
+    worst = None
+    for d, total in days:
+        if worst is None or total > worst[1]:
+            worst = (d, total)
+    return {"days": len(days),
+            "total": sum(t for _, t in days),
+            "worst_date": (worst[0].get("date") if worst else ""),
+            "worst_weekday": (worst[0].get("weekday") if worst else ""),
+            "worst_count": (worst[1] if worst else 0)}
+
+
 # ---------------------------------------------------------------- 说法
 
 def item_text(it: dict) -> str:
@@ -395,6 +451,10 @@ def format_week_risks(res: dict) -> str:
                      + (f";这天还有 {more} 处换楼" if more > 0 else ""))
     if quiet:
         lines.append(f"(其余 {quiet} 天没有要换楼的课)")
+    s = week_summary(res["days"])
+    if s["days"]:
+        lines.append(f"(本周 {s['days']} 天要换楼、共 {s['total']} 处,"
+                     f"周{s['worst_weekday']}最多 {s['worst_count']} 处)")
     return "\n".join(lines)
 
 

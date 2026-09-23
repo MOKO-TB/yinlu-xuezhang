@@ -309,6 +309,12 @@ try {
                 border-radius:6px; border-left:2px solid var(--warning);
                 background:var(--warning-bg); color:var(--text-1);
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* 后端 walk.week_summary 说这天是本周最多那天,才给这一档(不是前端自己比大小) */
+  .sc-walkchip.max{ background:var(--warning); color:#fff; font-weight:700;
+                    border-left-color:transparent; }
+  .sc-walksum{ font-size:11px; line-height:1.6; margin:2px 0 8px; padding:6px 9px;
+               border-radius:8px; border-left:2px solid var(--warning);
+               background:var(--warning-bg); color:var(--text-1); }
   .sc-clash{ font-size:10.5px; line-height:1.4; padding:4px 6px; margin-bottom:4px;
              border-radius:6px; background:var(--danger-bg); color:var(--text-2); }
   .sc-skipped{ font-size:11px; color:var(--text-3); margin-top:6px; line-height:1.7; }
@@ -4115,8 +4121,9 @@ function scWalkRow(it, title) {
 function scWalkRows(day) {
   const walks = day.walks || [];
   const rows = walks.slice(0, 4).map(it => scWalkRow(it, scWalkTitle(it)));
-  if (walks.length > 4)
-    rows.push(`<div class="sc-more">另有 ${walks.length - 4} 处换楼没列出</div>`);
+  const total = day.walk_total || walks.length;
+  if (total > rows.length)
+    rows.push(`<div class="sc-more">另有 ${total - rows.length} 处换楼没列出</div>`);
   const clash = (day.clashes || []).slice(0, 3).map(c =>
     `<div class="sc-clash" title="同一节排了两门课:这是课表本身撞了,不是走路问题">`
     + `⚡ ${esc(c.label)}:${esc(c.a.name)} / ${esc(c.b.name)}</div>`).join("");
@@ -4130,7 +4137,22 @@ function scWalkRows(day) {
 function scWalkChip(col) {
   const walks = col.walks || [];
   if (!walks.length) return "";
-  return `<div class="sc-walkchip" title="${esc(scWalkTitle(walks[0]))}">⚠ ${walks.length} 处换楼</div>`;
+  // 处数用后端的 walk_total(含被 MAX_ITEMS 截掉的那些),是不是"本周最多那天"
+  // 也由后端 week_summary 说了算 —— 前端一比大小就长出第二套判断。
+  const sum = (scheduleData && scheduleData.walk_week) || {};
+  const max = sum.worst_date && col.date === sum.worst_date && sum.worst_count > 1;
+  return `<div class="sc-walkchip${max ? " max" : ""}" `
+    + `title="${esc(scWalkTitle(walks[0]))}${max ? "(本周最多的一天)" : ""}">`
+    + `⚠ ${col.walk_total || walks.length} 处换楼</div>`;
+}
+/* 周视图顶部那句汇总:整周一个视角,先知道"这周几天要换楼、哪天最多"再逐天看。
+   一天都没有就不画(不摆"0 处"占位);索引缺失时后端给的 days 就是 0,这里也不硬解释。 */
+function scWalkWeek() {
+  const s = (scheduleData && scheduleData.walk_week) || {};
+  if (!s.days) return "";
+  return `<div class="sc-walksum">⚠ 本周 ${s.days} 天要换教学楼、共 ${s.total} 处,`
+    + `周${esc(s.worst_weekday)}最多(${s.worst_count} 处)`
+    + `${scheduleData.clock ? "" : "(只按节次说,没编分钟)"}</div>`;
 }
 function scDayPanel(day, emptyText) {
   const gaps = (day.gaps || []).slice().sort((a, b) => b.periods - a.periods);
@@ -4217,7 +4239,7 @@ function renderSchedule() {
           title="点开看这天的空档与要交的东西">
         <h5>周${esc(col.weekday || "一二三四五六日"[k - 1])}</h5>${cells}
         <div class="sc-gaps">${scWalkChip(col)}${scGapChips(col, 2)}${scTail(col)}</div></div>`;
-    }).join("") + `</div>
+    }).join("") + `</div>` + scWalkWeek() + `
       <div class="sc-note">本周按第 ${scheduleData.week || "?"} 周排课(单双周已过滤);
       没写钟点的课只显示节次。${scheduleData.overdue ? `另有 ${scheduleData.overdue} 条待办已逾期。` : ""}
       ${scheduleData.clock ? "空档已按你填的作息表给钟点。"

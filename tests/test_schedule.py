@@ -706,6 +706,29 @@ def test_view_carries_walk_facts_for_the_panel():
     assert wed["walks"] == [] and wed["walk_skipped"][0]["name"] == "体育课"
 
 
+def test_view_carries_real_walk_counts_and_a_week_summary():
+    """v0.9.36:面板那句"这周几天要换楼、哪天最多"由后端算好,前端只挑出那天加重颜色。"""
+    assert schedule.save("2026-09-07", [
+        _row("高等数学", 1, "1-2", location="J1至善楼"),
+        _row("大学英语", 1, "3-4", location="S5致用楼"),
+        _row("数据结构", 1, "5-6", location="S1格致楼"),
+        _row("体育", 3, "1-2", location="J1至善楼"),
+        _row("体育", 3, "3-4", location="S5致用楼")])[0]
+    view = schedule.view(TODAY_MON)
+    mon, wed = view["week_grid"]["1"], view["week_grid"]["3"]
+    assert mon["walk_total"] == 2 and wed["walk_total"] == 1
+    assert view["walk_week"] == {"days": 2, "total": 3,
+                                 "worst_date": mon["date"], "worst_weekday": "一",
+                                 "worst_count": 2}
+
+
+def test_view_week_summary_is_zero_for_a_week_without_walks():
+    assert schedule.save("2026-09-07", [
+        _row(periods="1-2", day=1, location="J1至善楼101"),
+        _row("大学英语", 1, "3-4", location="J1至善楼205")])[0]
+    assert schedule.view(TODAY_MON)["walk_week"]["days"] == 0
+
+
 def test_prompt_section_injects_walk_lines_only_when_there_is_one():
     day = date.today().weekday() + 1                # 注入看的是真"今天/明天",不能写死周几
     assert schedule.save(_this_monday().isoformat(), _walk_rows(day))[0]
