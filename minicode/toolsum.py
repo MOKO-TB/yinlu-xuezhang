@@ -1,4 +1,4 @@
-"""工具调用的「一句话说法」唯一口径(v0.9.37)。
+"""工具调用的「一句话说法」与「成没成」唯一口径(v0.9.37 / v0.9.39 Z1)。
 
 为什么单独一个模块:同一件事在三个地方要写 —— 终端一行 `● bash …`、聊天里的工具
 卡片、右侧任务监控的时间线。原来 gui_ui 与 ui 各有一份 `_arg_summary`,已经差在
@@ -79,3 +79,34 @@ def summarize(name: str, args: dict | None, limit: int = 160) -> str:
     else:
         s = "  ".join(f"{k}={str(v)[:40]}" for k, v in args.items())
     return str(s or "")[:limit]
+
+
+# ------------------------------------------------------------ 这一步成没成
+
+# 结果文本以这些开头 = 这一步**没成**。`Agent._execute` 里每个失败出口都写成这个
+# 句式(参数不对 → `错误: …`;抛异常 → `工具执行出错: …`;用户点拒绝 → `用户拒绝了…`),
+# 所以判断只需要看开头。
+#
+# 为什么提到这里(v0.9.39 Z1 第一步):同一句 `result.startswith(("错误", "工具执行出错",
+# "用户拒绝"))` 原来在 `gui_ui.tool_done`、`ui.tool_done` 各抄了一份字面量,加上
+# `activity.FAILED_PREFIXES` 共三份。三份各自抄的后果不是难看,是**会不一致**:
+# 新增一种失败措辞(或改一句文案)时,聊天里工具卡片打 ✓、监控栏那行写失败、终端 ✗ ——
+# 而没有任何一处会报错。前端只信 `tool_done` 推过去的 `ok` 字段,所以 Python 这一侧
+# 就是唯一真相,这里收口之后它只剩一个来源。
+#
+# 边界照实说:这套判断认的是**文案**,不是结构化的失败标记。工具自己 return 一句
+# 「错误: …」以外的失败描述(比如「做了一半」),这里仍算成功 —— 那是文案纪律,
+# 由 `tests/test_tool_outcome.py` 拿真的 Agent 跑一遍逐条对。
+FAILED_PREFIXES = ("错误", "工具执行出错", "用户拒绝")
+
+ERROR_PREVIEW = 300          # 失败时给人看的那段原文截多长(终端与界面同一个数)
+
+
+def is_failure(result) -> bool:
+    """这一次工具调用的结果算不算「没成」。非字符串不算(宁可标对,不标错)。"""
+    return isinstance(result, str) and result.startswith(FAILED_PREFIXES)
+
+
+def error_preview(result, limit: int = ERROR_PREVIEW) -> str:
+    """失败时该展示的那段原文;成功一律给空串(界面据此决定要不要留错误行)。"""
+    return str(result or "")[:limit] if is_failure(result) else ""

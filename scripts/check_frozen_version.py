@@ -94,8 +94,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.37:工具口径只有一份真相 —— 聊天里的工具卡片、右侧时间线、实时表三处
     # 都调它。漏收 = 三处措辞各自漂移(时间线里写「读取」,卡片里写「读文件」),
     # 而配对靠的是同一个 summarize 结果,漂了就再也对不上,行行都显示不了耗时。
+    # v0.9.39 Z1:这里还多了"这一步成没成"的唯一口径(漏 is_failure = 终端 / 工具卡片 /
+    # 监控栏三处又各自写一份前缀判断,而这三处一致是"不能只当装饰"的硬要求)
     "minicode.toolsum": ("summarize", "verb", "short_name", "agent_type",
-                         "SUBAGENT_PREFIX_SEP"),
+                         "SUBAGENT_PREFIX_SEP", "FAILED_PREFIXES", "ERROR_PREVIEW",
+                         "is_failure", "error_preview"),
     # v0.9.37:折叠偏好整模块(漏收 = 点段头直接抛异常,整栏打不开)
     "minicode.monitor": ("read_pref", "write_pref", "pref_path", "SECTIONS",
                          "DEFAULTS", "PREF_FILE", "_clean_folded"),

@@ -104,11 +104,13 @@ class TerminalUI:
 
     def tool_done(self, tool: Tool, result: str) -> None:
         dt = time.monotonic() - self._tool_t0
-        failed = result.startswith(("错误", "工具执行出错", "用户拒绝"))
+        # 与 GUI 那侧同一个口径:失败判定与截断长度都取自 toolsum
+        from minicode import toolsum
+        failed = toolsum.is_failure(result)
         mark = "[red]✗[/red]" if failed else "[green]✓[/green]"
         self.console.print(f"  {mark} [dim]{dt:.1f}s[/dim]")
         if failed:
-            self.console.print(f"  [red]{escape(result[:300])}[/red]")
+            self.console.print(f"  [red]{escape(toolsum.error_preview(result))}[/red]")
 
     def tool_rejected_hard(self, tool: Tool, args: dict) -> None:
         self.console.print(Panel(

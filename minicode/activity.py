@@ -16,9 +16,10 @@ v0.9.37 起这一栏叫「任务监控」,多了两样:**按真实先后的时�
    没写过文件就不会有产出行。类别为空时前端整段不显示,而不是显示一排"暂无"。
 ②**产出行会去磁盘上核一遍**(在不在、多大、什么时候改的)。模型说"已生成 report.docx"
    而文件其实不存在(被用户删了、或它压根没写成)是真实会发生的事,面板不能跟着一起装。
-③**运行中与失败分开标**:判失败用的是 `gui_ui.GuiUI.tool_done` 同一份前缀口径
-   (`错误` / `工具执行出错` / `用户拒绝`) —— 两处若漂了,聊天里工具卡片显示失败、
-   右侧面板却显示完成,那就是自相矛盾的装饰。
+③**运行中与失败分开标**:判失败问的是 `minicode.toolsum.is_failure`(v0.9.39 Z1
+   起它是一份**唯一**口径,终端、GUI 工具卡片、这里三处都问同一个函数)—— 原来三处
+   各抄一份前缀字面量,抄着抄着就会漂,而漂了的后果是自相矛盾的装饰:聊天里那张卡片
+   打 ✓,这一栏却写着失败。
 ④**上下文压缩后早期动作会进摘要、不再出现在这里** —— 面板写的是「本次会话(可见)」,
    不假装能翻出已经被压缩掉的完整历史。
 """
@@ -37,8 +38,9 @@ DETAIL_MAX = 4000         # 点开才看的全文(子代理报告、记忆内容
 GROUP_LIMIT = 12          # 每类最多列几行,超出只报个数
 RECENT_FIRST = True       # 面板按"最新在上"排,和用户扫一眼的顺序一致
 
-# 与 gui_ui.GuiUI.tool_done 同口径:结果以这些前缀开头 = 这一步没成
-FAILED_PREFIXES = ("错误", "工具执行出错", "用户拒绝")
+# 唯一真相在 toolsum(v0.9.39 Z1);这里只是**沿用同一个名字**给下面的聚合用,
+# 不再自己写一份元组 —— 自己写一份,就又有机会和界面那侧漂开。
+FAILED_PREFIXES = toolsum.FAILED_PREFIXES
 
 FILE_TOOLS = {"write_file": "写入", "edit_file": "编辑", "browser_screenshot": "截图"}
 URL_TOOLS = {"web_crawl", "browser_open", "browser_eval", "page_parse"}
@@ -78,7 +80,7 @@ def _as_list(val) -> list:
 
 
 def _failed(result: str) -> bool:
-    return isinstance(result, str) and result.startswith(FAILED_PREFIXES)
+    return toolsum.is_failure(result)
 
 
 def _url_and_host(url: str) -> tuple[str, str, str]:

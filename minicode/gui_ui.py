@@ -74,10 +74,12 @@ class GuiUI:
                   trust=getattr(tool, "trust", "local"))
 
     def tool_done(self, tool: Tool, result: str) -> None:
-        failed = result.startswith(("错误", "工具执行出错", "用户拒绝"))
+        # 成没成、截多长都由 toolsum 一处说了算(原来这两行各写了一份字面量:
+        # 一份 startswith 元组、一个 [:300],与 activity 那份是三份真相)
+        failed = toolsum.is_failure(result)
         self._live_end(tool.name, not failed)
         self.push("tool_done", ok=not failed,
-                  error_preview="" if not failed else result[:300])
+                  error_preview=toolsum.error_preview(result))
 
     def tool_rejected_hard(self, tool: Tool, args: dict) -> None:
         self.push("hard_reject", command=str(args.get("command", "")))
