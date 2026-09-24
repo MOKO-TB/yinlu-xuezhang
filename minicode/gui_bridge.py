@@ -1409,6 +1409,7 @@ class Bridge:
             "allow_outside_workspace": state.policy.allow_outside_workspace,
             "allow_network": state.policy.allow_network,
             "timeout_seconds": state.policy.timeout_seconds,
+            "strip_env_secrets": state.policy.strip_env_secrets,
             "description": state.describe(),
         }
 

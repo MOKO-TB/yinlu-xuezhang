@@ -203,6 +203,14 @@ class Config:
     shell: str = "auto"                 # auto | bash | cmd | powershell
     max_output_chars: int = 20000       # 工具输出回填给模型前的截断长度
     request_timeout_seconds: int = 300  # 单次 LLM 请求超时
+    # 一轮对话的**总**时限(多次 LLM 往返还算在这一轮里):0 = 不限。
+    # 到点后只在"上一步做完、下一步还没开始"的间隙停下,不强杀正在执行的那一步
+    # ——bash/py_script 自己有单条命令超时,两层各管各的,别指望这里能打断一条卡住的命令。
+    turn_time_limit_seconds: int = 1800
+    # 单个子代理(task 工具派出去的那一档)最长等多久:0 = 不限。
+    # 超时是"主代理不再等它",后台线程仍会跑完当前那一步(Python 没有安全的强杀),
+    # 结果不再回填 —— 报告里会照这个口径写明是哪一路超时。
+    subagent_time_limit_seconds: int = 600
     context_window: int = 131072        # 模型上下文窗口(token),用于压缩触发判断
     compact_at_ratio: float = 0.7       # 估算 token 达到窗口的该比例时触发压缩
     # MCP 服务器原始配置(list[dict],由 minicode.mcp.parse_servers 解析;
@@ -212,6 +220,11 @@ class Config:
     sandbox: dict = field(default_factory=dict)
     # 当前模型是否支持看图(多模态):开启后上传的图片会以 data URL 发给模型
     vision: bool = False
+    # 外接能力的原始配置(dict,由 minicode.embed / minicode.images 自己解析):
+    # {"embeddings": {…}, "images": {…}}。与 sandbox / mcp 同一套路——config 只
+    # 存原文,不反向依赖功能模块。**Key 只允许出现在用户自己的 config.json 里**,
+    # 绝不进仓库、绝不进分享包(save_config 的白名单落盘会把 api_key 洗掉)。
+    capabilities: dict = field(default_factory=dict)
 
     # ---- 活动供应商;base_url/api_key/model 属性保持旧代码零改动 ----
     @property
@@ -345,6 +358,22 @@ def _dedupe_models(entries: list[dict]) -> list[dict]:
     return out
 
 
+def _scrub_secrets(node, _keys=("api_key", "apikey", "token", "secret")):
+    """递归洗掉外接能力配置里的密钥字段(只回显结构,不改内存里那份)。
+
+    为什么必须洗:capabilities 是给"向量检索 / 图片生成"用的,使用者很容易顺手
+    把 api_key 写进去。而项目里所有供应商密钥都走 `_credentials_save` 那份单独的
+    凭据文件,config.json 是要显示在界面上、也可能被拷给别人看的。所以落盘时一律
+    洗成空串,取 Key 只认 provider_id —— 外接能力**不新开一条密钥路径**。
+    """
+    if isinstance(node, dict):
+        return {k: ("" if str(k).lower() in _keys else _scrub_secrets(v, _keys))
+                for k, v in node.items()}
+    if isinstance(node, list):
+        return [_scrub_secrets(v, _keys) for v in node]
+    return node
+
+
 def _config_from_raw(raw: dict) -> Config:
     providers = _providers_from_raw(raw)
     active = str(raw.get("active_provider") or "")
@@ -356,11 +385,15 @@ def _config_from_raw(raw: dict) -> Config:
         shell=raw.get("shell", "auto"),
         max_output_chars=int(raw.get("max_output_chars", 20000)),
         request_timeout_seconds=int(raw.get("request_timeout_seconds", 300)),
+        turn_time_limit_seconds=max(0, int(raw.get("turn_time_limit_seconds", 1800) or 0)),
+        subagent_time_limit_seconds=max(0, int(
+            raw.get("subagent_time_limit_seconds", 600) or 0)),
         context_window=int(raw.get("context_window", 131072)),
         compact_at_ratio=float(raw.get("compact_at_ratio", 0.7)),
         mcp_servers=raw.get("mcp_servers") if isinstance(raw.get("mcp_servers"), list) else [],
         sandbox=raw.get("sandbox") if isinstance(raw.get("sandbox"), dict) else {},
         vision=bool(raw.get("vision", False)),
+        capabilities=raw.get("capabilities") if isinstance(raw.get("capabilities"), dict) else {},
     )
     # active 缺失/指向不存在的供应商 → 钉到第一个**用户配置**的供应商上。
     # 必须显式写回:Config.provider 在 id 为空时会隐式回退到 providers[0],
@@ -448,6 +481,9 @@ def save_config(path: Path, cfg: Config) -> None:
         "shell": cfg.shell,
         "max_output_chars": cfg.max_output_chars,
         "request_timeout_seconds": cfg.request_timeout_seconds,
+        # 两条时限跟着落盘:用户在设置里改过、下次启动还在(0=不限也照样存下来)
+        "turn_time_limit_seconds": cfg.turn_time_limit_seconds,
+        "subagent_time_limit_seconds": cfg.subagent_time_limit_seconds,
         "context_window": cfg.context_window,
         "compact_at_ratio": cfg.compact_at_ratio,
     }
@@ -457,6 +493,13 @@ def save_config(path: Path, cfg: Config) -> None:
         data["sandbox"] = cfg.sandbox
     if cfg.vision:
         data["vision"] = True
+    if cfg.capabilities:
+        # 外接能力**不新开一条密钥路径**:embeddings / images 只写
+        # {"provider_id": "...", "model": "..."} 这类无密钥字段,运行时按
+        # provider_id 去借 providers 里那份 Key(已有 credentials 机制管)。
+        # 这里再兜一道:万一有人手写了 api_key,存盘时一律洗掉,
+        # 免得 Key 从 credentials 文件漏进 config.json(便携版那是跟着包走的)。
+        data["capabilities"] = _scrub_secrets(cfg.capabilities)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8")
     _credentials_save({p.id: p.api_key for p in cfg.providers

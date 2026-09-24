@@ -4,7 +4,7 @@ from __future__ import annotations
 from minicode import growth
 from minicode import calendar as school_calendar
 from minicode import reminders, tray
-from minicode import campus, gpa, kb, library, library_guide, memory, mood, planning, schedule, site_parse, skills, weather
+from minicode import campus, charts, gpa, images, kb, library, library_guide, memory, mood, ocr, planning, schedule, site_parse, skills, weather
 from minicode.tools import browser as browser_tools
 from minicode.tools import crawl, fs, search, shell
 from minicode.tools.base import Tool
@@ -82,6 +82,10 @@ def build_default_registry() -> list[Tool]:
                 "openpyxl / pypdf 等文档库,做 PPT/Word/Excel/PDF 转换时先按相应"
                 "技能(write_file 写脚本)再调本工具运行。脚本里请 print 关键"
                 "步骤与产物路径;长时间任务可调 timeout(上限 300 秒)。"
+                "两条边界:①运行前会先读一遍脚本内容,出现凭据/密钥路径、工作区外"
+                "路径或联网出口时会把命中的那几行摆进确认框(这一层不是隔离,是让你"
+                "看一眼再决定);②子进程环境里名字像凭据的变量默认被摘掉,别指望用 "
+                "os.environ 读到模型服务的 Key。"
             ),
             parameters={
                 "type": "object",
@@ -434,7 +438,7 @@ def build_default_registry() -> list[Tool]:
         ),
         Tool(
             name="search_knowledge",
-            description="检索本地知识库(校园通知、奖助学金、竞赛、证书、考研就业、心理调适等资料),返回带来源网址与可信度的条目。回答相关问题时必须先用本工具,引用时给出网址供用户核实。用户问细节时把 snippet_chars 调大,直接基于原文回答,避免再去爬官网让用户等。",
+            description="检索本地知识库(校园通知、奖助学金、竞赛、证书、考研就业、心理调适等资料),返回带来源网址与可信度的条目,并附「检索口径」说明这次靠什么命中的。回答相关问题时必须先用本工具,引用时给出网址供用户核实。用户问细节时把 snippet_chars 调大,直接基于原文回答,避免再去爬官网让用户等。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -443,12 +447,91 @@ def build_default_registry() -> list[Tool]:
                     "category": {"type": "string", "description": "按分类过滤,如:奖助学金 / 学科竞赛 / 考研"},
                     "snippet_chars": {"type": "integer",
                                       "description": "每条返回的正文长度,默认 160(速览);问评定条件/流程/时间等细节时用 600-1200"},
+                    "source": {"type": "string",
+                               "description": "按来源过滤(渠道名或网址里的子串),如 微信公众号 / gzasc.edu.cn;默认不限"},
+                    "since": {"type": "string",
+                              "description": "只看该日期之后发布的条目,格式 2026-01-01;问「今年/最近」时用,不填即不限时间"},
+                    "semantic": {"type": "boolean",
+                                 "description": "要不要用向量(语义)档。默认留空=自动:向量索引已建好才用;没建好结果里的「检索口径」会照实告诉你"},
+                    "build_index": {"type": "boolean",
+                                    "description": "显式建/补向量索引——要给几百条真发 embedding 请求,既慢又花使用者的额度,只有用户明确要求时才传 true"},
                 },
                 "required": ["query"],
             },
             handler=kb.search_knowledge,
             trust="external",
             read_only=True,
+        ),
+        Tool(
+            name="ocr_image",
+            description="把图片里的文字取出来(拍错题、截图通知、黑板照片)。结果末尾一定会写「用了哪条后端 + 该后端的可靠性告警」:Windows 自带引擎对公式/上下标/手写不可靠,视觉模型可能夹带补全。所以取到的文本只当待核对草稿,不要当已核实原文引用;认不出来的地方宁可说「看不清」也不要猜。没有可用后端时会照实说缺什么、怎么补,不会硬编内容。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "图片路径(相对工作区或绝对路径),png/jpg 等"},
+                    "backend": {"type": "string",
+                                "description": "auto(默认,先走本机离线引擎) / system(只要 Windows 引擎) / vision(只要视觉模型)"},
+                    "lang": {"type": "string",
+                             "description": "系统引擎的识别语言,如 zh-Hans-CN / en-US;留空按系统用户配置,系统没装这个包会说明并退回"},
+                    "max_chars": {"type": "integer", "description": "返回文本上限,默认 6000"},
+                },
+                "required": ["path"],
+            },
+            handler=ocr.ocr_image,
+            trust="external",
+            read_only=True,
+        ),
+        Tool(
+            name="render_chart",
+            description="把一组数字画成自包含的 SVG 图表(成绩对比、每周时长、学分构成),写到工作区 charts/ 下。零依赖、离线,不联网也不读本机数据:data 里的每个数值都必须由你或用户明确给出,程序不取数、不补数、不把缺失值当 0 —— 数据不全就先用对应工具查到、或直说查不到,别先画。source 要写真实来源(教务系统导出/用户提供 等),它会印在图脚注;确实没来源就留空,返回值里会提示你这图没有来源信息。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "chart_type": {"type": "string",
+                                   "description": "bar(比大小)/ line(看趋势)/ pie(看占比,最多 10 块)"},
+                    "data": {"description": "数据:[{label,value}] 数组、[[标签,数值]] 或 {标签:数值};数值必须是有限数字",
+                             "type": ["array", "object"]},
+                    "title": {"type": "string", "description": "图标题"},
+                    "source": {"type": "string",
+                               "description": "数据来源,会印在图脚注;没有就留空(返回值会提醒)"},
+                    "name": {"type": "string", "description": "文件名(不含扩展名),默认取标题"},
+                    "donut": {"type": "boolean", "description": "饼图是否画成环形,默认 false"},
+                    "width": {"type": "integer", "description": "宽,默认 720"},
+                    "height": {"type": "integer", "description": "高,默认 420"},
+                },
+                "required": ["chart_type", "data"],
+            },
+            handler=charts.chart_file,
+            read_only=False,
+        ),
+        Tool(
+            name="generate_image",
+            description=(
+                "生成图片,写到工作区 images/ 下。两条后端各管一件事,别混:"
+                "① api(文生图模型)—— 需要 config.json 的 capabilities.images 里配好"
+                "provider_id + 模型名 + 该供应商已有 Key,才能按 prompt 画出插图;"
+                "② card(本地文字卡片)—— 不要网络也不要 Key,把 text/title 排成 PNG,"
+                "画的就是这些字。**没配好接口时不要指望凭 prompt 出图**:那种情况要么"
+                "给用户做文字卡片(必须传 text),要么如实说缺什么。返回值一定会写清楚"
+                "用了哪条后端、字节数、以及「卡片是排版不是 AI 绘图」这类边界。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string",
+                               "description": "给文生图模型的图像描述(只有配了接口才有效)"},
+                    "text": {"type": "string",
+                             "description": "要印在卡片上的文字(本地出图用),多行用 \\n"},
+                    "title": {"type": "string", "description": "卡片大标题"},
+                    "backend": {"type": "string",
+                                "description": "auto(默认)/ api(只要文生图接口)/ card(只要本地排版)"},
+                    "size": {"type": "string",
+                             "description": "如 1024x1024;接口用默认 1024x1024,卡片默认 1080x1440"},
+                    "name": {"type": "string", "description": "文件名(不含扩展名)"},
+                },
+            },
+            handler=images.image_generate,
+            read_only=False,
         ),
         Tool(
             name="campus_calendar",

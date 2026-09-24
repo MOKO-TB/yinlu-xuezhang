@@ -21,9 +21,10 @@ from pathlib import Path
 
 from minicode.config import Config
 from minicode.sandbox import (
-    ASK as SB_ASK, BLOCKED, OUTSIDE, REJECT as SB_REJECT, SECRET,
-    check_command, classify_for_write, classify_path,
-    command_hits_credential, command_hits_network,
+    ASK as SB_ASK, BLOCKED, KNOWN_LIMITS, OUTSIDE,
+    REJECT as SB_REJECT, SECRET, check_command, classify_for_write,
+    classify_path, command_hits_credential, command_hits_network,
+    command_touches_outside_path, script_hits,
 )
 from minicode.tools.base import Tool
 
@@ -33,8 +34,10 @@ REJECT = "reject"
 
 WRITE_TOOLS = ("write_file", "edit_file")
 
-# 用户确认后需要记住"这个路径可以访问"的工具
-PATH_TOOLS = ("read_file", "write_file", "edit_file")
+# 用户确认后需要记住"这个路径可以访问"的工具。
+# ocr_image 也在这里:它自己 resolve 路径交给识别引擎,不经过 resolve_path 围栏,
+# 少了这道门就等于"给个绝对路径就能把工作区外的图片读走"(注入防御要堵的洞)。
+PATH_TOOLS = ("read_file", "write_file", "edit_file", "py_script", "ocr_image")
 
 # accept_edits(自动编辑)档放行的构建类命令首词。只放"跑测试/装依赖/编译"
 # 这类可重复执行、不直接破坏数据的动作;删改类(rm/del/Remove-Item/git push…)
@@ -284,6 +287,80 @@ class PermissionGate:
                 return hit
         return None
 
+    # ------------------------------------------------------------ 脚本内容一层
+
+    PY_HEADS = frozenset({"python", "python3", "py", "python.exe", "python3.exe"})
+    SCRIPT_SCAN_BYTES = 200_000
+
+    def _script_targets(self, name: str, args: dict) -> list:
+        """这次动作会跑起来的脚本文件(只收工作区内、真存在的)。
+
+        `py_script` 的 path 参数由 resolve_path 围栏管着,但**文件内容没人看过**;
+        `bash("python x.py")` 更是绕过 py_script 的现成后门。两处一起扫。
+        """
+        if self.sandbox is None:
+            return []
+        ws = Path(self.sandbox.workspace).resolve()
+        raws: list[str] = []
+        if name == "py_script":
+            raw = args.get("path")
+            if isinstance(raw, str) and raw.strip().endswith(".py"):
+                raws.append(raw.strip())
+        elif name == "bash":
+            cmd = str(args.get("command", "") or "")
+            for seg in re.split(r"[;&|\n]", cmd):
+                tokens = [t.strip("\"'") for t in seg.split()]
+                if not tokens:
+                    continue
+                head = tokens[0].lower().rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+                if head not in self.PY_HEADS:
+                    continue
+                raws.extend(t for t in tokens[1:]
+                            if t.lower().endswith(".py") and not t.startswith("-"))
+        out = []
+        for raw in raws:
+            kind, p = classify_path(ws, raw)
+            # 工作区外的脚本更要扫(不是豁免理由);敏感目录下的文件本来就碰不到
+            if kind != BLOCKED and p.is_file():
+                out.append(p)
+        return out
+
+    def _read_script(self, p: Path) -> str | None:
+        """读脚本文本(只读前 200 KB;读不出来就当没内容,不因此放行也不报错)。"""
+        try:
+            return p.read_text(encoding="utf-8", errors="replace")[:self.SCRIPT_SCAN_BYTES]
+        except OSError:
+            return None
+
+    def _script_gate(self, name: str, args: dict) -> str:
+        """脚本文案的沙箱判定:ALLOW / ASK / REJECT(ASK 时已写好 _note)。"""
+        for p in self._script_targets(name, args):
+            text = self._read_script(p)
+            if text is None:
+                continue
+            level, why = script_hits(self.sandbox.policy, text,
+                                     touched_external=self._touched_external,
+                                     workspace=self.sandbox.workspace)
+            if level == SB_REJECT:
+                self._note(why)
+                return REJECT
+            if level == SB_ASK:
+                self._note(f"{why}\n{KNOWN_LIMITS['script']}(文件:{p.name})")
+                return ASK
+        return ALLOW
+
+    def _outside_path_gate(self, name: str, args: dict) -> str:
+        """bash 命令里出现工作区外路径:和 read_file 越界同一口径(不因档位放开)。"""
+        token = command_touches_outside_path(self.sandbox.policy,
+                                             self.sandbox.workspace,
+                                             str(args.get("command", "")))
+        if not token:
+            return ALLOW
+        self._note(f"这条命令引用了工作区外的路径 {token} —— 沙箱默认只让它在工作区内活动。"
+                   "确认不是你要的请点拒绝;需要长期放开请在 config.json 打开 "
+                   "sandbox.allow_outside_workspace。")
+        return ASK
+
     # ------------------------------------------------------------ 主判定
 
     def check(self, tool: Tool, args: dict) -> str:
@@ -322,6 +399,15 @@ class PermissionGate:
                     pass                # full 档:沙箱内可配命令放行(见下)
                 if not self.sandbox.policy.enabled:
                     pass                # 沙箱关闭:命令仍走下面的常规确认
+                # 命令里引用了工作区外的路径:与 read_file 越界同一口径
+                if self.sandbox.policy.enabled:
+                    if self._outside_path_gate(name, args) == ASK:
+                        return ASK
+            # 脚本内容一层:py_script 与 bash 里跑的 python 脚本都要先扫
+            if self.sandbox.policy.enabled and name in ("py_script", "bash"):
+                gate = self._script_gate(name, args)
+                if gate != ALLOW:
+                    return gate
 
         if tool.read_only:
             return ALLOW

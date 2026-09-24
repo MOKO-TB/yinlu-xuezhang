@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from minicode.sandbox import scrub_env
 from minicode.tools.base import ToolContext
 
 DEFAULT_TIMEOUT = 60
@@ -74,6 +75,29 @@ def _decode(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def _child_env(ctx: ToolContext, extra: dict | None = None
+               ) -> tuple[dict, list[str]]:
+    """子进程环境:UTF-8 开关照旧,凭据类变量按沙箱开关摘掉。
+
+    摘掉的是**给脚本的那份**,应用自己要用的 key 在启动时已读进内存;
+    摘了多少个会在输出末尾如实写出来(不静默改变脚本能看到的 worlds)。
+    """
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", **(extra or {})}
+    state = getattr(ctx, "sandbox", None)
+    if state is not None and getattr(state.policy, "strip_env_secrets", True):
+        env, dropped = scrub_env(env)
+        return env, dropped
+    return env, []
+
+
+def _env_note(dropped: list[str]) -> str:
+    if not dropped:
+        return ""
+    shown = ", ".join(dropped[:6]) + ("…" if len(dropped) > 6 else "")
+    return (f"\n(沙箱已从子进程环境里摘掉 {len(dropped)} 个名字像凭据的变量:{shown};"
+            "需要它们请在 config.json 把 sandbox.strip_env_secrets 设为 false)")
+
+
 def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
     """在工作区目录执行一条 shell 命令,返回退出码与输出。"""
     timeout = min(max(1, int(timeout)), MAX_TIMEOUT)
@@ -82,7 +106,8 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
         timeout = state.policy.command_timeout(timeout)
     argv = resolve_shell_argv(ctx.config.shell)
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    env, dropped = _child_env(ctx)
+    env_note = _env_note(dropped)
 
     try:
         if argv is None:
@@ -98,10 +123,10 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
     except subprocess.TimeoutExpired as e:
         partial = _decode(e.stdout or b"")
         return (f"错误: 命令超时(>{timeout}s),已被终止。"
-                f"已产生的输出:\n{partial[:TIMEOUT_OUTPUT_LIMIT]}")
+                f"已产生的输出:\n{partial[:TIMEOUT_OUTPUT_LIMIT]}{env_note}")
 
-    out = _decode(proc.stdout or b"").strip()
-    err = _decode(proc.stderr or b"").strip()
+    out = _clip(_decode(proc.stdout or b"").strip())
+    err = _clip(_decode(proc.stderr or b"").strip())
     sections = [f"退出码: {proc.returncode}"]
     if out:
         sections.append(f"--- stdout ---\n{out}")
@@ -109,7 +134,19 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
         sections.append(f"--- stderr ---\n{err}")
     if proc.returncode != 0 and not out and not err:
         sections.append("(无输出。命令可能不存在,或需要不同的参数。)")
-    return "\n".join(sections)
+    return "\n".join(sections) + env_note
+
+
+BASH_OUTPUT_LIMIT = 6000
+
+
+def _clip(text: str) -> str:
+    """单路输出截断:整段不限量会把上下文一次性撑爆。"""
+    if len(text) <= BASH_OUTPUT_LIMIT:
+        return text
+    return (text[:BASH_OUTPUT_LIMIT]
+            + f"\n…(输出过长,只保留了前 {BASH_OUTPUT_LIMIT} 字,"
+            + f"共 {len(text)} 字;要完整结果请把命令输出重定向到工作区文件再读)")
 
 
 # ------------------------------------------------------- py_script(内置运行时)
@@ -159,7 +196,8 @@ def py_script(ctx: ToolContext, path: str, timeout: int = 120) -> str:
         return ("错误: 当前是单文件版,没有内置脚本运行时(缺 引路学长-CLI.exe)。"
                 "请改用安装包/便携版,或把脚本内容直接展示给用户手动运行。")
     cmd = [*base, str(target)]
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    env, dropped = _child_env(ctx, {"PYTHONUTF8": "1"})
+    env_note = _env_note(dropped)
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         proc = subprocess.run(cmd, cwd=ctx.workspace, capture_output=True,
@@ -167,7 +205,7 @@ def py_script(ctx: ToolContext, path: str, timeout: int = 120) -> str:
     except subprocess.TimeoutExpired as e:
         partial = _decode(e.stdout or b"")
         return (f"错误: 脚本运行超过 {timeout} 秒被中止。已产生的输出:\n"
-                f"{partial[:TIMEOUT_OUTPUT_LIMIT]}")
+                f"{partial[:TIMEOUT_OUTPUT_LIMIT]}{env_note}")
     out = _decode(proc.stdout or b"").strip()
     err = _decode(proc.stderr or b"").strip()
     sections = [f"退出码: {proc.returncode}"]
@@ -180,4 +218,4 @@ def py_script(ctx: ToolContext, path: str, timeout: int = 120) -> str:
         text = text[:PY_SCRIPT_OUTPUT_LIMIT] + "\n…(输出过长,已截断)"
     if proc.returncode != 0 and not out and not err:
         text += "\n(无输出。脚本可能抛了异常却没打印,检查代码或让脚本 print 关键步骤。)"
-    return text
+    return text + env_note

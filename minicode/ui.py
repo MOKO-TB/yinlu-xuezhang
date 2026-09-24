@@ -313,3 +313,9 @@ class TerminalUI:
             f"[yellow]⚠ 本回合工具调用已达 {limit} 轮上限,强制停止。"
             f"可继续对话让它接着做。[/yellow]"
         )
+
+    def turn_time_limited(self, seconds: int, steps: int) -> None:
+        self.console.print(
+            f"[yellow]⏱ 本回合已跑 {steps} 步、超过一轮总时限 {seconds} 秒,"
+            f"已停下(正在执行的那一步不会被强杀)。可继续对话让它接着做。[/yellow]"
+        )

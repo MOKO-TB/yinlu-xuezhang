@@ -131,6 +131,24 @@ def risk_notes(tool_name: str, args: dict) -> list[str]:
     elif name == "py_script":
         notes.append("会用内置 Python 运行时执行这个脚本(能读写工作区文件、可能联网)")
         notes.append("脚本产生的改动不在「撤销」的跟踪范围内")
+    elif name == "ocr_image":
+        notes.append("会把这张图片的内容读成文字;走 vision 后端时图片会发给外部模型服务")
+        notes.append("识别结果是不一定准的草稿(公式/上下标/手写容易错),不当已核实原文")
+    elif name == "render_chart":
+        keys = list(args.get("data"))[:3] if isinstance(args.get("data"), dict) else []
+        notes.append("会往工作区 charts/ 下写一个 SVG 文件(需手动删,「撤销」不跟踪它)")
+        notes.append("图上的每个数值都来自这次调用传进来的数据"
+                     + (f"(如 {'、'.join(str(k) for k in keys)})" if keys else "")
+                     + ",程序不取数也不补数;没写 source 时脚注就是空的")
+    elif name == "generate_image":
+        notes.append("会往工作区 images/ 下写一个 PNG(需手动删,「撤销」不跟踪它)")
+        if str(args.get("backend", "") or "") == "api":
+            notes.append("走 api:会把这段图像描述发给外部文生图服务,并花该 Key 的额度")
+        elif str(args.get("backend", "") or "") == "card":
+            notes.append("走 card:只在本地把文字排成图,不联网也不调模型(是排版,不是 AI 绘图)")
+        else:
+            notes.append("backend=auto:配好了接口就把描述发给外部服务并花该 Key 额度;"
+                         "没配接口则只在本地把文字排成卡片(不联网,也不是 AI 绘图)")
     return notes
 
 

@@ -20,6 +20,8 @@
   "shell": "auto",
   "max_output_chars": 20000,
   "request_timeout_seconds": 300,
+  "turn_time_limit_seconds": 1800,
+  "subagent_time_limit_seconds": 600,
   "context_window": 131072,
   "compact_at_ratio": 0.7,
   "vision": false,
@@ -28,7 +30,8 @@
     "allow_outside_workspace": false,
     "allow_network": true,
     "timeout_seconds": 60,
-    "deny_patterns": []
+    "deny_patterns": [],
+    "strip_env_secrets": true
   },
   "mcp_servers": [
     {

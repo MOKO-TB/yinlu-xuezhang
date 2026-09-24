@@ -103,3 +103,14 @@ _build_*.log
 # v0.9.32 情绪日记(整个 app 里最私密的一份本机记录;连同原子写的半截文件)
 /mood.json
 /mood.json.tmp
+
+# 向量检索的本地缓存与「用时下载」的模型权重(都是本机可再生资源,绝不进仓库)
+# kb-vectors/ = 条目指纹+向量档(embed.py);models/ = 本地 embedding 权重目录
+/kb-vectors/
+/models/
+
+# 工具生成的产物(默认工作区 = 程序目录,所以它们会落在仓库根)
+# charts/ 是成绩/时长图,images/ 是文字卡片与文生图结果 —— 里面可能有同学自己的
+# 姓名与成绩,属于个人数据:不进仓库,也不随分享包外发(build_exe 里同一份清单)。
+/charts/
+/images/

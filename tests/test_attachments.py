@@ -175,6 +175,8 @@ def test_attachment_note_mentions_vision_state(tmp_path):
     note_on = attachment_note(atts, vision=True)
     assert "uploads/a.png" in note_off and "uploads/b.pdf" in note_off
     assert "不支持看图" in note_off and "已随消息提供" in note_on
+    # 看不了图时不能只说"不行",要给一条真能走的路(工具自己会报能不能用)
+    assert "ocr_image" in note_off and "ocr_image" not in note_on
     assert attachment_note([], vision=True) == ""
 
 

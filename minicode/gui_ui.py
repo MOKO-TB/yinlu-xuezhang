@@ -97,6 +97,13 @@ class GuiUI:
     def max_steps_reached(self, limit: int) -> None:
         self.push("info", text=f"本回合工具调用已达 {limit} 轮上限,强制停止")
 
+    def turn_time_limited(self, seconds: int, steps: int) -> None:
+        # 走已有的 info 通道:时限到点只是"这一轮先停",不是错误,
+        # 用 error 会让前端标红成一次失败。
+        self.push("info", text=f"本回合已跑 {steps} 步、超过一轮总时限 {seconds} 秒,"
+                               f"已停下(正在执行的那一步不会被强杀)。"
+                               f"想接着做直接说「继续」。")
+
     def compacted(self, before: int, after: int) -> None:
         self.push("compacted", before=before, after=after)
 

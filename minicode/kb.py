@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -19,6 +20,13 @@ SNIPPET_LIMIT = 160
 SNIPPET_MAX = 1200
 MAX_CONTENT_LIMIT = 1500
 KB_RESULT_LIMIT = 5
+
+# 向量档的相似度闸门:低于它就不算命中。这只是一个**保守闸门**,不是"经验阈值"
+# —— 本仓没有拿真模型跑过阈值曲线,所以不吹某个数是最佳值;要调就在
+# config.json 的 capabilities.embeddings.min_sim 里给,给了就用给的。
+DEFAULT_MIN_SIM = 0.35
+# 关键词一路先取多少候选送去参与融合(融合是名次级的,候选宽一点不心疼)
+HYBRID_CANDIDATES = 12
 
 # ------------------------------------------------------------------ 来源可信度
 #
@@ -205,23 +213,152 @@ def score_entry(entry: KbEntry, query_tokens: set[str]) -> int:
     return score
 
 
+@dataclass
+class SearchHit:
+    """一条命中:条目 + 分数 + 命中依据(哪个词落在哪个字段)+ 这一条是靠哪档进来的。"""
+    entry: KbEntry
+    score: float
+    reason: str
+    via: str
+
+
+def _min_sim(cfg) -> float:
+    caps = getattr(cfg, "capabilities", None) or {}
+    spec = caps.get("embeddings") if isinstance(caps, dict) else None
+    if isinstance(spec, dict) and spec.get("min_sim") is not None:
+        try:
+            return float(spec["min_sim"])
+        except (TypeError, ValueError):
+            return DEFAULT_MIN_SIM
+    return DEFAULT_MIN_SIM
+
+
+def search_hybrid(entries: list[KbEntry], query: str, *, top_k: int = 3,
+                  category: str | None = None, source: str | None = None,
+                  since: str | None = None, until: str | None = None,
+                  semantic: bool | None = None, build_index: bool = False,
+                  cfg=None) -> tuple[list[SearchHit], dict]:
+    """关键词(BM25F)+ 可选向量档 + 元数据过滤,RRF 名次融合。
+
+    ``semantic``:None=auto(只有向量索引**已经建好**时才用,不会顺手发几百条请求)、
+    False=只用关键词、True=要用语义档(缺索引且 build_index=True 才补建)。
+    ``meta`` 里的每个字段都是真跑出来的,直接进给用户看的"检索口径"一行。
+    """
+    from minicode import embed, retrieval
+
+    query = (query or "").strip()
+    semantic = _tri_state(semantic)
+    pool, dropped = retrieval.filter_meta(
+        entries, category=category, source=source, since=since, until=until,
+        date_of=lambda e: e.publish_at, tags_of=lambda e: e.tags,
+        source_of=lambda e: " ".join([e.source, e.url, e.source_file]))
+    meta = {"pool": len(pool), "dropped": dropped, "keyword_hits": 0,
+            "modes": ["关键词 BM25F"], "vector": {"ran": False, "why": "未启用",
+                                                  "backend": "none", "cached": 0,
+                                                  "missing": 0, "embedded": 0,
+                                                  "elapsed_ms": 0},
+            "fused": False, "elapsed_ms": 0}
+    if not query or not pool:
+        return [], meta
+
+    started = time.perf_counter()
+    index = retrieval.KeywordIndex([
+        retrieval.fields_of(e.title, e.tags, e.content) for e in pool])
+    kw_hits = index.search(query, top_k=max(top_k * 4, HYBRID_CANDIDATES))
+    meta["keyword_hits"] = len(kw_hits)
+    reasons = {h.index: retrieval.reason_line(h) for h in kw_hits}
+    rankings = [[h.index for h in kw_hits]]
+    weights = [1.0]
+    via = {i: "关键词" for i in rankings[0]}
+
+    vec_report = None
+    if semantic is not False and pool:
+        vec_report = embed.ensure_vectors(pool, cfg, build=(build_index or semantic is True))
+        cached_ok = vec_report["cached"] or vec_report["embedded"]
+        meta["vector"].update(backend=vec_report["backend"], cached=vec_report["cached"],
+                              missing=vec_report["missing"], embedded=vec_report["embedded"])
+        if not vec_report["ready"] or not cached_ok:
+            meta["vector"]["why"] = vec_report["why"] or (
+                f"索引未建({vec_report['missing']} 条没有向量),本次只走关键词;"
+                "要建索引就明确说一声(build_index=True)")
+        else:
+            qv = None
+            try:
+                qv = embed.embed_texts([query], cfg)[0]
+            except embed.EmbedUnavailable as e:
+                meta["vector"]["why"] = f"查询向量取不到:{e}"
+            if qv:
+                ranked = retrieval.rank_by_vector(qv, vec_report["vectors"],
+                                                  min_sim=_min_sim(cfg))
+                if ranked:
+                    meta["vector"].update(ran=True, why="",
+                                          elapsed_ms=vec_report["elapsed_ms"],
+                                          sims=dict(ranked[:top_k * 4]))
+                    meta["modes"].append("向量(%s)" % vec_report["backend"])
+                    rankings.append([i for i, _s in ranked])
+                    weights.append(1.0)
+                    for i, _s in ranked:
+                        via[i] = "关键词+向量" if i in via else "仅向量"
+                else:
+                    meta["vector"]["why"] = ("向量档跑了但没有任何条目过相似度闸门"
+                                             f"({_min_sim(cfg):.2f}),本次只走关键词")
+    if len(rankings) > 1:
+        meta["fused"] = True
+        fused = retrieval.rrf(rankings, weights)
+        order = retrieval.order_by_fused(fused)
+    else:
+        fused = {h.index: h.score for h in kw_hits}
+        order = [h.index for h in kw_hits]
+    limit = max(1, min(int(top_k), KB_RESULT_LIMIT))
+    hits = [SearchHit(entry=pool[i], score=round(fused.get(i, 0.0), 6),
+                      reason=reasons.get(i, ""), via=via.get(i, "关键词"))
+            for i in order[:limit]]
+    meta["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
+    return hits, meta
+
+
 def search(entries: list[KbEntry], query: str,
            top_k: int = 3, category: str | None = None) -> list[KbEntry]:
-    query_tokens = _tokens(query)
-    pool = [e for e in entries
-            if not category or category.lower() in " ".join(e.tags).lower()]
-    scored = [(score_entry(e, query_tokens), e) for e in pool]
-    scored = [(s, e) for s, e in scored if s > 0]
-    scored.sort(key=lambda pair: (-pair[0], not pair[1].credible))
-    return [e for _, e in scored[:max(1, min(int(top_k), KB_RESULT_LIMIT))]]
+    """旧接口:只走关键词档(BM25F 排序),返回裸条目。
+
+    留着是因为脚本与测试都在用它;要拿命中依据与检索口径请用 search_hybrid。
+    """
+    hits, _meta = search_hybrid(entries, query, top_k=top_k, category=category,
+                                semantic=False)
+    return [h.entry for h in hits]
 
 
-def format_results(results: list[KbEntry],
-                   snippet_chars: int = SNIPPET_LIMIT) -> str:
+def _mode_line(meta: dict | None) -> str:
+    """把本次检索真跑了什么拼成一行,放在结果最前面。
+
+    这一行的每个数字都来自 search_hybrid 的 meta(候选数、排除数、向量档状态、
+    实测耗时),没有任何"看起来更聪明"的措辞:向量档没跑就写没跑,以及为什么没跑。
+    """
+    if not meta:
+        return ""
+    vec = meta.get("vector") or {}
+    if vec.get("ran"):
+        vpart = f"向量档已跑(后端 {vec.get('backend')},缓存 {vec.get('cached')} 条"
+        if vec.get("embedded"):
+            vpart += f",本次新算 {vec.get('embedded')} 条"
+        vpart += f",{vec.get('elapsed_ms')}ms)"
+    else:
+        vpart = f"向量档未跑:{vec.get('why') or '未启用'}"
+    parts = ["+".join(meta.get("modes") or ["关键词"]), vpart,
+             f"候选 {meta.get('keyword_hits', 0)} 条", f"耗时 {meta.get('elapsed_ms', 0)}ms"]
+    dropped = meta.get("dropped") or {}
+    if dropped:
+        parts.append("元数据排除 " + "、".join(f"{k} {v} 条" for k, v in dropped.items()))
+    return "检索口径:" + "｜".join(parts) + "\n"
+
+
+def format_results(results: list, snippet_chars: int = SNIPPET_LIMIT,
+                   meta: dict | None = None) -> str:
     if not results:
-        return "知识库中没有匹配的内容。"
+        return (_mode_line(meta) + "知识库中没有匹配的内容。") if meta else "知识库中没有匹配的内容。"
     blocks = []
-    for i, e in enumerate(results, start=1):
+    for i, item in enumerate(results, start=1):
+        e = item.entry if isinstance(item, SearchHit) else item
         cred = e.credibility or "未标注"
         # 抓取降级条目不是"学长学姐经验",不能套 reply-tone 的"亲测有效"话术(那会把
         # 一个未核实的网页说成实地经过的推荐)。
@@ -232,15 +369,19 @@ def format_results(results: list[KbEntry],
         else:
             mark = "⚠ 此条为演示/待核实数据,引用时必须向用户注明"
         lines = [f"[{i}] {e.title}  (可信度: {cred}){(' ' + mark) if mark else ''}"]
-        meta = []
+        meta_bits = []
         if e.tags:
-            meta.append("分类: " + "/".join(e.tags[:4]))
+            meta_bits.append("分类: " + "/".join(e.tags[:4]))
         if e.publish_at:
-            meta.append("发布: " + e.publish_at)
+            meta_bits.append("发布: " + e.publish_at)
         if e.deadline:
-            meta.append("截止: " + e.deadline)
-        if meta:
-            lines.append("    " + " · ".join(meta))
+            meta_bits.append("截止: " + e.deadline)
+        if meta_bits:
+            lines.append("    " + " · ".join(meta_bits))
+        if isinstance(item, SearchHit):
+            why = item.reason or ("" if item.via == "关键词" else "靠语义档进来的,关键词没对上原词")
+            lines.append(f"    为什么命中: {why}({item.via})" if why else
+                         f"    为什么命中: 元数据过滤后进入候选({item.via})")
         if e.content:
             snippet = e.content[:snippet_chars] + ("…" if len(e.content) > snippet_chars else "")
             lines.append(f"    摘要: {snippet}")
@@ -249,7 +390,7 @@ def format_results(results: list[KbEntry],
         elif e.source:
             lines.append(f"    来源渠道: {e.source}(无网址)")
         blocks.append("\n".join(lines))
-    header = (f"共命中 {len(results)} 条(按相关度排序)。"
+    header = _mode_line(meta) + (f"共命中 {len(results)} 条(按相关度排序)。"
               "回答引用这些内容时,请给出条目标题与来源网址;"
               "可信度非 A 的条目按 reply-tone 技能话术表述:能指认实测者的说"
               "「学长学姐亲测有效、推荐的方法」并附条目标题与来源;"
@@ -266,14 +407,41 @@ def _int_arg(value, default: int, low: int, high: int) -> int:
     return max(low, min(num, high))
 
 
+def _tri_state(value):
+    """把工具入参收成 True / False / None(自动)。
+
+    模型经常传字符串:"false"、"否"、"" —— 这些都得算"不要",不能因为
+    `if semantic:` 遇到非空字符串为真就默认去跑向量档。传得含糊时一律退回
+    最保守的 None(自动:有现成索引才用)。
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "y", "是", "开", "true."):
+        return True
+    if text in ("0", "false", "no", "n", "否", "关", "off"):
+        return False
+    return None
+
+
 def search_knowledge(ctx, query: str, top_k: int = 3,
                      category: str | None = None,
-                     snippet_chars: int = SNIPPET_LIMIT) -> str:
-    """工具处理器:检索本地知识库。
+                     snippet_chars: int = SNIPPET_LIMIT,
+                     source: str | None = None,
+                     since: str | None = None,
+                     semantic: bool | None = None,
+                     build_index: bool = False) -> str:
+    """工具处理器:检索本地知识库(关键词 BM25F + 元数据过滤,可选向量档融合)。
 
     snippet_chars 是每条返回的正文长度(默认 160 字的速览摘要)。用户问细节
     (评定条件、办理流程、时间安排、分数线等)时调大,一次就能拿到原文要点,
     不必再去爬官网等结果。
+
+    source / since 是元数据过滤(按来源渠道或网址、按发布日期下限 YYYY-MM-DD);
+    被过滤掉多少条会写在返回的「检索口径」里,不静默减少结果。
+    semantic 默认 None=自动:只有向量索引**已经建好**才参与融合,缺索引不会
+    顺手去发几百条 embedding 请求(那既花时间又花使用者的额度)。真要建索引
+    就明确传 build_index=True,返回里会如实说明这次新算了多少条。
     """
     query = (query or "").strip()
     if not query:
@@ -282,14 +450,18 @@ def search_knowledge(ctx, query: str, top_k: int = 3,
     if not entries:
         return "错误: 知识库为空(kb/ 目录下没有可用的 JSON 数据)。"
     snippet_chars = _int_arg(snippet_chars, SNIPPET_LIMIT, SNIPPET_LIMIT, SNIPPET_MAX)
-    results = search(entries, query, top_k=top_k, category=category)
-    if not results:
+    hits, meta = search_hybrid(entries, query, top_k=top_k, category=category,
+                               source=source, since=since, semantic=semantic,
+                               build_index=bool(build_index),
+                               cfg=getattr(ctx, "config", None))
+    if not hits:
         # 未命中登记(知识库成长闭环):库里明明有数据却接不住这个问法,
         # 这就是要补的语料缺口。登记失败静默,绝不影响回答。
         from minicode import growth
         growth.log_kb_gap(query)
-    out = format_results(results, snippet_chars=snippet_chars)
-    return out[:max(MAX_CONTENT_LIMIT, snippet_chars * len(results) + 800)]
+    out = format_results(hits, snippet_chars=snippet_chars, meta=meta)
+    # 每条命中多了「为什么命中」一行,上限跟着放宽,否则口径行会把最后一条挤掉
+    return out[:max(MAX_CONTENT_LIMIT, snippet_chars * len(hits) + 800 + 80 * max(1, len(hits)))]
 
 
 def kb_stats(dirs: list[Path]) -> list[dict]:

@@ -28,6 +28,7 @@ class FakeUI:
         self.tool_results = []
         self.hard_rejected = []
         self.interrupted = False
+        self.time_limited = []       # 一轮总时限到点时的 (秒, 已走步数)
         self.errors = []
 
     def on_text_delta(self, t): pass
@@ -62,6 +63,21 @@ class FakeUI:
         self.errors.append(e)
 
     def max_steps_reached(self, n): pass
+
+    def turn_time_limited(self, seconds, steps):
+        self.time_limited.append((seconds, steps))
+
+
+class Clock:
+    """假时钟:每读一次走 step 秒,让"一轮总时限到点"可测而不用真等。"""
+
+    def __init__(self, step: float):
+        self.t = 0.0
+        self.step = step
+
+    def monotonic(self) -> float:
+        self.t += self.step
+        return self.t
 
 
 def make_agent(config, ctx, llm, ui):
@@ -251,3 +267,39 @@ def test_confirm_falls_back_to_narration(config, ctx):
 
     # 界面拿到的是整段说明;取"最后一段作为原因"由 explain/界面层负责
     assert ui.reasons == ["我先确认一下当前状态。\n\n这条命令只列出目录,不会改动文件。"]
+
+
+# ------------------------------------------------------- 一轮总时限
+
+def test_turn_time_limit_stops_between_steps(config, ctx, monkeypatch):
+    """到点只在两步之间收手:不再问模型,但已发出去的那一步照常走完。"""
+    from minicode import agent as agent_mod
+    monkeypatch.setattr(agent_mod, "time", Clock(6.0))
+    config.turn_time_limit_seconds = 10
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="glob", arguments=json.dumps({"pattern": "**/*"}))]),
+        AssistantTurn(text="这一轮不该再被请求"),
+    ])
+    ui = FakeUI()
+    make_agent(config, ctx, llm, ui).run_turn("找文件")
+
+    assert llm.calls and len(llm.calls) == 1        # 第二次请求没发生
+    assert ui.time_limited == [(10, 1)]             # 报告:时限 + 已经走了几步
+    assert ui.tool_results                          # 已派出去的那一步有结果
+
+
+def test_turn_time_limit_zero_means_unlimited(config, ctx, monkeypatch):
+    """0 = 不限:哪怕假时钟一小时走八回,也不会自己停下。"""
+    from minicode import agent as agent_mod
+    monkeypatch.setattr(agent_mod, "time", Clock(3600.0))
+    config.turn_time_limit_seconds = 0
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="glob", arguments=json.dumps({"pattern": "**/*"}))]),
+        AssistantTurn(text="完成"),
+    ])
+    ui = FakeUI()
+    make_agent(config, ctx, llm, ui).run_turn("找文件")
+
+    assert ui.time_limited == [] and len(llm.calls) == 2

@@ -30,7 +30,9 @@ def _src_version() -> str:
 # 每个模块要求存在的新增符号(v0.9.13:模型清单/导出搜索;v0.9.14:成长闭环/校历/绩点/搜索)
 TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.config": ("model_entries", "enabled_models", "sync_model",
-                        "_dedupe_models", "_models_from_raw", "PROVIDER_PRESETS"),
+                        "_dedupe_models", "_models_from_raw", "PROVIDER_PRESETS",
+                        # v0.9.39:两条时限是真的在拦东西(漏收 = 配置文件里的数字没人读)
+                        "turn_time_limit_seconds", "subagent_time_limit_seconds"),
     "minicode.gui_bridge": ("test_model", "fetch_models", "get_provider_presets",
                             "export_session", "search_sessions",
                             "rate_message", "get_countdowns",
@@ -80,7 +82,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.37:实时耗时表(漏 live_rows = 时间线一行时刻都没有;漏 live_abandon =
     # 按了停止还在转圈,那一行永远装作在跑)
     "minicode.gui_ui": ("live_rows", "live_now", "live_abandon", "_live_begin",
-                        "_live_end", "LIVE_CAP"),
+                        "_live_end", "LIVE_CAP",
+                        # v0.9.39:一轮总时限到点要说得出声(漏收 = 停下时界面一个字也不显示,
+                        # 用户只看到"它不动了",以为卡死)
+                        "turn_time_limited"),
     # v0.9.30:迁移包整模块是新文件,漏收 = 装好的包连面板都打不开
     "minicode.mydata": ("inventory", "pack_plan", "export_package", "read_package",
                         "import_pick", "import_apply", "forget_preview",
@@ -154,7 +159,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.provenance": ("wrap", "strip_marks", "is_external",
                             "contains_external", "log_escalation"),
     "minicode.sandbox": ("SECRET", "is_credential_filename",
-                         "command_hits_credential", "command_hits_network"),
+                         "command_hits_credential", "command_hits_network",
+                         # v0.9.39:沙箱第四层(脚本内容级检测)+ 子进程密钥剥离。
+                         # 漏收 = 确认框又只看命令字面,`python 一个偷偷读密钥的脚本`
+                         # 一路放行(表现是"没弹框就跑了",而不是报错,所以必须有这根针)
+                         "scan_script_text", "script_risk_note", "script_hits",
+                         "scrub_env", "KNOWN_LIMITS", "SCRIPT_CREDENTIAL_PATTERNS",
+                         "SCRIPT_ESCAPE_PATTERNS", "SCRIPT_EGRESS_PATTERNS",
+                         "command_touches_outside_path"),
     "minicode.permission": ("note_external", "_is_sensitive_action",
                             "_credential_hit", "_same_site"),
     "minicode.kb": ("crawl_credibility", "host_is_trusted",
@@ -201,6 +213,36 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "_reminders_bits", "_calendar_bits",
                           # v0.9.36:早上的桌面通知要说得出"最早那一处是哪两栋"
                           "brief_phrase"),
+    # ---- v0.9.39(refactor 分支):检索/外接能力/领域路由三批新模块 ----
+    # 漏收的后果各不相同,但都属"装好的包里功能静默退化":
+    # retrieval 不在 = kb 退回朴素关键词匹配(BM25F/RRF/元数据过滤全丢,还照旧报"已按相关度排序");
+    # embed 不在 = 语义档永远起不来;
+    # router 不在 = task 的 auto 与四个领域档一起消失(只剩 explore/implement/review)。
+    "minicode.retrieval": ("tokenize", "KeywordIndex", "fields_of", "rrf",
+                           "order_by_fused", "cosine", "rank_by_vector",
+                           "filter_meta", "reason_line", "Hit", "RRF_K",
+                           "FIELD_WEIGHTS"),
+    "minicode.embed": ("detect", "embed_texts", "ensure_vectors", "cache_path",
+                       "load_cache", "save_cache", "entry_key", "entry_text",
+                       "EmbedUnavailable", "CACHE_VERSION"),
+    "minicode.ocr": ("recognize", "ocr_image", "ocr_probe", "recognize_system",
+                     "recognize_vision", "system_ready", "vision_ready",
+                     "normalize_system_text", "SYSTEM_WARN", "VISION_PROMPT",
+                     "BackendMissing"),
+    "minicode.charts": ("chart_file", "render", "normalize_data", "nice_ticks",
+                        "render_bar", "render_line", "render_pie", "ChartError",
+                        "CHART_TYPES", "MAX_POINTS", "PIE_MAX_SLICES", "slugify"),
+    "minicode.images": ("image_generate", "render_card", "call_api", "probe",
+                        "api_targets", "local_ready", "CONFIG_SHAPE",
+                        "ImageError", "MAX_DOWNLOAD_BYTES", "MAX_CARD_HEIGHT"),
+    "minicode.router": ("DOMAINS", "DomainSpec", "classify", "best", "resolve_type",
+                        "extra_prompt", "hit_line", "skills_of", "Match"),
+    # v0.9.39:一轮总时限是真的在拦东西(漏收 = 配置文件里的数字没人读)
+    "minicode.agent": ("run_turn", "turn_time_limited"),
+    "minicode.subagents": ("type_spec", "_await", "_timeout_note", "TYPE_KEYS",
+                           "DOMAIN_KEYS"),
+    # v0.9.39:确认框要能讲清新工具的代价(漏收 = 弹了框但没说图会被发出去/文件落在哪)
+    "minicode.explain": ("risk_notes", "permission_why", "action_reason"),
     # ---- v0.9.16/17/20:主动推荐 + 新版本检查 + 今日简报(合并成一个键,
     #      避免 dict 重复键 last-wins 让早先的 needle 悄悄漏检) ----
     "minicode.proactive": ("check_once", "fetch_latest", "start_loop", "clean_title",

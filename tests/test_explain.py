@@ -47,6 +47,26 @@ def test_risks_strip_subagent_prefix():
     assert any("只读" in n for n in risk_notes("explore·read_file", {}))
 
 
+def test_risks_for_new_media_tools():
+    # OCR:图片可能外发给视觉模型,且结果只是草稿
+    ocr = risk_notes("ocr_image", {"path": "photo.png"})
+    assert any("vision" in n and "外部模型" in n for n in ocr)
+    assert any("草稿" in n for n in ocr)
+    # 图表:落盘 + 数值全部来自调用方,不假装程序会取数
+    chart = risk_notes("render_chart", {"data": {"高数": 88, "英语": 92}})
+    assert any("charts/" in n and "撤销" in n for n in chart)
+    assert any("不取数也不补数" in n for n in chart)
+    assert any("高数" in n for n in chart)          # 把真实数据摆进确认框
+    # 图片生成:api 花额度、card 只是排版,auto 两种可能都写清
+    api = risk_notes("generate_image", {"backend": "api", "prompt": "猫"})
+    assert any("额度" in n for n in api) and not any("卡片" in n for n in api)
+    card = risk_notes("generate_image", {"backend": "card", "text": "通知"})
+    assert any("不联网" in n and "不是 AI 绘图" in n for n in card)
+    auto = risk_notes("generate_image", {"prompt": "猫"})
+    assert any("额度" in n for n in auto) and any("排版" in n or "卡片" in n for n in auto)
+    assert any("images/" in n for n in auto)
+
+
 # ------------------------------------------------------------ 为什么要做
 
 def test_reason_prefers_model_reason():

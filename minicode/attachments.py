@@ -235,7 +235,8 @@ def attachment_note(atts: list[Attachment], vision: bool) -> str:
     for a in atts:
         if a.kind == "image":
             tail = "(图片已随消息提供给模型查看)" if vision \
-                else "(图片:当前模型不支持看图,仅作文件引用)"
+                else "(图片:当前模型不支持看图,仅作文件引用;需要读出图里的文字时," \
+                     "可对下面这个路径调 ocr_image 工具——它能不能用、准不准由它自己说)"
         else:
             tail = ""
         lines.append(f"- {a.path}({human_size(a.size)}){tail}")

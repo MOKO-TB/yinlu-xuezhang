@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from minicode.compaction import compact, estimate_tokens
@@ -55,7 +56,17 @@ class Agent:
         self.gate.new_turn()
         self.session.add_user(user_input, content)
 
+        # 一轮总时限:只圈"这一轮一共转了多少次",不圈单条命令(那是沙箱的
+        # timeout_seconds)也不圈单次请求(那是 request_timeout_seconds)。
+        # 到点只在两步之间收手 —— 正在执行的那一步不会被强杀。
+        limit = max(0, int(getattr(self.ctx.config, "turn_time_limit_seconds", 0) or 0))
+        deadline = time.monotonic() + limit if limit else None
+        steps = 0
         for _ in range(self.max_steps):
+            if deadline is not None and time.monotonic() > deadline:
+                self.ui.turn_time_limited(limit, steps)
+                return
+            steps += 1
             self._maybe_compact()
             try:
                 turn = self.llm.stream_chat(

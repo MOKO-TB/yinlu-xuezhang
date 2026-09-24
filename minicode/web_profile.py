@@ -75,6 +75,11 @@ EXCLUDED_TOOLS: dict[str, str] = {
     "browser_close": "同上,浏览器能力整体不进白名单",
     "browser_status": "不暴露服务器的浏览器信息",
     "page_parse": "与 browser_* 同一族:要在服务端起一个浏览器才读得到页面",
+    "ocr_image": "收绝对路径、把本机任意图片读成文字带进对话(网页版等于让访客"
+                 "读服务器磁盘)",
+    "render_chart": "往服务器工作区 charts/ 写文件(对外形态不给写盘能力)",
+    "generate_image": "两条都不给:①接口一条会花**这台机器的 Key 额度**;②本地卡片一条"
+                      "往服务器工作区写 PNG。对外形态连读带写都不开",
 }
 
 # 只允许通过 get_asset 读回的扩展名(该接口的原意是显示技能正文里的配图)

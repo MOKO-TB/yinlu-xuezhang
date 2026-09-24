@@ -358,3 +358,118 @@ def test_task_single_string_unchanged(config, tmp_path):
     assert "[侦察子代理完成]" in result and "侦察字幕" in result
     assert not result.startswith("[并行子代理完成")
     assert "侦察字幕" in "".join(e["text"] for e in window.of_type("text_delta"))
+
+
+# ------------------------------------------------------- 领域档与自动路由
+
+def test_task_auto_routes_and_shows_the_reason(config, tmp_path):
+    """type=auto:路由选档,命中什么词、要加载哪些技能一并回显给用户。"""
+    _accept_all(config)
+    llm = QueueLLM([
+        _task_turn("auto", "帮我把这篇论文的提纲和参考文献理一下"),
+        _final("按 paper-writing 的规矩给了提纲"),
+        _final("主代理收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("写论文")
+    assert wait_until(lambda: not bridge._busy)
+
+    result = _tool_result(session)
+    assert "[写作子代理完成]" in result
+    assert "派「写作」档" in result and "命中「" in result and "计分" in result
+    assert "paper-writing" in result          # 指向的是已有技能,不是新写一套
+
+
+def test_task_auto_without_features_says_so(config, tmp_path):
+    """没命中领域特征时不硬派:退回 explore,并在理由里承认是没命中。"""
+    _accept_all(config)
+    llm = QueueLLM([
+        _task_turn("auto", "你看下这个"),
+        _final("先看了看目录"),
+        _final("收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("模糊请求")
+    assert wait_until(lambda: not bridge._busy)
+
+    result = _tool_result(session)
+    assert "[侦察子代理完成]" in result
+    assert "没命中任何领域关键词" in result
+
+
+def test_task_explicit_type_gets_no_routing_note(config, tmp_path):
+    """显式指定档位时不该多塞一段"我替你路由了"。"""
+    _accept_all(config)
+    llm = QueueLLM([
+        _task_turn("review", "审一下这段代码"),
+        _final("没有问题"),
+        _final("收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("审查")
+    assert wait_until(lambda: not bridge._busy)
+    assert "派「" not in _tool_result(session)
+
+
+def test_domain_tool_sets_are_prefixed_and_read_only_isolated(config, tmp_path):
+    """english 是只读档:拿不到写工具;code 档能拿到,前缀按档位来。"""
+    from minicode.subagents import sub_tool_registry, type_spec
+    from minicode.tools.registry import build_default_registry
+    reg = build_default_registry()
+
+    english = [t.name for t in sub_tool_registry(reg, type_spec("english", tmp_path))]
+    assert english and all(n.startswith("english·") for n in english)
+    assert "english·write_file" not in english
+    assert "english·search_knowledge" in english
+    assert "english·task" not in english          # 任何档都不能递归派活
+
+    code = [t.name for t in sub_tool_registry(reg, type_spec("code", tmp_path))]
+    assert "code·write_file" in code and "code·bash" in code
+
+
+def test_batch_parallel_allows_read_only_domain_but_not_writers(config, tmp_path):
+    _accept_all(config)
+    llm = QueueLLM([
+        AssistantTurn(tool_calls=[_call("task", {
+            "type": ["english", "writing"],
+            "task": ["查四级时间", "写论文提纲"]}, "b1")]),
+        _final("收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("混合并发")
+    assert wait_until(lambda: not bridge._busy)
+    result = _tool_result(session)
+    assert "批量并行只支持只读类型" in result and "writing" in result
+    assert "english" not in result.split("但收到了")[1]
+
+
+def test_subagent_timeout_is_visible_and_not_called_a_failure(config, tmp_path):
+    """子代理超时:报告说"不再等它",不写成失败,也不谎称已停止它。"""
+    import time as _time
+    _accept_all(config)
+    config.subagent_time_limit_seconds = 1
+
+    class SlowSubLLM:
+        """子代理那一路慢到超时;父代理两问都秒回。"""
+
+        def __init__(self):
+            self.parent_calls = 0
+
+        def stream_chat(self, messages, tools, on_text=None, reasoning=None,
+                        on_retry=None, **kw):
+            system = str(messages[0].get("content")) if messages else ""
+            if "只读侦察子代理" in system:
+                _time.sleep(3)
+                return _final("迟到的报告")
+            self.parent_calls += 1
+            return (_task_turn("explore", "慢慢看") if self.parent_calls == 1
+                    else _final("收尾"))
+
+    bridge, window, session = make(config, tmp_path, SlowSubLLM())
+    bridge.send_task("超时测试")
+    assert wait_until(lambda: not bridge._busy, timeout=20)
+
+    result = _tool_result(session)
+    assert "超时未返回" in result and "上限 1 秒" in result
+    assert "不算它失败" in result and "仍在后台跑完" in result
+    assert "迟到的报告" not in result      # 迟到的结果不假装收到

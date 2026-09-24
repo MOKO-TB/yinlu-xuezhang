@@ -10,7 +10,8 @@ def test_registry_contents():
                      "browser_click", "browser_fill", "browser_screenshot",
                      "browser_close", "browser_status", "page_parse",
                      "use_skill", "plan",
-                     "search_knowledge", "campus_calendar", "gpa_calc",
+                     "search_knowledge", "ocr_image", "render_chart", "generate_image",
+                     "campus_calendar", "gpa_calc",
                      "kb_suggest", "library_search", "library_guide", "memory",
                      "reminder", "mood", "schedule", "desktop_notify", "get_weather",
                      "map_find_place", "map_show_list", "map_highlight_building",
@@ -43,6 +44,13 @@ def test_read_only_flags():
         "page_parse": True,           # 只把页面上的表读成结构化文字,不写文件不驱动页面
         "use_skill": True,
         "search_knowledge": True,
+        # 拍错题识别:不写文件,但 vision 后端会把图发给模型 —— 外发由 trust="external" 管
+        "ocr_image": True,
+        # 图表:要在 charts/ 落一个文件,和 write_file 同级 —— 但它不联网、不读本机数据
+        "render_chart": False,
+        # 图片生成:api 一条会把描述发给外部服务并花 Key 额度,card 一条往 images/ 写
+        # PNG —— 两条都要确认
+        "generate_image": False,
         "campus_calendar": True,      # 校历查询:只读本地数据文件
         "gpa_calc": True,             # 绩点计算:纯计算,不落盘
         "kb_suggest": False,          # 写候选文件:确认框就是"用户同意存入"那一步
