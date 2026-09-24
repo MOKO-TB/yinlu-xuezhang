@@ -113,8 +113,37 @@ try {
   ::-webkit-scrollbar-thumb:hover{ background:var(--primary); }
   ::-webkit-scrollbar-track{ background:transparent; }
 
-  .app{ display:grid; grid-template-columns:260px 1fr; grid-template-rows:minmax(0,1fr);
+  .app{ display:grid; grid-template-columns:56px 260px 1fr; grid-template-rows:minmax(0,1fr);
         height:100vh; position:relative; z-index:1; }
+
+  /* ---------------- 最左入口栏(p3:面板入口从顶栏搬过来) ----------------
+     顶栏原来平铺 16 个控件,用户看图 p3/p4 点名「工具堆太多了没有简洁性」。
+     搬到这里而不是收进一个「⋯」菜单:那些面板是**日常要看的东西**(课表/计划/监控),
+     收进菜单每次要点两下,而且"藏起来"不等于"简洁"。
+     每一格仍是原按钮本体(id 一个没改,点击行为一行没动),只是换了个位置;
+     带状态的文案(沙箱开/关、记忆几条)仍然写在格子上 —— 不是只给个图标猜。 */
+  .rail{ display:flex; flex-direction:column; align-items:center; gap:2px;
+         padding:10px 0 12px; min-height:0; overflow-y:auto;
+         background:var(--glass); border-right:1px solid var(--line-soft);
+         backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
+  .rail button{ position:relative; flex:none; width:50px; min-height:44px;
+                padding:5px 1px 4px; display:flex; flex-direction:column;
+                align-items:center; justify-content:center; gap:1px;
+                background:transparent; border:1px solid transparent;
+                border-radius:12px; color:var(--text-2); cursor:pointer;
+                font-size:15px; line-height:1.15; transition:.15s; }
+  .rail button .cap{ font-size:10px; font-weight:700; letter-spacing:.2px;
+                     white-space:nowrap; }
+  .rail button:hover{ background:var(--glass-lite); border-color:var(--line-soft);
+                      color:var(--primary-text); }
+  /* 「开着的」才有青底:监控/沙箱这类是真状态,不是装饰 */
+  .rail button[aria-expanded="true"], .rail button.on{
+    background:var(--primary-light); border-color:var(--primary);
+    color:var(--primary-text); }
+  .rail button .pl-n{ position:absolute; top:1px; right:6px; font-size:9px;
+                      font-weight:800; color:var(--primary-text); }
+  .rail .sep{ flex:none; width:26px; height:1px; margin:6px 0 4px;
+              background:var(--line-soft); }
 
   /* ---------------- 侧栏(暮色磨砂玻璃) ---------------- */
   .sidebar{ background:var(--glass); border-right:1px solid var(--line-soft);
@@ -1357,7 +1386,7 @@ try {
              border-left:1px solid var(--line-soft); background:var(--glass);
              backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
   .app.act-open .activity{ display:flex; }
-  .app.act-open{ grid-template-columns:260px 1fr 300px; }   /* 与上面 map 让位的 300px 同值 */
+  .app.act-open{ grid-template-columns:56px 260px 1fr 300px; }   /* 最左 56px 是 p3 入口栏;300px 与 map 让位的值同 */
   body.act-open .map-panel{ right:300px; }        /* 两栏并排时地图不压住活动面板 */
   .act-head{ display:flex; align-items:center; gap:6px; padding:12px 12px 6px; }
   .act-head b{ font-size:13px; color:var(--text-1); white-space:nowrap; }
@@ -1541,6 +1570,25 @@ try {
 </head>
 <body>
 <div class="app">
+  <!-- 最左入口栏(p3):顶栏原来平铺 16 个控件,面板入口全部搬到这里。
+       id 一个没改、点击行为一行没动 —— 换的是位置,不是功能。 -->
+  <nav class="rail" aria-label="面板入口">
+    <button id="btnMap" title="打开/收起校园地图(肇庆校区)">🗺<span class="cap">地图</span></button>
+    <button id="btnSchedule" title="查看/导入我的课表(本机存储)">📅<span class="cap">课表</span></button>
+    <button id="btnMood" title="情绪日记:一句话记一下,每周回头看看(只回读、不诊断;数据只在本机)。也可以直接在对话里说「今天 3 分,因为…」">🌱<span class="cap">心情</span></button>
+    <button id="btnPlan" title="查看当前任务计划(plans/plan.md):做到哪步、哪几步能接着做">🗂<span class="cap">计划</span><span class="pl-n" id="plPill"></span></button>
+    <button id="btnActivity" aria-expanded="false" title="右侧「任务监控」栏(Ctrl+Shift+M):此刻在跑哪一步、计划做到哪、按先后排的时间线、产出的文件与查过的网页(每一行都点得动)">🛰<span class="cap">监控</span><span class="pl-n" id="actPill"></span></button>
+    <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐<span class="cap">技能</span></button>
+    <button id="btnMemory" title="整理长期记忆">🧠<span class="cap">记忆</span></button>
+    <button id="btnUsage" title="查看每日 token 消耗">📊<span class="cap">用量</span></button>
+    <button id="btnMyData" title="我的数据:都存在哪台目录、都有哪些文件,以及导出/导入迁移包(密钥与教务登录态永不外发)">💾<span class="cap">数据</span></button>
+    <button id="btnSandbox" style="display:none" title="沙箱状态">🛡<span class="cap">沙箱</span></button>
+    <div class="sep"></div>
+    <button id="btnExport" title="把当前会话导出成 Markdown(方便贴进文档或发给同学)">⬇<span class="cap">导出</span></button>
+    <button id="btnUndo" title="撤销最近一次文件改动">↶<span class="cap">撤销</span></button>
+    <button id="btnCompact" title="立即压缩上下文">🗜<span class="cap">压缩</span></button>
+    <button id="btnTheme" title="切换深色/浅色主题(系统标题栏跟着一起换)">🌙<span class="cap" id="themeCap">深色</span></button>
+  </nav>
   <aside class="sidebar">
     <div class="logo"><img class="m" src="img/cube.png" alt="引路学长">引路学长<small id="ver"></small></div>
     <div class="school"><img src="img/school.png" alt="广州应用科技学院"></div>
@@ -1560,24 +1608,12 @@ try {
 
   <section class="main">
     <div class="topbar">
+      <!-- p3:面板入口在左边那条入口栏里,顶栏只留"此刻在哪个工作区、用了多少、
+           用哪个模型、什么权限"这四样 —— 都是状态,不是导航。 -->
       <button class="wspill" id="wsPill" title="当前工作区(点击切换)">📁 …</button>
       <span class="spacer"></span>
       <span class="tok" id="tok"></span>
       <span class="modelpill" id="modelPill"></span>
-      <button id="btnMap" title="打开/收起校园地图(肇庆校区)">🗺 地图</button>
-      <button id="btnSchedule" title="查看/导入我的课表(本机存储)">📅 课表</button>
-      <button id="btnMood" title="情绪日记:一句话记一下,每周回头看看(只回读、不诊断;数据只在本机)。也可以直接在对话里说「今天 3 分,因为…」">🌱 心情</button>
-      <button id="btnPlan" title="查看当前任务计划(plans/plan.md):做到哪步、哪几步能接着做">🗂 计划<span class="pl-n" id="plPill"></span></button>
-      <button id="btnActivity" title="右侧「任务监控」栏(Ctrl+Shift+M):此刻在跑哪一步、计划做到哪、按先后排的时间线、产出的文件与查过的网页(每一行都点得动)">🛰 监控<span class="pl-n" id="actPill"></span></button>
-      <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐ 技能</button>
-      <button id="btnUsage" title="查看每日 token 消耗">📊 用量</button>
-      <button id="btnExport" title="把当前会话导出成 Markdown(方便贴进文档或发给同学)">⬇ 导出</button>
-      <button id="btnMyData" title="我的数据:都存在哪台目录、都有哪些文件,以及导出/导入迁移包(密钥与教务登录态永不外发)">💾 数据</button>
-      <button id="btnSandbox" style="display:none" title="沙箱状态">🛡 沙箱</button>
-      <button id="btnMemory" title="整理长期记忆">🧠 记忆</button>
-      <button id="btnTheme" title="切换深色/浅色主题">🌙 深色</button>
-      <button id="btnUndo" title="撤销最近一次文件改动">撤销</button>
-      <button id="btnCompact" title="立即压缩上下文">压缩</button>
       <select id="perm" title="权限模式:变更前确认 / 自动编辑 / 自动放行 / 完全访问"></select>
     </div>
 
@@ -2195,7 +2231,10 @@ function toast(text, isError) {
 /* ---------------- 主题切换(昼暮双景:浅色=日景,深色=暮色) ---------------- */
 function applyTheme(dark, persist) {
   document.documentElement.classList.toggle("dark", dark);
-  $("btnTheme").textContent = dark ? "☀️ 浅色" : "🌙 深色";
+  // p3:主题键在最左入口栏里,是"图标 + 小标签"两行结构 —— 只改标签那行,
+  // 整颗按钮的 textContent 一写就会把图标和标签结构一起抹掉。
+  $("themeCap").textContent = dark ? "浅色" : "深色";
+  $("btnTheme").firstChild.textContent = dark ? "☀️" : "🌙";
   if (persist) {
     try { localStorage.setItem("gcode-theme", dark ? "dark" : "light"); } catch (e) {}
   }
@@ -3490,9 +3529,14 @@ function renderTaskMetrics(m) {
 
   const menu = $("taskModelMenu");
   menu.innerHTML = '<div class="tmenu-hint">切换本任务使用的模型(不影响默认模型)</div>';
+  /* 「当前用的是哪一行」必须有真凭据才敢点亮:`p.key === m.selected_key` 在两边都
+     缺字段时会变成 undefined === undefined,于是**整列每一行都标成当前项**(v0.9.11
+     那场的夹具就是这样,红在断言上才被发现)。缺 selected_key 就一行都不标 ——
+     宁可显示"看不出现在用哪个",也不指着五个模型说"就是它"。 */
+  const selKey = m.selected_key || "";
   for (const p of m.selectable || []) {
     const row = document.createElement("div");
-    row.className = "trow" + (p.key === m.selected_key ? " on" : "");
+    row.className = "trow" + (selKey && p.key === selKey ? " on" : "");
     if (!p.has_key) row.classList.add("tnokey");
     row.innerHTML = `<span class="tname">${esc(p.name)}</span>`
       + `<span class="tmodel">${esc(p.model)}</span>`
@@ -3502,7 +3546,7 @@ function renderTaskMetrics(m) {
     row.addEventListener("click", () => {
       menu.classList.remove("show");
       if (!p.has_key) { toast(`「${p.name}」还没配 API Key,先在模型管理里配好`, true); return; }
-      if (p.key === m.selected_key) return;
+      if (selKey && p.key === selKey) return;   // 同上:没凭据时不许"点了当前项就当没事发生"
       pywebview.api.set_session_model(p.id, p.model).then(r => {
         if (!r.ok) toast(r.msg, true);
       }).catch(e => toast("切换失败:" + String(e).slice(0, 60), true));
@@ -5922,9 +5966,11 @@ function renderSandbox(info) {
   const btn = $("btnSandbox");
   if (!sandboxInfo || !sandboxInfo.available) { btn.style.display = "none"; return; }
   btn.style.display = "block";
-  btn.textContent = sandboxInfo.enabled ? "🛡 沙箱开" : "🛡 沙箱关";
   btn.title = sandboxInfo.description + "(点击切换:沙箱关时工作区外仍需确认)";
   btn.classList.toggle("on", !!sandboxInfo.enabled);
+  // 入口栏里那格是"图标 + 标签"两行:开/关两个字必须仍然看得见(真状态,不是装饰),
+  // 所以只写标签那一行 —— 整颗按钮的 textContent 一覆盖就把图标结构抹掉了。
+  btn.querySelector(".cap").textContent = sandboxInfo.enabled ? "沙箱开" : "沙箱关";
 }
 $("btnSandbox").addEventListener("click", () => {
   if (!sandboxInfo || !sandboxInfo.available) return;
@@ -5941,7 +5987,8 @@ function renderMemoryButton(counts) {
   if (counts) memoryCounts = counts;
   const btn = $("btnMemory");
   const total = (memoryCounts.project || 0) + (memoryCounts.user || 0);
-  btn.textContent = total ? `🧠 记忆 ${total}` : "🧠 记忆";
+  // 同沙箱那一格:条数是真数字,写在标签上(`记忆 7`),不覆盖整颗按钮
+  btn.querySelector(".cap").textContent = total ? `记忆 ${total}` : "记忆";
   btn.title = `长期记忆:本项目 ${memoryCounts.project || 0} 条 · 用户级 ${memoryCounts.user || 0} 条`
     + "(点击整理:合并重复、删掉被推翻的,自动备份原文件)";
 }

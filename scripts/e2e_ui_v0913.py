@@ -165,6 +165,9 @@ def _serve(directory: Path):
 
 def main() -> int:
     from playwright.sync_api import sync_playwright
+    # headless shell 这台机器没装:起浏览器这一步走 e2e_launch 那份共同的退路
+    # (p3 之前这五场每次都红在 launch 上,连页面都没打开 —— 见 scripts/e2e_launch.py)
+    from e2e_launch import launch
 
     url, shutdown = _serve(FRONTEND)
     failures: list[str] = []
@@ -180,7 +183,7 @@ def main() -> int:
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = launch(p)
             page = browser.new_page(viewport={"width": 1440, "height": 900})
             page.add_init_script(STUB_JS)
             page.goto(url, wait_until="load")
@@ -322,7 +325,11 @@ def main() -> int:
             page.click("#sessions .sess")
             page.wait_for_function(
                 "() => window.__E2E_CALLS__.some(c => c[0] === 'resume_session')")
-            check(calls(page, "resume_session")[-1][1] == 1, "点命中项切到该会话")
+            # 防串号那一轮(v0.9.16 前后)把"切到哪一条会话"从**序号**换成了**会话文件名**
+            # —— 序号会因列表重排指错人,所以前端现在送的是 `h.file || h.index`。
+            # 夹具本来就带着 file 字段,只有这条断言还停在 "== 1",于是它红的是自己的口径。
+            check(calls(page, "resume_session")[-1][1] == "session_20260917_2130.jsonl",
+                  f"点命中项按**文件名**切到该会话:{calls(page, 'resume_session')[-1]}")
             page.wait_for_function(
                 "() => window.__E2E_CALLS__.some(c => c[0] === 'refresh_sessions')")
             check(page.input_value("#sessSearch") == "", "点进去后自动清空搜索框")

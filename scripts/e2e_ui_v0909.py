@@ -5,7 +5,7 @@ DOM 事实与调用参数,不看截图:
 
     1. 侧栏「项目」面板列出当前 + 最近工作区,当前项高亮
     2. 点项目面板的一行 → 调 switch_workspace,workspace 事件后面板跟着刷新
-    3. 行尾 ✕ → 只调 forget_workspace,不切换
+    3. ⋯ 菜单「删除项目」→ 只调 delete_project,不切换(见下方第 3 步的口径注释)
     4. 「＋ 选择文件夹…」→ pick_workspace 后立即 switch_workspace
     5. 顶栏权限下拉按 get_info.permission_modes 渲染四档,选中值正确
     6. 切权限档位 → set_permission_mode(档位值)
@@ -125,6 +125,14 @@ window.pywebview = {{
       window.__E2E_RECENT__ = window.__E2E_RECENT__.filter(r => r.path !== p);
       return Promise.resolve({{ ok: true, recent: window.__E2E_RECENT__ }});
     }},
+    /* v0.9.11 起"移除项目"走的是 ⋯ 菜单里的删除项目 → delete_project
+       (只从列表移除,磁盘文件夹不动)。这一场原来等的是 forget_workspace,
+       那个名字前端已经不用了。 */
+    delete_project: (p) => {{
+      window.__E2E_CALLS__.push(["delete_project", p]);
+      window.__E2E_RECENT__ = window.__E2E_RECENT__.filter(r => r.path !== p);
+      return Promise.resolve({{ ok: true, recent: window.__E2E_RECENT__ }});
+    }},
     get_reasoning: () => Promise.resolve(window.__E2E_REASONING__),
     set_reasoning_choice: (c) => {{
       window.__E2E_CALLS__.push(["set_reasoning_choice", c]);
@@ -167,6 +175,9 @@ def _serve(directory: Path):
 
 def main() -> int:
     from playwright.sync_api import sync_playwright
+    # headless shell 这台机器没装:起浏览器这一步走 e2e_launch 那份共同的退路
+    # (p3 之前这五场每次都红在 launch 上,连页面都没打开 —— 见 scripts/e2e_launch.py)
+    from e2e_launch import launch
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     url, shutdown = _serve(FRONTEND)
@@ -178,7 +189,7 @@ def main() -> int:
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = launch(p)
             page = browser.new_page(viewport={"width": 1400, "height": 900})
             page.add_init_script(_stub_js())
             page.goto(url, wait_until="load")
@@ -214,15 +225,25 @@ def main() -> int:
                 "() => { const r = document.querySelectorAll('#projects .proj');"
                 " return r.length && r[0].textContent.includes('数据结构'); }")
 
-            # 3. ✕ 只移除记录
+            # 3. 移除项目:只调删除项目那一条,不许顺手把工作区切走
+            #    (原来点的是行尾那颗 ✕/forget_workspace;v0.9.11 把移除收进了 ⋯ 菜单,
+            #     桥方法也换成了 delete_project —— 这一条断的**不变量没变**:移除 ≠ 切换)
             before = len([c for c in calls() if c[0] == "switch_workspace"])
-            page.hover("#projects .proj:nth-child(2)")
-            page.click("#projects .proj:nth-child(2) .go")
+            row2 = page.locator("#projects .proj:nth-child(2)")
+            row2.hover()
+            row2.locator(".op.menu").click()
+            page.wait_for_selector("#projMenu.show")
+            page.click("#projMenu button[data-act='del']")
+            page.wait_for_selector("#appConfirmOverlay.show")
+            page.click("#btnAppOk")
             page.wait_for_function(
-                "() => window.__E2E_CALLS__.some(c => c[0] === 'forget_workspace')")
+                "() => window.__E2E_CALLS__.some(c => c[0] === 'delete_project')")
             page.wait_for_timeout(150)
+            gone = [c for c in calls() if c[0] == "delete_project"][-1][1]
+            check(gone in {r["path"] for r in RECENT},
+                  f"移除的是列表里那个项目:{gone}")
             check(len([c for c in calls() if c[0] == "switch_workspace"]) == before,
-                  "点 ✕ 不该切换工作区")
+                  "点删除项目不该顺手切换工作区")
 
             # 4. ＋ 选择文件夹… → pick 后直接切
             page.click(".proj-add")

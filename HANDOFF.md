@@ -141,12 +141,15 @@
 - **盘符判断要带 lookbehind**(v0.9.39):`command_touches_outside_path` 会把 URL 里的 `p://e` 读成 `e:` 盘,于是每条网络命令都误报"要跑出工作区";修法是多要求前一个字符不是字母/点。
 - **"跟着 CSS 取色"不等于 CSS 里真有那个变量**(v0.9.39 p2):`window_chrome` 本想深色底色就读 `--bg`,而**深色那一档根本没覆盖 `--bg`**(`:root` 的 `#DCE8E4` 在深色下仍然是它 —— 页面靠暮色航拍照片铺底,那条只是"照片加载前的兜底")。照着变量名取会拿一面浅色当深色标题栏,而且没人报错。定版:深色底色取**深色界面真正在用的那块实底**(`html.dark .msg.assistant .body` 的 `rgba(9,16,24,.93)`),并把每一个常数的**来源字符串**写进 `tests/test_window_chrome.py` 去 index.html 里逐条对 —— 变量名对不上不算错,**那行字符串还在不在**才算。
 - **提交前没跑那条对账闸,文档基线就会漂着绿**(v0.9.39 p1→p2):p1 加了 15 项测试,提交时既没改 HANDOFF 的条数也没跑 `check_docs.py --collect`,于是文档写着 1550、树上实际 1565 而**全绿** —— 检查器没被调用,当然不会红。本轮 collect-only 实测 1592 时才撞上。纪律:`--collect` 是**每次提交前的动作**,不是收尾时补的。
+- **"测试没跑"和"跑挂了"必须在输出里长得不一样**(v0.9.39 p3):v0.9.09~0.9.13 那五支 e2e **每次都是 rc=1,栈停在 `BrowserType.launch`**,连着几十场回归看起来"红就红了",于是没人再看 —— 而这五场其实**连页面都没打开过**,是零覆盖,不是失败。根因:这台机器的 Playwright 只有完整版 chromium,没装 `chromium_headless_shell`,而 `p.chromium.launch()` 默认找后者。修法不是给每支脚本各写一遍 `try/except 跳过`(跳过 = 继续假绿),而是抽出 `scripts/e2e_launch.py`:两条路都起不来就**抛 `RuntimeError` 并写明缺哪个可执行文件**。副作用是它们第一次真跑起来,当场暴露三处早已漂移的断言(v0909 的删项目流程、v0911 的 `.trow.on`、v0913 传的已是**会话文件名**而不是 index)。纪律:**一条从没跑通过的测试比一条红了的测试危险得多**;留副本不如收进一个模块(还有 12 份 `_launch(p)` 副本没折,见 §6)。
+- **`undefined === undefined` 会点亮整列**(v0.9.39 p3):`#taskModelMenu` 用 `p.key === m.selected_key` 判当前项,两边字段都缺时条件对所有行都成立 → 模型列表**每一行都标成"在用的那一个"**,而且点谁都像点了当前项、什么都不发生。修法:先 `const selKey = m.selected_key || ""`,**没有凭据就一行都不标、一次都不短路**。写"当前选中"这类高亮时一律先问"我拿什么证明它不是undefined";宁可界面上没有高亮,也不要给出一个正确率 0% 的高亮。
+- **结构搬家时,写死的绝对量会红得没有信息量**(v0.9.39 p3):三处老断言在搬入口栏后红了 —— 都是当年把"某个具体数字"当真相(网格**三列**、某按钮**高度**、主题按钮**文字**)。改法不是回填新数字,而是改成**它真正想守的那个不变量**:列数改"开栏比关栏多一列"、高度改量 `.topbar` 的几何(单行算法 + 子元素数)、文字改 glyph + `.cap` **拼回原来那句期望**(期望一个字没动,动的只是怎么量)。以后再动界面主体结构,先按这条改老针,别加魔数。
 
 ## 5. 测试与验证(改完代码必须做)
 
 ```bash
 cd /d/game/mini-code
-./.venv/Scripts/python.exe -m pytest -q                    # 1592 个测试全绿(v0.9.39 p2 标题栏之后 `--collect-only` 实测 1592;上一次全量实跑 1540 passed / 1 skipped;约 330 s;与别人的 pytest/重 IO 并行时,网页版真实 socket 用例会饿死超时,别在机器忙时下结论)
+./.venv/Scripts/python.exe -m pytest -q                    # 1660 个测试全绿(v0.9.39 p3 入口栏之后 `--collect-only` 实测 1660;本轮收尾全量实跑 **1659 passed / 1 skipped**(中途那次 1 failed 是文档闸:HANDOFF 当时还没写「入口栏」,补完转绿,红的全程只有一条、且红的是文档不是代码);约 299 s;与别人的 pytest/重 IO 并行时,网页版真实 socket 用例会饿死超时,别在机器忙时下结论)
 #                                                           v0.9.37 再 +24:`tests/test_activity.py` 21→30(时刻配对、对不上号就不给时间、
 #                                                           轮次切分与「另有 N 次」取真数、停止=已中断≠在跑≠失败)+ 新增 `tests/test_monitor.py` 9 项
 #                                                           (默认收起、坏 JSON 不炸、白名单外的键丢掉、**只 patch 一段不覆盖别段**、桥两方法与门面转发)
@@ -173,6 +176,13 @@ cd /d/game/mini-code
 #                                                           apply() 逐项报账/被拒要看得见、无 windll 与无窗口只降级不抛、
 #                                                           门面转发、网页版拿不到、开机建窗口就用工作区名)= **1592**
 #                                                           (`--collect-only` 实测 1592,`check_docs.py --collect` 本轮实跑 ✓)。
+#                                                           p3(14 个面板入口搬进最左「入口栏」)再 +68:新增 `tests/test_rail_entries.py`
+#                                                           (入口栏 14 颗 id 逐个钉死、每颗的"去处"仍写在源码里、顶栏只剩状态不剩按钮、
+#                                                           `.cap` 标签可写、弹层白名单没被别处绕过、两场 e2e 与源码同源、
+#                                                           《使用说明》漏写这条竖栏 / 还把搬走的入口指回顶栏,也一样红)= **1660**(`--collect-only` 实测 1660)。
+#                                                           ⚠ 这一批把 v0.9.34/v0.9.37/p2 三处写死的量改成了**派生量**:列数改成"开栏比关栏多一列"、
+#                                                           顶栏高度改成量 `.topbar` 而不是量按钮、主题文字改成 glyph + `.cap` 拼回原句 ——
+#                                                           期望串一个字没改,改的是"怎么量"。以后再搬界面请照这条走,别回填魔数。
 #                                                           注:v0.9.26 那行写的「1188」在现在的树上复现不出来 —— `--collect-only` 实测 HEAD 收集 **1117**,本轮 +25(test_schedule 42→67)= **1142**。基线以 collect-only 实测为准,别抄旧文档。
 #                                                           v0.9.28 再 +16:test_proactive 38→47、test_tray +1、新增 tests/test_docs_check.py 6 项 = 1158;
 #                                                           v0.9.29 再 +20:test_reminders 8→17、test_proactive 47→57、test_briefing 11→12 = **1178**
@@ -219,6 +229,14 @@ cd /d/game/mini-code
 #                                                           深色界面顶一面白标题栏)、点「☀️ 浅色」翻成 [True,False]、
 #                                                           桥回答 rejected 时主题照样切完(装饰失败不拖界面下水)、
 #                                                           桥没有 set_chrome(网页版)一句错都不许有。
+#                                                           **p3(入口移左栏)真的动到了两支老回归,都改成了"量它当年
+#                                                           在断的那件事"而不是"改个选择器再绿一次"**:①`e2e_ui_v0937.py`
+#                                                           原来量 `#btnActivity` 的高度(<32 ⇒ 顶栏只有一行),那颗按钮
+#                                                           搬进左栏后本来就是"图标 + 字"两行,再量它等于拿设计稿当尺子 →
+#                                                           改成直接量 `.topbar`(单行高 = 上下 padding + 最高那个子元素,
+#                                                           两个数都是现量的,没写魔数);②`e2e_ui_v0934.py` 写死"打开后
+#                                                           .app 是三列网格",加了入口栏后基础就变 4 列 → 改成**列数差值**
+#                                                           (关 → 开恰好多一列),绝对列数会因搬家而红,差值才是那条的意思。
 #                                                           **颜色的真机效果这一台没验到**(非交互桌面站起不了窗口)—— 见 §6 第 22 条。
 ./.venv/Scripts/python.exe scripts/e2e_ui_v0934.py         # 右侧「本次会话」活动面板(真 Chromium,32 项):**payload 全部出自真 `bridge.get_activity()`** ——
 #                                                           `task` 真并行跑两个子代理、文件真写盘再**在页面开着的时候删掉**、错误真由 `edit_file` 本体报、
@@ -257,6 +275,12 @@ cd /d/game/mini-code
 ./.venv/Scripts/python.exe scripts/e2e_ui_v0916.py        # v0.9.16:主动推荐条(新通知/校历)(真 Chromium)
 ./.venv/Scripts/python.exe scripts/e2e_ui_v0917.py        # v0.9.17:临期待办/新版本推送/mermaid 图表(真 Chromium)
 ./.venv/Scripts/python.exe scripts/e2e_ui_v0927.py        # v0.9.27:本周空档/当天下钻/填作息表(真 Chromium,**payload 出自真后端 schedule.view()**,22 项;需 PYTHONIOENCODING=utf-8)
+./.venv/Scripts/python.exe scripts/e2e_ui_v0939_p1.py     # v0.9.39 p1:右键粘贴四条路(文字/图片/空的/桥读不到)全走本机桥,浏览器那条只在桥不在或读不到时才碰(真 Chromium,15 项)
+./.venv/Scripts/python.exe scripts/e2e_ui_v0939_p2.py     # v0.9.39 p2:开机与换主题都把当下档位报给本机(标题栏染色那条线),桥拒/桥没有也不牵连界面(真 Chromium,16 项)
+./.venv/Scripts/python.exe scripts/e2e_ui_v0939_p3.py     # v0.9.39 p3:14 个面板入口搬进最左入口栏后,**每一颗仍点到原来那个弹层/原来那个桥方法**(真 Chromium,32 项:六个 Overlay、右侧那一栏的 aria-expanded、地图面板、consolidate_memory('all')、set_sandbox 翻转值、格子上写的真状态「沙箱开/关」「记忆 7」、矮窗口里 14 颗仍滚得到、后端说没沙箱就整颗不出现)
+#                                                          这三支的 payload 形状都照后端真返回值写(地图那份是真
+#                                                          `campus.frontend_payload()`),不是随手编的字典;起浏览器走
+#                                                          `scripts/e2e_launch.py` 那份共同的退路(见 §4 最后一条)。
 ./.venv/Scripts/python.exe scripts/e2e_injection.py       # v0.9.18:注入防御即时链端到端(假 LLM 驱真链路:围栏/凭据门/升级门/留痕,14 项)
 ./.venv/Scripts/python.exe scripts/review_kb_growth.py    # 知识库成长复盘:未命中缺口/候选/差评样本(只用标准库)
 ./.venv/Scripts/python.exe scripts/shot_model_dialog.py    # 自检截图:模型管理弹窗(浅/深各一张,输出到 _tmp_dev_check/)
@@ -344,13 +368,17 @@ cd /d/game/mini-code
 22. **用户点名的四件界面事 + ZCode 调研(2026-09-24,带四张截图 p1/p2/p3/p4)**:原话「顺便帮我修改一下这个bug,右键粘贴到对话框左上角显示这个提示希望不要出现太违和感了…第二个应用的最上面那一行与应用界面不符合…上面的工具堆太多了没有简洁性…这个仓库 https://github.com/zai-org/ZCode 看看还有没有功能可以添加的让我的agent更加完善实用」。两条拍板(AskUserQuestion 选的):顶栏 → **面板入口移到左侧栏**(Qoder/ZCode 那种左栏导航);标题栏 → **保留系统标题栏,只改色与文字**(不做无边框)。做完两件:
     - **p1 右键粘贴的授权横条 → 已完成并提交(`b792758`)**:那条「http://127.0.0.1:25460 想要查看复制到剪贴板的文本和图像」是 `navigator.clipboard.read()/readText()` 触发的,遮是遮不住的(WebView2 画的),所以**根本不再调它** —— 新增 `minicode/clipboard.py` 用 ctypes 直接读 `CF_UNICODETEXT`/`CF_DIB`(位图补 14 字节 BMP 文件头,有 Pillow 出 PNG、没有出 BMP),桥与门面各一条 `read_clipboard`,前端「粘贴」优先问本机桥、`navigator.clipboard` 收进 `legacyPaste` 只当退路(**最坏情况等于改版前**,功能不会因为换路坏掉)。同轮顺手补了 `PublicApi.get_skill_body` 的漏转发,并给 `tests/test_clipboard.py` 加了一条**全局对账**(前端写出的每个 `pywebview.api.X` 必须在门面上存在)—— 这类洞从此不靠人眼。**本机实测留痕**:智能体所在 shell 挂在非交互桌面站,`OpenClipboard` 直接 `GetLastError()=5`(PowerShell `Get-Clipboard` 同样失败),所以"读不到"这条路是真撞过的,模块据此把"没打开成功"和"里面没东西"分成两种说法(最初合成一种,会让空剪贴板对用户谎称"正被别的程序占用")。
     - **p2 系统标题栏 → 已完成**:新增 `minicode/window_chrome.py`,DWM 四条属性(`20` 深色 / `34` 描边 / `35` 底色 / `36` 文字)+ `SetWindowTextW` 把标题换成**当前工作区名**(与顶栏 📁 胶囊同一份 `ws.display_name` 口径;`gui_main.py` 建窗口时就直接用这个名字,不再闪一下「引路学长」)。三个色**不是另调一套**:全部由 `frontend/index.html` 里那几行 CSS 变量算出来(玻璃层叠在底色上,描边再叠一层 `--line`),`tests/test_window_chrome.py` 把每一个常数的**来源字符串**钉在 index.html 里 —— 界面改色而这里没跟,测试红。`apply()` 逐项报告系统接受/拒绝了哪几条,Win10 上被拒不伪装成成功。**边界:这台机器上没验到真染色** —— 开发机是 Win11 build 26100,但同一个非交互桌面站限制让临时探针连 `CreateWindowExW` 都没返回(45 s 被杀),所以"颜色对不对"目前只有算式与 CSS 来源两层保证,**下次开真窗口看一眼即知**(前端那一路有 `scripts/e2e_ui_v0939_p2.py` 16 项真 Chromium 钉着:开机就把深色/浅色报给本机、点主题会翻、桥拒绝或不存在时界面不受牵连)。
-    - **p3 顶栏工具太多 → 没动**(任务 #91):现状是顶栏 16 个平铺控件,方向是面板入口移进左栏。**这一条要动的是界面主体结构,单独一轮做,别夹在修 bug 的提交里**。
-    - **ZCode 调研(第 ④ 件)**:还没交清单 —— 用户问的是「看看还有没有功能可以添加的让我的 agent 更加完善实用」,要的是**能加什么的排序清单**,不是仓库摘要。落地项一个都没有,别当成已完成功能。
+    - **p3 顶栏工具太多 → 已完成**(任务 #91,**尚未提交**):界面最左边新加一条 56px 的**入口栏**(`<nav class="rail">`,`.app` 网格从 `260px 1fr` 变成 `56px 260px 1fr`,开右侧那一栏时 `56px 260px 1fr 300px`)。搬进去的 14 项按"面板入口"这条线收:地图 / 课表 / 心情 / 计划(+ 红点)/ 活动(+ 红点)/ 技能 / 记忆 / 用量 / 我的数据 / 沙箱(后端说没开就**整颗不出现**)/ 分隔 / 导出 / 撤销 / 压缩 / 主题。顶栏只留**状态**:📁 工作区胶囊、token 数、模型胶囊、权限灯 —— 一句话:按钮归左栏,状态留在上面。
+      - **搬位置不搬行为**这条承诺钉了三层:①`tests/test_rail_entries.py` 68 项从**源码文本**里逐个抠出 14 颗按钮的去处(`window.CampusMap`、六个 Overlay id、`act-open`、`consolidate_memory`、`set_sandbox`、`export_session`、`api.undo()`、`compact_now`、`applyTheme`),漏搬一颗、搬重一颗、点不动、只有图标没文字、矮窗口滚不到、后端没上报沙箱却把那颗显示出来,都会红;倒数第二项拿这 14 个 id 反查 e2e 那份**真点击**有没有覆盖到 —— 源码改了浏览器没跟着点也算红;最后一项除钉 HANDOFF 写过「入口栏」,还钉**包里那份《使用说明.txt》(字面量在 `scripts/build_exe.py`)写了这条竖栏、且不再把搬走的入口指到顶栏**(顶栏真留下的 📁 工作区、模型管理不算漂)。②`scripts/e2e_ui_v0939_p3.py` 32 项在真 Chromium 里**一颗一颗点过去**,断言点到的是原来那个弹层 / 原来那个桥方法(桩数据形状照后端真返回值抄,地图那份就是真 `campus.frontend_payload()`,所以格子上写的「沙箱开」「记忆 7」是有来源的);③几何用**派生量**而不写魔数 —— 开栏比关栏多一列、顶栏高度量 `.topbar` 而不是量按钮。
+      - **顺手修掉一个真 bug**:`#taskModelMenu` 判"当前是哪一行"用的是 `p.key === m.selected_key`,两边都缺字段时变成 `undefined === undefined`,于是**整列每一行都被点亮**;现在没凭据就一行都不点(`selKey` 为空则不标 `on`、点谁都不算"点了当前项")。它的回归针是 `scripts/e2e_ui_v0911.py`(那支靠 `selected_key` 真形状才点得亮一行,夹具补 `key`/`selected_key` 后断言收成 `ons == ["DeepSeek"]`),`selected_key` 这个字段形状本身由 `tests/test_model_manage.py` 钉在后端侧。
+      - ⚠ **这一轮把五支老 e2e 从"根本没跑"救回来了**:v0.9.09~0.9.13 那五场每次都红在 `BrowserType.launch`,原因是这台机器的 Playwright 只有完整版 chromium、没装 `chromium_headless_shell`。已抽出共同退路 `scripts/e2e_launch.py`(两条路都起不来就抛 `RuntimeError`,**不静默跳过** —— "测试没跑"和"跑挂了"在输出里必须长得不一样)。跑起来之后立刻暴露三处口径漂移(v0909 的删除项目流程、v0911 的 `.trow.on`、v0913 的 `resume_session` 参数早已变成会话文件名),都已回读当年在断什么之后修好,五场现全绿。剩下 12 份 `_launch(p)` 副本还散在别处,可折进这个模块(未做)。
+    - **跟着搬的还有面向用户的那份《使用说明.txt》**(字面量在 `scripts/build_exe.py::write_user_files`,装好的包里同学照着它找按钮):新加**第 29 条**写清左栏这事(14 个入口逐个列名、写明「搬的只是位置没搬行为」、「🛡 沙箱只在后端真开着时才出现」、「🌙 那一格写的是下一步会切到哪一档」),并把**六处**指错的旧句子改口 —— 「⬇ 导出」「🗂 计划」「📅 课表」(两处)「💾 数据」「🛰 监控」前面写的都是「点顶栏」,现在改成「点左栏」。留在顶栏的两处(`📁 工作区`、`模型管理`)**没动**,因为它们真没搬。这条规矩现在由 `tests/test_rail_entries.py::test_user_manual_documents_the_rail` 钉着,标签名是从 index.html 现取的(不是抄一份清单),所以以后改界面文案忘了改说明书会红。
+    - **ZCode 调研(第 ④ 件)**:排序清单**已就绪、待用户拍板,一个落地项都没有**。值得抄的前五:工具钩子生命周期(pre/post tool-use)、MCP 管理面板的命令化收口、`skills-lock` + skill-creator 那套技能依赖锁定、本地运行轨迹日志(可回放的 tool-call 流水)、会话/记忆 schema 迁移。明确**不值得抄**的:Electron monorepo、`packages/server` + SSH/WSL/SFTP 远程执行、远程 configs 下发、telemetry 上报、`zcode-cua` 屏幕接管、面向程序员的那批技能包 —— 与「只做本地桌面 agent、面向辅导员/学生」的边界冲突。**如实记录调研限制**:仓库只走通了 GitHub 网页与部分 raw 路径(`raw/api` 有 502/404),README 只拿到结构化摘要,所以这份排序依据的是目录结构与已读到的实现片段,**没跑过那个仓库一行代码**。
 
 ## 7. 新会话上手指南
 
 1. 读本文档 + `README.md`(能力/配置/命令全集)。
-2. 跑 `pytest -q` 确认基线(应为**全绿 1592 项**(v0.9.39 + #78 第一批 + p1 剪贴板 + p2 标题栏;上一轮文档写的 1188 在现在的树上复现不出来,以 `--collect-only` 实测为准,别抄旧文档 —— 现在 `scripts/check_docs.py --collect` 会把这里写的条数和实测对一遍,漂了自己会红。**每次提交前都要跑它**:p1 那批就是提交时没跑,文档数漂了 15 条没人发现);若并行会话在改,先跑全量再动手)。注意**不要**带 `PYTHONIOENCODING=utf-8` 跑全量(会让 `test_kb_credibility` 的 subprocess 采集假红);但单跑 `check_frontend_js.py` 时**需要**该 env(GBK 控制台)。
+2. 跑 `pytest -q` 确认基线(应为**全绿 1660 项**(v0.9.39 + #78 第一批 + p1 剪贴板 + p2 标题栏 + p3 入口栏;上一轮文档写的 1188 在现在的树上复现不出来,以 `--collect-only` 实测为准,别抄旧文档 —— 现在 `scripts/check_docs.py --collect` 会把这里写的条数和实测对一遍,漂了自己会红。**每次提交前都要跑它**:p1 那批就是提交时没跑,文档数漂了 15 条没人发现);若并行会话在改,先跑全量再动手)。注意**不要**带 `PYTHONIOENCODING=utf-8` 跑全量(会让 `test_kb_credibility` 的 subprocess 采集假红);但单跑 `check_frontend_js.py` 时**需要**该 env(GBK 控制台)。
 3. 改代码前**重读要编辑的文件**——本仓库有多个会话并行开发(web_crawl、school-qa、koubei-extract 技能与校园语料爬虫均为并行会话所加),编辑前用当前实际内容做锚点,改完跑全量测试。
 4. 相关文档:产品侧 `D:\game\yinlu-xuezhang\PLAN.md`(v2.0 冻结)与 `AGENT-PLAN.md`(用本 Agent 开发该项目的计划);产品知识库 JSON 数据源在 `D:\yy\yinlu-master\yinlu-master\`(已拷贝到本仓库 kb/)。
 5. 远端两个:`origin` = GitHub `MOKO-TB/yinlu-xuezhang`(**私有**,2026-09-13 从 `MOKO-TB/momo` 改名而来),`gitee` = `gitee.com/inkzero/momo`(**公开**)。注意 `branch.main.remote` 指向 gitee,所以 `git push` 不带参数推的是 gitee,推 GitHub 要显式写 `git push origin main`。

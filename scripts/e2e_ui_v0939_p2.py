@@ -128,7 +128,16 @@ def main() -> int:
                 "() => document.documentElement.classList.contains('dark')")
 
         def theme_text(page):
-            return page.evaluate("() => document.querySelector('#btnTheme').textContent")
+            # 原本量的是整颗按钮的 textContent("☀️ 浅色"),断的是"这一格给的是
+            # 下一步能切去的那一档"。p3 之后它变成"图标一行 + 标签一行"两行结构,
+            # 所以这里把两行拼回原来那句话再比 —— **期望串一个字没改**,改的是取法;
+            # 若哪天只剩图标、标签丢了,拼出来就不等于"☀️ 浅色",这条照样红。
+            return page.evaluate("""() => {
+                const b = document.getElementById('btnTheme');
+                const glyph = (b.firstChild.textContent || '').trim();
+                const cap = b.querySelector('.cap');
+                return cap ? glyph + ' ' + cap.textContent.trim() : glyph;
+            }""")
 
         # ---- 1) 开机浅色:桥要被问到一次,且问的是 false
         page = open_page(BOOT_LIGHT)

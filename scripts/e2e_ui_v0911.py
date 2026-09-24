@@ -58,12 +58,19 @@ window.pywebview = {
       sandbox: {enabled: false}, vision: false, campus_map: null,
       api_key_configured: true,
       reasoning: {visible: false, options: [], choice: "default"},
+      /* 这一份 payload 的形状照 `minicode/model_catalog.py` 的 `snapshot()`:
+         每一行带 `key = f"{供应商id}::{模型名}"`,整份带 `selected_key = f"{在用供应商}::{在用模型}"`。
+         v0.9.13 把"哪一行是当前项"从 `provider_id` 换成这两把钥匙(同一供应商多模型时
+         provider_id 分不开),夹具没跟着改 → 这一度是**假绿**:菜单里根本没有 `.on` 行,
+         断言读到的是旧 payload 残留的那一行。 */
       session_metrics: {ok: true, provider_id: "gzasc", model: "deepseek-v4-flash",
+        selected_key: "gzasc::deepseek-v4-flash",
         capabilities: ["文本"], supports_vision: false, known: true,
         context_window: 327680, context_tokens: 100, consumed: 0,
         compact_ratio: 0.7,
         selectable: [
-          {id: "gzasc", name: "广州应用科技学院", model: "deepseek-v4-flash",
+          {key: "gzasc::deepseek-v4-flash",
+           id: "gzasc", name: "广州应用科技学院", model: "deepseek-v4-flash",
            has_key: true, builtin: true, supports_vision: false,
            context_window: 327680}
         ]}
@@ -131,6 +138,9 @@ def _push(page, event: dict):
 
 def main() -> int:
     from playwright.sync_api import sync_playwright
+    # headless shell 这台机器没装:起浏览器这一步走 e2e_launch 那份共同的退路
+    # (p3 之前这五场每次都红在 launch 上,连页面都没打开 —— 见 scripts/e2e_launch.py)
+    from e2e_launch import launch
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     url, shutdown = _serve(FRONTEND)
@@ -143,7 +153,7 @@ def main() -> int:
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = launch(p)
             page = browser.new_page(viewport={"width": 1440, "height": 900})
             page.add_init_script(STUB_JS)
             page.add_init_script(f"window.__PROJ__ = {json.dumps(PROJ)}")
@@ -242,16 +252,19 @@ def main() -> int:
             # ---- p1/p2:session_metrics 事件 → 任务面板实时更新 ----
             _push(page, {"type": "session_metrics", "session": "s1",
                          "provider_id": "ds", "model": "deepseek-chat",
+                         "selected_key": "ds::deepseek-chat",
                          "capabilities": ["文本", "工具调用"],
                          "supports_vision": False, "known": True,
                          "context_window": 65536, "context_tokens": 42,
                          "consumed": 7, "compact_ratio": 0.7,
                          "selectable": [
-                             {"id": "gzasc", "name": "广州应用科技学院",
+                             {"key": "gzasc::deepseek-v4-flash",
+                              "id": "gzasc", "name": "广州应用科技学院",
                               "model": "deepseek-v4-flash", "has_key": True,
                               "builtin": True, "supports_vision": False,
                               "context_window": 327680},
-                             {"id": "ds", "name": "DeepSeek", "model": "deepseek-chat",
+                             {"key": "ds::deepseek-chat", "id": "ds",
+                              "name": "DeepSeek", "model": "deepseek-chat",
                               "has_key": True, "builtin": False,
                               "supports_vision": False, "context_window": 65536}
                          ]})
@@ -266,9 +279,10 @@ def main() -> int:
                 "#taskModelMenu .trow .tname", "els => els.map(e => e.textContent)")
             check("DeepSeek" in rows,
                   f"可切列表立刻出现新加的模型({rows})")
-            on = page.eval_on_selector(
-                "#taskModelMenu .trow.on .tname", "el => el.textContent")
-            check(on == "DeepSeek", "当前选中项与新模型一致")
+            ons = page.eval_on_selector_all(
+                "#taskModelMenu .trow.on .tname", "els => els.map(e => e.textContent)")
+            check(ons == ["DeepSeek"],
+                  f"当前选中项与新模型一致、且**只点亮那一行**(实测 {ons})")
 
             page.screenshot(path=str(OUT_DIR / "projects_and_files.png"),
                             full_page=False)

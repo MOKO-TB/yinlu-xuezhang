@@ -102,6 +102,9 @@ def _push(page, event: dict):
 
 def main() -> int:
     from playwright.sync_api import sync_playwright
+    # headless shell 这台机器没装:起浏览器这一步走 e2e_launch 那份共同的退路
+    # (p3 之前这五场每次都红在 launch 上,连页面都没打开 —— 见 scripts/e2e_launch.py)
+    from e2e_launch import launch
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     url, shutdown = _serve(FRONTEND)
@@ -114,7 +117,7 @@ def main() -> int:
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = launch(p)
             page = browser.new_page(viewport={"width": 1440, "height": 900})
             page.add_init_script(STUB_JS)
             page.goto(url, wait_until="load")

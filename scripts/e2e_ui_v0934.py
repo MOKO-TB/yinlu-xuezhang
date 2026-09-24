@@ -261,20 +261,30 @@ def main() -> int:
                 return page.evaluate(
                     "([name]) => window.__E2E_CALLS__.filter(c => c[0] === name)", [name])
 
-            # ---- 1. 开机不占位:没点开就没有第三列,也不该去敲桥 ----
+            def grid_cols():
+                return page.evaluate(
+                    "() => getComputedStyle(document.querySelector('.app'))"
+                    ".gridTemplateColumns.split(' ').length")
+
+            # ---- 1. 开机不占位:没点开就没有这一栏的列,也不该去敲桥 ----
             check(page.locator("#activity").is_hidden(), "开机时活动面板是收起来的")
             check(not page.evaluate("() => document.querySelector('.app')"
                                    ".classList.contains('act-open')"),
-                  "没开时 .app 不带 act-open(不抢第三列的宽度)")
+                  "没开时 .app 不带 act-open(不抢这一栏的宽度)")
+            cols_closed = grid_cols()
             check(page.evaluate("() => window.__ACT_CALLS__") == 0,
                   "关着的时候一次都不问后端(没人看就别统计)")
 
-            # ---- 2. 点「🧭 动态」:真多出一列,数据来自后端 ----
+            # ---- 2. 点「🛰 监控」:真多出一列,数据来自后端 ----
             page.click("#btnActivity")
             page.wait_for_selector("#activity .act-row")
-            cols = page.evaluate("() => getComputedStyle(document.querySelector('.app'))"
-                                 ".gridTemplateColumns.split(' ').length")
-            check(cols == 3, f"打开后 .app 是三列网格(实测 {cols} 列)")
+            cols_open = grid_cols()
+            # 原来这里写死的是 `== 3`("三列网格")。p3 在最左边加了一条入口栏,基础列
+            # 就变成 3,打开后是 4 —— 写死的数会因搬家而红。**这一条真正断的是「点开
+            # 那一栏,网格确实多占了一列」**,所以量的是差值,同时把两边的实际列数打出来
+            # 让人看得见(不是把断言放松:少一列、多两列照样红)。
+            check(cols_open == cols_closed + 1,
+                  f"打开后 .app 比关着时多一列(关 {cols_closed} 列 → 开 {cols_open} 列)")
             check(page.evaluate("() => window.__ACT_CALLS__") >= 1,
                   "打开时问了一次 get_activity")
             check(page.get_attribute("#btnActivity", "aria-expanded") == "true",

@@ -514,8 +514,22 @@ def main() -> int:
             page.wait_for_timeout(250)
             check(page.locator("#actBody .act-sect").count() == 4,
                   "重新点开后四段又都在了(收起→展开这一趟没弄丢内容)")
-            h = page.evaluate("() => document.getElementById('btnActivity').getBoundingClientRect().height")
-            check(h < 32, f"栏开着(300px)也没把顶栏按钮压成两行:{h:.1f}px")
+            # 这一条原本量 `#btnActivity` 的高度(<32 ⇒ 顶栏只有一行)。p3 之后那颗按钮
+            # 搬进了最左入口栏,而且本来就是"图标 + 标签"两行的设计 —— 再量它就等于拿设计稿
+            # 当尺子。**它真正守的是「300px 那一栏挤进来时,顶栏不许被挤到换行」**,所以改成
+            # 直接量顶栏自己:单行时的高 = 上下 padding + 最高那个子元素(两个都是现量的,
+            # 不是写死的魔数);真换了行就会多出一整行 + 一个 gap,这个式子立刻不成立。
+            tb = page.evaluate("""() => {
+                const t = document.querySelector('.topbar');
+                const cs = getComputedStyle(t);
+                const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+                let tall = 0;
+                for (const c of t.children) tall = Math.max(tall, c.getBoundingClientRect().height);
+                return {h: t.getBoundingClientRect().height, one: pad + tall, n: t.children.length};
+            }""")
+            check(tb["h"] <= tb["one"] + 1,
+                  "栏开着(300px)顶栏仍是一行:%.1fpx(单行算出来 %.1fpx,%d 个控件)"
+                  % (tb["h"], tb["one"], tb["n"]))
             shot = Path(tempfile.gettempdir()) / "yx-v0937-rail.png"
             page.screenshot(path=str(shot))
             print(f"  · 截图:{shot}")
