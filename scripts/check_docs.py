@@ -18,9 +18,11 @@
    `.gitignore` 盖住,且 `build_exe.py` 必须**遍历**这份清单而不是自己抄一串名字。
 
 用法: .venv/Scripts/python.exe scripts/check_docs.py [--collect]
-   --collect 额外跑一次 `pytest --collect-only -q`,核对 §7 上手指南里写的测试基线条数
+   --collect 额外跑一次 `pytest --collect-only -q`,核对文档写的测试基线条数
    (慢十几秒,提交前跑一次;本轮就是因为没人核,文档里的 1188 和实测的 1142 差着
-   46 项漂了一整轮)。
+   46 项漂了一整轮)。这一项要**两边只有一个数且相等**:上一版判的是"实测在文档提到
+   过的数里",文档留了历史数时它会绿着放过漂掉的当前基线 —— 历史条数请写成
+   「N passed」,别用「全绿 N 项」那个句式。
 """
 from __future__ import annotations
 
@@ -192,21 +194,37 @@ def check_handoff_size() -> list[str]:
     return []
 
 
+def claimed_counts(text: str) -> set[int]:
+    """从 HANDOFF 文本里扫出所有"全绿 N 项 / N 个测试全绿"的条数(纯函数,给测试喂假文本)。"""
+    found = {int(n) for n in re.findall(r"全绿\s*(\d{3,5})\s*项", text)}
+    return found | {int(n) for n in re.findall(r"(\d{3,5}) 个测试全绿", text)}
+
+
+def count_problems(actual: int, text: str) -> list[str]:
+    """基线条数对账的判定(拆成纯函数是为了让测试能喂它假文本 —— 同 pyproject_problems)。
+
+    这里只准出现**一个**数:上一版判的是 `actual in claimed`,于是文档里留下三个
+    历史数时,实测等于其中任何一个都会绿 —— 漂掉的当前基线照样过。
+    """
+    claimed = claimed_counts(text)
+    if not claimed:
+        return ["HANDOFF 没写全绿条数(§5 与 §7 上手指南至少各要有一处)"]
+    if claimed != {actual}:
+        return [f"HANDOFF 写的基线是 {sorted(claimed)},实测 {actual} 项 —— "
+                f"历史条数别用「全绿 N 项」这个句式写(改成「N passed」),否则旧数会冒充当前基线"]
+    return []
+
+
 def check_collected_count() -> list[str]:
-    """跑一次 collect-only,把 §7 写的基线数和实际收集数对一遍(慢,可选)。"""
+    """跑一次 collect-only,把文档写的基线数和实际收集数对一遍(慢,可选)。"""
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q"],
         cwd=str(ROOT), capture_output=True, text=True)
     m = re.search(r"(\d+) tests? collected", proc.stdout or "")
     if not m:
         return [f"pytest --collect-only 没报收集数(退出码 {proc.returncode})"]
-    actual = int(m.group(1))
-    text = (ROOT / "HANDOFF.md").read_text(encoding="utf-8")
-    claimed = {int(n) for n in re.findall(r"全绿\s*(\d{3,5})\s*项", text)}
-    claimed |= {int(n) for n in re.findall(r"(\d{3,5}) 个测试全绿", text)}
-    if actual not in claimed:
-        return [f"实际收集 {actual} 项,HANDOFF 写的是 {sorted(claimed) or '没写'}"]
-    return []
+    return count_problems(int(m.group(1)),
+                          (ROOT / "HANDOFF.md").read_text(encoding="utf-8"))
 
 
 def pyproject_problems(text: str) -> list[str]:

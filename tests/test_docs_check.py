@@ -91,3 +91,31 @@ def test_pyproject_check_bites_on_hardcoded_versions():
     # ③ 版本源改指到别处(比如指着一个不会更新的常量)→ 红
     assert any("minicode.__version__" in p for p in check_docs.pyproject_problems(
         real.replace('attr = "minicode.__version__"', 'attr = "minicode.__stale__"')))
+
+
+# ---------------- 测试基线条数(--collect 那一项的判定) ----------------
+
+def test_handoff_claims_exactly_one_baseline_number():
+    """文档里"全绿 N 项"这个句式只能有一个数:它是当前基线,不是历史账本。"""
+    text = (ROOT / "HANDOFF.md").read_text(encoding="utf-8")
+    claimed = check_docs.claimed_counts(text)
+    assert claimed, "一条基线都没写,提交前没人知道该跑多少"
+    assert len(claimed) == 1, f"HANDOFF 用「全绿 N 项」写了多个数:{sorted(claimed)}"
+
+
+def test_count_check_bites_when_an_old_number_lurks_in_the_doc():
+    """钉住上一版的漏洞:旧判定是 `actual in claimed`,文档留着历史数时它会绿着放过。
+
+    真实事故形状:本轮实测 1684,文档某处还写着上一轮的 1660 —— 旧规则里
+    1684 ∈ {1684, 1660} 于是过关,漂掉的当前基线没人看得见。
+    """
+    assert check_docs.count_problems(1684, "跑 pytest -q  # 全绿 1684 项") == []
+    # ① 多一个历史数 → 红(旧规则在这里是绿的)
+    assert check_docs.count_problems(
+        1684, "全绿 1684 项\n上一轮 全绿 1660 项") != [], "历史数冒充当前基线就该红"
+    # ② 数写漂了 → 红
+    assert check_docs.count_problems(1684, "全绿 1700 项") != []
+    # ③ 压根没写 → 红(不能"因为扫不到所以永远绿")
+    assert check_docs.count_problems(1684, "测试都跑过了,全绿") != []
+    # ④ 只认这一种句式:历史条数写成 passed 形态不该被误当成基线
+    assert check_docs.count_problems(1684, "全绿 1684 项(实跑 1683 passed / 1 skipped)") == []
