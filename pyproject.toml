@@ -1,0 +1,35 @@
+# 项目元数据。**版本号与依赖不写在这里** —— 见下面的 dynamic,真相仍是
+# `minicode/__init__.py::__version__` 和 `requirements.txt`。
+# 这份文件存在的意义是"让别人一条命令认得这个项目",不是给我们自己再加一处要手抄的地方:
+# 只要这里出现过写死的版本字面量或依赖行,`scripts/check_docs.py` 就会当场红。
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yinluxs-agent"
+description = "引路学长 —— 跑在终端与桌面窗口里的本地校园/编码智能体(OpenAI 兼容内核 + 40 个内置工具)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "MOKO-TB" }]
+keywords = ["agent", "cli", "desktop", "campus", "knowledge-base"]
+classifiers = [
+    "Private :: Do Not Upload",   # 没打算传 PyPI;这一行是防手滑上传,不是保密声明
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+]
+dynamic = ["version", "dependencies"]
+
+# 不写 [project.scripts]:命令行入口是仓库根的 main.py(桌面入口 gui_main.py),
+# 都不是包内的函数。硬造一个 `yinluxs = ...` 只会变成一个没人跑、也就没人验证的入口。
+
+[tool.setuptools]
+zip-safe = false
+
+[tool.setuptools.packages.find]
+include = ["minicode*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "minicode.__version__" }
+dependencies = { file = ["requirements.txt"] }

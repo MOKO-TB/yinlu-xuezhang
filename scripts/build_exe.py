@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from minicode import __version__  # noqa: E402
+from minicode import state_files as _state_files  # noqa: E402  「不外发清单」的唯一真相
 
 
 def _ensure_collected(dist: Path) -> None:
@@ -96,65 +97,15 @@ def write_user_files(dist: Path) -> None:
     **必须在编译安装包之前**调用:否则 setup 里不带《使用说明.txt》,
     而分发给同学时最需要的就是里面那两句(要 2 GB 磁盘 / 单文件版不带馆藏库)。
     """
-    shutil.rmtree(dist / "sessions", ignore_errors=True)
-    (dist / "config.json").unlink(missing_ok=True)
-    # 上一次跑起来的程序会在 exe 旁留下能力探测缓存(内含本机模型服务指纹):
-    # 那是运行时状态,不该随包发给别人。
-    (dist / "model_caps.json").unlink(missing_ok=True)
-    # 同类运行时状态一并清掉:token 记账库(含构建机上的用量记录)与
-    # 工作区记忆(含本机文件夹路径) —— 分享出去既没用,又像在泄露什么。
-    for _name in ("token-usage.db", "token-usage.db-wal", "token-usage.db-shm",
-                  "workspaces.json", "workspaces.json.tmp",
-                  # v0.9.14 知识库成长闭环的运行时日志(含本机问答/反馈,不该外发)
-                  "kb-gaps.jsonl", "kb-candidates.jsonl", "message-feedback.jsonl",
-                  # v0.9.18 个人数据与本机缓存:课表属于使用者本人,天气缓存是构建机坐标的
-                  "schedule.json", "weather-cache.json", "reminders.json",
-                  # v0.9.24 课表覆盖前的备份(同学本人的旧课表,同样不能外发)
-                  "schedule.prev.json",
-                  "notice-watch.json", "injection-events.log",
-                  # v0.9.22 关窗偏好与托盘诊断日志(本机状态,不外发)
-                  "close-pref.json", "tray.log",
-                  # v0.9.37 任务监控栏的开合/折叠偏好(纯本机界面状态)
-                  "monitor-pref.json",
-                  # v0.9.23 首次运行向导的「不再显示」偏好(纯本机状态)
-                  "onboarding.json",
-                  # v0.9.25 桌面提醒的开关与类别偏好(同样是纯本机状态)
-                  "notify-pref.json",
-                  # v0.9.26 「今天已弹过哪几条」去重账本(当日本机状态,发给别人等于
-                  # 把自己的提醒记录带出去,而且会让新机器的第一条补发被误判成已弹)
-                  "pushed-today.json",
-                  # v0.9.27 本机作息表(自己学校教务处那张表的抄录,属使用者本人环境状态:
-                  # 随包发出去既对别人没用,又会让他一空档直接按你的钟点算)
-                  "period-times.json",
-                  # v0.9.28 看门狗运行日志(本机弹过哪些提醒、为什么没弹的记录)
-                  "watchdog.log",
-                  # v0.9.28 对账脚本查出的三处漏网(见 scripts/check_docs.py):
-                  # weather.json 是用户自选城市(weather.py 的 CITY_FILE),含位置;
-                  # web-usage.log 是局域网问答版的发问记录 + 来源 IP,更不能外发。
-                  "weather.json", "web-usage.log",
-                  # v0.9.32 情绪日记:全 app 最私密的一份本机记录,随包发出去就是把自己的
-                  # 心情史交给别人(连同原子写留下的半截 .tmp)。导出才是显式动作。
-                  "mood.json", "mood.json.tmp"):
-        (dist / _name).unlink(missing_ok=True)
-    # 同上:问答版的会话目录(构建机若真跑过 web_server,这里面就是本机对话)
-    shutil.rmtree(dist / "web-sessions", ignore_errors=True)
-    # v0.9.30 导入迁移包前的原件备份(构建机若真试过导入,里面是本人文件副本)
-    shutil.rmtree(dist / "migrate-backup", ignore_errors=True)
-    # 向量档缓存(kb-vectors/*.json:条目指纹 + 向量)与用时下载的本地模型(models/):
-    # 前者是构建机问过哪些内容的痕迹,后者是几百 MB 的可再下资源,两者都不随包外发。
-    # 缺了它们 app 只降级为「纯关键词检索」,并在检索口径里如实说明,不会假装语义。
-    shutil.rmtree(dist / "kb-vectors", ignore_errors=True)
-    shutil.rmtree(dist / "models", ignore_errors=True)
-    # 工具产物目录:charts/ 里可能是构建机自己的成绩图,images/ 里是带姓名的文字卡与
-    # 文生图结果 —— 那是"某人用过这台机器的痕迹",不是程序,同样不随包外发。
-    shutil.rmtree(dist / "charts", ignore_errors=True)
-    shutil.rmtree(dist / "images", ignore_errors=True)
-    # v0.9.23:可见浏览器跑过教务导入后,这个 profile 目录里就是**真实的登录态**
-    # (cookie / sessionStorage)。随包发给同学 = 把自己的教务账号交出去。
-    shutil.rmtree(dist / "browser-profile", ignore_errors=True)
-    # v0.9.21:候选审核把人工核实的知识写进 app_path('kb')/reviewed.json;
-    # 构建机上若试用过「并入」,那份文件含本机问答,不能随包发给别人。
-    (dist / "kb" / "reviewed.json").unlink(missing_ok=True)
+    # 个人数据一律不外发:清单的唯一真相是 minicode/state_files.py::SHIP_NEVER
+    # (v0.9.39 R 批收口)。这里**遍历**它而不是抄一遍名字 —— 抄一份就会漂,而漂的后果
+    # 是把同学自己的课表/心情史/教务登录态打进分发包。新增本机状态文件请改那份清单。
+    for _entry in _state_files.SHIP_NEVER:
+        _p = dist.joinpath(*_entry.name.split("/"))
+        if _entry.kind == _state_files.DIR:
+            shutil.rmtree(_p, ignore_errors=True)
+        else:
+            _p.unlink(missing_ok=True)
     shutil.copy(ROOT / "config.example.json", dist / "config.example.json")
     (dist / "使用说明.txt").write_text(
         "引路学长 —— 校园 AI 助手 / 编程引路智能体(GUI + CLI)\n"

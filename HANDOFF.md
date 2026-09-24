@@ -144,7 +144,7 @@
 
 ```bash
 cd /d/game/mini-code
-./.venv/Scripts/python.exe -m pytest -q                    # 1541 个测试全绿(v0.9.39:本轮最后一次实跑 1540 passed / 1 skipped;约 330 s;与别人的 pytest/重 IO 并行时,网页版真实 socket 用例会饿死超时,别在机器忙时下结论)
+./.venv/Scripts/python.exe -m pytest -q                    # 1550 个测试全绿(v0.9.39:重构分支 #78 这一批之后 `--collect-only` 实测 1550;上一次全量实跑 1540 passed / 1 skipped;约 330 s;与别人的 pytest/重 IO 并行时,网页版真实 socket 用例会饿死超时,别在机器忙时下结论)
 #                                                           v0.9.37 再 +24:`tests/test_activity.py` 21→30(时刻配对、对不上号就不给时间、
 #                                                           轮次切分与「另有 N 次」取真数、停止=已中断≠在跑≠失败)+ 新增 `tests/test_monitor.py` 9 项
 #                                                           (默认收起、坏 JSON 不炸、白名单外的键丢掉、**只 patch 一段不覆盖别段**、桥两方法与门面转发)
@@ -157,6 +157,10 @@ cd /d/game/mini-code
 #                                                           `test_sandbox_script` 26、`test_frozen_targets` 2、`test_fetch_embed_model` 9),
 #                                                           另有 `test_agent` 11→13 个测试函数、`test_explain` 11→12、`test_subagent` 13→19
 #                                                           (`git show HEAD:tests/…` 与工作树逐个 `grep -c '^def test_'` 对过)。
+#                                                           #78(目录规范化第一批)再 +9:新增 `tests/test_state_files.py` 7 项(不外发清单的
+#                                                           自身形状、真删得掉、真删不掉好包、与 `mydata.TABLE` 的文件/目录口径一致、
+#                                                           扫描器不空转)+ `tests/test_docs_check.py` +2(pyproject 是门面不是第二份真相、
+#                                                           喂假文本必须红)= **1550**(`--collect-only` 实测 1550)。
 #                                                           注:v0.9.26 那行写的「1188」在现在的树上复现不出来 —— `--collect-only` 实测 HEAD 收集 **1117**,本轮 +25(test_schedule 42→67)= **1142**。基线以 collect-only 实测为准,别抄旧文档。
 #                                                           v0.9.28 再 +16:test_proactive 38→47、test_tray +1、新增 tests/test_docs_check.py 6 项 = 1158;
 #                                                           v0.9.29 再 +20:test_reminders 8→17、test_proactive 47→57、test_briefing 11→12 = **1178**
@@ -321,7 +325,7 @@ cd /d/game/mini-code
 ## 7. 新会话上手指南
 
 1. 读本文档 + `README.md`(能力/配置/命令全集)。
-2. 跑 `pytest -q` 确认基线(应为**全绿 1541 项**(v0.9.39;上一轮文档写的 1188 在现在的树上复现不出来,以 `--collect-only` 实测为准,别抄旧文档 —— 现在 `scripts/check_docs.py --collect` 会把这里写的条数和实测对一遍,漂了自己会红);若并行会话在改,先跑全量再动手)。注意**不要**带 `PYTHONIOENCODING=utf-8` 跑全量(会让 `test_kb_credibility` 的 subprocess 采集假红);但单跑 `check_frontend_js.py` 时**需要**该 env(GBK 控制台)。
+2. 跑 `pytest -q` 确认基线(应为**全绿 1550 项**(v0.9.39 + #78 第一批;上一轮文档写的 1188 在现在的树上复现不出来,以 `--collect-only` 实测为准,别抄旧文档 —— 现在 `scripts/check_docs.py --collect` 会把这里写的条数和实测对一遍,漂了自己会红);若并行会话在改,先跑全量再动手)。注意**不要**带 `PYTHONIOENCODING=utf-8` 跑全量(会让 `test_kb_credibility` 的 subprocess 采集假红);但单跑 `check_frontend_js.py` 时**需要**该 env(GBK 控制台)。
 3. 改代码前**重读要编辑的文件**——本仓库有多个会话并行开发(web_crawl、school-qa、koubei-extract 技能与校园语料爬虫均为并行会话所加),编辑前用当前实际内容做锚点,改完跑全量测试。
 4. 相关文档:产品侧 `D:\game\yinlu-xuezhang\PLAN.md`(v2.0 冻结)与 `AGENT-PLAN.md`(用本 Agent 开发该项目的计划);产品知识库 JSON 数据源在 `D:\yy\yinlu-master\yinlu-master\`(已拷贝到本仓库 kb/)。
 5. 远端两个:`origin` = GitHub `MOKO-TB/yinlu-xuezhang`(**私有**,2026-09-13 从 `MOKO-TB/momo` 改名而来),`gitee` = `gitee.com/inkzero/momo`(**公开**)。注意 `branch.main.remote` 指向 gitee,所以 `git push` 不带参数推的是 gitee,推 GitHub 要显式写 `git push origin main`。

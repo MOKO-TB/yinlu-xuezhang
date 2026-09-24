@@ -1,4 +1,4 @@
-"""`scripts/check_docs.py` 的三条对账要能在 pytest 里跑,不能只靠人记得执行。
+"""`scripts/check_docs.py` 的四条对账要能在 pytest 里跑,不能只靠人记得执行。
 
 上一轮的教训:文档里的测试基线数(1188)和实测(1142)漂了一整轮没人发现,
 个人数据文件靠人肉记进清理清单 —— 这一轮加 `watchdog.log` 时才发现
@@ -6,7 +6,8 @@
 把"记得跑一下"变成测试,才是真的会跑。
 
 `--collect` 那一项(跑一次 pytest --collect-only)放在测试里会自引用地慢,
-所以测试只覆盖三条静态对账;收集数那项留在提交前手工跑脚本。
+所以测试只覆盖四条静态对账;慢的那两项(跑 pytest --collect-only 对基线数、
+让 setuptools 真生成一遍元数据)留在提交前手工跑脚本。
 """
 import importlib.util
 import sys
@@ -70,3 +71,23 @@ def test_archived_milestones_are_not_silently_dropped():
     newest_archived = rows[0].split()[1]                    # 如 v0.9.22
     assert newest_archived not in heads, f"{newest_archived} 两处都有行首 = 没搬干净"
     assert "v" + check_docs.version_from_source() in heads, "最近一轮被归档掉了"
+
+
+def test_pyproject_is_a_facade_not_a_second_source():
+    """项目元数据必须指向真源;写死了就会漂,而漂掉的版本号比没有更误导人。"""
+    assert check_docs.check_pyproject() == []
+
+
+def test_pyproject_check_bites_on_hardcoded_versions():
+    """防"检查器扫不到东西所以永远绿":把写死的版本/依赖喂给它必须报出来。"""
+    real = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    # ① 抄了一份版本号 → 红
+    assert any("写死了" in p for p in
+               check_docs.pyproject_problems(real + '\nversion = "0.9.99"\n'))
+    # ② 把 dynamic 摘掉 → 红(指向真源的那两条一起报)
+    no_dynamic = real.replace('dynamic = ["version", "dependencies"]', "")
+    got = check_docs.pyproject_problems(no_dynamic)
+    assert any('"version"' in p for p in got) and any('"dependencies"' in p for p in got)
+    # ③ 版本源改指到别处(比如指着一个不会更新的常量)→ 红
+    assert any("minicode.__version__" in p for p in check_docs.pyproject_problems(
+        real.replace('attr = "minicode.__version__"', 'attr = "minicode.__stale__"')))
