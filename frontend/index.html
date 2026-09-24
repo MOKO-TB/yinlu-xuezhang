@@ -2199,6 +2199,11 @@ function applyTheme(dark, persist) {
   if (persist) {
     try { localStorage.setItem("gcode-theme", dark ? "dark" : "light"); } catch (e) {}
   }
+  // 系统标题栏跟着走(p2):它仍是系统画的,只是底色/文字对齐界面,
+  // 那行字写的是当前工作区而不是又一遍「引路学长」。失败不影响界面。
+  if (window.pywebview && pywebview.api && pywebview.api.set_chrome) {
+    try { Promise.resolve(pywebview.api.set_chrome(dark)).catch(() => {}); } catch (e) {}
+  }
 }
 $("btnTheme").addEventListener("click", () => {
   applyTheme(!document.documentElement.classList.contains("dark"), true);

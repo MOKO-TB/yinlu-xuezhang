@@ -67,7 +67,16 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # 前端那句"桥在不在"的判定永远为假,静默退回浏览器授权条,
                             # 弹条这个 bug 装了包还在);get_skill_body 是同一轮补的
                             # 漏转发(桥里有、门面没接 → 桌面版点技能卡片只有 TypeError)
-                            "read_clipboard", "get_skill_body"),
+                            "read_clipboard", "get_skill_body",
+                            # v0.9.39 p2:标题栏染色 + 改字(漏 set_chrome = 深色界面顶上
+                            # 仍顶着一条白标题栏,用户点名的就是那一条;开关都不通,
+                            # 前端只会静默什么也不做)
+                            "set_chrome"),
+    # v0.9.39 p2:标题栏整模块。漏收 = 桥里那句 `from minicode import window_chrome`
+    # 在装好的包里 ImportError,而它被前端那个 try/catch 吞掉 → 表现为"改了个寂寞"。
+    "minicode.window_chrome": ("apply", "chrome_for", "blend", "colorref",
+                               "IMMERSIVE_DARK_MODE", "CAPTION_COLOR",
+                               "TEXT_COLOR", "BORDER_COLOR"),
     # v0.9.39 p1:剪贴板整模块。漏收 = 装好的包里右键粘贴永远走不到本机这条,
     # 那条「xx 想要查看复制到剪贴板的文本和图像」的横条照旧弹(功能"看起来在",
     # 只是每次都违和),所以连 bmp_from_dib 一起钉 —— 它是图片那半的唯一出口。

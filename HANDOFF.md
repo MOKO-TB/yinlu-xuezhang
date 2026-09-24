@@ -139,12 +139,14 @@
 - **提示语里点名的"下一步"必须真存在**(v0.9.39):`embed.detect()` 三处写着「跑 `scripts/fetch_embed_model.py` 下载权重」,而**那个脚本从来没写过**;《使用说明》第 26 条更进一步,把它说成"权重第一次用时才自动下载"。本轮补了脚本,并把第 26 条改成实话(装好的包里既没有 `scripts/` 也没有 `onnxruntime`,所以本地权重那条路**只给源码运行的同学**,包里的同学要么配 api 档、要么就接受"只有字面匹配")。纪律:**凡是"用户照着做就能解决"的句子,写之前要么真走一遍,要么至少 `ls` 一遍。**
 - **Windows 上写夹具要用 `write_bytes`**(v0.9.39):`write_text("你\n好\n")` 会翻成 `\r\n`,于是"钉 sha256"的测试自己先红 —— 红的是夹具,不是被测代码。
 - **盘符判断要带 lookbehind**(v0.9.39):`command_touches_outside_path` 会把 URL 里的 `p://e` 读成 `e:` 盘,于是每条网络命令都误报"要跑出工作区";修法是多要求前一个字符不是字母/点。
+- **"跟着 CSS 取色"不等于 CSS 里真有那个变量**(v0.9.39 p2):`window_chrome` 本想深色底色就读 `--bg`,而**深色那一档根本没覆盖 `--bg`**(`:root` 的 `#DCE8E4` 在深色下仍然是它 —— 页面靠暮色航拍照片铺底,那条只是"照片加载前的兜底")。照着变量名取会拿一面浅色当深色标题栏,而且没人报错。定版:深色底色取**深色界面真正在用的那块实底**(`html.dark .msg.assistant .body` 的 `rgba(9,16,24,.93)`),并把每一个常数的**来源字符串**写进 `tests/test_window_chrome.py` 去 index.html 里逐条对 —— 变量名对不上不算错,**那行字符串还在不在**才算。
+- **提交前没跑那条对账闸,文档基线就会漂着绿**(v0.9.39 p1→p2):p1 加了 15 项测试,提交时既没改 HANDOFF 的条数也没跑 `check_docs.py --collect`,于是文档写着 1550、树上实际 1565 而**全绿** —— 检查器没被调用,当然不会红。本轮 collect-only 实测 1592 时才撞上。纪律:`--collect` 是**每次提交前的动作**,不是收尾时补的。
 
 ## 5. 测试与验证(改完代码必须做)
 
 ```bash
 cd /d/game/mini-code
-./.venv/Scripts/python.exe -m pytest -q                    # 1550 个测试全绿(v0.9.39:重构分支 #78 这一批之后 `--collect-only` 实测 1550;上一次全量实跑 1540 passed / 1 skipped;约 330 s;与别人的 pytest/重 IO 并行时,网页版真实 socket 用例会饿死超时,别在机器忙时下结论)
+./.venv/Scripts/python.exe -m pytest -q                    # 1592 个测试全绿(v0.9.39 p2 标题栏之后 `--collect-only` 实测 1592;上一次全量实跑 1540 passed / 1 skipped;约 330 s;与别人的 pytest/重 IO 并行时,网页版真实 socket 用例会饿死超时,别在机器忙时下结论)
 #                                                           v0.9.37 再 +24:`tests/test_activity.py` 21→30(时刻配对、对不上号就不给时间、
 #                                                           轮次切分与「另有 N 次」取真数、停止=已中断≠在跑≠失败)+ 新增 `tests/test_monitor.py` 9 项
 #                                                           (默认收起、坏 JSON 不炸、白名单外的键丢掉、**只 patch 一段不覆盖别段**、桥两方法与门面转发)
@@ -161,6 +163,16 @@ cd /d/game/mini-code
 #                                                           自身形状、真删得掉、真删不掉好包、与 `mydata.TABLE` 的文件/目录口径一致、
 #                                                           扫描器不空转)+ `tests/test_docs_check.py` +2(pyproject 是门面不是第二份真相、
 #                                                           喂假文本必须红)= **1550**(`--collect-only` 实测 1550)。
+#                                                           v0.9.39 p1(右键粘贴走本机剪贴板)再 +15:新增 `tests/test_clipboard.py`
+#                                                           (BMP 偏移逐档、Pillow 自写 BMP 回验、text/image/空/读不到四种说法、
+#                                                           前端只调存在的桥方法逐名对账)= 1565。**那一批提交时既没改这里、
+#                                                           也没跑 `check_docs --collect`**,所以文档数漂了 15 条没人看见 ——
+#                                                           本轮 collect-only 实测才发现,补跑这条闸要在每次提交前做,不是事后。
+#                                                           p2(系统标题栏染色 + 改字)再 +27:新增 `tests/test_window_chrome.py`
+#                                                           (blend 手算、COLORREF 是 BGR、三色每个常数都追回 index.html 里那行 CSS、
+#                                                           apply() 逐项报账/被拒要看得见、无 windll 与无窗口只降级不抛、
+#                                                           门面转发、网页版拿不到、开机建窗口就用工作区名)= **1592**
+#                                                           (`--collect-only` 实测 1592,`check_docs.py --collect` 本轮实跑 ✓)。
 #                                                           注:v0.9.26 那行写的「1188」在现在的树上复现不出来 —— `--collect-only` 实测 HEAD 收集 **1117**,本轮 +25(test_schedule 42→67)= **1142**。基线以 collect-only 实测为准,别抄旧文档。
 #                                                           v0.9.28 再 +16:test_proactive 38→47、test_tray +1、新增 tests/test_docs_check.py 6 项 = 1158;
 #                                                           v0.9.29 再 +20:test_reminders 8→17、test_proactive 47→57、test_briefing 11→12 = **1178**
@@ -201,6 +213,13 @@ cd /d/game/mini-code
 #                                                           就是后端算的":标签来自 SCORE_LABELS、#moBody 逐字等于 weekly_review、
 #                                                           保存走桥、HELP_FACTS 里既没有给模型的转述规矩也没有任何 7 位以上数字、
 #                                                           「删除全部」第一次点不得叫 mood_clear。
+#                                                           v0.9.39 p2:`scripts/e2e_ui_v0939_p2.py` 16 项真 Chromium,钉的是
+#                                                           「前端有没有把当下主题报给本机」这条线:开机浅色报 [False]、
+#                                                           上次留下 dark 时 html.dark 在且报 [True](漏这一条就是用户看到的
+#                                                           深色界面顶一面白标题栏)、点「☀️ 浅色」翻成 [True,False]、
+#                                                           桥回答 rejected 时主题照样切完(装饰失败不拖界面下水)、
+#                                                           桥没有 set_chrome(网页版)一句错都不许有。
+#                                                           **颜色的真机效果这一台没验到**(非交互桌面站起不了窗口)—— 见 §6 第 22 条。
 ./.venv/Scripts/python.exe scripts/e2e_ui_v0934.py         # 右侧「本次会话」活动面板(真 Chromium,32 项):**payload 全部出自真 `bridge.get_activity()`** ——
 #                                                           `task` 真并行跑两个子代理、文件真写盘再**在页面开着的时候删掉**、错误真由 `edit_file` 本体报、
 #                                                           来源真由 `provenance.wrap()` 包。断的是"这一栏真能用":点开产出行确实叫到 `reveal_file`
@@ -320,12 +339,18 @@ cd /d/game/mini-code
 21. **用户点名的四件事 + 目录规范化(2026-09-24,重构分支 `D:\game\yinlu-agent`)**:原话「在 `D:\game\mini-code` 目录同级目录中再帮我创建一个新文件,我想要把现在的文件变成更规范、专业的文件夹形式,并在我这个成熟的智能体版本上,加入**向量检索、图片生成、OCR、多 agent 路由(这些功能我全部需要)**」,同一轮还问了「从你专业的角度考虑,我的智能体项目还有哪些地方不够专业」。两条拍板:**①`yinlu-agent` 只是重构分支,主线仍在 `D:\game\mini-code`;②模型权重不进包、用时下载,没权重 / 没 Key 时必须如实降级**。四件功能的落地与口径见 §2 的 v0.9.39 那一行。**仍然没做完的三件**:
     - **向量档的真实效果没验过**:权重一个都没下过(本机连 huggingface 的检索 API 都连不通,所以 `scripts/fetch_embed_model.py` 不预设任何仓库名、要用户自己给 `--repo`),`local` 后端还要本机装得到 `onnxruntime`。所以现在能讲的只有"缺后端时的闸门与降级文案是对的"(有测试钉着),**"语义召回比关键词准"目前没有本机证据**。
     - **api 档的文生图 / embeddings 端点一次都没真调过**(手上没有可用 Key):请求体与返回解析按公开格式写死 + 假 POST 钉形状,真端点第一次调用成不成,以工具回显的 status 与落盘字节数为准,不提前替它背书。
-    - **R｜目录规范化 + 单一事实源没动**:`pyproject` 做唯一版本源、消 `tools/registry.py` 与 `scripts/build_exe.py` 两处热点、`tests/` 分层、运行时文件 manifest 化、ruff / CHANGELOG / SECURITY / CONTRIBUTING —— 见任务 #78,动手前先读本条与 §3 第 11 条(版本号唯一来源)。
+    - **R｜目录规范化 + 单一事实源 → 第一批已完成并提交(`e693835`)**:`pyproject` 改成 dynamic 版本(attr 指 `minicode.__version__`,不再是第二份写死的号)、运行时文件清单收进 `minicode/state_files.py::SHIP_NEVER`(37 条,`check_docs.py` 拿它跟 `mydata.TABLE` 与 `build_exe.py` 清理清单对账)、测试基线由 `check_docs.py --collect` 跟实测比。**剩下没做完的**:`tools/registry.py`(987 行 / 40 个 Tool)按领域拆薄(#84)、ruff(#85,venv 里没装,要先决定装不装)、CHANGELOG / SECURITY / CONTRIBUTING(#86)、`tests/` 打 marker 分层(#87)—— 见任务 #84–#88。
+
+22. **用户点名的四件界面事 + ZCode 调研(2026-09-24,带四张截图 p1/p2/p3/p4)**:原话「顺便帮我修改一下这个bug,右键粘贴到对话框左上角显示这个提示希望不要出现太违和感了…第二个应用的最上面那一行与应用界面不符合…上面的工具堆太多了没有简洁性…这个仓库 https://github.com/zai-org/ZCode 看看还有没有功能可以添加的让我的agent更加完善实用」。两条拍板(AskUserQuestion 选的):顶栏 → **面板入口移到左侧栏**(Qoder/ZCode 那种左栏导航);标题栏 → **保留系统标题栏,只改色与文字**(不做无边框)。做完两件:
+    - **p1 右键粘贴的授权横条 → 已完成并提交(`b792758`)**:那条「http://127.0.0.1:25460 想要查看复制到剪贴板的文本和图像」是 `navigator.clipboard.read()/readText()` 触发的,遮是遮不住的(WebView2 画的),所以**根本不再调它** —— 新增 `minicode/clipboard.py` 用 ctypes 直接读 `CF_UNICODETEXT`/`CF_DIB`(位图补 14 字节 BMP 文件头,有 Pillow 出 PNG、没有出 BMP),桥与门面各一条 `read_clipboard`,前端「粘贴」优先问本机桥、`navigator.clipboard` 收进 `legacyPaste` 只当退路(**最坏情况等于改版前**,功能不会因为换路坏掉)。同轮顺手补了 `PublicApi.get_skill_body` 的漏转发,并给 `tests/test_clipboard.py` 加了一条**全局对账**(前端写出的每个 `pywebview.api.X` 必须在门面上存在)—— 这类洞从此不靠人眼。**本机实测留痕**:智能体所在 shell 挂在非交互桌面站,`OpenClipboard` 直接 `GetLastError()=5`(PowerShell `Get-Clipboard` 同样失败),所以"读不到"这条路是真撞过的,模块据此把"没打开成功"和"里面没东西"分成两种说法(最初合成一种,会让空剪贴板对用户谎称"正被别的程序占用")。
+    - **p2 系统标题栏 → 已完成**:新增 `minicode/window_chrome.py`,DWM 四条属性(`20` 深色 / `34` 描边 / `35` 底色 / `36` 文字)+ `SetWindowTextW` 把标题换成**当前工作区名**(与顶栏 📁 胶囊同一份 `ws.display_name` 口径;`gui_main.py` 建窗口时就直接用这个名字,不再闪一下「引路学长」)。三个色**不是另调一套**:全部由 `frontend/index.html` 里那几行 CSS 变量算出来(玻璃层叠在底色上,描边再叠一层 `--line`),`tests/test_window_chrome.py` 把每一个常数的**来源字符串**钉在 index.html 里 —— 界面改色而这里没跟,测试红。`apply()` 逐项报告系统接受/拒绝了哪几条,Win10 上被拒不伪装成成功。**边界:这台机器上没验到真染色** —— 开发机是 Win11 build 26100,但同一个非交互桌面站限制让临时探针连 `CreateWindowExW` 都没返回(45 s 被杀),所以"颜色对不对"目前只有算式与 CSS 来源两层保证,**下次开真窗口看一眼即知**(前端那一路有 `scripts/e2e_ui_v0939_p2.py` 16 项真 Chromium 钉着:开机就把深色/浅色报给本机、点主题会翻、桥拒绝或不存在时界面不受牵连)。
+    - **p3 顶栏工具太多 → 没动**(任务 #91):现状是顶栏 16 个平铺控件,方向是面板入口移进左栏。**这一条要动的是界面主体结构,单独一轮做,别夹在修 bug 的提交里**。
+    - **ZCode 调研(第 ④ 件)**:还没交清单 —— 用户问的是「看看还有没有功能可以添加的让我的 agent 更加完善实用」,要的是**能加什么的排序清单**,不是仓库摘要。落地项一个都没有,别当成已完成功能。
 
 ## 7. 新会话上手指南
 
 1. 读本文档 + `README.md`(能力/配置/命令全集)。
-2. 跑 `pytest -q` 确认基线(应为**全绿 1550 项**(v0.9.39 + #78 第一批;上一轮文档写的 1188 在现在的树上复现不出来,以 `--collect-only` 实测为准,别抄旧文档 —— 现在 `scripts/check_docs.py --collect` 会把这里写的条数和实测对一遍,漂了自己会红);若并行会话在改,先跑全量再动手)。注意**不要**带 `PYTHONIOENCODING=utf-8` 跑全量(会让 `test_kb_credibility` 的 subprocess 采集假红);但单跑 `check_frontend_js.py` 时**需要**该 env(GBK 控制台)。
+2. 跑 `pytest -q` 确认基线(应为**全绿 1592 项**(v0.9.39 + #78 第一批 + p1 剪贴板 + p2 标题栏;上一轮文档写的 1188 在现在的树上复现不出来,以 `--collect-only` 实测为准,别抄旧文档 —— 现在 `scripts/check_docs.py --collect` 会把这里写的条数和实测对一遍,漂了自己会红。**每次提交前都要跑它**:p1 那批就是提交时没跑,文档数漂了 15 条没人发现);若并行会话在改,先跑全量再动手)。注意**不要**带 `PYTHONIOENCODING=utf-8` 跑全量(会让 `test_kb_credibility` 的 subprocess 采集假红);但单跑 `check_frontend_js.py` 时**需要**该 env(GBK 控制台)。
 3. 改代码前**重读要编辑的文件**——本仓库有多个会话并行开发(web_crawl、school-qa、koubei-extract 技能与校园语料爬虫均为并行会话所加),编辑前用当前实际内容做锚点,改完跑全量测试。
 4. 相关文档:产品侧 `D:\game\yinlu-xuezhang\PLAN.md`(v2.0 冻结)与 `AGENT-PLAN.md`(用本 Agent 开发该项目的计划);产品知识库 JSON 数据源在 `D:\yy\yinlu-master\yinlu-master\`(已拷贝到本仓库 kb/)。
 5. 远端两个:`origin` = GitHub `MOKO-TB/yinlu-xuezhang`(**私有**,2026-09-13 从 `MOKO-TB/momo` 改名而来),`gitee` = `gitee.com/inkzero/momo`(**公开**)。注意 `branch.main.remote` 指向 gitee,所以 `git push` 不带参数推的是 gitee,推 GitHub 要显式写 `git push origin main`。

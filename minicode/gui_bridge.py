@@ -145,6 +145,10 @@ class PublicApi:
         """右键「粘贴」:读本机剪贴板(文本/图片),免掉 WebView2 那条授权提示。"""
         return self._b.read_clipboard()
 
+    def set_chrome(self, dark: bool) -> dict:
+        """开机与每次切主题报一次:系统标题栏跟着界面染色、写工作区名(p2)。"""
+        return self._b.set_chrome(dark)
+
     def set_notice_watch(self, enabled: bool) -> dict:
         """主动推荐开关:官网新通知看门狗。"""
         return self._b.set_notice_watch(enabled)
@@ -461,6 +465,8 @@ class Bridge:
         # 确认握手是一次一条的(前端只有一个弹窗):并行子代理同时要确认时
         # 靠这把锁排队,否则两个线程会互抢 event/choice,确认框对不上是谁在等。
         self._confirm_lock = threading.Lock()
+        # 标题栏(p2):前端报过一次主题之后就记着,切工作区时只改字不重染
+        self._chrome_dark: bool | None = None
         ui.confirm_handler = self.confirm_tool
         self.open_session()                  # 第一个会话
 
@@ -919,6 +925,8 @@ class Bridge:
                      **ws.entry(target, self.app_dir))
         self._push_sessions()
         self.ui.push("info", session=runner.key, text=f"工作区已切换:{target}")
+        # 标题栏那行字跟着换(p2):前端不重画主题,这里自己补一次
+        self._apply_chrome()
         return {"ok": True, "session": runner.key, "path": str(target)}
 
     def _close_runners(self) -> None:
@@ -1650,6 +1658,29 @@ class Bridge:
         except Exception:
             view = None
         return {"ok": ok, "msg": msg, "schedule": view}
+
+    # ------------------------------------------------------------ 标题栏(p2)
+
+    def _chrome_window(self):
+        return getattr(self.ui, "window", None)
+
+    def _apply_chrome(self, dark: bool | None = None) -> dict:
+        """把标题栏染成与界面同一套色,并把字换成当前工作区名。
+
+        标题用的就是顶栏那颗 📁 胶囊同一份口径(`get_info()["workspace_name"]`
+        走的就是 `ws.display_name`),两边写两个名字迟早会对不上;
+        主题没报过来之前只改字、不猜颜色。
+        """
+        from minicode import window_chrome
+        if dark is not None:
+            self._chrome_dark = bool(dark)
+        return window_chrome.apply(
+            self._chrome_window(), dark=dark,
+            title=ws.display_name(self.workspace, self.app_dir))
+
+    def set_chrome(self, dark: bool) -> dict:
+        """前端切主题(含开机那一次)时报给本机,让系统标题栏跟着变。"""
+        return self._apply_chrome(bool(dark))
 
     def read_clipboard(self) -> dict:
         """输入框右键菜单「粘贴」:本机直接读剪贴板,不弹浏览器那条授权横条。

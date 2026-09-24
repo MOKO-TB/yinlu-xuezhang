@@ -163,9 +163,13 @@ def main() -> None:
     # 前端是打包内置资源(_MEIPASS);缺失时在窗口内给出明确错误而不是 404
     frontend = resource_path("frontend", "index.html")
     api = bridge.public_api()  # 门面:只暴露方法,防自动化客户端遍历内部对象
+    # 标题栏写"此刻在哪个工作区"(p2):左栏顶部已经有「引路学长」了,顶上再写一遍
+    # 只是重复。用与 `get_info()["workspace_name"]` 同一条 `ws.display_name` 口径,
+    # 开机那一闪和之后桥里改的字才是同一个名字。
+    title = ws.display_name(workspace, app_path())
     if frontend.exists():
         window = webview.create_window(
-            APP_NAME,
+            title,
             str(frontend),
             js_api=api,
             width=1280, height=820,
