@@ -5659,7 +5659,8 @@ $("firstRun").addEventListener("click", (e) => {
 
 /* ---------------- 输入框右键菜单(v0.9.19) ----------------
    WebView2 的原生右键菜单在输入框里不生效,这里用页面自绘菜单兜底。
-   动作全在 #input 上就地执行(execCommand),不碰系统剪贴板以外的东西。 */
+   复制/剪切/撤销全在 #input 上就地执行(execCommand);v0.9.39 p1 起「粘贴」
+   优先问本机桥(pywebview.api.read_clipboard),不再为自家应用弹浏览器授权条。 */
 const ctxMenu = $("ctxMenu");
 let ctxSel = [0, 0];
 function hideCtxMenu() { ctxMenu.setAttribute("aria-hidden", "true"); }
@@ -5694,49 +5695,85 @@ ctxMenu.addEventListener("click", (e) => {
   else if (act === "undo") document.execCommand("undo");
   else if (act === "redo") document.execCommand("redo");
   else if (act === "paste") {
-    const pasteImage = () => {
-      // 剪贴板里是截图/图片:交给和拖拽同一条上传链路
-      if (!navigator.clipboard || !navigator.clipboard.read) {
-        document.execCommand("paste"); return;
-      }
-      navigator.clipboard.read().then(list => {
-        const job = [];
-        for (const it of list || []) {
-          const t = (it.types || []).find(x => x.startsWith("image/"));
-          if (t) job.push(it.getType(t).then(b => {
-            const ext = t.split("/")[1].replace("jpeg", "jpg");
-            return new File([b], `粘贴图片-${Date.now()}.${ext}`, { type: t });
-          }));
-        }
-        if (!job.length) { document.execCommand("paste"); return; }
-        Promise.all(job).then(files => uploadDroppedFiles(files, "正在读取剪贴板里的图片…"));
-      }).catch(() => document.execCommand("paste"));
+    const fillText = (txt) => {
+      const s = el.selectionStart || 0, en = el.selectionEnd || 0;
+      el.value = el.value.slice(0, s) + txt + el.value.slice(en);
+      el.setSelectionRange(s + txt.length, s + txt.length);
+      el.dispatchEvent(new Event("input"));
+      ok();
     };
-    // 优先异步剪贴板读文本;没有文本(或是图片)再走图片分支
-    if (navigator.clipboard && navigator.clipboard.readText) {
-      navigator.clipboard.readText().then(txt => {
-        if (txt) {
-          const s = el.selectionStart || 0, en = el.selectionEnd || 0;
-          el.value = el.value.slice(0, s) + txt + el.value.slice(en);
-          el.setSelectionRange(s + txt.length, s + txt.length);
-          el.dispatchEvent(new Event("input"));
-          ok();
-        } else pasteImage();
-      }).catch(pasteImage);
-    } else pasteImage();
+    /* 首选本机桥:窗口进程直接读 Win32 剪贴板(gui_bridge.read_clipboard)。
+       自家桌面应用粘自己刚复制的东西,不该以「http://127.0.0.1:xxxx 想要查看
+       复制到剪贴板的文本和图像 / 阻止 / 允许」那条横条出现(p1)。 */
+    const nativePaste = () => {
+      Promise.resolve(pywebview.api.read_clipboard()).then(r => {
+        if (r && r.text) fillText(r.text);
+        else if (r && (r.files || []).length)
+          uploadItems(r.files, "正在读取剪贴板里的图片…");
+        else if (r && r.source === "unavailable") legacyPaste();  // 真读不到才退回浏览器
+        else toast((r && r.msg) || "读不到剪贴板里的内容", true);
+      }).catch(legacyPaste);
+    };
+    /* 退路:浏览器异步剪贴板 API,弹条就是它触发的。只在"本机桥不在"(网页版、
+       非 Windows)或桥明确读不到时才走 —— 那时候读剪贴板确实是浏览器行为。 */
+    const legacyPaste = () => {
+      const pasteImage = () => {
+        // 剪贴板里是截图/图片:交给和拖拽同一条上传链路
+        if (!navigator.clipboard || !navigator.clipboard.read) {
+          document.execCommand("paste"); return;
+        }
+        navigator.clipboard.read().then(list => {
+          const job = [];
+          for (const it of list || []) {
+            const t = (it.types || []).find(x => x.startsWith("image/"));
+            if (t) job.push(it.getType(t).then(b => {
+              const ext = t.split("/")[1].replace("jpeg", "jpg");
+              return new File([b], `粘贴图片-${Date.now()}.${ext}`, { type: t });
+            }));
+          }
+          if (!job.length) { document.execCommand("paste"); return; }
+          Promise.all(job).then(files => uploadDroppedFiles(files, "正在读取剪贴板里的图片…"));
+        }).catch(() => document.execCommand("paste"));
+      };
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then(txt => txt ? fillText(txt) : pasteImage())
+          .catch(pasteImage);
+      } else pasteImage();
+    };
+    if (window.pywebview && pywebview.api && pywebview.api.read_clipboard) nativePaste();
+    else legacyPaste();
   }
   hideCtxMenu();
 });
 
 /* ---------------- 拖拽 / 粘贴文件进对话框 ----------------
    v0.9.19 拖拽,v0.9.22 粘贴图片(截图直接 Ctrl+V)。
-   取本地绝对路径在 WebView2 里不可靠,一律用 FileReader 读字节交给后端落 uploads/。 */
-function uploadDroppedFiles(files, label) {
+   取本地绝对路径在 WebView2 里不可靠,一律用 FileReader 读字节交给后端落 uploads/。
+   v0.9.39 p1:上传那一段拆成 uploadItems —— 本机剪贴板读出来的图片已经是字节,
+   不必再假造 File 走一遍 FileReader。两条入口共用同一个落盘出口。 */
+function uploadItems(items, label) {
   if (!window.pywebview || !pywebview.api || !pywebview.api.add_dropped_attachments) {
     return;                              // 网页版不开放本地文件上传
   }
   if (busy) { toast("有任务正在进行中", true); return; }
   if (editing) { toast("编辑重发时不支持新增附件,请先取消编辑", true); return; }
+  const list = (items || []).filter(x => x && x.name && x.b64);
+  if (!list.length) { toast("文件读取失败", true); return; }
+  if (label) toast(label);
+  return pywebview.api.add_dropped_attachments(JSON.stringify(list)).then(r => {
+    if (!r.ok) { toast(r.msg, true); return; }
+    if (r.errors && r.errors.length) toast(r.errors.join("; "), true);
+    const got = r.items || [];
+    if (!got.length) return;
+    attachments = attachments.concat(got);
+    renderAttachments();
+    if (!visionOn && got.some(a => a.kind === "image"))
+      toast("当前模型未登记看图能力,图片先以文件路径提供;"
+            + "点任务面板那个「纯文本」标签可强制发图");
+  }).catch(e => toast("上传失败:" + String(e).slice(0, 60), true));
+}
+
+function uploadDroppedFiles(files, label) {
   const list = Array.from(files || []);
   if (!list.length) return;
   const read = (f) => new Promise((res) => {
@@ -5750,21 +5787,8 @@ function uploadDroppedFiles(files, label) {
     fr.readAsArrayBuffer(f);
   });
   toast(label || "正在读取文件…");
-  Promise.all(list.map(read)).then(res => {
-    const items = res.filter(Boolean);
-    if (!items.length) { toast("文件读取失败", true); return; }
-    return pywebview.api.add_dropped_attachments(JSON.stringify(items)).then(r => {
-      if (!r.ok) { toast(r.msg, true); return; }
-      if (r.errors && r.errors.length) toast(r.errors.join("; "), true);
-      const got = r.items || [];
-      if (!got.length) return;
-      attachments = attachments.concat(got);
-      renderAttachments();
-      if (!visionOn && got.some(a => a.kind === "image"))
-        toast("当前模型未登记看图能力,图片先以文件路径提供;"
-              + "点任务面板那个「纯文本」标签可强制发图");
-    });
-  }).catch(e => toast("上传失败:" + String(e).slice(0, 60), true));
+  // 进度已经提示过了,交出去时不再重复一条(label 传 null)
+  Promise.all(list.map(read)).then(res => uploadItems(res, null));
 }
 
 (function () {

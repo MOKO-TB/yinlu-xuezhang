@@ -62,7 +62,18 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # v0.9.37:任务监控栏的开合与折叠偏好(漏 get_monitor_pref =
                             # 每次开机都回到默认收起,「记住我的选择」这句成了空话;
                             # 漏 set_monitor_pref = 点段头有反应但下次全忘)
-                            "get_monitor_pref", "set_monitor_pref"),
+                            "get_monitor_pref", "set_monitor_pref",
+                            # v0.9.39 p1:右键粘贴走本机剪贴板(漏 read_clipboard =
+                            # 前端那句"桥在不在"的判定永远为假,静默退回浏览器授权条,
+                            # 弹条这个 bug 装了包还在);get_skill_body 是同一轮补的
+                            # 漏转发(桥里有、门面没接 → 桌面版点技能卡片只有 TypeError)
+                            "read_clipboard", "get_skill_body"),
+    # v0.9.39 p1:剪贴板整模块。漏收 = 装好的包里右键粘贴永远走不到本机这条,
+    # 那条「xx 想要查看复制到剪贴板的文本和图像」的横条照旧弹(功能"看起来在",
+    # 只是每次都违和),所以连 bmp_from_dib 一起钉 —— 它是图片那半的唯一出口。
+    "minicode.clipboard": ("read_clipboard", "bmp_from_dib", "dib_to_file",
+                           "CF_UNICODETEXT", "CF_DIB", "TEXT", "IMAGE",
+                           "EMPTY", "UNAVAILABLE"),
     # v0.9.34:活动面板的数据源整模块(漏收 = 装好的包右边那一栏永远"读不出来")
     # v0.9.37:这一栏改叫「任务监控」,多了此刻与时间线两段(漏 timeline =
     # 那一整段消失,用户仍然只能看到五组按类别堆的行,看不到"先做了什么、

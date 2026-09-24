@@ -141,6 +141,10 @@ class PublicApi:
         """把拖进对话框的文件收进 uploads/(与 📎 选文件同一条落盘路径)。"""
         return self._b.add_dropped_attachments(files_json)
 
+    def read_clipboard(self) -> dict:
+        """右键「粘贴」:读本机剪贴板(文本/图片),免掉 WebView2 那条授权提示。"""
+        return self._b.read_clipboard()
+
     def set_notice_watch(self, enabled: bool) -> dict:
         """主动推荐开关:官网新通知看门狗。"""
         return self._b.set_notice_watch(enabled)
@@ -308,6 +312,16 @@ class PublicApi:
     def get_skills(self) -> dict:
         """技能面板:内置/应用/工作区三个渠道里的技能清单。"""
         return self._b.get_skills()
+
+    def get_skill_body(self, name: str) -> dict:
+        """技能详情:点开一张技能卡片时取那份 SKILL.md 全文。
+
+        这一条转发是 v0.9.39 补的洞:`Bridge.get_skill_body` 早就在,门面漏了
+        一行,于是桌面版点技能卡片只会得到一句「读取技能失败:TypeError …」。
+        `tests/test_clipboard.py::test_frontend_only_calls_api_that_exist` 现在
+        逐名对账,这类"桥有、门面没接"的静默坏掉不指望人眼发现。
+        """
+        return self._b.get_skill_body(name)
 
     def get_skill_channels(self) -> dict:
         """技能面板「渠道」tab:技能目录的存在状态与各自技能数。"""
@@ -1636,6 +1650,15 @@ class Bridge:
         except Exception:
             view = None
         return {"ok": ok, "msg": msg, "schedule": view}
+
+    def read_clipboard(self) -> dict:
+        """输入框右键菜单「粘贴」:本机直接读剪贴板,不弹浏览器那条授权横条。
+
+        返回 {ok, source, text, files, msg};files 已是 [{name, b64}],前端可以
+        原样交给下面那个 add_dropped_attachments,不用再经 FileReader 绕一圈。
+        """
+        from minicode import clipboard
+        return clipboard.read_clipboard()
 
     def add_dropped_attachments(self, files_json: str = "[]") -> dict:
         """把拖进对话框的文件落进工作区 uploads/(与点 📎 选文件同一条路径)。
