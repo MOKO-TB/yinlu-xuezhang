@@ -5,7 +5,6 @@
 绝不能什么都不做。
 """
 import json
-import os
 import time
 
 import pytest

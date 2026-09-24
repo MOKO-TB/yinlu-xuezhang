@@ -466,7 +466,8 @@ def create_server(config: Config, workspace: Path, host: str = "0.0.0.0",
     handler = type("BoundHandler", (Handler,), {"app": app})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True
-    httpd.web_app = app                    # noqa: attribute-defined-outside-init
+    # 把 app 挂在 httpd 上:关停时要靠它找回 sweeper(有意为之,不是漏写 self)
+    httpd.web_app = app
     app.start_sweeper()
     return httpd
 

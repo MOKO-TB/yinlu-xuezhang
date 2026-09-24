@@ -1,8 +1,7 @@
 """长期记忆测试:保存/列出/检索/忘记/去重/上限/提示词注入。"""
-from pathlib import Path
 
 from minicode.memory import (list_entries, load_entries, memory,
-                             memory_path, prompt_section, save_entry)
+                             memory_path, prompt_section)
 from minicode.tools.base import ToolContext
 
 

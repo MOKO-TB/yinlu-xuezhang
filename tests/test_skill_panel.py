@@ -6,7 +6,6 @@
   - add_skill:把用户填的表单落盘成 SKILL.md
 """
 
-import pytest
 
 from minicode import skills as sk
 from minicode.gui_bridge import create_app

@@ -35,8 +35,7 @@ if str(ROOT) not in sys.path:                    # 支持从任意目录调用
 
 from minicode.tools.crawl import (KB_MIN_CONTENT, _md_text,  # noqa: E402
                                   _plain_text_len, _slug, _write_kb,
-                                  DEFAULT_CUT_MARKERS, extract_body,
-                                  strip_boilerplate)
+                                  DEFAULT_CUT_MARKERS, extract_body)
 
 DEFAULT_CONFIG = ROOT / "scripts" / "school_topics.json"
 PAGE_DELAY = 0.6

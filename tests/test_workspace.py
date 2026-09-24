@@ -24,6 +24,11 @@ from minicode.session import Session, list_sessions
 
 # --------------------------------------------------------------------- 替身
 
+# 整文件打 slow:实测 37 s(2026-09-25 --durations=0)—— 慢在真线程/
+# 真 socket/真超时,不是算法。日常只跑 `pytest -m "not slow"` 时它会被跳过。
+pytestmark = pytest.mark.slow
+
+
 class FakeWindow:
     """捕获 evaluate_js 推给前端的事件。"""
 
@@ -426,7 +431,7 @@ def test_pick_workspace_cancel(tmp_path, monkeypatch):
         def create_file_dialog(self, kind, **kwargs):
             return None            # 用户点了取消
 
-    ui.window = window = Win()
+    ui.window = Win()
     assert bridge.pick_workspace() == {"ok": False, "msg": "已取消"}
 
 

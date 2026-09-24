@@ -4,7 +4,6 @@
 deepseek-v4-flash)真实抓下来的 —— 探测的解析规则就是照着它写的,所以用
 原文而不是编造的文本做回归。
 """
-import json
 import time
 
 from minicode import model_catalog, model_probe

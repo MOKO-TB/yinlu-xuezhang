@@ -39,7 +39,7 @@ from minicode.paths import (APP_DIR, SESSIONS_DIR, diagnostics as paths_diagnost
                             resource_path)
 from minicode.permission import MODE_LABELS, PERMISSION_MODES
 from minicode.sandbox import SandboxState, classify_path, policy_from_raw, policy_to_raw
-from minicode.session import (Session, export_filename as session_export_name,
+from minicode.session import (export_filename as session_export_name,
                               list_sessions,
                               search_logs as search_session_logs,
                               to_markdown as session_to_markdown)
@@ -648,7 +648,7 @@ class Bridge:
         load_skills 是先到先得(应用目录压过工作区同名),所以渠道归属按
         skill_dirs 的顺序反推;正文不回传(点开详情时按路径读,保持轻量)。
         """
-        from minicode.skills import describe_channels, find_skill
+        from minicode.skills import describe_channels
         dirs = skill_dirs(self.workspace)
         labels = {c["key"]: c["label"] for c in describe_channels(self.workspace)}
         skills: list[dict] = []

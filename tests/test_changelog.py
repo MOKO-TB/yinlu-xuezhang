@@ -4,10 +4,12 @@
 很多次的装饰:手抄的变更日志一定会漂,而且漂了没人看得见。所以生成逻辑放在
 `scripts/gen_changelog.py`,这里钉两件事:
 
-1. 文件内容 == 脚本现在从 git log 生成出来的内容(改了提交没重生成 = 红)。
+1. 文件内容 == 脚本从**它尾注里那个提交**生成出来的内容(内容被手改过 = 红;
+   比 HEAD 落后不算红,尾注写清收到哪儿了 —— 理由见下面第一条测试的 docstring)。
 2. 生成器的判定本身咬得住(喂假日志:没版本标记的、一行两个版本的、顺序)。
 """
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -25,10 +27,23 @@ CHANGELOG = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
 # ---------------- 1. 文件与 git log 对得上 ----------------
 
-def test_changelog_file_matches_git_log():
-    """防"提交了新的一版,变更日志还停在上一版"。git 不在就抛错,不许静默跳过。"""
-    assert CHANGELOG == gen.generate(), \
-        "CHANGELOG.md 漂了:跑 `python scripts/gen_changelog.py` 重新生成"
+def test_changelog_matches_the_commit_it_says_it_was_made_from():
+    """文件必须与**它自己尾注里那个提交**对得上;git 不在就抛错,不许静默跳过。
+
+    为什么不是"与 HEAD 对得上":任何标题里点了版本号的提交,提交完成后都会让
+    刚生成的那份 CHANGELOG 少它自己那一行 —— 那条断言永远红。尾注写清"收到哪个
+    提交为止",落后就不是漂(跑一次脚本即推到最新),而内容被手改过仍然会红。
+    """
+    m = re.search(r"生成自 git 提交 ([0-9a-f]+)", CHANGELOG)
+    assert m, "CHANGELOG.md 少了「生成自 git 提交 …」尾注"
+    assert CHANGELOG == gen.generate(m.group(1)), \
+        f"CHANGELOG.md 与它记的提交 {m.group(1)} 对不上:跑 `python scripts/gen_changelog.py`"
+
+
+def test_regenerating_from_head_picks_up_newer_commits():
+    """反向钉一下:重跑到 HEAD 时,尾注必须跟着走到 HEAD(否则"落后"永远查不出来)。"""
+    head = gen.short_sha()
+    assert gen.generate(head).endswith(f"生成自 git 提交 {head};此后的提交还没收进来 -->\n")
 
 
 def test_changelog_actually_covers_the_history():

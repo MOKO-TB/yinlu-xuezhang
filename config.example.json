@@ -22,6 +22,7 @@
   "request_timeout_seconds": 300,
   "turn_time_limit_seconds": 1800,
   "subagent_time_limit_seconds": 600,
+  "feedback_recall": true,
   "context_window": 131072,
   "compact_at_ratio": 0.7,
   "vision": false,

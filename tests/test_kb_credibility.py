@@ -13,7 +13,7 @@ import pytest
 
 from minicode import kb
 from minicode.kb import (
-    CRAWLED_UNVERIFIED, crawl_credibility, host_is_trusted, kb_dirs,
+    CRAWLED_UNVERIFIED, crawl_credibility, host_is_trusted,
 )
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "fix_kb_credibility.py"

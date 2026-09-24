@@ -1,5 +1,4 @@
 """思考档位:能力表、请求参数编码与非法输入归档。"""
-import json
 
 from minicode import reasoning as rz
 
@@ -225,7 +224,6 @@ def test_confirm_unchanged(tmp_path):
 
 
 def test_config_loads_new_modes(tmp_path):
-    import json as _json
     from minicode.config import _config_from_raw
     raw = {"providers": [], "permission_mode": "accept_edits"}
     assert _config_from_raw(raw).permission_mode == "accept_edits"

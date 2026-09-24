@@ -4,7 +4,6 @@
 永久短链 mp.weixin.qq.com/s/xxx)、httpx 直接抓搜索页会命中 antispider、
 环境异常页的识别。
 """
-import re
 
 from scripts.crawl_wx_topics import (extract_permanent_link,
                                      extract_real_link, parse_sogou_results,

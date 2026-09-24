@@ -29,7 +29,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:                    # 支持从任意目录调用

@@ -36,7 +36,7 @@ from minicode.session import Session
 from minicode.tools.base import Tool, ToolContext
 
 if TYPE_CHECKING:  # 避免循环导入,运行时才用到这些类型
-    from minicode.ui import TerminalUI
+    pass
 
 MAX_SUB_STEPS = 20        # 子代理步数上限(比主 Agent 小)
 REPORT_LIMIT = 6000       # 单个子代理报告回填给主对话的截断长度

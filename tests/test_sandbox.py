@@ -168,6 +168,7 @@ def test_resolve_path_outside_allowed_by_policy(ws):
     assert resolve_path(ctx, str(target)) == target.resolve()
 
 
+@pytest.mark.slow      # 真等 5 s 超时:这条用例的耗时就是被测行为
 def test_shell_timeout_clamped_by_sandbox(ws):
     from minicode.tools.shell import bash
     ctx = _ctx(ws, SandboxPolicy(timeout_seconds=1))

@@ -1,2 +1,5 @@
 pyinstaller>=6.0
 pillow>=10.0
+# 只用于静态检查(#85):`python -m ruff check .`,规则见 pyproject.toml 的 [tool.ruff]。
+# **不进 requirements.txt** —— 运行时一个字节都不需要它,装好的包里也没有。
+ruff>=0.16

@@ -19,6 +19,11 @@ from minicode.web_server import DailyCounter, RateLimiter, create_server
 # ---------------------------------------------------------------- 夹具
 
 
+# 整文件打 slow:实测 51 s(2026-09-25 --durations=0)—— 慢在真线程/
+# 真 socket/真超时,不是算法。日常只跑 `pytest -m "not slow"` 时它会被跳过。
+pytestmark = pytest.mark.slow
+
+
 class FakeLLM:
     """一次回合直接给出正文;可指定多轮脚本。"""
 

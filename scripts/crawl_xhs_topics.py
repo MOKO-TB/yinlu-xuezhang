@@ -44,7 +44,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from minicode.tools.crawl import _slug  # noqa: E402
 
 DEFAULT_CONFIG = ROOT / "scripts" / "xhs_topics.json"
 AUTOMATION_DIR = ROOT / ".automation"
@@ -170,7 +169,6 @@ def parse_initial_state(html: str) -> dict:
 
 def _kb_entry(note: dict, card: dict, topic: str, keyword: str) -> dict:
     title = note.get("title") or card["title"]
-    tags = [t for t in note.get("tags") or [] if t][:5]
     parts = [f"小红书笔记:《{title}》"]
     if note.get("desc"):
         parts.append(f"正文:{note['desc'][:600]}")
@@ -299,7 +297,7 @@ async def crawl_keyword(page, kwcfg: dict, limit: int, dry_run: bool,
             await asyncio.sleep(1)
         cards = parse_search_items(search_payload)[:limit]
         if not cards:
-            _log(f"    搜索 0 条(登录态失效或风控,重跑 --login)")
+            _log("    搜索 0 条(登录态失效或风控,重跑 --login)")
             return 0, 1
         _log(f"    搜索结果 {len(parse_search_items(search_payload))} 条,取前 {len(cards)} 条")
         for card in cards:

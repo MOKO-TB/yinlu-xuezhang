@@ -109,10 +109,10 @@ def _serve(directory: Path):
 
     handler = partial(_QuietHandler, directory=str(directory))
     # 随机端口可能撞上 Chromium 的 unsafe port 黑名单(66xx 一带):不在禁区才用。
-    # 逐次创建再关闭会把候选端口打进 TIME_WAIT,越试越少 —— 这里先选号再长期持有。
+    # 探测用的 socket 立刻就关;选中那个端口后由 ThreadingHTTPServer 当场绑住并
+    # 一直持有到测试结束(所以候选端口不会因为反复探测被 TIME_WAIT 吃光)。
     import socket
     port = None
-    sock = None
     for _ in range(200):
         probe = socket.socket()
         probe.bind(("127.0.0.1", 0))

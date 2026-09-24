@@ -20,6 +20,11 @@ from minicode.session import Session, export_filename, search_logs, to_markdown
 
 # ---------------------------------------------------------------- 夹具
 
+# 整文件打 slow:实测 37 s(2026-09-25 --durations=0)—— 慢在真线程/
+# 真 socket/真超时,不是算法。日常只跑 `pytest -m "not slow"` 时它会被跳过。
+pytestmark = pytest.mark.slow
+
+
 class FakeLLM:
     def __init__(self, turns=None):
         self.turns = list(turns or [])

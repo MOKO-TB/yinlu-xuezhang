@@ -220,7 +220,6 @@ def test_local_result_not_wrapped(tmp_path):
 
 def test_truncation_happens_before_wrapping(tmp_path):
     """先截后包:超长内容也必须留有结束标记。"""
-    from minicode.config import Config
     big = "啊" * 5000
     agent, llm, ui = _agent(tmp_path, lambda ctx: big, trust="external")
     agent.ctx.config.max_output_chars = 300

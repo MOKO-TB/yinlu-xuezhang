@@ -521,6 +521,15 @@ def timeline(messages, workspace=None, live=None, busy=True) -> dict:
     for row in rows:
         by_turn.setdefault(row["turn"], []).append(row)
     turns = []
+    # 「×N 未命中」:同一个查询词在可见上下文里第几次搜空。计数**不在这里另算一份**
+    # —— 与工具结果末尾那句(B0)共用 `feedback_recall.empty_hits` 那一次扫描,
+    # 两边各算一次迟早对不上(那就是"聊天里说没搜到、监控栏写着搜到了")。
+    try:
+        from minicode import feedback_recall
+        empty_marks = feedback_recall.empty_hits_by_call(messages)
+        mark_from = feedback_recall.MARK_FROM
+    except Exception:                 # 回灌坏了不该让整栏画不出来
+        empty_marks, mark_from = {}, 2
     for n, items in sorted(by_turn.items(), reverse=True):
         counts = {"running": 0, "failed": 0, "stale": 0}
         for r in items:
@@ -539,6 +548,9 @@ def timeline(messages, workspace=None, live=None, busy=True) -> dict:
             # 就不显示时间。宁可少一列,不许拿"现在"凑一个。
             r["time"] = _clock(r.get("start"))
             r["dur_text"] = f"{r['dur']}s" if r.get("dur") is not None else ""
+            hits = empty_marks.get(r.get("cid"))
+            if hits and hits >= mark_from:
+                r["repeat_text"] = f"×{hits} 未命中"
             for k in ("args", "result", "cid", "raw", "turn_title", "end", "dur"):
                 r.pop(k, None)
         turns.append({"n": n, "title": title,

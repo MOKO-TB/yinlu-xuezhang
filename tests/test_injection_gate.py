@@ -11,7 +11,7 @@ from minicode.config import Config
 from minicode.llm import AssistantTurn, ToolCall
 from minicode.permission import ALLOW, ASK, REJECT, PermissionGate, _same_site
 from minicode.sandbox import (
-    BLOCKED, INSIDE, SECRET, SandboxPolicy, SandboxState,
+    BLOCKED, INSIDE, SandboxPolicy, SandboxState,
     classify_path, command_hits_credential,
 )
 from minicode.tools.base import Tool, ToolContext

@@ -11,7 +11,6 @@ kb/school-calendar.json 就能更新,不必重跑爬虫。加载优先 exe 旁�
 from __future__ import annotations
 
 import json
-import time
 from datetime import date, timedelta
 from pathlib import Path
 

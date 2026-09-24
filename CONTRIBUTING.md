@@ -19,23 +19,35 @@ Windows 是这个项目唯一的运行平台(托盘、桌面通知、教务导�
 ## 改完之后要跑的四件事
 
 ```bash
-python -m pytest -q                                  # ① 全量测试
-python scripts/check_docs.py --collect               # ② 文档/数据边界对账(慢十几秒)
-python scripts/check_frontend_js.py                  # ③ 前端内联 JS 语法(需要 UTF-8 控制台)
-python scripts/gen_changelog.py                      # ④ 重新生成 CHANGELOG.md
+python -m pytest -m "not slow" -q                    # ① 快跑一遍(实测 106 s)
+python -m ruff check .                               # ② 静态检查(规则在 pyproject 的 [tool.ruff])
+python scripts/check_docs.py --collect               # ③ 文档/数据边界对账(慢十几秒)
+python scripts/check_frontend_js.py                  # ④ 前端内联 JS 语法(需要 UTF-8 控制台)
+python scripts/gen_changelog.py                      # ⑤ 重新生成 CHANGELOG.md
+python -m pytest -q                                  # 提交前再跑一次**全量**(实测 ~350 s)
 ```
 
-- **① 不要带 `PYTHONIOENCODING=utf-8` 跑全量** —— 那会让 `test_kb_credibility` 的
-  subprocess 采集假红。反过来,**③ 需要**这个环境变量,否则 GBK 控制台读不动中文。
+- **① 平时不要跑全量**:耗时大户都打了 `slow` 标记(名单与秒数是量出来的,写在
+  `pytest.ini` 里 —— 五个文件占全量 342 s 里的 240 s)。`tests/test_markers.py`
+  钉住"快车道里一项都不许来自那五个文件",所以忘了打标会被红告诉你在哪。
+- **①② 不要带 `PYTHONIOENCODING=utf-8` 跑 pytest** —— 那会让 `test_kb_credibility`
+  的 subprocess 采集假红。反过来,**④ 需要**这个环境变量,否则 GBK 控制台读不动中文。
   这种坑都写在脚本自己的 docstring 里,别只记在脑子里。
-- ② 是七道闸(名字就是它打印出来的那七行):版本号一致、个人数据三处同步、
+- **② 只开"报出来就是真问题"那几条**(未用导入/未用变量、裸 except、可变默认参数、
+  闭包引用循环变量),**不开 E501、不用 `ruff format`**:这个仓库的中文长描述与"为什么
+  长这样"的注释是内容,让工具去折行只会把每轮 diff 变成一片空白改动。要改规则就在
+  `pyproject.toml` 里写清为什么 —— `tests/test_lint_gate.py` 盯着规则集与放行清单,
+  偷偷调松会红。ruff 是 **dev 依赖**,不进 `requirements.txt`、不进安装包。
+- ③ 是七道闸(名字就是它打印出来的那七行):版本号一致、个人数据三处同步、
   不外发清单自洽、HANDOFF 长度、pyproject 单一事实源,加 `--collect` 才跑的两项
   —— 测试基线条数、元数据真算得出来(让 setuptools 真生成一遍 METADATA)。
   **它红了通常是文档漂了,不是代码坏了** —— 先看报的哪一句。
-- ④ 是因为 `CHANGELOG.md` 由 git log 生成,`tests/test_changelog.py` 会核对它有没有漂。
+- ⑤ 是因为 `CHANGELOG.md` 由 git log 生成,`tests/test_changelog.py` 会核对它有没有漂。
+  它比对的是**文件自己尾注里那个提交**,不是 HEAD —— 否则任何点了版本号的提交都会
+  让自己刚生成的那份立刻少一行(那条断言会永远红)。
 
-`tests/` 现在有一千多项,全量跑一次约 5 分钟。**当前基线数只写在 `HANDOFF.md` §5**
-(那个数由对账闸跟 `--collect-only` 实测比),别抄进你自己的文档或提交信息里。
+**当前基线数只写在 `HANDOFF.md` §5**(那个数由对账闸跟 `--collect-only` 实测比),
+别抄进你自己的文档或提交信息里。
 
 ## 真点击的回归(e2e)
 
@@ -62,6 +74,9 @@ chromium、没有 `chromium_headless_shell`,所以那个 helper 找不到可执�
 | 依赖 | `requirements.txt` | 同上 |
 | 绝不能随包外发的本机文件 | `minicode/state_files.py::SHIP_NEVER` | `check_docs.py`(还要 `.gitignore` 盖住) |
 | 工具调用的"一句话说法"与"成没成" | `minicode/toolsum.py` | `tests/test_tool_outcome.py` 扫全仓库不许出现第二份字面量 |
+| "知识库里没查到"这句话 | `minicode/kb.py::NO_HIT_TEXT`(`is_no_hit` 判它) | `tests/test_feedback_recall.py` —— 回灌读的是文本,文案一改而判据没跟,回灌会**静默失灵** |
+| 反复搜空 / 差评同类问题的判据与计数 | `minicode/feedback_recall.py`(一次扫描 `empty_hits`,相似度接 `memory.is_same_memory`) | 同上:监控栏那个「×N」与工具回话末尾那句必须同一个数 |
+| 40 个内置工具的**先后顺序** | `minicode/tools/registry.py`(内容在六份 `catalog_*.py`) | `tests/test_registry_split.py`(顺序逐字钉、漏装配/重复装配/热点回潮都会红) |
 | 打包后 exe 必须还有的内部符号 | `scripts/check_frozen_version.py::TARGETS` | `tests/test_frozen_targets.py`(针本身)+ 构建后跑脚本 |
 | 包内《使用说明.txt》 | `scripts/build_exe.py::write_user_files` | 见下一节 |
 | 里程碑流水账 | `HANDOFF.md` §2 + `docs/handoff/milestones.md` | `check_docs.py` 盯行数与归档完整性 |

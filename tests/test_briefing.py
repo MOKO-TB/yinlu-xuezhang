@@ -4,7 +4,6 @@
 weather.refresh_async 钉成空操作(简报绝不该当场等网络)。
 """
 import re
-import time
 from datetime import date, timedelta
 
 import pytest

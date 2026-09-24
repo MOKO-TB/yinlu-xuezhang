@@ -5225,6 +5225,8 @@ function actTlRowEl(item) {
   const bits = [];
   if (item.time) bits.push(item.time);                 // 没记到时刻 = 不显示,不拿刷新那一刻凑
   if (item.dur_text) bits.push("用时 " + item.dur_text);
+  // 「×N 未命中」由后端从会话消息里数出来(与工具结果末尾那句同一次扫描),前端不自己数
+  if (item.repeat_text) bits.push(item.repeat_text);
   if (bits.length) mid.appendChild(actEl("act-s", bits.join(" · ")));
   row.appendChild(actEl({ cls: "act-dot" }));
   row.appendChild(mid);

@@ -1,8 +1,7 @@
 """计划模式测试:写入/读取/更新/解析/校验 + 面板状态与「一键派发」指令。"""
-import json
 
 from minicode.planning import (blocked_steps, dispatch_text, notify_plan,
-                               parse_plan, plan, plan_path, plan_state,
+                               parse_plan, plan, plan_state,
                                ready_steps, render_plan)
 from minicode.tools.base import ToolContext
 
@@ -61,7 +60,7 @@ def test_update_marks_done_and_counts(tmp_path):
 def test_update_all_done_message(tmp_path):
     ctx = _ctx(tmp_path)
     _write_call(ctx, goal="小任务", steps=[{"title": "唯一一步"}, {"title": "第二步"}])
-    r1 = plan(ctx, "update", step=1, status="done")
+    plan(ctx, "update", step=1, status="done")   # 要的是副作用,这一条不断言返回值
     r2 = plan(ctx, "update", step=2, status="done")
     assert "2/2 完成" in r2 and "全部步骤已完成" in r2
 

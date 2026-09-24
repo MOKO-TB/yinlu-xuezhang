@@ -5,7 +5,6 @@
 - 向量后端没配置时,任何输出都不许出现"语义检索已生效"的字样;
 - 相似度没过闸门的条目不能被当成命中。
 """
-import json
 
 from minicode import embed, kb as kbmod, retrieval
 from minicode.kb import KbEntry, format_results, search_hybrid

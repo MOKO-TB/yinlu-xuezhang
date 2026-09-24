@@ -51,7 +51,7 @@ def apply_context_menu_settings(window) -> bool:
     for view in _webview2_controls(window):
         state = {"ok": False}
 
-        def _apply():
+        def _apply(view=view, state=state):   # 绑住这一轮的控件(B023)
             core = getattr(view, "CoreWebView2", None)
             if core is None:
                 return

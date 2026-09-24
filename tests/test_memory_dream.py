@@ -5,9 +5,9 @@ import pytest
 
 from minicode import config as config_mod
 from minicode.memory import (
-    CATEGORIES, MemoryEntry, dedupe_entries, dream, dream_all, global_memory_path,
-    is_same_memory, list_entries, load_entries, load_from, memory, memory_path,
-    prompt_section, save_entry, save_to, similarity,
+    MemoryEntry, dedupe_entries, dream, dream_all, global_memory_path,
+    is_same_memory, load_entries, load_from, memory, memory_path,
+    prompt_section, save_to, similarity,
 )
 from minicode.tools.base import ToolContext
 

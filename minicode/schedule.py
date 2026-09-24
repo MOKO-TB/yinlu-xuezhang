@@ -1070,7 +1070,7 @@ def schedule_prompt_section() -> str:
                 "之后「今天有什么课」这类问题不必再看图。截图看不清就如实请他复制成文字。\n")
     wk = week_of()
     today = date.today()
-    lines = [f"\n# 个人课表(已登记,存本机)",
+    lines = ["\n# 个人课表(已登记,存本机)",
              f"- 第 1 周周一 = {data.get('term_start')}" +
              (f";今天(周{'一二三四五六日'[today.weekday()]})是第 {wk} 周" if wk else ";今天不在学期内")]
     lines.append("- 今天日程:\n" + format_day(today, data))

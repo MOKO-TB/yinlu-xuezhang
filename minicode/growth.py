@@ -51,6 +51,20 @@ def normalize_query(query: str) -> str:
     return re.sub(r"[\s\W\u3000-\u303f]+", "", str(query or ""), flags=re.UNICODE).lower()
 
 
+def within_days(ts, cutoff_epoch: float) -> bool:
+    """一条记录的时间戳是否还在窗口内(`ts` 是本模块写出去的那种 `%F %T` 字符串)。
+
+    时间字段坏了宁可算"在窗口内"(多显示一条),也不静默丢掉 —— 这条口径原来是
+    `scripts/review_kb_growth.py` 里的私有函数,B1 也要用同一份,所以搬到这里当
+    唯一真相(脚本改成调它)。
+    """
+    try:
+        t = time.mktime(time.strptime(str(ts or "")[:19], "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return True
+    return t >= cutoff_epoch
+
+
 def log_kb_gap(query: str, reason: str = "no-hit") -> bool:
     """search_knowledge 未命中时登记一条;同一天同一查询只记一次。
 

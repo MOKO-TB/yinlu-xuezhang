@@ -4,7 +4,6 @@
 发布日期在正文容器之外(所以只能从整页 HTML 取)、导航/页脚清理。
 """
 import json
-import re
 
 from minicode.tools.crawl import extract_body, strip_boilerplate
 from scripts.crawl_school_topics import (_attachment_names,

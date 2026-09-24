@@ -33,3 +33,33 @@ include = ["minicode*"]
 [tool.setuptools.dynamic]
 version = { attr = "minicode.__version__" }
 dependencies = { file = ["requirements.txt"] }
+
+# ---------------------------------------------------------------- ruff(#85)
+# 只开"报出来就是真问题"那几条,**不做格式化、不重排代码**:这个仓库的注释与
+# 中文长描述是内容,不是排版噪声,让工具去折行只会把每轮 diff 变成一片空白改动。
+# 所以:E501(行太长)不开;`ruff format` 不用;`--fix` 只在你逐条看过之后手动跑。
+[tool.ruff]
+target-version = "py310"
+extend-exclude = ["dist", "build", "scripts/library_opac"]
+
+[tool.ruff.lint]
+select = [
+    "F",      # pyflakes 全套:未用导入/变量、未定义名、重复参数、return 在函数外
+    "E722",   # 裸 except(会连 KeyboardInterrupt 一起吞,停止按钮就废了)
+    "B006",   # 可变默认参数(list/dict 当默认值 = 跨调用共享同一份状态)
+    "B023",   # 闭包引用循环变量(本仓库并行派发子代理时正是靠 `lambda s=spec` 避开的)
+    "B002",   # 一元 +(x 上的 +)在 Python 里是空操作,通常是笔误
+]
+# 不开 SIM108(能用三元却写了 if/else):本轮唯一一处报点在 `reminders.py`,
+# 它建议的三元比原来那两行更难读 —— 风格建议不是"真问题",开了只会逼人加 noqa。
+# 不在这里全局 ignore 任何规则:未用导入(F401)是真问题,只在**确实需要重导出**
+# 的那几个文件里按 per-file-ignores 放行(下面),放行要写清为什么。
+
+[tool.ruff.lint.per-file-ignores]
+# `registry.py` 只做装配:六个目录模块导进来就是为了在列表里 `*` 开,ruff 看不出这层用法。
+# `minicode/__init__.py` 的 `__version__` 由 pyproject 的 dynamic 读,不是给人 import 的。
+"minicode/tools/registry.py" = ["F401"]
+"minicode/__init__.py" = ["F401"]
+# 测试里同一个夹具名被多次定义/覆盖是常见写法(pytest 允许),不是笔误
+"tests/*" = ["F811"]
+

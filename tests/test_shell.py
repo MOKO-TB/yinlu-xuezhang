@@ -1,3 +1,4 @@
+import pytest
 from minicode.config import Config, Provider
 from minicode.tools import shell
 from minicode.tools.base import ToolContext
@@ -27,6 +28,7 @@ def test_cmd_fallback(tmp_path):
     assert "hello-from-cmd" in out
 
 
+@pytest.mark.slow      # 真等 5 s 超时:这条用例的耗时就是被测行为
 def test_timeout(tmp_path):
     ctx = ToolContext(workspace=tmp_path, config=_cfg())
     if shell.resolve_shell_argv("auto") is None:

@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from minicode.growth import (CANDIDATES_FILE, FEEDBACK_FILE, GAPS_FILE,  # noqa: E402
-                             app_path)
+                             app_path, within_days)
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -94,12 +94,10 @@ def main() -> int:
     return 0
 
 
+# 口径搬进 `minicode.growth.within_days` 了(B1 的差评窗口要用同一份判断)。
+# 这里留一个同名转发,免得脚本里那两处调用点跟着改形。
 def _within_days(ts, cutoff_epoch) -> bool:
-    try:
-        t = time.mktime(time.strptime(str(ts or "")[:19], "%Y-%m-%d %H:%M:%S"))
-    except ValueError:
-        return True       # 时间字段坏了宁可多显示,不静默丢
-    return t >= cutoff_epoch
+    return within_days(ts, cutoff_epoch)
 
 
 if __name__ == "__main__":

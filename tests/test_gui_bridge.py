@@ -1,12 +1,17 @@
 """GUI 桥接层测试:假 webview 捕获事件 + 假 LLM 驱动完整回合。"""
+import pytest
 import json
-import os
 import threading
 import time
 
 from minicode.attachments import save_attachment, save_attachments
 from minicode.gui_bridge import create_app
 from minicode.llm import AssistantTurn, ToolCall
+
+
+# 整文件打 slow:实测 64 s(2026-09-25 --durations=0)—— 慢在真线程/
+# 真 socket/真超时,不是算法。日常只跑 `pytest -m "not slow"` 时它会被跳过。
+pytestmark = pytest.mark.slow
 
 
 class FakeWindow:

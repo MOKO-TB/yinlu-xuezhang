@@ -454,7 +454,7 @@ def _try_attach(*, timeout: float = ATTACH_TIMEOUT) -> tuple[tuple['_Conn', str]
     try:
         conn = _Conn(ws_url, timeout=timeout)
         product = conn.call("Browser.getVersion", timeout=timeout).get("product", "")
-    except Exception as exc:
+    except Exception:
         if conn is not None:
             conn.close()
         # 文案要诚实:超时不能肯定地说"浏览器已关"(实测也可能是首次握手慢),

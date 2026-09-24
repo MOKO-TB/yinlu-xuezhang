@@ -1,9 +1,15 @@
 """子代理(task 工具)测试:派发、只读隔离、递归拒绝、步数上限、只读并行。"""
+import pytest
 import json
 import threading
 
 from minicode.llm import AssistantTurn, ToolCall
 from test_gui_bridge import make, wait_until
+
+
+# 整文件打 slow:实测 51 s(2026-09-25 --durations=0)—— 慢在真线程/
+# 真 socket/真超时,不是算法。日常只跑 `pytest -m "not slow"` 时它会被跳过。
+pytestmark = pytest.mark.slow
 
 
 class QueueLLM:
@@ -182,7 +188,7 @@ def test_task_sub_steps_capped(config, tmp_path):
                 return _task_turn("explore", "数一数工具调用次数")
             if 2 <= self.consumed <= 21:  # 子代理 20 步上限
                 return AssistantTurn(tool_calls=[
-                    _call(f"explore·glob", {"pattern": "**/*"}, f"g{self.consumed}")])
+                    _call("explore·glob", {"pattern": "**/*"}, f"g{self.consumed}")])
             return _final("全部结束")
 
     endless = EndlessLLM()
@@ -338,7 +344,7 @@ def test_task_batch_validation(config, tmp_path):
             else _final("ok")))
         bridge, window, session = make(config, case_dir, llm)
         bridge.send_task("校验")
-        assert wait_until(lambda: not bridge._busy, timeout=15), expect
+        assert wait_until(lambda b=bridge: not b._busy, timeout=15), expect
         assert expect in _tool_result(session), (expect, _tool_result(session))
 
 

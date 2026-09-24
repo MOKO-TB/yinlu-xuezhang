@@ -14,7 +14,7 @@ from pathlib import Path
 from minicode.compaction import compact, estimate_tokens
 from minicode.llm import LLMClient, ToolCall
 from minicode.model_catalog import context_window_for
-from minicode.permission import ALLOW, ASK, REJECT, PermissionGate
+from minicode.permission import ASK, REJECT, PermissionGate
 from minicode.session import Session
 from minicode.tools.base import (
     PathBlocked, PathOutsideWorkspace, Tool, ToolContext, resolve_path,
@@ -39,6 +39,7 @@ class Agent:
         self._tool_map = {t.name: t for t in registry}
         self._undo_stack: list[dict] = []
         self._narration = ""       # 本轮模型写的说明文字:权限确认框里当"为什么要做"的兜底
+        self._pending_prior = ""   # B1:下一步 search_knowledge 命中历史差评时的那句系统侧先验
         self.mcp = None            # app_setup 注入:McpManager,退出时关停
 
     def close(self) -> None:
@@ -70,7 +71,7 @@ class Agent:
             self._maybe_compact()
             try:
                 turn = self.llm.stream_chat(
-                    self.session.messages,
+                    self._messages_for_request(),
                     self.registry,
                     on_text=self.ui.on_text_delta,
                     on_reasoning=self.ui.on_reasoning_delta,
@@ -98,6 +99,28 @@ class Agent:
                 self.session.add_tool_result(call.id, call.name, result)
         else:
             self.ui.max_steps_reached(self.max_steps)
+
+    def _messages_for_request(self) -> list[dict]:
+        """这一次请求要发的消息 = 留档那份 +(必要时)一条**只活在这一次请求里**的先验。
+
+        B1(差评避让)要"给模型一句提示,但不改用户消息、也不进留档正文":所以这里
+        **复制**一份消息列表,把先验并进开头那条 system 提示的末尾。为什么并进 system
+        而不是另插一条 —— 有的兼容端点只认开头那一条 system,插在中间会直接 400,
+        而这一层我手上没有可核的真端点,不拿用户的对话去赌。
+
+        先验只用一次(`_pending_prior` 用完即清),否则同一条会在后面每一步都重复出现。
+        """
+        msgs = self.session.messages
+        prior = self._pending_prior
+        if not prior:
+            return msgs
+        self._pending_prior = ""
+        out = list(msgs)
+        if out and isinstance(out[0], dict) and out[0].get("role") == "system":
+            out[0] = {**out[0], "content": f"{out[0].get('content') or ''}\n\n{prior}"}
+        else:
+            out.insert(0, {"role": "system", "content": prior})
+        return out
 
     def _record_usage(self, turn) -> None:
         """把本轮真实 token 用量记进本地统计(见 minicode/usage.py)。
@@ -238,6 +261,7 @@ class Agent:
             # 用户放行后记住工作区外路径(本回合内有效)
             self.gate.approve_outside(tool, args)
 
+        self._note_low_rated_prior(tool, args)
         self._snapshot_before_mutation(tool, args)
         self.ui.tool_start(tool, args)
         try:
@@ -248,6 +272,7 @@ class Agent:
             result = f"工具执行出错: {type(e).__name__}: {e}"
         self.ui.tool_done(tool, result)
         result = self._truncate(result)
+        result = self._mark_repeat_empty(tool, args, result)
         # 外部内容围栏:在 _truncate **之后**包壳,否则长内容会把结束标记裁掉。
         # 收口只在这里,禁止各 handler 自行拼壳(方案 §8 决策 1)。
         if self._is_external_result(tool, args):
@@ -258,6 +283,53 @@ class Agent:
             if callable(note):
                 note(tool.name, args)
         return result
+
+    # ---------------------------------------------------- 信号回灌(v0.9.39 B0/B1)
+    #
+    # 两处都在 `_execute` 里挂钩,因为只有这一层同时看得到"这一步是哪个工具、参数是
+    # 什么"和"会话里已经发生过什么";`ToolContext` 里没有会话消息,所以 kb.search_knowledge
+    # 自己算不出"这是第几次搜空"(路线图 §4 原先以为能在 handler 里做,读代码后发现不行)。
+    # 两处都**失败即退回原样**:回灌是锦上添花,不能因为读一份 JSONL 出异常就带走一轮对话。
+
+    def _recall_enabled(self) -> bool:
+        return bool(getattr(self.ctx.config, "feedback_recall", True))
+
+    def _note_low_rated_prior(self, tool: Tool, args: dict) -> None:
+        """B1:这一步是 `search_knowledge` 且撞上一条最近的历史 👎 时,准备一句先验。
+
+        先验在**下一次**请求里生效(并进开头那条 system 提示,见 `_messages_for_request`)
+        —— 那正是模型拿着检索结果组织回答的时刻。保守边界(用户拍的):只在这一个工具
+        前面做匹配,不是每次回答前都算一遍。
+        """
+        if tool.name != "search_knowledge" or not self._recall_enabled():
+            return
+        try:
+            from minicode import feedback_recall
+            matched = feedback_recall.match_low_rated(str(args.get("query") or ""))
+            if matched:
+                self._pending_prior = feedback_recall.avoidance_hint(matched)
+        except Exception:
+            self._pending_prior = ""       # 读不到差评就当没有,绝不因此中断这一步
+
+    def _mark_repeat_empty(self, tool: Tool, args: dict, result: str) -> str:
+        """B0:同一个词第 3 次(含)还是搜空,就在结果末尾附一行事实 + 下一步。
+
+        附在 `_truncate` 之后、溯源围栏之前:截断不能把这句吃掉,而它本身不是外部内容,
+        不该被围栏包进去(包进去会让"×3 未命中"看起来像网页里抄来的话)。
+        """
+        if tool.name != "search_knowledge" or not self._recall_enabled():
+            return result
+        try:
+            from minicode import feedback_recall, growth, kb
+            if not kb.is_no_hit(result):
+                return result
+            times = feedback_recall.repeat_empty_queries(
+                self.session.messages).get(growth.normalize_query(args.get("query", "")), 0) + 1
+            if times <= feedback_recall.REPEAT_ASK_N:
+                return result          # 前两次空手是正常检索,不催它换策略
+            return result + "\n\n" + feedback_recall.repeat_note(times)
+        except Exception:
+            return result
 
     def _log_security_ask(self, tool: Tool, args: dict, note: str, choice: str) -> None:
         """安全门(凭据/升级)开口就留一行痕(方案 M6)。失败静默。"""

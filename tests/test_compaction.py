@@ -1,4 +1,3 @@
-import json
 
 from minicode.compaction import compact, estimate_tokens
 from minicode.llm import AssistantTurn

@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 from minicode.paths import app_path
@@ -43,7 +43,6 @@ def state_path() -> Path:
 
 
 def load_items() -> list[dict]:
-    import json
     try:
         data = json.loads(state_path().read_text(encoding="utf-8"))
         if isinstance(data, dict) and isinstance(data.get("items"), list):
@@ -54,7 +53,6 @@ def load_items() -> list[dict]:
 
 
 def save_items(items: list[dict]) -> None:
-    import json
     try:
         state_path().parent.mkdir(parents=True, exist_ok=True)
         state_path().write_text(

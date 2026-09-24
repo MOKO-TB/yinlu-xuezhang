@@ -90,10 +90,15 @@ class LLMClient:
         """发起一轮流式对话;返回聚合完成的 AssistantTurn。"""
         schemas = [t.to_openai_schema() for t in tools]
         for attempt in range(MAX_RETRIES + 1):
+            emitted = {"any": False}
             try:
-                return self._stream_once(messages, schemas, on_text, on_reasoning)
+                return self._stream_once(messages, schemas, on_text, on_reasoning,
+                                         emitted)
             except RETRYABLE_ERRORS as e:
-                if attempt == MAX_RETRIES:
+                # 已经往界面上吐过 chunk 就不再重试:重跑一遍用户会看到"半截答案 +
+                # 完整答案"两段叠在一起(这条口径原来只写在一行注释里,`received_any`
+                # 记了却谁都没读 —— #85 跑 ruff 才撞出来,见 F841)。
+                if attempt == MAX_RETRIES or emitted["any"]:
                     raise
                 if on_retry:
                     on_retry(e, attempt + 1)
@@ -132,7 +137,8 @@ class LLMClient:
 
     def _stream_once(self, messages: list[dict], schemas: list[dict],
                      on_text: TextCallback | None,
-                     on_reasoning: TextCallback | None) -> AssistantTurn:
+                     on_reasoning: TextCallback | None,
+                     emitted: dict | None = None) -> AssistantTurn:
         kwargs: dict = {
             "model": self.config.model,
             "messages": messages,
@@ -148,11 +154,13 @@ class LLMClient:
 
         turn = AssistantTurn()
         fragments: dict[int, dict] = {}
-        received_any = False  # 收到首个 chunk 之后的网络错误不再重试,避免输出重复
         started = time.perf_counter()
 
         for chunk in self._create_stream(kwargs):
-            received_any = True
+            if emitted is not None:
+                # 收到首个 chunk 就记一笔:此后失败**不再重试**(见 stream_chat),
+                # 否则用户会看到半截答案后面又接一份完整答案。
+                emitted["any"] = True
             if getattr(chunk, "usage", None):
                 turn.usage = {
                     "prompt_tokens": chunk.usage.prompt_tokens,

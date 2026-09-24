@@ -11,10 +11,9 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from minicode.gui_bridge import create_app
-from minicode.llm import AssistantTurn, ToolCall
+from minicode.llm import AssistantTurn
 
 from tests.test_gui_bridge import FakeLLM, FakeWindow, wait_until
 

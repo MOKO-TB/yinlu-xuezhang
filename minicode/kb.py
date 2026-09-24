@@ -21,6 +21,17 @@ SNIPPET_MAX = 1200
 MAX_CONTENT_LIMIT = 1500
 KB_RESULT_LIMIT = 5
 
+# "没查到"这句话只有一处真相:`format_results` 用它拼回话,`is_no_hit` 用它判回话。
+# 为什么要有 `is_no_hit` —— B0「反复搜空」要在**工具结果文本**上判断这次有没有空手,
+# 而那串字面量原先只写在 format_results 里面;两边各写一份,改一次文案就静默失灵
+# (表现为"连着搜空也不再提示",而且没有任何东西会红)。
+NO_HIT_TEXT = "知识库中没有匹配的内容。"
+
+
+def is_no_hit(result) -> bool:
+    """这段工具结果是不是"知识库里没查到"。非字符串一律 False(宁可少标不乱标)。"""
+    return isinstance(result, str) and NO_HIT_TEXT in result
+
 # 向量档的相似度闸门:低于它就不算命中。这只是一个**保守闸门**,不是"经验阈值"
 # —— 本仓没有拿真模型跑过阈值曲线,所以不吹某个数是最佳值;要调就在
 # config.json 的 capabilities.embeddings.min_sim 里给,给了就用给的。
@@ -355,7 +366,7 @@ def _mode_line(meta: dict | None) -> str:
 def format_results(results: list, snippet_chars: int = SNIPPET_LIMIT,
                    meta: dict | None = None) -> str:
     if not results:
-        return (_mode_line(meta) + "知识库中没有匹配的内容。") if meta else "知识库中没有匹配的内容。"
+        return (_mode_line(meta) + NO_HIT_TEXT) if meta else NO_HIT_TEXT
     blocks = []
     for i, item in enumerate(results, start=1):
         e = item.entry if isinstance(item, SearchHit) else item

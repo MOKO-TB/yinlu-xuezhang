@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 from minicode import kb as kbmod
 from minicode.kb import (format_results, kb_prompt_section, kb_stats,

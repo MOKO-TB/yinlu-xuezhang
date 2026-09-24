@@ -247,7 +247,7 @@ def _result_bytes(payload: dict, target: dict) -> tuple[bytes, str]:
 
 def _download(url: str) -> bytes:
     try:
-        with urlopen(url, timeout=TIMEOUT_SECONDS) as r:   # noqa: S310(https 白名单已在上面)
+        with urlopen(url, timeout=TIMEOUT_SECONDS) as r:   # noqa: S310  # https 白名单已在上面
             data = r.read(MAX_DOWNLOAD_BYTES + 1)
     except Exception as e:
         raise ImageError(f"图片地址下载失败:{type(e).__name__}: {e}") from e

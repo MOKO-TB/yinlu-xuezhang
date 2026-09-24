@@ -56,8 +56,22 @@ def _turn(user_text, calls):
     return {"text": user_text, "calls": calls}
 
 
+# 「没查到」那句话由真 `kb.format_results` 生成,这里不抄字面量:文案一改这一场会跟着走,
+# 而 B0 的判据(`kb.is_no_hit`)读的也正是同一句 —— 两边不同源时这里会红。
+from minicode.kb import format_results as _kb_format          # noqa: E402
+
+EMPTY_KB = _kb_format([])
+
 # 一项 = (调用 id, 工具名, 参数, 回话或 None, 有没有被实时表记到)
 TURNS = [
+    _turn("那社团招新呢", [
+        # B0:同一个词连着三次搜空。**最早**那一轮 —— 后面的断言都按"最新两轮"写,
+        # 插到末尾会把nth(1) 的指向挪走(轮与轮之间最新在上)。
+        # 第 2 次起这一行标「×N 未命中」,数字由后端数,前端只是照着画。
+        ("c6", "search_knowledge", {"query": "社团招新"}, EMPTY_KB, True),
+        ("c7", "search_knowledge", {"query": "社团招新"}, EMPTY_KB, True),
+        ("c8", "search_knowledge", {"query": "社团招新"}, EMPTY_KB, True),
+    ]),
     _turn("帮我把这次期中成绩统计成报告", [
         ("c1", "read_file", {"path": "grades.csv"}, "姓名,分数\n张三,87\n李四,62\n", True),
         ("c2", "bash", {"command": "python analyze.py"},
@@ -136,11 +150,15 @@ NO_PLAN = {**PLAN, "has_plan": False, "steps": [], "total": 0, "done": 0,
 
 # ---- 自检:后端真算出了这些数(否则下面的断言全是在验一张空面板)
 _T = BUSY["timeline"]["turns"]
-assert BUSY["summary"]["calls"] == 5 and BUSY["summary"]["errors"] == 1, BUSY["summary"]
+assert BUSY["summary"]["calls"] == 8 and BUSY["summary"]["errors"] == 1, BUSY["summary"]
 assert BUSY["summary"]["running"] == 1 and BUSY["summary"]["interrupted"] == 0
 assert BUSY["now"] and BUSY["now"]["tool"] == "grep", BUSY["now"]
-assert [t["n"] for t in _T] == [2, 1] and _T[1]["calls"] == 3, _T
+assert [t["n"] for t in _T] == [3, 2, 1] and _T[1]["calls"] == 3, _T
 assert _T[1]["errors"] == 1 and _T[0]["running"] == 1
+# B0 那一轮(最早那轮 = _T[2]):三次搜空,后端就要把「×2 / ×3 未命中」算进载荷,
+# 否则下面那些断言是在验一张空面板。
+_marks = [r.get("repeat_text", "") for r in _T[2]["items"]]
+assert _marks == ["", "×2 未命中", "×3 未命中"], (_T[2]["items"], _marks)
 assert IDLE["summary"]["interrupted"] == 1 and IDLE["summary"]["running"] == 0
 assert IDLE["now"] is None and BUSY["empty"] is False and EMPTY["empty"] is True
 assert PLAN["has_plan"] and PLAN["blocked"] == [5] and PLAN["ready"] == [4], PLAN
@@ -361,7 +379,9 @@ def main() -> int:
             check(tl.count() == BUSY["timeline"]["turns_total"],
                   f"轮数与后端一致({BUSY['timeline']['turns_total']} 轮)")
             heads = loc_texts(timeline_sec.locator(".act-turnhead b"))
-            t0, t1 = BUSY["timeline"]["turns"]
+            t0, t1 = BUSY["timeline"]["turns"][0], BUSY["timeline"]["turns"][1]
+            check(len(BUSY["timeline"]["turns"]) == 3,
+                  "三轮:最新「再看看图书馆」、中间「成绩」、最早那条是 B0 的三次搜空")
             check(heads[0] == head_text(t0),
                   f"最新那轮的标题数字逐字取自后端:{heads[0]}")
             check(heads[1] == head_text(t1),
@@ -380,13 +400,27 @@ def main() -> int:
                   f"轮内按**先后**排,不是倒过来;失败那行把状态写在动词旁边:{order}")
             subs = loc_texts(tl.locator(".act-row .act-s"))
             with_time = [t for t in subs if ":" in t]
-            check(len(with_time) == 4,
-                  f"实时表记到的 4 步有时刻,其余不编:{with_time}")
+            # 8 次调用里 7 次被实时表记到(c4 是并行子代理内部那一步,被 _QuietUI 吞了,
+            # 所以它一个时刻都没有)。B0 那三轮加进来后是 7,不是当年那个 4。
+            check(len(with_time) == 7,
+                  f"实时表记到的 7 步有时刻,其余不编:{with_time}")
             check(not any("00:00:00" in t for t in with_time),
                   "没有一行拿零点整凑数")
             dur = [t for t in subs if "用时" in t]
-            check(len(dur) == 3, f"只有真记到结束的时刻才有「用时」:{dur}")
+            check(len(dur) == 6,
+                  f"只有真记到结束的时刻才有「用时」(c5 还在跑、c4 没记到):{dur}")
             check("1s" in " ".join(dur), "写文件那一步的用时是真的(睡过 0.6 秒)")
+
+            # ---- 5b. B0「×N 未命中」:数字由后端从会话消息里数,前端只照着画 ----
+            tl.nth(2).locator(".act-turnhead").click()      # 最早那轮默认折起
+            b0 = loc_texts(tl.nth(2).locator(".act-row .act-s"))
+            marks = [next((p for p in t.split(" · ") if "未命中" in p), "") for t in b0]
+            check(marks == ["", "×2 未命中", "×3 未命中"],
+                  f"同一个词连着三次搜空:第一次什么都不标,第 2/3 次标 ×2 / ×3:{b0}")
+            check("×1" not in " ".join(b0), "不该出现「×1 未命中」—— 第 1 次搜空是正常检索")
+            same = loc_texts(tl.nth(2).locator(".act-row .act-t"))
+            check(len(set(same)) == 1 and "社团招新" in same[0],
+                  f"这三行确实是同一个词:{same}")
 
             # ---- 6. 点一行真做事:reveal_file 与「看原文」 ----
             file_row = page.locator("#actBody .act-row", has_text="report.md").first

@@ -85,31 +85,55 @@ def render(pairs: list[tuple[tuple[int, ...], str, str]]) -> str:
     return "".join(parts)
 
 
-def log_lines() -> list[str]:
-    proc = subprocess.run(
-        ["git", "log", "--date=short", "--pretty=%ad%x09%s"],
-        cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8")
+def log_lines(rev: str | None = None) -> list[str]:
+    args = ["git", "log", "--date=short", "--pretty=%ad%x09%s"]
+    if rev:
+        args.append(rev)
+    proc = subprocess.run(args, cwd=str(ROOT), capture_output=True,
+                          text=True, encoding="utf-8")
     if proc.returncode != 0:
         # 宁可抛出让测试红,也不静默生成一份空日志 —— 空 CHANGELOG 看起来"很正常"
         raise RuntimeError(f"git log 失败(退出码 {proc.returncode}):{proc.stderr.strip()}")
     return [ln for ln in proc.stdout.splitlines() if ln.strip()]
 
 
-def generate() -> str:
-    return render(entries(log_lines()))
+def short_sha(rev: str | None = None) -> str:
+    proc = subprocess.run(["git", "rev-parse", "--short", rev or "HEAD"],
+                          cwd=str(ROOT), capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"git rev-parse 失败:{proc.stderr.strip()}")
+    return proc.stdout.strip()
+
+
+def generate(rev: str | None = None) -> str:
+    """生成整份文件。`rev` 给定时只收到那个提交为止(测试就是这么对的)。"""
+    sha = short_sha(rev)
+    body = render(entries(log_lines(rev)))
+    # 尾注不是装饰:它写明这份索引**收到哪个提交为止**。
+    # 为什么必须有 —— 生成这件事有个先有鸡还是先有蛋的死结:任何"提交标题里点了
+    # 版本号"的提交,一旦提交完成就会让刚生成的那份 CHANGELOG 少一行(它自己那一行)。
+    # 于是"必须与 HEAD 逐字一致"这条断言**永远红**。改成"与自己记录的提交一致"就
+    # 自洽了:落后不叫漂,文件自己说清落后到哪儿;跑一次脚本就推到最新。
+    return body + f"\n<!-- 生成自 git 提交 {sha};此后的提交还没收进来 -->\n"
 
 
 def main() -> int:
-    text = generate()
     if "--check" in sys.argv:
         current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
-        if current != text:
-            print("CHANGELOG.md 与 git log 不一致,跑一次 "
+        m = re.search(r"生成自 git 提交 ([0-9a-f]+)", current)
+        if not m:
+            print("CHANGELOG.md 没有「生成自 git 提交 …」尾注,先跑一次 "
                   "`python scripts/gen_changelog.py`")
             return 1
-        print(f"CHANGELOG.md 已是最新({text.count(chr(10))} 行)")
+        if current != generate(m.group(1)):
+            print(f"CHANGELOG.md 与它自己记的提交 {m.group(1)} 对不上,跑一次 "
+                  "`python scripts/gen_changelog.py`")
+            return 1
+        behind = short_sha() != m.group(1)
+        print(f"CHANGELOG.md 自洽(生成自 {m.group(1)})"
+              + (";HEAD 之后还有没进来的提交,要发版就重跑一次" if behind else ";已是最新"))
         return 0
-    OUT.write_text(text, encoding="utf-8")
+    OUT.write_text(generate(), encoding="utf-8")
     print(f"已写出 {OUT.name}")
     return 0
 

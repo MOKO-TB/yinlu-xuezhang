@@ -185,7 +185,6 @@ def _kb_entry(e: dict, topic: str, keyword: str, link: str) -> dict:
 
 def _archive_md(out_dir: Path, e: dict, link: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    slug = re.sub(r"[^\w\u4e00-\u9fff]+", "-", e["title"])[:40] or "article"
     p = out_dir / f"{e['id']}.md"
     p.write_text(
         "---\n"
@@ -309,7 +308,7 @@ async def run(args) -> int:
                      f"{len(art['content'])}字 | 本文永久链接:{'有' if perm else '无(存搜狗入口)'}")
                 await asyncio.sleep(1.2)
             if got == 0:
-                _log(f"    该关键词 0 篇成功")
+                _log("    该关键词 0 篇成功")
             time.sleep(PAGE_DELAY)
 
     if args.dry_run:

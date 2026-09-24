@@ -211,6 +211,10 @@ class Config:
     # 超时是"主代理不再等它",后台线程仍会跑完当前那一步(Python 没有安全的强杀),
     # 结果不再回填 —— 报告里会照这个口径写明是哪一路超时。
     subagent_time_limit_seconds: int = 600
+    # 信号回灌(v0.9.39 B0/B1,见 minicode/feedback_recall.py):把已经记下来的东西
+    # 回头用起来 —— 同一个词连着搜空就在结果里点一句、命中历史 👎 就给本轮一条
+    # 系统侧先验。**关掉它,主循环的请求字节与结果文本都与开之前逐字一致**。
+    feedback_recall: bool = True
     context_window: int = 131072        # 模型上下文窗口(token),用于压缩触发判断
     compact_at_ratio: float = 0.7       # 估算 token 达到窗口的该比例时触发压缩
     # MCP 服务器原始配置(list[dict],由 minicode.mcp.parse_servers 解析;
@@ -388,6 +392,7 @@ def _config_from_raw(raw: dict) -> Config:
         turn_time_limit_seconds=max(0, int(raw.get("turn_time_limit_seconds", 1800) or 0)),
         subagent_time_limit_seconds=max(0, int(
             raw.get("subagent_time_limit_seconds", 600) or 0)),
+        feedback_recall=bool(raw.get("feedback_recall", True)),
         context_window=int(raw.get("context_window", 131072)),
         compact_at_ratio=float(raw.get("compact_at_ratio", 0.7)),
         mcp_servers=raw.get("mcp_servers") if isinstance(raw.get("mcp_servers"), list) else [],
@@ -484,6 +489,7 @@ def save_config(path: Path, cfg: Config) -> None:
         # 两条时限跟着落盘:用户在设置里改过、下次启动还在(0=不限也照样存下来)
         "turn_time_limit_seconds": cfg.turn_time_limit_seconds,
         "subagent_time_limit_seconds": cfg.subagent_time_limit_seconds,
+        "feedback_recall": cfg.feedback_recall,
         "context_window": cfg.context_window,
         "compact_at_ratio": cfg.compact_at_ratio,
     }

@@ -265,7 +265,6 @@ def check_pyproject_resolves() -> list[str]:
     静态文本对了不代表装得上 —— dynamic 指向的模块一旦改名,`pip install`
     才会报错,而没人 pip install 的时候这份门面就是张假支票。
     """
-    import tempfile
 
     code, out = _run([
         "-c",

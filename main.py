@@ -7,11 +7,10 @@
 """
 from __future__ import annotations
 
-import platform
 import re
 import sys
-import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from minicode.app_setup import create_agent
 from minicode.compaction import estimate_tokens
@@ -21,6 +20,9 @@ from minicode.paths import SESSIONS_DIR
 from minicode import workspace as ws
 from minicode.session import Session, list_sessions
 from minicode.ui import TerminalUI
+
+if TYPE_CHECKING:      # 只给注解用:运行期不 import
+    from minicode.agent import Agent
 
 
 def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
@@ -175,7 +177,7 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
     elif name == "/compact":
         agent.compact_now()
     elif name == "/permission":
-        from minicode.permission import MODE_LABELS, PERMISSION_MODES, normalize_mode
+        from minicode.permission import MODE_LABELS, PERMISSION_MODES
         if arg:
             mode = arg.strip().lower()
             if mode in PERMISSION_MODES:
@@ -355,8 +357,6 @@ def _fix_console_encoding() -> None:
 
 
 def main() -> None:
-    import platform
-    import time
 
     _fix_console_encoding()
 

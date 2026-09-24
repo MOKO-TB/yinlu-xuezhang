@@ -32,7 +32,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.config": ("model_entries", "enabled_models", "sync_model",
                         "_dedupe_models", "_models_from_raw", "PROVIDER_PRESETS",
                         # v0.9.39:两条时限是真的在拦东西(漏收 = 配置文件里的数字没人读)
-                        "turn_time_limit_seconds", "subagent_time_limit_seconds"),
+                        "turn_time_limit_seconds", "subagent_time_limit_seconds",
+                        # v0.9.39 B0/B1:回灌开关(漏收 = config.json 里写了没人读)
+                        "feedback_recall"),
     "minicode.gui_bridge": ("test_model", "fetch_models", "get_provider_presets",
                             "export_session", "search_sessions",
                             "rate_message", "get_countdowns",
@@ -157,7 +159,17 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.21:候选审核面板(list_candidates/review_candidate/_merge_into_kb)
     "minicode.growth": ("log_kb_gap", "save_candidate", "log_feedback", "kb_suggest",
                         "list_candidates", "review_candidate", "_merge_into_kb",
-                        "REVIEWED_KB_FILE"),
+                        "REVIEWED_KB_FILE",
+                        # v0.9.39 B0/B1:归一化与时间窗是"是不是同一个词/还在不在窗口里"
+                        # 的唯一口径(漏收 = 回灌按自己的规矩另判一套)
+                        "normalize_query", "within_days", "FEEDBACK_FILE"),
+    # v0.9.39 B0/B1:把已经记下来的信号回头用起来(反复搜空 / 差评避让)。
+    # 漏收的表现是"装了包之后,连着搜空不再提示、历史差评不再影响答法",而界面一切正常。
+    "minicode.feedback_recall": ("empty_hits", "empty_hits_by_call",
+                                 "repeat_empty_queries", "repeat_note",
+                                 "recent_low_rated", "match_low_rated",
+                                 "avoidance_hint", "REPEAT_ASK_N", "MARK_FROM",
+                                 "MATCH_DAYS"),
     "minicode.calendar": ("campus_calendar", "calendar_payload",
                           "calendar_prompt_section",
                           # v0.9.32:「每年重复」事件(漏收 = 心理普查那类年度事件不再投影)
@@ -171,6 +183,17 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.tools.crawl": ("web_search", "_resolve_redirect"),
     # ---- v0.9.15:上下文面板 + py_script ----
     "minicode.tools.shell": ("py_script", "_py_runtime_command"),
+    # ---- v0.9.39 #84:注册表按领域拆成 6 份目录(registry.py 只管装配顺序)----
+    # 漏收一份 = 装好的包里**那个领域的工具整组消失**,而 build_default_registry()
+    # 不报错(它只是拼不出那一段),模型侧表现是"这个能力没有了"。
+    "minicode.tools.registry": ("build_default_registry",),
+    "minicode.tools.catalog_files": ("tools",),
+    "minicode.tools.catalog_web": ("tools",),
+    "minicode.tools.catalog_knowledge": ("skills_plan_search", "kb_suggest_tool",
+                                         "memory_tool"),
+    "minicode.tools.catalog_media": ("tools",),
+    "minicode.tools.catalog_campus": ("calendar_gpa", "remind_tools"),
+    "minicode.tools.catalog_places": ("library_tools", "map_tools"),
     "minicode.model_catalog": ("_context_breakdown", "vision_forced"),
     # ---- v0.9.17:截止提醒 ----
     "minicode.reminders": ("reminder", "add", "due_soon", "parse_due",
@@ -193,7 +216,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.permission": ("note_external", "_is_sensitive_action",
                             "_credential_hit", "_same_site"),
     "minicode.kb": ("crawl_credibility", "host_is_trusted",
-                    "CRAWLED_UNVERIFIED"),
+                    "CRAWLED_UNVERIFIED",
+                    # v0.9.39 B0:"没查到"这句话与判它的那一处必须同时在包里 ——
+                    # 只收一个,回灌就静默失灵(界面照旧,只是再也不提示)
+                    "NO_HIT_TEXT", "is_no_hit"),
     # ---- v0.9.18:课表持久化 + 天气 chip ----
     "minicode.schedule": ("parse_weeks", "classes_on", "next_class_note",
                           "schedule_prompt_section",
@@ -261,7 +287,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.router": ("DOMAINS", "DomainSpec", "classify", "best", "resolve_type",
                         "extra_prompt", "hit_line", "skills_of", "Match"),
     # v0.9.39:一轮总时限是真的在拦东西(漏收 = 配置文件里的数字没人读)
-    "minicode.agent": ("run_turn", "turn_time_limited"),
+    "minicode.agent": ("run_turn", "turn_time_limited",
+                       # v0.9.39 B0/B1:两个挂钩 + 那条"只活在一次请求里"的先验
+                       "_messages_for_request", "_note_low_rated_prior",
+                       "_mark_repeat_empty"),
     "minicode.subagents": ("type_spec", "_await", "_timeout_note", "TYPE_KEYS",
                            "DOMAIN_KEYS"),
     # v0.9.39:确认框要能讲清新工具的代价(漏收 = 弹了框但没说图会被发出去/文件落在哪)

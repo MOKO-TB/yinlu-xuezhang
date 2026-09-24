@@ -14,7 +14,6 @@ stub 掉 pywebview 桥(get_providers / get_token_usage / save_providers 返回
 """
 from __future__ import annotations
 
-import json
 import sys
 import threading
 from functools import partial
