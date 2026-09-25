@@ -34,7 +34,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # v0.9.39:两条时限是真的在拦东西(漏收 = 配置文件里的数字没人读)
                         "turn_time_limit_seconds", "subagent_time_limit_seconds",
                         # v0.9.39 B0/B1:回灌开关(漏收 = config.json 里写了没人读)
-                        "feedback_recall"),
+                        "feedback_recall",
+                        # v0.9.40 D2:回合步数上限(漏收 = 配置文件里的数字没人读)
+                        "max_steps"),
     "minicode.gui_bridge": ("test_model", "fetch_models", "get_provider_presets",
                             "export_session", "search_sessions",
                             "rate_message", "get_countdowns",
@@ -147,7 +149,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                       "wd_log_tail", "watchdog_log_path"),
     "minicode.reasoning": ("reasoning_snapshot", "get_capability",
                            "apply_reasoning_choice"),
-    "minicode.session": ("to_markdown", "search_logs", "export_filename"),
+    "minicode.session": ("to_markdown", "search_logs", "export_filename",
+                         # v0.9.40 D0:跨天重建提示词要真换得掉 messages[0]
+                         "refresh_system_prompt"),
+    # v0.9.40 D1/D2:压缩保头+尾、工具 schema 进估算(漏收 = 装好的包里这两条退化
+    # 回"保尾丢头"和"只数消息"的旧尺子,而界面看不出来)
+    "minicode.compaction": ("clip_history", "schema_tokens", "HISTORY_HEAD_CAP"),
     "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill"),
     "minicode.web_profile": ("网页版不开放会话导出", "search_sessions",
                              # v0.9.23:教务导入需要本机浏览器窗口,网页版必须挡掉
@@ -290,7 +297,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.agent": ("run_turn", "turn_time_limited",
                        # v0.9.39 B0/B1:两个挂钩 + 那条"只活在一次请求里"的先验
                        "_messages_for_request", "_note_low_rated_prior",
-                       "_mark_repeat_empty"),
+                       "_mark_repeat_empty",
+                       # v0.9.40 D0/D2:跨天重建 + 撞上限后的收尾调用
+                       "_refresh_clock", "_wrap_up"),
     "minicode.subagents": ("type_spec", "_await", "_timeout_note", "TYPE_KEYS",
                            "DOMAIN_KEYS"),
     # v0.9.39:确认框要能讲清新工具的代价(漏收 = 弹了框但没说图会被发出去/文件落在哪)

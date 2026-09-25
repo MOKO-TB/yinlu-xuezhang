@@ -1,6 +1,6 @@
 import json
 
-from minicode.agent import Agent
+from minicode.agent import WRAP_UP_NOTE, Agent
 from minicode.llm import AssistantTurn, ToolCall
 from minicode.permission import PermissionGate
 from minicode.session import Session
@@ -267,6 +267,252 @@ def test_confirm_falls_back_to_narration(config, ctx):
 
     # 界面拿到的是整段说明;取"最后一段作为原因"由 explain/界面层负责
     assert ui.reasons == ["我先确认一下当前状态。\n\n这条命令只列出目录,不会改动文件。"]
+
+
+# ============================================ v0.9.40 D2:步数上限与窗口这把尺子
+
+from minicode.compaction import schema_tokens  # noqa: E402
+from minicode.config import _config_from_raw, save_config  # noqa: E402
+from minicode.tools.base import Tool  # noqa: E402
+
+
+def _big_tool(tag: str) -> Tool:
+    """一份"很占地方的工具定义":只用来把 schema 的 token 量撑起来。"""
+    return Tool(name=f"tool_{tag}", description="定" * 3000,
+                parameters={"type": "object",
+                            "properties": {"q": {"type": "string"}}},
+                handler=lambda ctx: "")
+
+
+class ScriptLLM:
+    """按脚本回答,并记下每次请求带了什么 —— 收尾调用必须**不带工具**。"""
+
+    def __init__(self, turns):
+        self.turns = list(turns)
+        self.calls = []            # [(messages, tools)]
+
+    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
+                    on_retry=None):
+        self.calls.append((list(messages), list(tools)))
+        turn = self.turns.pop(0)
+        if isinstance(turn, BaseException):
+            raise turn
+        if on_text and turn.text:
+            on_text(turn.text)
+        return turn
+
+
+class LoudUI(FakeUI):
+    def __init__(self):
+        super().__init__()
+        self.texts = []
+        self.stops = []
+
+    def on_text_delta(self, t):
+        self.texts.append(t)
+
+    def max_steps_reached(self, n):
+        self.stops.append(n)
+
+
+def _tool_turn(call_id):
+    return AssistantTurn(tool_calls=[ToolCall(
+        id=call_id, name="glob", arguments=json.dumps({"pattern": "*.md"}))])
+
+
+# ------------------------------------------------------------------ max_steps
+
+def test_max_steps_comes_from_config(config, ctx):
+    agent = make_agent(config, ctx, FakeLLM([]), FakeUI())
+    assert agent.max_steps == 40 == config.max_steps
+
+
+def test_bumping_config_moves_the_knob(config, ctx):
+    """调大旋钮是真的生效,不是 config 里写了没人读。"""
+    config.max_steps = 3
+    agent = make_agent(config, ctx, FakeLLM([]), FakeUI())
+    assert agent.max_steps == 3
+
+
+def test_explicit_argument_beats_config(config, ctx):
+    """子代理那一档仍由调用方给数:`task` 工具不该跟着主循环的旋钮跑满 40 步。"""
+    config.max_steps = 40
+    agent = Agent(llm=FakeLLM([]), registry=build_default_registry(),
+                  session=Session(system_prompt="sys"), gate=PermissionGate(config),
+                  ui=FakeUI(), ctx=ctx, max_steps=8)
+    assert agent.max_steps == 8
+
+
+def test_old_config_without_the_key_behaves_as_before():
+    assert _config_from_raw({}).max_steps == 40
+    assert _config_from_raw({"max_steps": 5}).max_steps == 5
+    assert _config_from_raw({"max_steps": "7"}).max_steps == 7
+
+
+def test_nonsense_max_steps_cannot_turn_the_loop_off():
+    """0/负数会让人以为"关掉了对抗上限",实际是会转空圈:夹到至少 1。"""
+    assert _config_from_raw({"max_steps": 0}).max_steps == 40
+    assert _config_from_raw({"max_steps": -5}).max_steps == 1
+
+
+def test_max_steps_survives_a_save_reload_cycle(config, tmp_path):
+    """落盘再读回来还是这个数 —— 没进序列化白名单的字段会静默丢掉。"""
+    import json
+    config.max_steps = 12
+    path = tmp_path / "config.json"
+    save_config(path, config)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["max_steps"] == 12
+    assert _config_from_raw(raw).max_steps == 12
+
+
+# ------------------------------------------------------- 窗口这把尺子量了什么
+
+def _chatty_session(turns: int = 4) -> Session:
+    """几句真对话:够压缩函数下手(它按整轮折,少于三轮就不动)。"""
+    s = Session(system_prompt="sys")
+    for i in range(turns):
+        s.add_user(f"问 {i} 今天有什么课")
+        s.add_assistant(AssistantTurn(text=f"答 {i} 有课"))
+    return s
+
+
+def test_schema_tokens_are_counted_into_the_compact_trigger(config, ctx):
+    """同一个会话、同样的消息量:只多了一份大 schema,就该触发压缩。
+
+    旧算法只数消息,这种"消息没几句、工具定义几千 token"的回合会一路撞到
+    真实窗口才想起来压 —— 这条钉住那几千 token 不再被漏掉。
+    """
+    config.context_window = 2000
+    config.compact_at_ratio = 0.5          # 阈值 1000:消息够不到,两份大 schema 够得到
+    llm = ScriptLLM([AssistantTurn(text="(摘要)"), AssistantTurn(text="今天有课")])
+    agent = Agent(llm=llm, registry=[_big_tool("a"), _big_tool("b")],
+                  session=_chatty_session(), gate=PermissionGate(config),
+                  ui=FakeUI(), ctx=ctx)
+    assert agent.tools_tokens > 1000
+    agent.run_turn("你好")
+
+    assert len(llm.calls) == 2
+    first_msgs, first_tools = llm.calls[0]
+    assert first_tools == []                                  # 摘要那一次不给工具
+    assert "会话压缩器" in first_msgs[0]["content"]
+    assert "(此前对话的摘要" in agent.session.messages[1]["content"]
+
+
+def test_small_registry_does_not_trigger_on_schema_alone(config, ctx):
+    """同样的消息、没有大工具定义:不该压 —— 压早了也是代价。"""
+    config.context_window = 2000
+    config.compact_at_ratio = 0.5
+    llm = ScriptLLM([AssistantTurn(text="你好呀")])
+    agent = Agent(llm=llm, registry=[], session=_chatty_session(),
+                  gate=PermissionGate(config), ui=FakeUI(), ctx=ctx)
+    assert agent.tools_tokens == schema_tokens([])
+    agent.run_turn("你好")
+    assert len(llm.calls) == 1          # 只有一次真请求,没顺手去压缩
+
+
+def test_late_added_mcp_tools_are_in_the_one_measurement(config, ctx):
+    """注册表在 Agent 构造前就装配完(MCP 工具已并进来),所以算一次就够。"""
+    small = Agent(llm=FakeLLM([]), registry=build_default_registry(),
+                  session=Session(system_prompt="sys"), gate=PermissionGate(config),
+                  ui=FakeUI(), ctx=ctx)
+    big = Agent(llm=FakeLLM([]), registry=build_default_registry() + [_big_tool("m")],
+                session=Session(system_prompt="sys"), gate=PermissionGate(config),
+                ui=FakeUI(), ctx=ctx)
+    assert big.tools_tokens > small.tools_tokens
+    # 整表一次序列化:加一个成员,增量就是那一份定义本身(误差只有分隔符那几个字符)
+    one = schema_tokens([_big_tool("m")]) - schema_tokens([])
+    assert abs((big.tools_tokens - small.tools_tokens) - one) <= 4
+
+
+# --------------------------------------------------------- 撞上限之后的那段收尾
+
+def test_steps_run_out_then_it_wraps_up(config, ctx):
+    llm = ScriptLLM([_tool_turn("c1"), _tool_turn("c2"), AssistantTurn(text="我做完了 A、B,还差 C。")])
+    ui = LoudUI()
+    agent = Agent(llm=llm, registry=build_default_registry(),
+                  session=Session(system_prompt="sys"), gate=PermissionGate(config),
+                  ui=ui, ctx=ctx, max_steps=2)
+    agent.run_turn("接着做")
+
+    assert ui.stops == [2]
+    assert llm.calls[-1][1] == []       # 收尾那一次**不带工具**
+    assert "我做完了 A、B,还差 C。" in "".join(ui.texts)
+    assert agent.session.messages[-1]["role"] == "assistant"
+
+
+def test_wrap_up_leaves_no_dangling_tool_result(config, ctx):
+    """撞上限时尾部正挂着没被读过的工具结果;收尾之后不许再留孤儿。"""
+    llm = ScriptLLM([_tool_turn("c1"), _tool_turn("c2"), AssistantTurn(text="收")])
+    agent = Agent(llm=llm, registry=build_default_registry(),
+                  session=Session(system_prompt="sys"), gate=PermissionGate(config),
+                  ui=LoudUI(), ctx=ctx, max_steps=2)
+    agent.run_turn("跑两步")
+    msgs = agent.session.messages
+    assert msgs[-1]["role"] == "assistant"
+    for i, m in enumerate(msgs):
+        if m["role"] == "assistant" and m.get("tool_calls"):
+            ids = {tc["id"] for tc in m["tool_calls"]}
+            followed = {x.get("tool_call_id") for x in msgs[i + 1:i + 1 + len(ids)]}
+            assert ids <= followed, "有工具调用没等到结果,下一轮请求会被 API 挡下"
+
+
+def test_normal_finish_never_calls_the_wrap_up(config, ctx):
+    llm = ScriptLLM([AssistantTurn(text="就这")])
+    ui = LoudUI()
+    agent = Agent(llm=llm, registry=build_default_registry(),
+                  session=Session(system_prompt="sys"), gate=PermissionGate(config),
+                  ui=ui, ctx=ctx, max_steps=2)
+    agent.run_turn("在吗")
+    assert len(llm.calls) == 1
+    assert ui.stops == []
+
+
+def test_wrap_up_failure_falls_back_to_the_old_behavior(config, ctx):
+    """收尾自己失败就静默:最坏情况等于本轮改动之前,不能因为收尾把整回合判成错误。"""
+    boom = ScriptLLM([_tool_turn("c1"), _tool_turn("c2"), RuntimeError("连不上")])
+    ui = LoudUI()
+    agent = Agent(llm=boom, registry=build_default_registry(),
+                  session=Session(system_prompt="sys"), gate=PermissionGate(config),
+                  ui=ui, ctx=ctx, max_steps=2)
+    agent.run_turn("跑两步")
+    assert ui.stops == [2]
+    assert agent.session.messages[-1]["role"] == "tool"    # 回到"悬着结束"的旧行为
+    assert ui.errors == []                                  # 没把它报成一次对话失败
+
+
+def test_wrap_up_tool_calls_are_dropped_so_the_next_turn_still_works(config, ctx):
+    """没给工具却回吐 tool_calls 的端点:摘掉再入会话,否则下一轮每个请求都 400。"""
+    llm = ScriptLLM([_tool_turn("c1"), _tool_turn("c2"), _tool_turn("c9")])
+    agent = Agent(llm=llm, registry=build_default_registry(),
+                  session=Session(system_prompt="sys"), gate=PermissionGate(config),
+                  ui=LoudUI(), ctx=ctx, max_steps=2)
+    agent.run_turn("跑两步")
+    assert not agent.session.messages[-1].get("tool_calls")
+
+
+def test_wrap_up_tells_the_model_it_has_no_tools_left(config, ctx):
+    """收尾那次要捎一句"工具用完了",否则模型会照着"下一步我去查一下"的口吻继续说。
+
+    这句只活在这次请求里 —— 会话留档里不该出现一句用户没说过的话。
+    """
+    llm = ScriptLLM([_tool_turn("c1"), _tool_turn("c2"), AssistantTurn(text="收")])
+    agent = Agent(llm=llm, registry=build_default_registry(),
+                  session=Session(system_prompt="sys"), gate=PermissionGate(config),
+                  ui=LoudUI(), ctx=ctx, max_steps=2)
+    agent.run_turn("跑两步")
+    sent = llm.calls[-1][0]
+    assert sent[-1] == {"role": "user", "content": WRAP_UP_NOTE}
+    assert all(m.get("content") != WRAP_UP_NOTE for m in agent.session.messages)
+    # 步数还够得着的那几次请求,绝不带这句
+    assert all(msgs[-1].get("content") != WRAP_UP_NOTE for msgs, _t in llm.calls[:-1])
+
+
+def test_context_tokens_is_messages_plus_tool_definitions(config, ctx):
+    from minicode.compaction import estimate_tokens
+    agent = make_agent(config, ctx, FakeLLM([]), FakeUI())
+    assert agent.context_tokens() == (estimate_tokens(agent.session.messages)
+                                      + agent.tools_tokens)
 
 
 # ------------------------------------------------------- 一轮总时限

@@ -202,6 +202,9 @@ class Config:
     permission_mode: str = "confirm"
     shell: str = "auto"                 # auto | bash | cmd | powershell
     max_output_chars: int = 20000       # 工具输出回填给模型前的截断长度
+    # 单个回合里"请求模型 → 执行工具 → 回填"最多转几圈。撞上限后仍会让模型收一段尾
+    # (那一次不带工具),只是不再允许它继续调工具。调大 = 一轮烧的 token 更多。
+    max_steps: int = 40
     request_timeout_seconds: int = 300  # 单次 LLM 请求超时
     # 一轮对话的**总**时限(多次 LLM 往返还算在这一轮里):0 = 不限。
     # 到点后只在"上一步做完、下一步还没开始"的间隙停下,不强杀正在执行的那一步
@@ -388,6 +391,7 @@ def _config_from_raw(raw: dict) -> Config:
         permission_mode=normalize_mode(raw.get("permission_mode", "confirm")),
         shell=raw.get("shell", "auto"),
         max_output_chars=int(raw.get("max_output_chars", 20000)),
+        max_steps=max(1, int(raw.get("max_steps", 40) or 40)),
         request_timeout_seconds=int(raw.get("request_timeout_seconds", 300)),
         turn_time_limit_seconds=max(0, int(raw.get("turn_time_limit_seconds", 1800) or 0)),
         subagent_time_limit_seconds=max(0, int(
@@ -485,6 +489,7 @@ def save_config(path: Path, cfg: Config) -> None:
         "permission_mode": cfg.permission_mode,
         "shell": cfg.shell,
         "max_output_chars": cfg.max_output_chars,
+        "max_steps": cfg.max_steps,
         "request_timeout_seconds": cfg.request_timeout_seconds,
         # 两条时限跟着落盘:用户在设置里改过、下次启动还在(0=不限也照样存下来)
         "turn_time_limit_seconds": cfg.turn_time_limit_seconds,

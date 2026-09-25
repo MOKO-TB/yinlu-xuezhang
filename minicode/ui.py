@@ -311,9 +311,11 @@ class TerminalUI:
         self.error(f"模型调用失败: {e} {hint}")
 
     def max_steps_reached(self, limit: int) -> None:
+        # 不承诺"接下来会给一段收尾":那次收尾调用可能失败(失败就静默退回原样),
+        # 承诺了却没兑现,这条提示自己就成了假话。
         self.console.print(
-            f"[yellow]⚠ 本回合工具调用已达 {limit} 轮上限,强制停止。"
-            f"可继续对话让它接着做。[/yellow]"
+            f"[yellow]⚠ 本回合工具调用已达 {limit} 轮上限,已停止调用工具。"
+            f"想接着做直接说「继续」。[/yellow]"
         )
 
     def turn_time_limited(self, seconds: int, steps: int) -> None:

@@ -144,6 +144,8 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
                  llm, ui, config: Config, registry: list[Tool]) -> str:
     """跑一个子代理,返回它的最终文字报告(不含前缀)。异常收敛成报告文本。"""
     from minicode.app_setup import build_system_prompt  # 延迟导入避免循环
+    # 子代理不参与跨天重建:`_refresh_clock` 只在 `run_turn` 开头查一次,而子代理
+    # 生命周期以分钟计、建会话当天就跑完了。将来要"统一"到别处请先想清楚这点。
     try:
         sub_session = Session(
             system_prompt=build_system_prompt(ctx.workspace) + spec.extra_prompt,

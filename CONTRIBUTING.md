@@ -76,7 +76,9 @@ chromium、没有 `chromium_headless_shell`,所以那个 helper 找不到可执�
 | 工具调用的"一句话说法"与"成没成" | `minicode/toolsum.py` | `tests/test_tool_outcome.py` 扫全仓库不许出现第二份字面量 |
 | "知识库里没查到"这句话 | `minicode/kb.py::NO_HIT_TEXT`(`is_no_hit` 判它) | `tests/test_feedback_recall.py` —— 回灌读的是文本,文案一改而判据没跟,回灌会**静默失灵** |
 | 反复搜空 / 差评同类问题的判据与计数 | `minicode/feedback_recall.py`(一次扫描 `empty_hits`,相似度接 `memory.is_same_memory`) | 同上:监控栏那个「×N」与工具回话末尾那句必须同一个数 |
-| 40 个内置工具的**先后顺序** | `minicode/tools/registry.py`(内容在六份 `catalog_*.py`) | `tests/test_registry_split.py`(顺序逐字钉、漏装配/重复装配/热点回潮都会红) |
+| 40 个内置工具的**先后顺序** | `minicode/tools/registry.py`(内容在六份 `catalog_*.py`) | `tests/test_registry_split.py`(顺序逐字钉、漏装配/重复装配都会红) |
+| "上下文占了多少 token" 这**一把尺子** | `minicode/agent.py::Agent.context_tokens()`(消息 + 工具定义,后者是 `compaction.schema_tokens`) | `tests/test_agent.py` + `tests/test_context_panel.py` —— 面板说没到阈值它却压了(或反过来),就是又有人各量各的 |
+| 一个回合能转几圈 | `minicode/config.py::Config.max_steps`(唯一的 40 在那儿,`agent.py` 里不留第二个默认值) | `tests/test_agent.py`(含"老 config 没这个键 = 行为逐字不变") |
 | 打包后 exe 必须还有的内部符号 | `scripts/check_frozen_version.py::TARGETS` | `tests/test_frozen_targets.py`(针本身)+ 构建后跑脚本 |
 | 包内《使用说明.txt》 | `scripts/build_exe.py::write_user_files` | 见下一节 |
 | 里程碑流水账 | `HANDOFF.md` §2 + `docs/handoff/milestones.md` | `check_docs.py` 盯行数与归档完整性 |

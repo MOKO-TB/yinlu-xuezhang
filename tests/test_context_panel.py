@@ -1,4 +1,5 @@
 """上下文窗口面板:session_metrics 的占用明细 + compact_now 的真实压缩与忙时守卫。"""
+from minicode.compaction import schema_tokens
 from minicode.model_catalog import session_metrics
 
 
@@ -28,6 +29,23 @@ def test_metrics_contain_context_breakdown(config, tmp_path):
     skills_bucket = b["buckets"][2]
     assert skills_bucket["count"] >= 10       # 仓库现有技能(含 v0.9.14/15 新增)
     assert skills_bucket["tokens"] > 0
+
+
+def test_tool_bucket_is_the_same_number_the_compact_trigger_uses(config, tmp_path):
+    """面板上"工具定义"那个数,和决定什么时候压缩的那把尺子,必须是同一个来源。
+
+    v0.9.40 D2 之前是两套算法(面板按单条相加、触发器压根没算),于是"面板说还没到
+    七成,压缩却提前来了"或反过来都对不上账。
+    """
+    from tests.test_gui_bridge import FakeWindow
+    from minicode.gui_bridge import create_app
+    bridge, ui, agent, _session = create_app(
+        config, tmp_path, llm=FakeLLM(),
+        sessions_dir=tmp_path / "sessions", config_path=tmp_path / "config.json")
+    ui.attach(FakeWindow())
+    b = _metrics(bridge)["context_breakdown"]
+    tools = next(x for x in b["buckets"] if x["key"] == "tools")
+    assert tools["tokens"] == schema_tokens(agent.registry) == agent.tools_tokens
 
 
 def test_metrics_breakdown_none_without_ctx(config, tmp_path):

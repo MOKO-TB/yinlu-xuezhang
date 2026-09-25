@@ -97,6 +97,18 @@ class Session:
         self._log_path = path  # 后续对话继续写入该文件
         return len(loaded)
 
+    def refresh_system_prompt(self, text: str) -> bool:
+        """换掉开头那条 system 提示(跨天时重建日期与课表段)。
+
+        只动内存:留档 JSONL 记的是 user/assistant/tool 三种 role,从来不含
+        system 行,所以重建它不影响 `load_from` 恢复旧会话。
+        返回是否真的换了 —— 调用方据此决定要不要告诉用户一声。
+        """
+        if not self.messages or self.messages[0].get("role") != "system":
+            return False
+        self.messages[0] = {"role": "system", "content": text}
+        return True
+
     def replace_messages(self, msgs: list[dict]) -> None:
         """整体替换上下文(压缩后调用);system 之外的记录留档。"""
         self._replace_messages(

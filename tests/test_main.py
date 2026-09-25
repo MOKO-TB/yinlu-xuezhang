@@ -31,14 +31,17 @@ class FakeUI:
 
 
 class FakeAgent:
-    """只用到 ctx.workspace / undo 的最小替身。"""
+    """只用到 ctx.workspace / undo / 上下文估算的最小替身。"""
 
     def __init__(self, workspace):
         self.ctx = ToolContext(workspace=workspace, config=Config())
+        self.tools_tokens = 1234       # /history 要能把工具定义那份占用单独报出来
 
     def undo(self): return "已撤销"
 
     def compact_now(self): return None
+
+    def context_tokens(self): return 5000 + self.tools_tokens
 
 
 @pytest.fixture
@@ -69,6 +72,17 @@ def test_slash_commands_do_not_crash(env, cmd):
 def test_slash_exit_returns_true(env):
     _workspace, ui, agent = env
     assert handle_slash("/exit", Session(system_prompt="x"), Config(), ui, agent) is True
+
+
+def test_history_reports_the_same_ruler_the_compact_trigger_uses(env):
+    """/history 说的"约多少 token"必须含工具定义 —— 否则阈值看着很远,却会突然压。"""
+    _workspace, ui, agent = env
+    session = Session(system_prompt="测试用系统提示")
+    session.add_user("在吗")
+    handle_slash("/history", session, Config(), ui, agent)
+    text = "\n".join(t for _kind, t in ui.messages)
+    assert f"{agent.context_tokens()} tokens" in text
+    assert "工具定义 1234 tokens" in text
 
 
 def test_dream_command_reports_result(env):

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import date
 from pathlib import Path
 
-from minicode.compaction import compact, estimate_tokens
+from minicode.compaction import compact, estimate_tokens, schema_tokens
 from minicode.llm import LLMClient, ToolCall
 from minicode.model_catalog import context_window_for
 from minicode.permission import ASK, REJECT, PermissionGate
@@ -21,25 +22,39 @@ from minicode.tools.base import (
 )
 from minicode.ui import TerminalUI
 
-MAX_STEPS = 40  # 单回合默认工具调用轮数上限
 SNAPSHOT_TOOLS = ("write_file", "edit_file")  # bash 的改动无法安全跟踪,不在回滚范围
+
+# 撞步数上限后那一次收尾调用要说的话。它**只活在这次请求里**(不进会话留档),
+# 因为没有别的地方需要读它;不给这句,模型不知道自己被"断了工具",收尾常常写成
+# "接下来我要继续查……" —— 那正是这段代码要避免的戛然而止。
+WRAP_UP_NOTE = ("工具调用轮数已经用完,这一次不许再调用工具。"
+                "就上面已经跑完的那些结果,用几句话讲清:已经完成什么、还没完成什么、"
+                "下一步建议做什么。不要重复已经说过的内容。")
 
 
 class Agent:
     def __init__(self, llm: LLMClient, registry: list[Tool], session: Session,
                  gate: PermissionGate, ui: TerminalUI, ctx: ToolContext,
-                 max_steps: int = MAX_STEPS):
+                 max_steps: int = 0):
         self.llm = llm
         self.registry = registry
         self.session = session
         self.gate = gate
         self.ui = ui
         self.ctx = ctx
-        self.max_steps = max_steps
+        # 单回合工具调用轮数上限:唯一的数在 config.py 的 `max_steps` 字段里。
+        # 这里不写第二个默认值 —— 显式传参(子代理那一档)优先,没传就回 config。
+        self.max_steps = int(max_steps) if max_steps else int(ctx.config.max_steps)
         self._tool_map = {t.name: t for t in registry}
+        # 工具 JSON Schema 每轮都随消息一起发出去,量窗口不能只数消息。
+        # 注册表运行期不变(MCP 工具在装配时就并进来了),所以这里算一次存住。
+        self.tools_tokens = schema_tokens(registry)
         self._undo_stack: list[dict] = []
         self._narration = ""       # 本轮模型写的说明文字:权限确认框里当"为什么要做"的兜底
         self._pending_prior = ""   # B1:下一步 search_knowledge 命中历史差评时的那句系统侧先验
+        # 身上这份 system prompt 是哪一天建的。system prompt 里烧着日期与"今天/明天
+        # 的课",而本应用是托盘常驻的 —— 记下建它的那天,回合开头一比对就知道过没过期。
+        self._prompt_date = date.today()
         self.mcp = None            # app_setup 注入:McpManager,退出时关停
 
     def close(self) -> None:
@@ -54,6 +69,7 @@ class Agent:
 
     def run_turn(self, user_input: str, content=None) -> None:
         """跑一个回合。content 可选:带附件时的多模态消息体(list[dict])。"""
+        self._refresh_clock()      # 跨天了先重建日期与课表段,再收这条新消息
         self.gate.new_turn()
         self.session.add_user(user_input, content)
 
@@ -99,6 +115,58 @@ class Agent:
                 self.session.add_tool_result(call.id, call.name, result)
         else:
             self.ui.max_steps_reached(self.max_steps)
+            self._wrap_up()
+
+    def _wrap_up(self) -> None:
+        """步数耗尽后补一次**不带工具**的调用,把悬着的工具结果收成一段话。
+
+        撞上限那一刻,会话尾部正挂着执行完但模型还没读过一眼的工具结果;直接结束
+        就是戛然而止,长任务(论文、题库)恰恰最容易撞在这里。这一次不给工具、
+        不重进步数循环,文本照常在 `on_text_delta` 流出并入留档。
+        末尾那句 `WRAP_UP_NOTE` 只加在这次请求里 —— 模型不然不知道自己已经不能再
+        调工具,会照着"下一步我去查一下"的口吻继续说。
+        它自己失败就静默退回原样 —— 最坏情况等于本轮改动之前的行为,不新增故障面。
+        """
+        try:
+            turn = self.llm.stream_chat(
+                self.session.messages + [{"role": "user", "content": WRAP_UP_NOTE}], [],
+                on_text=self.ui.on_text_delta,
+                on_reasoning=self.ui.on_reasoning_delta,
+                on_retry=self.ui.on_retry)
+        except KeyboardInterrupt:
+            self.ui.turn_interrupted()
+            return
+        except Exception:
+            return
+        self.ui.finish_stream()
+        # 这一次没给工具,端点若仍回吐 tool_calls(兼容端点会这么干),把它们摘掉再入
+        # 会话 —— 留下一条没人回答的 tool_calls,下一轮每个请求都会 400。
+        if turn.tool_calls:
+            from dataclasses import replace
+            turn = replace(turn, tool_calls=[])
+        self.session.add_assistant(turn)
+        self._record_usage(turn)
+        self._bump_turn_tokens(turn)
+        self._push_turn_stats(turn)
+
+    def _refresh_clock(self) -> None:
+        """跨过一天就把 system prompt 重算一遍(每个会话每天至多一次)。
+
+        为什么按日重建而不是每轮注入一行当前时间:后者**每一步请求都在破坏
+        KV Cache 前缀**(校历段 `calendar.py` 顶层注释就是为了这个才不带时间的),
+        前者一天只破一次。重建走 `build_system_prompt` 这同一个函数 —— 日期、课表、
+        校历、记忆的真相仍各只有一处,这里不产生第二份时间来源。
+
+        只在回合边界检查:`run_turn` 一开头,第一条 LLM 请求之前。跑到一半的回合
+        绝不会被换掉提示词(后台会话运行器各建各的 Agent,各查各自的)。
+        """
+        today = date.today()
+        if today == self._prompt_date:
+            return
+        self._prompt_date = today
+        from minicode.app_setup import build_system_prompt  # 延迟导入:app_setup 顶层 import 本模块
+        if self.session.refresh_system_prompt(build_system_prompt(self.ctx.workspace)):
+            self.ui.info("已跨天,日期与课表已刷新")
 
     def _messages_for_request(self) -> list[dict]:
         """这一次请求要发的消息 = 留档那份 +(必要时)一条**只活在这一次请求里**的先验。
@@ -199,6 +267,14 @@ class Agent:
 
     # ------------------------------------------------------------ 压缩
 
+    def context_tokens(self) -> int:
+        """这一次请求真正要发出去的东西占多少 token:消息 + 40 来个工具的定义。
+
+        只数消息会系统性低估几千 token,于是阈值偏晚触发,把真实窗口顶到脸上才想起
+        来压(v0.9.40 D2)。CLI 的 `/history` 与任务面板用的是这同一个数。
+        """
+        return estimate_tokens(self.session.messages) + self.tools_tokens
+
     def compact_now(self) -> None:
         self._maybe_compact(force=True)
 
@@ -208,7 +284,7 @@ class Agent:
         # 探测不到才退回 config.json 里的默认值。
         window = context_window_for(cfg.model, cfg.context_window)
         threshold = int(window * cfg.compact_at_ratio)
-        if not force and estimate_tokens(self.session.messages) <= threshold:
+        if not force and self.context_tokens() <= threshold:
             return False
         new_msgs, before = compact(self.session.messages, self.llm)
         if len(new_msgs) >= before:

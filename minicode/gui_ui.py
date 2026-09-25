@@ -97,7 +97,9 @@ class GuiUI:
         self.push("error", text=f"模型调用失败: {e} {hint}")
 
     def max_steps_reached(self, limit: int) -> None:
-        self.push("info", text=f"本回合工具调用已达 {limit} 轮上限,强制停止")
+        # 与 TerminalUI 同一句口径:只说"停止调用工具",不承诺后面一定有收尾。
+        self.push("info", text=f"本回合工具调用已达 {limit} 轮上限,已停止调用工具。"
+                               f"想接着做直接说「继续」。")
 
     def turn_time_limited(self, seconds: int, steps: int) -> None:
         # 走已有的 info 通道:时限到点只是"这一轮先停",不是错误,

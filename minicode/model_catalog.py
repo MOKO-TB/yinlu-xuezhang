@@ -12,7 +12,7 @@ core/model_catalog.py(公开仓库 gitee.com/feng-chenhao/xingyao-y-code),
 """
 from __future__ import annotations
 
-from minicode.compaction import estimate_tokens
+from minicode.compaction import estimate_tokens, schema_tokens
 from minicode.config import API_KEY_PLACEHOLDERS
 
 # model -> {"context_window": int, "supports_vision": bool}
@@ -114,6 +114,19 @@ def capabilities(model: str) -> list[str]:
     return caps
 
 
+def context_total(agent, session) -> int:
+    """面板上"上下文占用"那个数 —— 与压缩触发器**同一个来源**(Agent.context_tokens)。
+
+    分开算会出这种事:面板按"消息 ÷ 窗口"说还没到七成,实际请求里还有 40 来个工具
+    定义,压缩提前来了 —— 用户看到的是"它自己乱压"。没有 ctx 的测试桩退回本地估算。
+    """
+    calc = getattr(agent, "context_tokens", None)
+    if callable(calc):
+        return int(calc())
+    return estimate_tokens(session.messages) + schema_tokens(
+        getattr(agent, "registry", []) or [])
+
+
 def push_turn_usage(agent, session, config, turn) -> None:
     """给 GUI 推一条 turn_usage 事件(任务面板:消耗 + 上下文占用)。
 
@@ -128,7 +141,7 @@ def push_turn_usage(agent, session, config, turn) -> None:
     usage = turn.usage if isinstance(turn.usage, dict) else {}
     prompt = usage.get("prompt_tokens")
     estimated = not (isinstance(prompt, int) and prompt >= 0)
-    context = prompt if not estimated else estimate_tokens(session.messages)
+    context = prompt if not estimated else context_total(agent, session)
     try:
         push("turn_usage",
              consumed=int(getattr(agent, "turn_tokens", 0) or 0),
@@ -155,7 +168,7 @@ def session_metrics(agent, session, config, llm_override: dict | None) -> dict:
     """
     model = llm_override["model"] if llm_override else config.model
     window = context_window_for(model, config.context_window)
-    used = estimate_tokens(session.messages)
+    used = context_total(agent, session)
     consumed = getattr(agent, "turn_tokens", 0) or 0
     info = lookup(model)
     selectable = []
@@ -213,8 +226,6 @@ def _context_breakdown(agent, session, config, window: int,
     workspace = getattr(ctx, "workspace", None)
     if workspace is None:
         return None
-    import json as _json
-
     from minicode.skills import load_skills, skill_dirs, skills_prompt_section
 
     def _tok(text: str) -> int:
@@ -225,14 +236,15 @@ def _context_breakdown(agent, session, config, window: int,
     skills = load_skills(skill_dirs(workspace))
     skills_sec = skills_prompt_section(skills)
     skills_tokens = _tok(skills_sec) if skills_sec else 0
-    tools_tokens = sum(_tok(_json.dumps(t.to_openai_schema(), ensure_ascii=False))
-                       for t in getattr(agent, "registry", []) or [])
-    messages_tokens = max(0, used - system_total)
-    # 面板占用基数 = 消息(含系统提示词)+ 工具定义:工具 schema 不在消息里,
-    # 但同样占模型的上下文窗口;p1 的占比分母就是它,四项之和才能闭合。
+    # 与压缩触发器同一份算法:传进来的 `used` 出自 `Agent.context_tokens()`,
+    # 已经含工具定义了,所以这里只把它拆开看,不再加一次(加两次会虚报占用)。
+    tools_tokens = schema_tokens(getattr(agent, "registry", []) or [])
+    body = max(0, used - tools_tokens)          # 消息部分(含系统提示词)
+    messages_tokens = max(0, body - system_total)
+    # 四项之和 = (系统提示词-技能) + 工具定义 + 技能 + 对话消息 ≈ used,闭合靠同一个数
     return {
         "window": window,
-        "used": used + tools_tokens,
+        "used": used,
         "compact_at": config.compact_at_ratio,
         "buckets": [
             {"key": "system", "label": "系统提示词",

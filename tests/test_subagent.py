@@ -176,14 +176,23 @@ def test_task_sub_bash_disaster_hard_reject(config, tmp_path):
 
 
 def test_task_sub_steps_capped(config, tmp_path):
+    """子代理把 20 步用满时,现在**以一段收尾报告结束**,而不是留一句占位符。
+
+    v0.9.40 D2 之前:步数耗尽 → 直接结束 → 父那边拿到的是
+    "(子代理已结束,但未返回文本报告)",侦察了一整圈什么也没带回来。
+    现在耗尽后补一次不带工具的调用,所以调用数 = 1(父派) + 20(子用满)
+    + 1(子收尾) + 1(父最后一答)。多出那一次是**真花 token 的**,写清楚免得日后被当成回归。
+    """
     _accept_all(config)
     class EndlessLLM:
         def __init__(self):
             self.consumed = 0
+            self.tool_counts = []      # 每次请求带了几份工具定义
 
         def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
                         on_retry=None):
             self.consumed += 1
+            self.tool_counts.append(len(tools))
             if self.consumed == 1:
                 return _task_turn("explore", "数一数工具调用次数")
             if 2 <= self.consumed <= 21:  # 子代理 20 步上限
@@ -196,8 +205,11 @@ def test_task_sub_steps_capped(config, tmp_path):
     bridge.send_task("无限循环")
     assert wait_until(lambda: not bridge._busy, timeout=30)
 
-    assert endless.consumed == 22   # 父 task 1 + 子 20(上限)+ 父收尾 1
-    assert "(子代理已结束,但未返回文本报告)" in _tool_result(session)
+    assert endless.consumed == 23   # 父 1 + 子 20(上限)+ 子收尾 1 + 父收尾 1
+    assert endless.tool_counts[21] == 0      # 第 22 次就是那次"合上工具"的收尾
+    result = _tool_result(session)
+    assert "全部结束" in result
+    assert "未返回文本报告" not in result
 
 
 # ------------------------------------------------------- 只读子代理并行派发

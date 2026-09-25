@@ -19,6 +19,7 @@
   "permission_mode": "confirm",
   "shell": "auto",
   "max_output_chars": 20000,
+  "max_steps": 40,
   "request_timeout_seconds": 300,
   "turn_time_limit_seconds": 1800,
   "subagent_time_limit_seconds": 600,

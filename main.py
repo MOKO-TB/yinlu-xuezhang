@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from minicode.app_setup import create_agent
-from minicode.compaction import estimate_tokens
 from minicode.config import load_config
 from minicode import model_probe
 from minicode.paths import SESSIONS_DIR
@@ -155,10 +154,14 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                          "若只想用已开远程调试的浏览器,可设 YINLUXS_CDP_URL=http://127.0.0.1:9222。")
         ui.info("\n".join(lines))
     elif name == "/history":
-        est = estimate_tokens(session.messages)
+        # 与压缩触发器同一个数(消息 + 工具定义):只报消息那一半,读的人会对不上
+        # "为什么还没到阈值就压了"。
+        total = agent.context_tokens()
+        tools_only = agent.tools_tokens
         threshold = int(config.context_window * config.compact_at_ratio)
-        ui.info(f"当前上下文 {len(session.messages)} 条消息,约 {est} tokens"
-                f"(压缩阈值 {threshold} tokens)。会话留档在 sessions/ 目录。")
+        ui.info(f"当前上下文 {len(session.messages)} 条消息,约 {total} tokens"
+                f"(其中工具定义 {tools_only} tokens;压缩阈值 {threshold} tokens)。"
+                f"会话留档在 sessions/ 目录。")
     elif name == "/resume":
         summaries = list_sessions(SESSIONS_DIR)
         if not summaries:
