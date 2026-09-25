@@ -165,7 +165,7 @@
 
 ```bash
 cd /d/game/mini-code
-./.venv/Scripts/python.exe -m pytest -q                    # 1807 个测试全绿(v0.9.40 模型层收口之后 `--collect-only` 实测 1807;全量实跑 **1806 passed / 1 skipped**,442 s。**日常改东西先跑快车道** `pytest -q -m "not slow"` —— 实测 **1635 passed / 1 skipped / 171 deselected,110 s**,那 171 项 = 五个耗时文件 + 两条真等超时的用例,名单与秒数是量出来的、写在 `pytest.ini` 与 `tests/test_markers.py` 里;上一条 #87 那次快车道是 1544 passed / 105.89 s,本轮 D0~D3 净增 68 项测试);与别人的 pytest/重 IO 并行时,网页版真实 socket 用例会饿死超时,别在机器忙时下结论)
+./.venv/Scripts/python.exe -m pytest -q                    # 1807 个测试全绿(v0.9.40 模型层收口之后 `--collect-only` 实测 1807;全量实跑 **1806 passed / 1 skipped**,373 s。**日常改东西先跑快车道** `pytest -q -m "not slow"` —— 实测 **1635 passed / 1 skipped / 171 deselected,116 s**,那 171 项 = 五个耗时文件 + 两条真等超时的用例,名单与秒数是量出来的、写在 `pytest.ini` 与 `tests/test_markers.py` 里;上一条 #87 那次快车道是 1544 passed / 105.89 s,本轮 D0~D3 净增 68 项测试);与别人的 pytest/重 IO 并行时,网页版真实 socket 用例会饿死超时,别在机器忙时下结论)
 #                                                           v0.9.37 再 +24:`tests/test_activity.py` 21→30(时刻配对、对不上号就不给时间、
 #                                                           轮次切分与「另有 N 次」取真数、停止=已中断≠在跑≠失败)+ 新增 `tests/test_monitor.py` 9 项
 #                                                           (默认收起、坏 JSON 不炸、白名单外的键丢掉、**只 patch 一段不覆盖别段**、桥两方法与门面转发)
