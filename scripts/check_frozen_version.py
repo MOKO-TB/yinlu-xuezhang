@@ -151,7 +151,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "apply_reasoning_choice"),
     "minicode.session": ("to_markdown", "search_logs", "export_filename",
                          # v0.9.40 D0:跨天重建提示词要真换得掉 messages[0]
-                         "refresh_system_prompt"),
+                         "refresh_system_prompt",
+                         # 跨会话记忆:模型侧工具与 CLI /find 共用这一份取数,
+                         # 漏收 = 装好的包里学长仍然记不住上次聊过什么
+                         "history_hits", "search_history"),
     # v0.9.40 D1/D2:压缩保头+尾、工具 schema 进估算(漏收 = 装好的包里这两条退化
     # 回"保尾丢头"和"只数消息"的旧尺子,而界面看不出来)
     "minicode.compaction": ("clip_history", "schema_tokens", "HISTORY_HEAD_CAP"),

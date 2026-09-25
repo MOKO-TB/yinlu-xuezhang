@@ -255,6 +255,7 @@ class TerminalUI:
             "  /library      查看馆藏书目库状态\n"
             "  /history      查看上下文消息数与 token 估算\n"
             "  /resume [<n>] 查看/恢复历史会话\n"
+            "  /find <关键词> 在自己的历史会话留档里搜(与模型侧 search_history 同一份)\n"
             "  /undo         撤销最近一次文件改动(可连续;bash 改动不在跟踪范围)\n"
             "  /compact      立即压缩上下文(平时到达阈值会自动压缩)\n"
             "  /sandbox [on|off] 查看/临时切换沙箱(持久化改 config.json)\n"

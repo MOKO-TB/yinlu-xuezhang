@@ -28,6 +28,7 @@ VERBS: dict[str, str] = {
     "browser_screenshot": "截图", "browser_snapshot": "取页面快照",
     "browser_close": "关浏览器", "browser_status": "看浏览器状态",
     "search_knowledge": "查知识库", "kb_suggest": "记候选知识",
+    "search_history": "翻历史会话",
     "memory": "记忆", "plan": "计划", "task": "派子代理",
     "schedule": "查课表", "get_weather": "查天气", "campus_calendar": "查校历",
     "reminder": "待办", "mood": "情绪日记", "gpa_calc": "算绩点",

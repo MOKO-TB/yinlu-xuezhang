@@ -17,7 +17,8 @@ from minicode.config import load_config
 from minicode import model_probe
 from minicode.paths import SESSIONS_DIR
 from minicode import workspace as ws
-from minicode.session import Session, list_sessions
+from minicode.session import (HISTORY_SCAN_FILES, Session, history_hits,
+                              list_sessions)
 from minicode.ui import TerminalUI
 
 if TYPE_CHECKING:      # 只给注解用:运行期不 import
@@ -175,6 +176,21 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
             n = session.load_from(chosen.path)
             ui.info(f"已恢复 {n} 条消息(来自 {chosen.path.name});"
                     f"后续对话继续写入该文件。")
+    elif name == "/find":
+        # 与模型侧 search_history 同一份取数(history_hits):口径改一处,两边一起变
+        if not arg.strip():
+            ui.info("用法: /find <关键词>   在你自己的历史会话留档里搜,如 /find 报错")
+        else:
+            found = history_hits(arg, top=5)
+            if not found:
+                ui.info(f"最近 {HISTORY_SCAN_FILES} 个会话留档里没提到「{arg.strip()}」。")
+            else:
+                blocks = [f"[{i}] {h['when']}"
+                          + (f" · {h['workspace']}" if h["workspace"] else "")
+                          + f"(命中 {h['hits']} 次)\n    {h['snippet']}"
+                          for i, h in enumerate(found, start=1)]
+                ui.info("\n".join(blocks))
+                ui.info("接着聊那次:GUI 在侧栏搜索框点开,CLI 用 /resume <序号>。")
     elif name == "/undo":
         ui.info(agent.undo())
     elif name == "/compact":
@@ -219,13 +235,13 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
             ui.info("\n".join(lines))
     else:
             ui.error(f"未知命令 {name}。可用: /help /clear /model /history "
-                     f"/resume /undo /compact /sandbox /permission /think "
+                     f"/resume /find /undo /compact /sandbox /permission /think "
                      f"/memory /remember /dream /plan /skills /kb /library "
                      f"/usage /browser /exit")
     return False
 
 
-SLASH_NAMES = {"/help", "/clear", "/model", "/history", "/resume",
+SLASH_NAMES = {"/help", "/clear", "/model", "/history", "/resume", "/find",
                "/undo", "/compact", "/sandbox", "/memory", "/remember",
                "/dream", "/skills", "/kb", "/plan", "/library", "/usage",
                "/browser", "/workspace", "/permission", "/think",

@@ -14,7 +14,7 @@ from minicode.config import (BUILTIN_PROVIDER_ID, Config, Provider,
                              _dedupe_models, _models_from_raw,
                              _providers_from_raw)
 from minicode.gui_bridge import create_app
-from minicode.llm import AssistantTurn
+from minicode.llm import AssistantTurn, ToolCall
 from minicode.session import Session, export_filename, search_logs, to_markdown
 
 
@@ -500,6 +500,35 @@ def test_export_session_needs_content(config, tmp_path):
     bridge, _window, _session = make(config, tmp_path, attach=False)
     r = bridge.export_session()
     assert not r["ok"] and "没有对话内容" in r["msg"]
+
+
+# ------------------------------------------------------------ 丢弃最后一次回答
+
+
+def test_drop_last_answer_keeps_the_question_but_clears_the_round_trip():
+    """「重新生成」的后端一半:撤的是上一段**输出**(含工具往返),那句提问原地留着。"""
+    s = Session(system_prompt="sys")
+    s.add_user("第一个问题")
+    s.add_assistant(AssistantTurn(text="第一个答案"))
+    s.add_user("第二个问题")
+    s.add_assistant(AssistantTurn(tool_calls=[
+        ToolCall(id="c1", name="grep", arguments="{}")]))
+    s.add_tool_result("c1", "grep", "命中若干")
+    s.add_assistant(AssistantTurn(text="第二个答案"))
+
+    assert s.drop_last_answer() == 3
+    assert s.messages[-1]["role"] == "user"
+    assert not [m for m in s.messages if m.get("role") == "tool"], "工具结果要一起撤掉"
+    assert len([m for m in s.messages if m.get("role") == "user"]) == 2
+
+
+def test_drop_last_answer_is_a_noop_when_nothing_has_been_answered():
+    s = Session(system_prompt="sys")
+    assert s.drop_last_answer() == 0          # 连提问都没有
+    s.add_user("问了但还没答")
+    assert s.drop_last_answer() == 0
+    assert len(s.messages) == 2
+    assert s.last_user_message()["content"] == "问了但还没答"
 
 
 # ---------------------------------------------------------------- 会话搜索

@@ -666,6 +666,9 @@ try {
   .msg.rated .acts button.rt-up, .msg.rated .acts button.rt-dn{
     opacity:.35; pointer-events:none; }
   .msg.rated .acts button.picked{ opacity:1; border-color:var(--primary); color:var(--primary-text); }
+  /* 「重新生成」只对最后一条回答开着:评过分的也照开(不满意才更要重答) */
+  .acts button.rt-re[disabled]{ opacity:.3; pointer-events:none; }
+  .acts button.rt-re.pending{ opacity:.5; pointer-events:none; }
   .reasoning{ display:none; }
 
   /* 可读性:消息相关表面一律实底(覆盖半透明),深浅两套都给足对比 */
@@ -2420,7 +2423,7 @@ function ensureAssistant() {
     <div class="body" hidden></div>
     <div class="stats" hidden title="本次输出的实测耗时与速度(服务端返回 token 数才显示速度)"></div>
     <div class="acts"><button class="cp" title="复制回复">⧉</button>
-      <span class="rate"><button class="rt-up" title="这个回答有帮助">👍</button><button class="rt-dn" title="这个回答不对/没帮助">👎</button></span></div>`;
+      <span class="rate"><button class="rt-up" title="这个回答有帮助">👍</button><button class="rt-dn" title="这个回答不对/没帮助">👎</button><button class="rt-re" title="撤掉这段回答,照原样再答一次">↻</button></span></div>`;
   chat.appendChild(wrap);
   bindCopy(wrap.querySelector(".cp"), () => wrap.dataset.raw);
   // 消息级反馈:👍/👎 只在带正文的助手消息上出现(纯工具调用消息的 .acts 会被整条移除)
@@ -2438,6 +2441,24 @@ function ensureAssistant() {
   };
   rtUp.addEventListener("click", () => doRate(1, rtUp));
   rtDn.addEventListener("click", () => doRate(-1, rtDn));
+  // 「重新生成」:把这段回答撤下来,让后端照原样重跑那句提问(带上当时的附件消息体)。
+  // 只给最后一条回答开着 —— 更早的那条点重答会把后面整段一起丢掉,所以直接关掉。
+  const rtRe = wrap.querySelector(".rt-re");
+  chat.querySelectorAll(".msg.assistant .rt-re")
+    .forEach(b => { if (b !== rtRe) b.disabled = true; });
+  rtRe.addEventListener("click", () => {
+    const api = window.pywebview && pywebview.api;
+    if (!api || !api.regenerate || rtRe.classList.contains("pending")) return;
+    rtRe.classList.add("pending");
+    const done = () => rtRe.classList.remove("pending");
+    api.regenerate().then(r => {
+      done();
+      if (!r || r.ok === false) { toast((r && r.msg) || "没能重新生成", true); return; }
+      let n = wrap;                        // 摘掉这条回答(提问那条在它前面,留着)
+      while (n) { const next = n.nextSibling; n.remove(); n = next; }
+      cur = null; lastTool = null;         // 新答案要另起一条气泡,别写进已摘掉的旧节点
+    }).catch(() => { done(); toast("重新生成没送到后端", true); });
+  });
   const trace = wrap.querySelector(".trace");
   trace.querySelector(".tr-head").addEventListener("click", () => {
     trace.classList.toggle("open");

@@ -74,6 +74,10 @@ class PublicApi:
     def send_task(self, text: str, attachments: str = "[]") -> dict:
         return self._b.send_task(text, attachments)
 
+    def regenerate(self) -> dict:
+        """重新生成:撤掉上一段回答,照原样重跑那句提问(带上当时的附件)。"""
+        return self._b.regenerate()
+
     def pick_attachments(self) -> dict:
         return self._b.pick_attachments()
 
@@ -1354,6 +1358,30 @@ class Bridge:
         runner.thread.start()
         return {"ok": True, "session": runner.key}
 
+    def regenerate(self) -> dict:
+        """「重新生成」:撤掉上一段回答,照**原样**重跑那句提问。
+
+        与「编辑重发」的区别是这里没有新文本,所以走 `add_user=False`:那条提问原地不动,
+        既不重复追加(模型会把同一句看到两遍,答出来的是"下一题"),也不掉当时的附件
+        —— 拍错题那类提问重答一次,图还得在。
+        点 👎 已经记进反馈日志的那条**不清除**:那是"这答得不好"的信号,差评回灌要用。
+        """
+        runner = self._current
+        if runner.busy:
+            return {"ok": False, "msg": "当前会话有任务正在进行中"}
+        last = runner.session.last_user_message()
+        if last is None:
+            return {"ok": False, "msg": "还没有提问,没有可重答的回答"}
+        if not runner.session.drop_last_answer():
+            return {"ok": False, "msg": "最后一条就是提问本身,还没有答过的内容"}
+        content = last.get("content")
+        text = display_text(content)
+        runner.thread = threading.Thread(
+            target=self._run_task, args=(runner, text, content),
+            kwargs={"add_user": False}, daemon=True)
+        runner.thread.start()
+        return {"ok": True, "session": runner.key}
+
     # ------------------------------------------------------------ 附件
 
     def pick_attachments(self) -> dict:
@@ -2179,13 +2207,14 @@ class Bridge:
 
     # ------------------------------------------------------------ 内部
 
-    def _run_task(self, runner: SessionRunner, text: str, content=None) -> None:
+    def _run_task(self, runner: SessionRunner, text: str, content=None,
+                  *, add_user: bool = True) -> None:
         """在后台线程里跑一个回合(每个会话一个线程,互不干扰)。"""
         runner.busy = True
         runner.ui.push("busy", value=True)
         self._push_sessions()          # 立刻让侧栏标上"运行中"的转圈
         try:
-            runner.agent.run_turn(text, content)
+            runner.agent.run_turn(text, content, add_user=add_user)
         except Exception as e:  # 引擎之外的意外错误也要让前端知道
             runner.ui.push("error", text=f"内部错误: {type(e).__name__}: {e}")
         finally:

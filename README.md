@@ -84,7 +84,7 @@ echo "列出 TODO" | python main.py   # 管道输入
 python main.py --workspace "D:\我的资料"   # 指定工作区启动(路径不合法直接报错退出)
 ```
 
-CLI 命令:`/help` `/clear` `/model`(供应商列表)`/history` `/resume [<n>]` `/undo` `/compact`
+CLI 命令:`/help` `/clear` `/model`(供应商列表)`/history` `/resume [<n>]` `/find [<关键词>]`(搜自己的历史会话)`/undo` `/compact`
 `/sandbox` `/workspace [路径|default]` `/memory` `/remember` `/dream` `/skills` `/kb`(知识库统计)`/plan`
 `/library`(馆藏库状态)`/usage [1|7|30]`(token 用量)`/browser`(浏览器能力状态)`/exit`;
 `Ctrl+C` 中断当前回合。

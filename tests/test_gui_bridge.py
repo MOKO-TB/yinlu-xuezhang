@@ -133,6 +133,39 @@ def test_confirm_denied_skips_write(config, tmp_path):
     assert not (tmp_path / "gui.txt").exists()
 
 
+def test_regenerate_replaces_the_last_answer(config, tmp_path):
+    """"重新生成":旧答案从上下文里撤下,那句提问**原地**重跑一次(不再追加第二遍)。"""
+    llm = FakeLLM([AssistantTurn(text="第一版答案"), AssistantTurn(text="第二版答案")])
+    bridge, window, session = make(config, tmp_path, llm)
+
+    assert bridge.send_task("怎么查绩点")["ok"]
+    assert wait_until(lambda: bridge._busy)
+    assert wait_until(lambda: not bridge._busy)
+    assert bridge.regenerate()["ok"]
+    assert wait_until(lambda: bridge._busy)
+    assert wait_until(lambda: not bridge._busy)
+
+    bodies = [m.get("content") for m in session.messages if m.get("role") == "assistant"]
+    assert "第二版答案" in bodies and "第一版答案" not in bodies
+    users = [m for m in session.messages if m.get("role") == "user"]
+    assert len(users) == 1, "重答不是重新发问:那句提问只能有一条"
+    # 旧答案留在留档里(追加式),只补一行 regenerated 标记 —— 与 cleared/compacted 同一口径
+    log = session.log_path.read_text(encoding="utf-8")
+    assert '"regenerated"' in log
+
+
+def test_regenerate_refuses_when_there_is_nothing_to_redo(config, tmp_path):
+    llm = FakeLLM([AssistantTurn(text="答案")])
+    bridge, _window, session = make(config, tmp_path, llm)
+
+    r = bridge.regenerate()
+    assert r["ok"] is False and r["msg"], "空会话点重答要说清为什么不做,别静默"
+
+    session.add_user("只提问还没答过")
+    r = bridge.regenerate()
+    assert r["ok"] is False and "提问" in r["msg"]
+
+
 def test_stop_interrupts_stream(config, tmp_path):
     llm = FakeLLMScripted(["a", "b", "c", "d", "e"])
     bridge, window, _ = make(config, tmp_path, llm)

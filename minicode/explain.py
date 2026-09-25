@@ -34,6 +34,7 @@ _CMD_RULES: list[tuple[str, str]] = [
 ]
 
 _READONLY_TOOLS = {"read_file", "glob", "grep", "search_knowledge", "use_skill",
+                   "search_history",
                    "library_search", "map_find_place", "map_show_list",
                    "map_highlight_building", "map_drop_pin", "map_clear",
                    "browser_status"}

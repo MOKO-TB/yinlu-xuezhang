@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from minicode.llm import AssistantTurn
+from minicode.paths import SESSIONS_DIR
 
 
 @dataclass
@@ -116,6 +117,30 @@ class Session:
             log_marker="compacted",
         )
 
+    def drop_last_answer(self) -> int:
+        """丢掉最近一次回答(最后那句 user 之后的一切),返回丢掉的条数。
+
+        「重新生成」是**换个答法**,不是撤回提问 —— 用户那句留着。丢掉的行不从留档里
+        抹掉,只补一行 `regenerated` 标记(与 cleared/compacted/resumed 同一套追加式
+        口径):复盘时看得见这里重答过;代价是恢复整份留档时会把旧答案一起带回来,
+        与 `compacted` 现有的行为一致。
+        """
+        msgs = self.messages
+        last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"),
+                        default=-1)
+        if last_user < 0 or last_user == len(msgs) - 1:
+            return 0                    # 没提问过,或提问后一个字都还没答
+        dropped = len(msgs) - last_user - 1
+        self._replace_messages(msgs[:last_user + 1], log_marker="regenerated")
+        return dropped
+
+    def last_user_message(self) -> dict | None:
+        """上下文里最后那句用户消息(「重新生成」要照它重跑一遍)。"""
+        for m in reversed(self.messages):
+            if m.get("role") == "user":
+                return m
+        return None
+
     # ------------------------------------------------------------------
 
     def _replace_messages(self, body: list[dict], log_marker: str) -> None:
@@ -186,17 +211,23 @@ def export_filename(sess: "Session", prefix: str = "引路学长会话") -> str:
     return f"{prefix}-{stamp}.md"
 
 
-def search_logs(log_dir: Path, query: str, limit: int = 50) -> list[dict]:
+def search_logs(log_dir: Path, query: str, limit: int = 50,
+                snippet_chars: int = 80) -> list[dict]:
     """在所有会话留档里搜关键词,返回 [{"path", "hits", "snippet"}]。
 
     大小写不敏感的子串匹配 —— 留档以中文为主,上分词器纯属负担,而且会让
     "搜不到"变得无法解释。每条命中给一段上下文片段:界面上要能看见
     "为什么这条算命中",否则用户只能挨个点开试。
+
+    `snippet_chars` 只改片段窗口,默认 80 = 侧栏搜索框现在的样子;模型侧要用
+    这段片段直接回答"上次怎么解决的",80 字不够,所以 `search_history` 传更大的数。
     """
     query = (query or "").strip()
     if not query or not log_dir.exists():
         return []
     needle = query.lower()
+    lead = min(24, snippet_chars)
+    trail = max(snippet_chars - lead, 0)
     out: list[dict] = []
     files = sorted(log_dir.glob("session_*.jsonl"),
                    key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
@@ -223,13 +254,85 @@ def search_logs(log_dir: Path, query: str, limit: int = 50) -> list[dict]:
                 continue
             hits += low.count(needle)
             if not snippet:
-                start = max(0, at - 24)
+                start = max(0, at - lead)
                 snippet = ("…" if start else "") + \
-                    content[start:at + len(query) + 56].replace("\n", " ")
+                    content[start:at + len(query) + trail].replace("\n", " ")
         if hits:
             out.append({"path": path, "hits": hits, "snippet": snippet.strip()})
     out.sort(key=lambda h: h["hits"], reverse=True)
     return out
+
+
+# ------------------------------------------------------------------ 跨会话记忆
+
+HISTORY_SCAN_FILES = 60      # 一次翻最近多少个留档
+HISTORY_TOP_LIMIT = 5        # 最多回几条
+HISTORY_SNIPPET_CHARS = 420  # 每条命中的上下文窗口:要够接住"上次那个报错怎么解决的"
+HISTORY_TOTAL_CHARS = 2600   # 输出总长上限:几段片段不该把整轮回话挤掉
+
+
+def history_hits(query: str, top: int = 3, log_dir: Path | None = None,
+                 snippet_chars: int = HISTORY_SNIPPET_CHARS,
+                 scan_files: int = HISTORY_SCAN_FILES) -> list[dict]:
+    """按关键词翻本机历史会话留档,返回
+    [{"when", "workspace", "opening", "hits", "snippet"}](按命中次数排序)。
+
+    留档在 `APP_DIR/sessions`,工作区围栏之外 —— `read_file`/`glob`/`grep` 都到不了,
+    这是刻意的(里面全是用户自己的话)。这里是一份**受控**出口:只取 role 为
+    user/assistant 的正文(工具往返不进结果),对外只给会话时间、工作区目录名与首问,
+    绝对路径一个字都不下发。工具侧 `search_history` 与 CLI 的 `/find` 都渲染这份
+    结果,同一份算法两处消费。
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    log_dir = Path(log_dir) if log_dir is not None else SESSIONS_DIR
+    hits = search_logs(log_dir, q, limit=scan_files, snippet_chars=snippet_chars)
+    labels = {s.path: s for s in list_sessions(log_dir, limit=scan_files)}
+    out: list[dict] = []
+    for hit in hits[:max(top, 1)]:
+        s = labels.get(hit["path"])
+        out.append({
+            "when": (s.time[:16] if s else hit["path"].stem),
+            "workspace": (Path(s.workspace).name if s and s.workspace else ""),
+            "opening": (s.last_user_text if s else ""),
+            "hits": hit["hits"],
+            "snippet": hit["snippet"],
+        })
+    return out
+
+
+def search_history(ctx, query: str, limit: int = 3) -> str:
+    """跨会话检索历史留档(只读工具):学长记起"我们上次聊过什么"的唯一入口。"""
+    q = (query or "").strip()
+    if not q:
+        return "要给一个关键词才能搜历史会话,如 query=\"报错\" / query=\"蓝桥杯\"。"
+    try:
+        top = max(1, min(int(limit or 3), HISTORY_TOP_LIMIT))
+    except (TypeError, ValueError):
+        top = 3
+    found = history_hits(q, top=top)
+    if not found:
+        return (f"最近 {HISTORY_SCAN_FILES} 个会话留档里没有提到「{q}」的内容。"
+                "没查到就是没查到 —— 别编「我们上次说过」,如实告诉用户并换个关键词再试。")
+    lines = [f"在历史会话里找到提到「{q}」的 {len(found)} 段对话"
+             f"(翻了最近 {HISTORY_SCAN_FILES} 个留档,按命中次数排序):"]
+    used = 0
+    for i, h in enumerate(found, start=1):
+        head = h["when"]
+        if h["workspace"]:
+            head += f" · 工作区 {h['workspace']}"
+        if h["opening"]:
+            head += f" · 那轮开头问的是「{h['opening'][:40]}」"
+        block = f"[{i}] {head}(命中 {h['hits']} 次)\n    {h['snippet']}"
+        if used + len(block) > HISTORY_TOTAL_CHARS:
+            lines.append("（剩下的片段太长没贴出来,可在侧栏搜索框打开对应会话看全文）")
+            break
+        lines.append(block)
+        used += len(block)
+    lines.append("口径:只搜你本机留档里的用户与助手正文(不含工具往返);要接着那次往下聊,"
+                 "让用户在侧栏搜索框点开该会话,或 CLI 用 /resume。")
+    return "\n".join(lines)
 
 
 def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:

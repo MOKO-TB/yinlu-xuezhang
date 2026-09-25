@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from minicode import growth, kb, memory, planning, skills
+from minicode import growth, kb, memory, planning, session, skills
 from minicode.tools.base import Tool
 
 
@@ -93,6 +93,39 @@ def skills_plan_search() -> list[Tool]:
             },
             handler=kb.search_knowledge,
             trust="external",
+            read_only=True,
+        ),
+    ]
+
+
+def history_tool() -> list[Tool]:
+    """跨会话历史检索。单独一组:它挨着 `search_knowledge` 装配,但不属于上面那三件
+    的历史顺序 —— 把它们四个并成一个函数会改动 `registry.py` 里已钉住的装配序列。"""
+    return [
+        Tool(
+            name="search_history",
+            description=(
+                "在**你自己本机**的历史会话留档里搜关键词,接住「上次那个报错我们后来怎么解决的」"
+                "「之前聊的择校结论是什么」这类跨会话的问题。用户提到「上次 / 之前 / 我们说过 / "
+                "你还记得」时**先调本工具再回答**:知识库(search_knowledge)装的是校园公开资料,"
+                "长期记忆(memory)只装着被显式记下的那几句,两者都不含整段对话。"
+                "返回按命中次数排序的原文片段,附会话时间与工作区名;没查到就照实说没查到,"
+                "绝不据此编内容。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string",
+                              "description": "关键词,取用户原话里最特别的词,如:报错 / 蓝桥杯 / 择校"},
+                    "limit": {"type": "integer",
+                              "description": "返回几条命中,默认 3,最多 5"},
+                },
+                "required": ["query"],
+            },
+            # trust=local 的依据:search_logs 只取 role 为 user/assistant 的行,
+            # 工具往返(外部网页原文)根本不进结果 —— 剩下的都是用户说的话与助手的回话。
+            handler=session.search_history,
+            trust="local",
             read_only=True,
         ),
     ]

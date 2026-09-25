@@ -23,12 +23,14 @@ TOOLS_DIR = ROOT / "minicode" / "tools"
 
 # 拆分前 `build_default_registry()` 的真实顺序(2026-09-24 从 git HEAD 那份 987 行
 # 逐个抄出,拆完用运行期结果逐字对过)。要重排请单独一轮并说清为什么。
+# 之后新增的工具只有 `search_history`(跨会话记忆),按"新工具挨着它的同类"
+# 插在 `search_knowledge` 后面,其余顺序一字未动。
 ORDER = [
     "read_file", "write_file", "edit_file", "bash", "py_script", "glob", "grep",
     "web_crawl", "web_search", "browser_open", "browser_eval", "browser_snapshot",
     "browser_click", "browser_fill", "browser_screenshot", "browser_close",
     "browser_status", "page_parse",
-    "use_skill", "plan", "search_knowledge",
+    "use_skill", "plan", "search_knowledge", "search_history",
     "ocr_image", "render_chart", "generate_image",
     "campus_calendar", "gpa_calc",
     "kb_suggest",
@@ -69,13 +71,13 @@ def _catalog_tool_names() -> dict[str, str]:
 
 # ---------------- 1. 顺序与数量 ----------------
 
-def test_registry_returns_the_same_forty_tools_in_the_same_order():
+def test_registry_returns_the_same_forty_one_tools_in_the_same_order():
     assert [t.name for t in registry.build_default_registry()] == ORDER
 
 
 def test_order_pin_is_not_stale():
-    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 40 个不重名。"""
-    assert len(ORDER) == len(set(ORDER)) == 40
+    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 41 个不重名。"""
+    assert len(ORDER) == len(set(ORDER)) == 41
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

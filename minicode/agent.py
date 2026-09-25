@@ -67,11 +67,16 @@ class Agent:
                 pass
             self.mcp = None
 
-    def run_turn(self, user_input: str, content=None) -> None:
-        """跑一个回合。content 可选:带附件时的多模态消息体(list[dict])。"""
+    def run_turn(self, user_input: str, content=None, *, add_user: bool = True) -> None:
+        """跑一个回合。content 可选:带附件时的多模态消息体(list[dict])。
+
+        `add_user=False` 给用户点「重新生成」用:那句提问已经在上下文里了(而且带着
+        当时的附件消息体),再追加一遍会让模型把同一句话看到两遍,答出来的是"下一题"。
+        """
         self._refresh_clock()      # 跨天了先重建日期与课表段,再收这条新消息
         self.gate.new_turn()
-        self.session.add_user(user_input, content)
+        if add_user:
+            self.session.add_user(user_input, content)
 
         # 一轮总时限:只圈"这一轮一共转了多少次",不圈单条命令(那是沙箱的
         # timeout_seconds)也不圈单次请求(那是 request_timeout_seconds)。

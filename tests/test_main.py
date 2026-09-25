@@ -59,6 +59,7 @@ SILENT_COMMANDS = ("/clear", "/compact")   # 只改状态,不往 UI 打消息
     "/sandbox", "/sandbox off", "/memory", "/memory user",
     "/remember 喜欢先给结论", "/dream", "/dream all",
     "/skills", "/kb", "/plan", "/nothing-like-this",
+    "/find", "/find 三体",
 ])
 def test_slash_commands_do_not_crash(env, cmd):
     """重构 handle_slash 时漏传 workspace,曾让 /memory /plan /skills /kb 直接 NameError。"""
@@ -83,6 +84,28 @@ def test_history_reports_the_same_ruler_the_compact_trigger_uses(env):
     text = "\n".join(t for _kind, t in ui.messages)
     assert f"{agent.context_tokens()} tokens" in text
     assert "工具定义 1234 tokens" in text
+
+
+def test_find_prints_hits_without_leaking_the_sessions_path(env, monkeypatch):
+    """/find 与模型侧 search_history 共用 history_hits:终端这条要真能搜到自己说过的话,
+    但留档绝对路径不该打到屏幕上(那是家目录)。"""
+    import json
+
+    from minicode import session as session_mod
+    _workspace, ui, agent = env
+    logs = _workspace / "sessions"
+    logs.mkdir()
+    (logs / "session_20260917_2130.jsonl").write_text("\n".join(json.dumps(e, ensure_ascii=False) for e in [
+        {"type": "session_start", "time": "2026-09-17 21:30", "workspace": str(_workspace)},
+        {"role": "user", "content": "三体这本书在图书馆哪里"},
+        {"role": "assistant", "content": "三楼社科阅览室"},
+    ]) + "\n", encoding="utf-8")
+    monkeypatch.setattr(session_mod, "SESSIONS_DIR", logs)
+
+    handle_slash("/find 三体", Session(system_prompt="x"), Config(), ui, agent)
+    text = "\n".join(t for _kind, t in ui.messages)
+    assert "2026-09-17 21:30" in text and "图书馆" in text
+    assert str(logs) not in text, "留档绝对路径不该出现在终端"
 
 
 def test_dream_command_reports_result(env):

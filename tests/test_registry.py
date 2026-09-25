@@ -10,7 +10,8 @@ def test_registry_contents():
                      "browser_click", "browser_fill", "browser_screenshot",
                      "browser_close", "browser_status", "page_parse",
                      "use_skill", "plan",
-                     "search_knowledge", "ocr_image", "render_chart", "generate_image",
+                     "search_knowledge", "search_history",
+                     "ocr_image", "render_chart", "generate_image",
                      "campus_calendar", "gpa_calc",
                      "kb_suggest", "library_search", "library_guide", "memory",
                      "reminder", "mood", "schedule", "desktop_notify", "get_weather",
@@ -44,6 +45,8 @@ def test_read_only_flags():
         "page_parse": True,           # 只把页面上的表读成结构化文字,不写文件不驱动页面
         "use_skill": True,
         "search_knowledge": True,
+        # 翻本机历史会话:只读,且只出用户/助手正文,不下发绝对路径
+        "search_history": True,
         # 拍错题识别:不写文件,但 vision 后端会把图发给模型 —— 外发由 trust="external" 管
         "ocr_image": True,
         # 图表:要在 charts/ 落一个文件,和 write_file 同级 —— 但它不联网、不读本机数据
