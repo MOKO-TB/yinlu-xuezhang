@@ -668,6 +668,12 @@ try {
   .msg.rated .acts button.picked{ opacity:1; border-color:var(--primary); color:var(--primary-text); }
   /* 「重新生成」只对最后一条回答开着:评过分的也照开(不满意才更要重答) */
   .acts button.rt-re[disabled]{ opacity:.3; pointer-events:none; }
+  /* 分享图在排队时先"占住"这颗按钮:排一张卡片要几百毫秒,连点会出好几张图 */
+  .acts button.shr.pending{ opacity:.5; pointer-events:none; }
+  /* 「接着做」那一行:逾期/今天到期的是紧急项,给一条主色描边,但不用红 —— 红在这套
+     暮色玻璃视觉里是"出错",拿来说"今天要做"会让人误读。 */
+  .go-chips .chip-go{ border-color:var(--line-soft); }
+  .go-chips .chip-go.urgent{ border-color:var(--primary); color:var(--primary-text); }
   .acts button.rt-re.pending{ opacity:.5; pointer-events:none; }
   .reasoning{ display:none; }
 
@@ -1500,6 +1506,22 @@ try {
   .sktip{ color:var(--text-3); font-size:11.5px; line-height:1.7; margin:6px 0 0; }
 
   /* ---------------- 工作区弹窗 ---------------- */
+  /* 会话内搜索(v0.9.42)。高亮一律走 CSS Custom Highlight API:它只挂 Range、**不改 DOM**,
+     所以消息上的 ⧉ 复制 / ✎ 编辑重发 / ↻ 重新生成 这些按钮的事件一个都不会被重写
+     innerHTML 弄丢(那是最容易"搜完按钮全失效"的做法)。浏览器不支持时不硬假装有高亮:
+     搜索条里照实写"这个窗口只能跳转",见 setFindNote。 */
+  ::highlight(chat-find){ background:rgba(255,196,64,.42); color:inherit; }
+  ::highlight(chat-find-cur){ background:var(--primary); color:#fff; }
+  #findBar{ position:absolute; top:10px; right:16px; z-index:30; display:none;
+            align-items:center; gap:6px; padding:5px 7px; border-radius:11px;
+            background:var(--glass-strong); border:1px solid var(--line-soft);
+            box-shadow:0 6px 22px rgba(0,0,0,.24); }
+  #findBar.show{ display:flex; }
+  #findInput{ width:196px; font-size:12.5px; }
+  #findCount{ font-size:11.5px; color:var(--text-2); min-width:52px; text-align:center; }
+  #findBar button{ padding:2px 7px; font-size:12px; }
+  #findNote{ font-size:11px; color:var(--text-3); max-width:210px; }
+
   #wsOverlay .dialog{ width:560px; max-width:94vw; }
   #wsOverlay .ws-note{ color:var(--text-2); font-size:12px; line-height:1.65;
                        margin:0 0 12px; }
@@ -1511,6 +1533,12 @@ try {
   #wsOverlay .ws-sub{ font-size:12px; font-weight:800; color:var(--text-2);
                       margin:12px 0 6px; }
   #wsOverlay .ws-list{ max-height:230px; overflow-y:auto; }
+  /* 三个产物目录的标签:计数是后端真数出来的(附件/图片/图表各一个目录) */
+  #wsOverlay .ws-tabs{ display:flex; gap:6px; margin:2px 0 6px; }
+  #wsOverlay .ws-tab{ font-size:11.5px; padding:3px 9px; border-radius:999px;
+                      border:1px solid var(--line-soft); color:var(--text-2); }
+  #wsOverlay .ws-tab.on{ border-color:var(--primary); color:var(--primary-text);
+                         background:var(--primary-light); }
   #wsOverlay .ws-row{ display:flex; align-items:center; gap:10px; padding:8px 10px;
                       border:1px solid var(--line-soft); border-radius:var(--r-m);
                       margin-bottom:6px; cursor:pointer; transition:.15s; }
@@ -1598,7 +1626,7 @@ try {
     <!-- v0.9.11:「+ 新建任务」搬进当前项目卡片(p4);v0.9.12 按用户反馈加回
          侧栏独立入口(p2:首页要一眼看到新建任务),两处并存 -->
     <div class="side-title">项目</div>
-    <button class="side-newtask" id="btnNewTask">＋ 新建任务</button>
+    <button class="side-newtask" id="btnNewTask" title="开一个新会话（Ctrl+N）；正在后台跑的任务不会被打断">＋ 新建任务</button>
     <div class="projects" id="projects"></div>
     <div class="side-title">历史会话</div>
     <div class="sess-search">
@@ -1622,6 +1650,15 @@ try {
 
     <div class="chat-wrap">
       <div id="chat"></div>
+      <div id="findBar" role="search">
+        <input id="findInput" type="search" placeholder="在这条对话里找…（Ctrl+F）"
+               aria-label="会话内搜索" autocomplete="off">
+        <span id="findCount">0 / 0</span>
+        <button id="findPrev" title="上一条命中（↑）">↑</button>
+        <button id="findNext" title="下一条命中（Enter）">↓</button>
+        <button id="findClose" title="关闭搜索（Esc）">✕</button>
+        <span id="findNote" hidden></span>
+      </div>
       <button id="scrollBtn" title="回到底部">↓</button>
     </div>
 
@@ -2008,12 +2045,13 @@ try {
     <div class="ws-cur" id="wsCurrent"></div>
     <div class="ws-sub">最近用过（点一下切过去）</div>
     <div class="ws-list" id="wsList"></div>
-    <div class="ws-sub" id="wsUplTitle">这里的附件</div>
-    <div class="ws-list" id="wsUploads"></div>
+    <div class="ws-sub">这里的文件（三个目录都是只进不出的东西，点标签换）</div>
+    <div class="ws-tabs" id="wsDirs"></div>
+    <div class="ws-list" id="wsFiles"></div>
     <div class="btns">
       <button class="b-no" id="btnWsPick">选择文件夹…</button>
       <button class="b-no" id="btnWsDefault">恢复默认</button>
-      <button class="b-no" id="btnWsUplDelete" title="删掉勾选的附件原件">删除选中附件</button>
+      <button class="b-no" id="btnWsUplDelete" title="删掉勾选的文件原件">删除选中文件</button>
       <button class="b-no" id="btnWsClose">关闭</button>
     </div>
   </div>
@@ -2088,6 +2126,7 @@ const HOME_SUGGESTIONS = [
 ];
 let homeSuggestions = HOME_SUGGESTIONS;   // 启动后由后端按聊天记录动态刷新
 let homeCountdowns = [];                  // 校历倒计时(后端下发,空则整行不显示)
+let homeContinue = [];                     // 「接着做」:计划里正挂着的那步 + 今天/逾期待办
 let homeWeather = null;                   // 首页天气 chip(只读缓存,拿不到就不显示)
 function renderHome() {
   const chips = homeSuggestions.map(t => `<button class="chip">${esc(t)}</button>`).join("");
@@ -2102,6 +2141,15 @@ function renderHome() {
            title="${esc((c.start || "") + (c.note ? " · " + c.note : ""))}">${esc(c.name)} · 还有 ${c.days_left} 天</button>`).join("")}`
     : "";
   const cdRow = (wxChip || cdHtml) ? `<div class="chips cd-chips">${wxChip}${cdHtml}</div>` : "";
+  // 「接着做」:打开应用第一眼给的是"有什么在做/到期",不是"可以问什么"。
+  // 一枚都不自己造 —— 后端 continue_chips 读不到计划也读不到临期待办时返回空,这行整行不出。
+  const goHtml = homeContinue.length
+    ? homeContinue.map(c =>
+        `<button class="chip chip-go${c.urgent ? " urgent" : ""}" data-ask="${esc(c.ask)}"
+           title="${esc((c.note || "") + " · 点一下填进输入框(不自动发)")}">${esc(c.label)}</button>`
+      ).join("")
+    : "";
+  const goRow = goHtml ? `<div class="chips go-chips"><span>接着做：</span>${goHtml}</div>` : "";
   // 地图入口放在首位:不用先学会怎么问,点一下就能自己找楼
   const mapChip = `<button class="chip chip-map" title="打开手绘校园地图,可以搜楼名/俗称,或按类别看">🗺 打开校园地图</button>`;
   // 图书馆固定功能模块入口:点一下直接进图书馆导览(查书/找书/借还流程)
@@ -2112,6 +2160,7 @@ function renderHome() {
       <div class="sub">我是引路学长，你的校园 AI 助手 —— 学习、考试、活动、校园生活，都可以问我。</div>
     </div>
     <div class="home-tray">
+      ${goRow}
       ${cdRow}
       <div class="chips"><span>试试这些：</span>${mapChip}${libChip}${chips}</div>
       <div class="tip">小提示：找楼可以直接问我「图书馆在哪」，也可以点上面的地图自己搜（支持 E栋、s5 这类俗称）；聊天里用鼠标选中文字会出现「复制选区」按钮；思考过程与工具卡片在最终回复给出后会自动收起，点击可重新展开。</div>
@@ -2137,7 +2186,8 @@ function renderHome() {
       send();
       return;
     }
-    if (el.classList.contains("chip-cd")) {
+    if (el.classList.contains("chip-cd") || el.classList.contains("chip-go")) {
+      // 倒计时与「接着做」都只填问题、不自动发:发不发是用户的事
       const input = $("input");
       input.value = el.dataset.ask || el.textContent;
       input.focus();
@@ -2153,6 +2203,10 @@ function renderHome() {
 function refreshHomeSuggestions() {
   if (!window.pywebview || !pywebview.api || !pywebview.api.get_suggestions) return;
   pywebview.api.get_suggestions().then(r => {
+    if (r && Array.isArray(r.continue)) {
+      homeContinue = r.continue;   // 后端给空数组就是"没在做的事",这行整行不出
+      if (chat.querySelector(".placeholder")) renderHome();
+    }
     if (r && Array.isArray(r.suggestions) && r.suggestions.length) {
       homeSuggestions = r.suggestions;
       if (chat.querySelector(".placeholder")) renderHome();   // 仅在首页还开着时刷新
@@ -2323,14 +2377,175 @@ document.addEventListener("mousedown", ev => {
 });
 document.addEventListener("mouseup", () => { mouseDown = false; scheduleSelBar(0); });
 document.addEventListener("pointerup", () => { mouseDown = false; scheduleSelBar(0); });
+/* ---------------- 会话内搜索(Ctrl+F)----------------
+   侧栏能搜历史会话,当前这条长对话反而搜不了 —— 跑了几百条消息的编码任务,想找回
+   "刚才那个报错在哪儿说的"只能滚轮翻。命中判定在前端做(对话正文本来全在 DOM 里),
+   不敲桥。两个坑避开:
+   ① 高亮只挂 Range(`::highlight`),绝不重写 innerHTML —— 后者会把消息上 ⧉ 复制 /
+      ✎ 编辑重发 / ↻ 重新生成 的按钮事件全弄丢,表现是"搜一次按钮就全死"。
+   ② 命中可能落在收起的「💭 工作过程」里(那是 CSS 收着的,不是 hidden 属性),
+      直接滚过去等于滚到一片看不见的位置 —— 所以跳之前先把那一块展开。 */
+const find = {
+  ranges: [], at: -1, q: "",
+  supported: (typeof CSS !== "undefined" && !!CSS.highlights && typeof window.Highlight === "function"),
+};
+
+function setFindNote(text) {
+  const el = $("findNote");
+  el.textContent = text || "";
+  el.hidden = !text;
+}
+
+function collectFindRanges(needle) {
+  const out = [];
+  const walker = document.createTreeWalker($("chat"), NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const v = node.nodeValue;
+      if (!v) return NodeFilter.FILTER_REJECT;
+      const p = node.parentElement;
+      // 搜索条自己、隐藏属性里的、脚本样式里的一律不算(搜到自己会越搜越多)
+      if (!p || p.closest("[hidden], script, style, #findBar")) return NodeFilter.FILTER_REJECT;
+      if (!p.closest(".msg")) return NodeFilter.FILTER_REJECT;
+      return v.toLowerCase().indexOf(needle) >= 0
+        ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    },
+  });
+  let n;
+  while ((n = walker.nextNode())) {
+    const hay = n.nodeValue.toLowerCase();
+    let i = hay.indexOf(needle);
+    while (i >= 0) {
+      const r = document.createRange();
+      try { r.setStart(n, i); r.setEnd(n, i + needle.length); } catch (e) { break; }
+      out.push(r);
+      i = hay.indexOf(needle, i + needle.length);
+    }
+  }
+  return out;
+}
+
+function paintFind() {
+  if (!find.supported) return;
+  CSS.highlights.set("chat-find", new Highlight(...find.ranges));
+  const cur = find.ranges[find.at];
+  if (cur) CSS.highlights.set("chat-find-cur", new Highlight(cur));
+  else CSS.highlights.delete("chat-find-cur");
+}
+
+function clearFind() {
+  find.ranges = []; find.at = -1; find.q = "";
+  if (find.supported) {
+    CSS.highlights.delete("chat-find");
+    CSS.highlights.delete("chat-find-cur");
+  }
+}
+
+function showFindCount() {
+  $("findCount").textContent = find.ranges.length
+    ? (find.at + 1) + " / " + find.ranges.length : (find.q ? "没有命中" : "");
+}
+
+function revealFind() {
+  const r = find.ranges[find.at];
+  if (!r) return;
+  const host = r.startContainer.parentElement;
+  if (!host) return;
+  const trace = host.closest(".trace");
+  if (trace && !trace.classList.contains("open")) trace.classList.add("open");
+  paintFind();
+  showFindCount();          // 计数跟着当前那条走:只在 runFind 里写死 "1 / N"
+                            // 会让跳了半天数字一动不动,用户以为按键没生效
+  // 刚展开完布局还没算,下一帧再滚;block:center 比手算 scrollTop 稳
+  // (#chat 自己滚,但命中也可能在刚变高的过程区里,交给浏览器定位)。
+  requestAnimationFrame(() => host.scrollIntoView({ block: "center", behavior: "smooth" }));
+}
+
+function stepFind(delta) {
+  if (!find.ranges.length) return;
+  find.at = (find.at + delta + find.ranges.length) % find.ranges.length;
+  revealFind();
+}
+
+function runFind(raw, keepView) {
+  find.q = String(raw || "").trim();
+  if (find.q.length < 2) {
+    clearFind();
+    find.q = String(raw || "").trim();       // 输入框里的字还在,只是不算命中
+    $("findCount").textContent = "";
+    setFindNote(find.q ? "再打一两个字才搜(少于 2 字不搜,免得满屏highlight)" : "");
+    if (find.supported) { CSS.highlights.delete("chat-find"); CSS.highlights.delete("chat-find-cur"); }
+    return;
+  }
+  find.ranges = collectFindRanges(find.q.toLowerCase());
+  find.at = find.ranges.length ? 0 : -1;
+  showFindCount();
+  setFindNote(!find.supported && find.ranges.length
+    ? "这个窗口不支持着色高亮,只能跳到命中处(不算骗你说已高亮)" : "");
+  if (find.at >= 0 && !keepView) revealFind();
+  else if (find.supported) { CSS.highlights.delete("chat-find"); CSS.highlights.delete("chat-find-cur"); }
+}
+
+function openFind() {
+  $("findBar").classList.add("show");
+  const box = $("findInput");
+  box.focus();
+  box.select();
+  runFind(box.value);
+}
+
+function closeFind() {
+  $("findBar").classList.remove("show");
+  clearFind();
+  setFindNote("");
+  $("findCount").textContent = "";
+  $("input").focus();
+}
+
+$("findInput").addEventListener("input", () => runFind($("findInput").value));
+$("findInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); stepFind(e.shiftKey ? -1 : 1); }
+  else if (e.key === "Escape") { e.preventDefault(); closeFind(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); stepFind(-1); }
+  else if (e.key === "ArrowDown") { e.preventDefault(); stepFind(1); }
+});
+$("findNext").addEventListener("click", () => stepFind(1));
+$("findPrev").addEventListener("click", () => stepFind(-1));
+$("findClose").addEventListener("click", closeFind);
+
+/* 会话切换的快捷键要用侧栏最近一次渲染的清单,所以把它留一份 */
+let sessionItems = [];
+
+function stepSession(delta) {
+  const list = (sessionItems || []).filter(s => s && (s.file || s.index));
+  if (list.length < 2) { toast("侧栏只有一条会话,没什么可切的"); return; }
+  let at = list.findIndex(s => s.current);
+  at = (at < 0 ? 0 : at) + delta;
+  const next = list[(at + list.length) % list.length];
+  if (next.current) return;
+  pywebview.api.resume_session(next.file || next.index).then(r => {
+    if (r && r.ok === false) toast(r.msg, true);
+  });
+}
+
 document.addEventListener("dblclick", () => scheduleSelBar(0));       // 双击选词
 document.addEventListener("selectionchange", () => { if (!mouseDown) scheduleSelBar(90); });
 document.addEventListener("keydown", ev => {
   // 快捷键(v0.9.13):Ctrl+K 打开模型管理、Ctrl+N 新建任务
   if (ev.ctrlKey && !ev.altKey && !ev.shiftKey) {
     const k = String(ev.key || "").toLowerCase();
+    // Ctrl+F 会话内搜索:WebView2 里 Ctrl+F 默认没绑东西,而"在这条长对话里找一个报错"
+    // 是天天要的动作。输入框里正在打字时也接住 —— 用户按的就是"搜索"这个意图。
+    if (k === "f") { ev.preventDefault(); openFind(); return; }
     if (k === "k") { ev.preventDefault(); openProvDlg(); return; }
     if (k === "n") { ev.preventDefault(); $("btnNewTask").click(); return; }
+  }
+  // Ctrl+Shift+K 聚焦输入框(单列 Ctrl+K 已被模型管理占了;带 Shift 避让)、
+  // Ctrl+Shift+[ / ] 在侧栏会话清单里前后切换 —— 与切标签页的肌肉记忆一致。
+  if (ev.ctrlKey && ev.shiftKey && !ev.altKey) {
+    const k = String(ev.key || "").toLowerCase();
+    if (k === "k") { ev.preventDefault(); $("input").focus(); return; }
+    if (ev.key === "[") { ev.preventDefault(); stepSession(-1); return; }
+    if (ev.key === "]") { ev.preventDefault(); stepSession(1); return; }
   }
   // Ctrl+Shift+M(v0.9.37):收起/展开右侧「任务监控」栏。单列 Ctrl+M 是 WebView2
   // 的缩放一类保留组合,也是浏览器"移动标签"的习惯,所以加 Shift 避让。
@@ -2427,6 +2642,7 @@ function ensureAssistant() {
     <div class="body" hidden></div>
     <div class="stats" hidden title="本次输出的实测耗时与速度(服务端返回 token 数才显示速度)"></div>
     <div class="acts"><button class="cp" title="复制回复">⧉</button>
+      <button class="shr" title="把这段回答排成一张能发群的图片（带来源出处）">🖼</button>
       <span class="rate"><button class="rt-up" title="这个回答有帮助">👍</button><button class="rt-dn" title="这个回答不对/没帮助">👎</button><button class="rt-re" title="撤掉这段回答,照原样再答一次">↻</button></span></div>`;
   chat.appendChild(wrap);
   bindCopy(wrap.querySelector(".cp"), () => wrap.dataset.raw);
@@ -2443,6 +2659,23 @@ function ensureAssistant() {
       .then(r => { if (r && r.ok === false) toast(r.msg || "反馈没有记录成功", true); })
       .catch(() => {});
   };
+  // 分享卡片图:文字取这条回答的原文(与 👍/👎 记的那份同源),路径与文件名后端定。
+  const shr = wrap.querySelector(".shr");
+  shr.addEventListener("click", () => {
+    const api = window.pywebview && pywebview.api;
+    if (!api || !api.share_image || shr.classList.contains("pending")) return;
+    if (!(wrap.dataset.raw || "").trim()) { toast("这段回答还没有文字，排不出卡片", true); return; }
+    shr.classList.add("pending");
+    toast("在排卡片图…");
+    api.share_image(wrap.dataset.raw).then(r => {
+      shr.classList.remove("pending");
+      if (!r || r.ok === false) { toast((r && r.msg) || "没生成成功", true); return; }
+      toast(r.msg || "已生成分享图");
+    }).catch(() => {
+      shr.classList.remove("pending");
+      toast("分享图没生成成本(本机桥没接上)", true);
+    });
+  });
   rtUp.addEventListener("click", () => doRate(1, rtUp));
   rtDn.addEventListener("click", () => doRate(-1, rtDn));
   // 「重新生成」:把这段回答撤下来,让后端照原样重跑那句提问(带上当时的附件消息体)。
@@ -2744,6 +2977,12 @@ window.__gcodeEvent = function (e) {
       break;
     }
     case "finish_stream":
+      // 搜着搜着又来了一条回答:命中数与位置都会变,按原词静默重算一遍。
+      // keepView = 不滚到第一条命中 —— 否则用户刚看完的那段会被视野抢走。
+      if ($("findBar").classList.contains("show")
+          && $("findInput").value.trim().length >= 2) {
+        requestAnimationFrame(() => runFind($("findInput").value, true));
+      }
       if (cur) {
         foldTrace(cur);
         foldAllTraces();
@@ -2850,11 +3089,13 @@ window.__gcodeEvent = function (e) {
       loadTaskMetrics();            // 新会话的模型/消耗/占用从头算
       cur = null; lastTool = null; lastTraceTurn = null;
       resetMap();
+      closeFind();          // 聊天区整个重建:手上那些 Range 指向已摘掉的节点,计数会留着但跳不动
       break;
     case "resumed":
       if (e.session) currentSessionKey = e.session;
       clearAttachments();
       renderHistory(e.messages || []);
+      closeFind();          // 同上:换会话 = 旧 Range 全部失效,关条比留一个跳不动的计数诚实
       loadTaskMetrics();            // 恢复的会话按历史消息重新估算占用
       resetMap();
       requestAnimationFrame(() => toBottom());
@@ -2990,6 +3231,7 @@ function renderHistory(messages) {
 }
 
 function renderSessions(items) {
+  sessionItems = items || [];       // 会话切换快捷键(Ctrl+Shift+[ / ])要按这份顺序走
   const box = $("sessions");
   box.innerHTML = "";
   if (!items.length) {
@@ -6113,22 +6355,46 @@ function renderWsDlg(d) {
   }
 }
 
-/* 工作区 uploads/ 的清单:三个入口(📎、拖进来、剪贴板)只往里拷,以前没有任何地方
-   看得见它多大、也没法删 —— 天天拖 20MB 课件的人,工作区就在无声膨胀。 */
-let wsUplAt = 0;              // 「删除选中附件」二次确认的时间戳(与心情面板清空同一手法)
-let wsUplPicked = "";
+/* 工作区三个"只进不出"的目录:`uploads/`(附件原件 —— 📎 选文件、拖进来、剪贴板三个
+   入口都往这里拷)、`images/`(分享卡片与文生图)、`charts/`(成绩图/时长图)。它们都在
+   **工作区**里,所以不在「我的数据」面板范围内 —— 以前没有任何地方看得见多大,也没有
+   地方删:天天拖 20MB 课件的人,工作区就在无声膨胀;🖼 分享图上线后又多了一个只会生
+   不会清的口。目录由后端白名单管,前端只能在这三个里挑。 */
+const WS_DIRS = [["uploads", "附件"], ["images", "图片"], ["charts", "图表"]];
+let wsFolder = "uploads";
+let wsData = {};
+let wsDelAt = 0, wsDelKey = "";   // 二次确认(与心情面板清空同一手法)
 
-function renderUploads(r) {
-  const list = $("wsUploads");
+function renderWsTabs() {
+  const bar = $("wsDirs");
+  bar.innerHTML = "";
+  for (const [dir, label] of WS_DIRS) {
+    const info = wsData[dir];
+    const b = document.createElement("button");
+    b.className = "ws-tab" + (dir === wsFolder ? " on" : "");
+    b.textContent = (info && info.ok !== false) ? `${label} ${info.count}` : label;
+    b.title = (info && info.count)
+      ? `${dir}/ 里 ${info.count} 个，共 ${humanSize(info.total_bytes)}`
+      : `${dir}/ 现在是空的`;
+    b.addEventListener("click", () => { wsFolder = dir; renderWsFiles(); });
+    bar.appendChild(b);
+  }
+}
+
+function renderWsFiles() {
+  renderWsTabs();
+  const list = $("wsFiles");
   list.innerHTML = "";
-  const items = (r && r.items) || [];
-  if (!items.length) {
-    $("wsUplTitle").textContent = "这里的附件（uploads/ 里还没有东西）";
+  const r = wsData[wsFolder] || {};
+  if (r.ok === false) {
+    list.innerHTML = `<div class="ws-empty">${esc(r.msg || "读不到这个目录")}</div>`;
     return;
   }
-  $("wsUplTitle").textContent =
-    `这里的附件（uploads/ 里 ${r.count} 个,共 ${humanSize(r.total_bytes)}`
-    + (r.shown < r.count ? `,下面只列最近 ${r.shown} 个` : "") + "）";
+  const items = r.items || [];
+  if (!items.length) {
+    list.innerHTML = `<div class="ws-empty">${esc(wsFolder)}/ 里现在是空的</div>`;
+    return;
+  }
   for (const it of items) {
     const el = document.createElement("div");
     el.className = "ws-row";
@@ -6144,30 +6410,39 @@ function renderUploads(r) {
     });
     list.appendChild(el);
   }
+  if (r.shown < r.count) {                     // 只列了最近一部分就要说清
+    const more = document.createElement("div");
+    more.className = "ws-empty";
+    more.textContent = `另有 ${r.count - r.shown} 个没列出(只列最近 ${r.shown} 个)`;
+    list.appendChild(more);
+  }
 }
 
-function refreshUploads() {
-  pywebview.api.uploads_list().then(renderUploads)
-    .catch(() => { $("wsUplTitle").textContent = "这里的附件（读不到 uploads/,不猜）"; });
+function refreshWsFiles() {
+  Promise.all(WS_DIRS.map(([dir]) =>
+    pywebview.api.workspace_files_list(dir)
+      .then(r => [dir, r])
+      .catch(() => [dir, { ok: false, msg: "读不到这个目录(不猜有多大)" }])
+  )).then(pairs => { wsData = {}; pairs.forEach(([d, r]) => { wsData[d] = r; }); renderWsFiles(); });
 }
 
 $("btnWsUplDelete").addEventListener("click", () => {
-  const picked = Array.from(document.querySelectorAll("#wsUploads input:checked"))
+  const picked = Array.from(document.querySelectorAll("#wsFiles input:checked"))
     .map(i => i.dataset.name);
-  if (!picked.length) { toast("先勾上要删的附件", true); return; }
+  if (!picked.length) { toast(`先勾上要删的${wsFolder}/ 里的文件`, true); return; }
   const btn = $("btnWsUplDelete");
-  const key = picked.join("|");
-  if (key !== wsUplPicked || Date.now() - wsUplAt > 8000) {
-    wsUplAt = Date.now(); wsUplPicked = key;
+  const key = wsFolder + "|" + picked.join("|");
+  if (key !== wsDelKey || Date.now() - wsDelAt > 8000) {
+    wsDelAt = Date.now(); wsDelKey = key;
     btn.textContent = `真的删掉这 ${picked.length} 个?再点一次`;
-    toast("删的是附件原件:会话里引用的那条路径会跟着失效,这一步没有备份", true);
+    toast(`删的是 ${wsFolder}/ 里的原件:会话里引用的那条路径会跟着失效,这一步没有备份`, true);
     return;
   }
-  wsUplAt = 0; wsUplPicked = ""; btn.textContent = "删除选中附件";
-  pywebview.api.uploads_delete(JSON.stringify(picked)).then(res => {
-    if (!res || !res.ok) { toast((res && res.msg) || "删除没成功", true); refreshUploads(); return; }
+  wsDelAt = 0; wsDelKey = ""; btn.textContent = "删除选中文件";
+  pywebview.api.workspace_files_delete(JSON.stringify(picked), wsFolder).then(res => {
+    if (!res || !res.ok) { toast((res && res.msg) || "删除没成功", true); refreshWsFiles(); return; }
     toast(res.msg || "已删除");
-    refreshUploads();
+    refreshWsFiles();
   }).catch(e => toast("删除没成功:" + String(e).slice(0, 60), true));
 });
 
@@ -6175,7 +6450,7 @@ function openWsDlg() {
   pywebview.api.get_workspaces().then(d => {
     renderWsDlg(d || {});
     $("wsOverlay").classList.add("show");
-    refreshUploads();
+    refreshWsFiles();
   }).catch(e => toast("读取工作区失败:" + String(e).slice(0, 60), true));
 }
 

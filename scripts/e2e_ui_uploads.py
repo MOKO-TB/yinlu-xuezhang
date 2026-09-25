@@ -1,10 +1,19 @@
 # -*- coding: utf-8 -*-
-"""前端回归:工作区弹窗里那段「这里的附件」看得见大小、删得掉,而且两步确认。
+"""前端回归:工作区弹窗里那三个"只进不出"的目录 —— 看得见大小、删得掉、两步确认。
 
-`uploads/` 以前只进不出:三个入口往里拷,面板看不见、也没地方删(审计的发现四)。
-后端 `uploads_list` / `uploads_delete` 有一堆测试盯着路径安全,这份文件盯的是**界面上
-那几件事**:数字是从后端来的不是前端自己数的、没勾选时不误删、第一次点只 arm 不删、
-删完清单会自己刷新、后端拒了要让用户看到"有几个没删"而不是假装成功。
+后端 `workspace_files_list` / `workspace_files_delete` 有一堆测试盯路径安全(带路径的、
+绝对的、目录、软链到别处的一律拒),这份文件盯的是**界面上那几件事**:
+数字来自后端而不是前端自己数、三个目录各算各的、没勾选不误删、第一次点只 arm 不删、
+删完清单自己刷新、后端拒了要让用户看到有几个没删而不是假装成功。
+
+钉这些:
+1. 打开弹窗列出 `uploads/` 的两个附件,标签上带真条数;
+2. 大小与日期是后端给的(`total_bytes`/`bytes`/`mtime`),前端只做人话化;
+3. 切到「图片」标签看到的是另一个目录(空就是空,不拿附件那两份凑数);
+4. 没勾任何一行点删除 → 一次请求都不发;
+5. 第一次点只 arm(文案自己变成"再点一次"),第二次才发,且只发一次;
+6. 发出去的参数带当前这个目录 —— 在 charts/ 里勾的东西不能删到 uploads/;
+7. 后端回 ok:false + refused 列表时,界面不报成功。
 
 跑法(项目根目录):
     PYTHONIOENCODING=utf-8 .venv\\Scripts\\python.exe scripts\\e2e_ui_uploads.py
@@ -23,20 +32,24 @@ FRONTEND = ROOT / "frontend"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-LISTING = {
-    "ok": True, "count": 2, "total_bytes": 3072, "shown": 2, "dir": "uploads",
-    "items": [{"name": "课件第3章.pdf", "bytes": 2048, "mtime": "2026-09-24 15:02"},
-              {"name": "错题照片.jpg", "bytes": 1024, "mtime": "2026-09-25 09:11"}],
+LISTINGS = {
+    "uploads": {"ok": True, "count": 2, "total_bytes": 3072, "shown": 2, "dir": "uploads",
+                "items": [{"name": "课件第3章.pdf", "bytes": 2048, "mtime": "2026-09-24 15:02"},
+                          {"name": "错题照片.jpg", "bytes": 1024, "mtime": "2026-09-25 09:11"}]},
+    "images": {"ok": True, "count": 0, "total_bytes": 0, "shown": 0, "dir": "images",
+               "items": []},
+    "charts": {"ok": True, "count": 1, "total_bytes": 512, "shown": 1, "dir": "charts",
+               "items": [{"name": "成绩.svg", "bytes": 512, "mtime": "2026-09-26 10:04"}]},
 }
 
 STUB_JS = """
 window.__DELETE_CALLS__ = [];
 window.__DELETE_RESULT__ = {ok:true, deleted:["课件第3章.pdf"], refused:[], freed_bytes:2048,
                             msg:"删掉 1 个,腾出 2048 字节"};
-window.__LIST__ = @@LIST@@;
+window.__LISTINGS__ = @@LISTINGS@@;
 const base = {
   get_info: () => Promise.resolve({
-    version: "0.9.40", app_name: "引路学长",
+    version: "0.9.41", app_name: "引路学长",
     permission_mode: "confirm",
     permission_modes: [{value: "confirm", label: "变更前确认"}],
     session_key: "s1", model: "test-model", active_provider: "test",
@@ -50,9 +63,10 @@ const base = {
   }),
   get_workspaces: () => Promise.resolve({current: {name: "campus", path: "D:/demo/campus"},
                                          default: {}, recent: []}),
-  uploads_list: () => Promise.resolve(window.__LIST__),
-  uploads_delete: (names) => {
-    window.__DELETE_CALLS__.push(JSON.parse(names));
+  workspace_files_list: (folder) => Promise.resolve(
+    window.__LISTINGS__[folder] || {ok:false, msg:"只认这三个目录"}),
+  workspace_files_delete: (names, folder) => {
+    window.__DELETE_CALLS__.push([JSON.parse(names), folder]);
     return Promise.resolve(window.__DELETE_RESULT__);
   },
 };
@@ -97,7 +111,7 @@ def main() -> int:
             failures.append(message)
         print(("  ok   " if cond else "  FAIL ") + message)
 
-    stub = STUB_JS.replace("@@LIST@@", json.dumps(LISTING, ensure_ascii=False))
+    stub = STUB_JS.replace("@@LISTINGS@@", json.dumps(LISTINGS, ensure_ascii=False))
     with sync_playwright() as p:
         browser = _launch(p)
         page = browser.new_page(viewport={"width": 1280, "height": 860})
@@ -107,47 +121,57 @@ def main() -> int:
         page.wait_for_timeout(900)
 
         page.click("#wsPill")
-        page.wait_for_timeout(400)
-        check(page.locator("#wsUploads .ws-row").count() == 2,
-              "① 弹窗里列出了 uploads/ 的两个附件")
-        title = page.text_content("#wsUplTitle")
-        check("3 KB" in title and "2 个" in title,
-              f"② 总大小与条数是后端给的:{title.strip()[:60]}")
-        sizes = page.text_content("#wsUploads")
-        check("2 KB" in sizes and "1 KB" in sizes and "2026-09-24" in sizes,
-              "② 每行有大小与日期,不是一串字节数")
+        page.wait_for_timeout(500)
+        check(page.locator("#wsFiles .ws-row").count() == 2,
+              f"① 弹窗列出 uploads/ 的两个附件(实得 {page.locator('#wsFiles .ws-row').count()})")
+        tabs = page.evaluate("() => [...document.querySelectorAll('.ws-tab')].map(b=>b.textContent)")
+        check(tabs == ["附件 2", "图片 0", "图表 1"], f"① 三个标签各带真条数:{tabs}")
+        first_title = page.get_attribute(".ws-tab", "title")
+        check("3 KB" in first_title and "2 个" in first_title,
+              f"② 标签的悬停说明里是后端给的总数:{first_title}")
+        row = page.text_content("#wsFiles .ws-row")
+        check("2 KB" in row and "2026-09-24" in row, "② 每行有大小与日期,不是一串字节数")
 
-        # 没勾任何一行就点删除 → 一次都不该发给桥
-        page.click("#btnWsUplDelete")
-        page.wait_for_timeout(200)
-        check(page.evaluate("window.__DELETE_CALLS__") == [],
-              "③ 没勾选时不误删,也不把空清单发给后端")
+        # ---- 3) 切标签看另一个目录
+        page.click(".ws-tab:nth-of-type(2)")
+        page.wait_for_timeout(280)
+        check("images/ 里现在是空的" in page.text_content("#wsFiles"),
+              "③ 切到「图片」看到的是那个目录自己的内容(空就说空)")
+        page.click(".ws-tab:nth-of-type(3)")
+        page.wait_for_timeout(280)
+        check(page.locator("#wsFiles .ws-row").count() == 1 and "成绩.svg" in page.text_content("#wsFiles"),
+              "③ 切到「图表」只剩那一张 svg")
 
-        # 勾一个 → 第一次点只是"再点一次",第二次才真发
-        page.check("#wsUploads input")
+        # ---- 4) 没勾选就点删除
+        page.evaluate("() => { window.__DELETE_CALLS__ = []; }")
         page.click("#btnWsUplDelete")
         page.wait_for_timeout(220)
-        calls = page.evaluate("window.__DELETE_CALLS__")
-        check(calls == [], f"④ 第一次点不该真删(只 arm):{calls}")
-        check("再点一次" in page.text_content("#btnWsUplDelete"),
-              "④ 按钮自己说清下一步是什么")
-        page.click("#btnWsUplDelete")
-        page.wait_for_timeout(260)
-        calls = page.evaluate("window.__DELETE_CALLS__")
-        check(calls == [["课件第3章.pdf"]], f"④ 第二次才把选中的发出去:{calls}")
-        check(len(calls) == 1, "④ 一次点击只发一次请求")
+        check(page.evaluate("window.__DELETE_CALLS__") == [], "④ 没勾选时一次请求都不发")
 
-        # 后端拒了一部分 → 界面上要看得见有几个没删,不能报成功
-        page.evaluate("""() => { window.__DELETE_RESULT__ = {ok:false, deleted:[],
-                          refused:['../config.json'], freed_bytes:0,
-                          msg:"没有删掉任何东西"}; }""")
-        page.check("#wsUploads input")
+        # ---- 5~6) 两步确认,且带当前目录
+        page.check("#wsFiles input")
         page.click("#btnWsUplDelete")
-        page.wait_for_timeout(200)
+        page.wait_for_timeout(220)
+        check(page.evaluate("window.__DELETE_CALLS__") == [], "⑤ 第一次点只 arm,不真删")
+        check("再点一次" in page.text_content("#btnWsUplDelete"),
+              "⑤ 按钮自己说清下一步是什么")
         page.click("#btnWsUplDelete")
         page.wait_for_timeout(300)
-        check(len(page.evaluate("window.__DELETE_CALLS__")) == 2,
-              "⑤ 被拒的那次也照样发出去(拒的原因是后端判的,前端不替它决定)")
+        calls = page.evaluate("window.__DELETE_CALLS__")
+        check(calls == [[["成绩.svg"], "charts"]],
+              f"⑥ 发出去的是当前目录 + 勾中的名字:{calls}")
+
+        # ---- 7) 后端拒了不装成功
+        page.evaluate("""() => { window.__DELETE_RESULT__ = {ok:false, deleted:[],
+                          refused:['../../etc/passwd'], freed_bytes:0, msg:"没有删掉任何东西"}; }""")
+        page.click("#wsFiles .ws-row")            # 回到图表那一行,勾上它
+        page.wait_for_timeout(160)
+        page.click("#btnWsUplDelete")
+        page.wait_for_timeout(160)
+        page.click("#btnWsUplDelete")
+        page.wait_for_timeout(300)
+        body = page.text_content("body")
+        check("没有删掉任何东西" in body, "⑦ 后端的原话显示给用户,不报成功")
 
         page.close()
         browser.close()
@@ -160,7 +184,7 @@ def main() -> int:
             print("FAIL:", f)
         print(f"\n{len(failures)} 项不通过")
         return 1
-    print("PASS: uploads 清单来自后端、两步确认才删、没勾不误删、被拒不装成功")
+    print("PASS: 三个目录各算各的、两步确认才删、删除带目录参数、被拒不装成功")
     return 0
 
 

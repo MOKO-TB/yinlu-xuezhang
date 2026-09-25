@@ -121,3 +121,78 @@ def build_suggestions(texts: list[str]) -> list[str]:
 
 def _default_suggestions() -> list[str]:
     return [next(t for t in TOPICS if t.tid == tid).ask for tid in _DEFAULT_ORDER]
+
+
+# ---------------------------------------------------------------- 接着做 chips
+
+CONTINUE_CAP = 3          # 这一行最多几枚;再多就不是"接着做",是刷屏
+TITLE_CAP = 24            # 待办/步骤标题超长按省略号截,不重排也不改写原话
+_FAR_FUTURE = 0           # days_left > 这个数的一律不进这一行
+
+def _short(text: str) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= TITLE_CAP else text[:TITLE_CAP].rstrip() + "…"
+
+
+def continue_chips(plan: dict | None = None, soon: list[dict] | None = None) -> list[dict]:
+    """首页「接着做」那一行:计划里正挂着的那一步 + 今天要交/已逾期的待办。
+
+    与话题 chips 的分工:那行是"可以问什么",这行是"有什么在做、有什么到期"。
+    数据**一律读现成出口**(`planning.plan_state` 的调度视图、`reminders.due_soon`
+    的临期清单),这里不解析日期、不判依赖、不猜状态 —— 那些都各有一处真相。
+
+    诚实规矩:两样都没有就返回空列表,首页那一行整行不出现。编一条"接着做"出来
+    (而用户其实没在做任何事)比没有更糟,这条与 chips 里"没填作息表就不报钟点"同源。
+    """
+    plan = plan if isinstance(plan, dict) else {}
+    soon = soon if isinstance(soon, list) else []
+    cands: list[tuple[int, dict]] = []
+
+    for item in soon:
+        if not isinstance(item, dict):
+            continue
+        title = _short(item.get("title"))
+        days = item.get("days_left")
+        if not title or not isinstance(days, int) or days > _FAR_FUTURE:
+            continue        # 三天开外的事归"倒计时"那一行,不在这里重复出现
+        clock = ""
+        due_at = str(item.get("due_at") or "")
+        if len(due_at) >= 16 and due_at[10] == "T":
+            clock = due_at[11:16]          # 只有真写了钟点才说钟点,不猜"下午"
+        if days < 0:
+            cands.append((0, {
+                "kind": "due", "label": f"已逾期 {-days} 天：{title}",
+                "ask": f"逾期的「{title}」现在怎么处理，还有什么能补救",
+                "note": f"截止 {item.get('due')}", "urgent": True}))
+        else:
+            cands.append((1, {
+                "kind": "due", "label": f"今天要交：{title}" + (f"（{clock}）" if clock else ""),
+                "ask": f"今天要交的「{title}」帮我拆解一下还差什么",
+                "note": "今天截止", "urgent": True}))
+
+    steps = {s.get("n"): s for s in (plan.get("steps") or []) if isinstance(s, dict)}
+    running = [n for n in (plan.get("running") or []) if n in steps]
+    failed = [n for n in (plan.get("failed") or []) if n in steps]
+    ready = [n for n in (plan.get("ready") or []) if n in steps]
+    if running:
+        n = running[0]
+        cands.append((2, {
+            "kind": "plan", "label": f"接着做：第 {n} 步「{_short(steps[n].get('title'))}」",
+            "ask": f"接着做计划的第 {n} 步「{_short(steps[n].get('title'))}」",
+            "note": "计划里标着「进行中」的那一步", "urgent": False}))
+    elif failed:
+        n = failed[0]
+        cands.append((3, {
+            "kind": "plan", "label": f"第 {n} 步失败了：「{_short(steps[n].get('title'))}」",
+            "ask": f"计划里第 {n} 步失败了，先看那一步是怎么回事",
+            "note": "上游没做成的步骤，下游会被判为卡住", "urgent": False})
+                 )
+    elif ready:
+        n = ready[0]
+        cands.append((4, {
+            "kind": "plan", "label": f"下一步可做：第 {n} 步「{_short(steps[n].get('title'))}」",
+            "ask": f"开始做计划的第 {n} 步「{_short(steps[n].get('title'))}」",
+            "note": "依赖都已完成，现在动得了", "urgent": False}))
+
+    cands.sort(key=lambda x: x[0])
+    return [c for _, c in cands[:CONTINUE_CAP]]

@@ -362,3 +362,86 @@ def image_generate(ctx, prompt: str = "", text: str = "", title: str = "",
         return f"这次没有出图:{e}"
     except OSError as e:
         return f"图算好了但写不出去:{out_dir}（{type(e).__name__}: {e}）"
+
+
+# ---------------------------------------------------------------- 回答分享卡片
+#
+# 同学的分享主场是微信/QQ 群:查到的一条校历、算好的绩点、整理出的知识条目,现在
+# 只能"复制一段文字"发出去。这几行把一段回答排成一张能直接发群的竖版卡片,
+# 走的是上面同一条 Pillow 路线(真像素、系统里那份中文字体),不引浏览器 canvas
+# 那条管线 —— 后者要在 WebView2 里外嵌 SVG/字体,多两处会静默出白图的坑。
+#
+# 三条口径:
+# - **来源 URL 自动带上**:回答里出现过 http(s) 链接就列进卡片尾部。延续的是这个项目
+#   "引用可核实"的本能 —— 分享出去的东西自带出处。没有链接就整段不出现,不放一句
+#   "来源见聊天"充数。
+# - **超长如实截断并说明**:放不下时截到预算,并在末尾留一行"完整回答请回聊天里看",
+#   绝不悄悄裁掉尾巴让用户以为发出去的是完整版。
+# - **落盘复用 images/ 那一套**:同名不覆盖(`_unique`)、目录由后端定,前端传不进路径。
+
+SHARE_CHAR_BUDGET = 1500      # 卡片正文的字符预算(超了如实截,不静默裁尾)
+SHARE_MAX_BYTES = 6_000_000   # 一张卡片的字节上限,防病态输入撑爆磁盘
+SHARE_SOURCE_CAP = 6          # 来源最多列几条(再多群里没人点,还会把正文挤没)
+_URL_RE = re.compile(r"https?://[^\s）)】>\"'，。;；、]+")
+
+
+def extract_sources(text: str) -> list[str]:
+    """按出现顺序取出回答里的链接并去重。没链接就是空列表 —— 不编来源。"""
+    out: list[str] = []
+    for url in _URL_RE.findall(str(text or "")):
+        if url not in out:
+            out.append(url)
+    return out
+
+
+def compose_share_card(text: str, sources: list[str] | None = None,
+                       today: str = "") -> tuple[str, bool]:
+    """拼出卡片正文,返回 (文字, 是否被截断)。"""
+    body = " ".join(str(text or "").split())
+    urls = [u for u in (sources if sources is not None else extract_sources(body))
+            if u][:SHARE_SOURCE_CAP]
+    clipped = len(body) > SHARE_CHAR_BUDGET
+    if clipped:
+        body = body[:SHARE_CHAR_BUDGET].rstrip() + "…"
+    lines = [body, ""]
+    if urls:
+        lines.append("来源（可点开核实）：")
+        lines += [f"· {u}" for u in urls]
+        lines.append("")
+    lines.append("—— 引路学长 · 广州应用科技学院")
+    if today:
+        lines.append(today)
+    if clipped:
+        lines.append("（内容较长，卡片只排到这里；完整回答请回聊天里看）")
+    return "\n".join(lines), clipped
+
+
+def save_share_card(workspace, text: str, title: str = "") -> dict:
+    """把一段回答排成分享卡片 PNG,写进工作区 `images/`。
+
+    失败一律回 `{"ok": False, "msg": 真原因}`(没有 Pillow / 中文字体读不动 /
+    文字为空 / 超上限 / 写盘报错) —— 界面要能把这句话给用户看,而不是"生成失败"三个字。
+    """
+    from minicode.charts import slugify
+
+    root = Path(workspace).expanduser().resolve()
+    body = str(text or "").strip()
+    if not body:
+        return {"ok": False, "msg": "这段回答没有文字内容，排不出卡片"}
+    block, clipped = compose_share_card(body, today=time.strftime("%Y-%m-%d"))
+    try:
+        png = render_card(block, title=(title or "校园问答")[:40])
+    except ImageError as e:
+        return {"ok": False, "msg": str(e)}
+    if len(png) > SHARE_MAX_BYTES:
+        return {"ok": False,
+                "msg": f"卡片有 {len(png):,} 字节，超过 {SHARE_MAX_BYTES:,} 的上限，没写盘"}
+    try:
+        out_dir = root / "images"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = _unique(out_dir, slugify("share-" + (title or body[:8])), ".png")
+        path.write_bytes(png)
+    except OSError as e:
+        return {"ok": False, "msg": f"写不进 images/：{type(e).__name__}: {e}"}
+    return {"ok": True, "path": _rel(path, root), "bytes": len(png),
+            "truncated": clipped, "sources": extract_sources(body)[:SHARE_SOURCE_CAP]}

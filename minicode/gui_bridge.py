@@ -44,7 +44,7 @@ from minicode.session import (export_filename as session_export_name,
                               search_logs as search_session_logs,
                               to_markdown as session_to_markdown)
 from minicode.skills import load_skills, skill_dirs
-from minicode.suggestions import build_suggestions, collect_user_texts
+from minicode.suggestions import build_suggestions, collect_user_texts, continue_chips
 from minicode.tools.base import Tool
 
 PREVIEW_LINES = 15
@@ -81,13 +81,14 @@ class PublicApi:
     def pick_attachments(self) -> dict:
         return self._b.pick_attachments()
 
-    def uploads_list(self) -> dict:
-        """工作区 uploads/ 的清单(名字/大小/日期 + 总共占多少)。"""
-        return self._b.uploads_list()
+    def workspace_files_list(self, folder: str = "uploads") -> dict:
+        """工作区产物目录的清单(uploads/images/charts,名字/大小/日期 + 总占用)。"""
+        return self._b.workspace_files_list(folder)
 
-    def uploads_delete(self, names_json: str = "[]") -> dict:
-        """删掉选中的附件;只认 uploads/ 里的真文件名。"""
-        return self._b.uploads_delete(names_json)
+    def workspace_files_delete(self, names_json: str = "[]",
+                               folder: str = "uploads") -> dict:
+        """删掉选中的产物文件;只认那三个目录里的真文件名。"""
+        return self._b.workspace_files_delete(names_json, folder)
 
     def set_sandbox(self, enabled: bool) -> dict:
         return self._b.set_sandbox(enabled)
@@ -100,6 +101,10 @@ class PublicApi:
 
     def get_suggestions(self) -> dict:
         return self._b.get_suggestions()
+
+    def share_image(self, text: str = "") -> dict:
+        """把某段回答排成一张能发群的卡片图(实现在 Bridge,工作区在那边)。"""
+        return self._b.share_image(text)
 
     def rate_message(self, rating: int, question: str = "", answer: str = "") -> dict:
         """消息级 👍/👎 反馈:落到应用目录的反馈日志。"""
@@ -1460,38 +1465,56 @@ class Bridge:
         return {"ok": True, "items": [self._attachment_item(a) for a in atts],
                 "errors": errors}
 
-    # ------------------------------------------------------------ 附件目录(uploads/)
+    # ------------------------------------------------------------ 工作区产物目录
+    #
+    # 三类"只进不出"的东西:`uploads/`(拖进来/粘贴的附件原件)、`images/`(分享卡片与
+    # 文生图)、`charts/`(成绩图/时长图)。它们都在**工作区**里,因此不在「我的数据」面板
+    # 范围内(mydata 把工作区的东西排除在外) —— 于是没任何地方看得见大小,更没地方删。
+    # 《使用说明》第 25 条那句"这两个目录里的东西要手动删"以前是句实话,现在有入口了。
 
+    WORKSPACE_DIRS = ("uploads", "images", "charts")
     UPLOAD_LIST_CAP = 300      # 一次最多列/删多少个:堆到几千个时界面不该跟着卡
 
-    def uploads_list(self) -> dict:
-        """工作区 `uploads/` 的清单:名字、多大、哪天进来的,外加总共占多少。
+    def _workspace_dir(self, folder) -> Path:
+        """把界面传来的目录名限死在这三个产物目录里,别的目录一律不给列、不给删。"""
+        name = str(folder or "").strip()
+        if name not in self.WORKSPACE_DIRS:
+            raise ValueError(f"只认这几个工作区目录:{'/'.join(self.WORKSPACE_DIRS)}")
+        return self.workspace / name
 
-        为什么要有这一条:附件有三个入口往这里拷(📎 选文件、拖进来、剪贴板),但**没有
-        任何地方看得见它** —— `mydata.py` 明写工作区里的东西不在「我的数据」面板范围内,
-        于是天天拖 20MB 课件的人,工作区在无声膨胀。这里给一个看得见也删得掉的地方。
+    def workspace_files_list(self, folder: str = UPLOAD_DIR) -> dict:
+        """工作区某个产物目录的清单:名字、多大、哪天进来,外加总共占多少。
+
+        为什么要有这一条:附件有三个入口往里拷(📎 选文件、拖进来、剪贴板),分享卡片与
+        图表也各有一个,而**没有任何地方看得见它们** —— 天天拖 20MB 课件的人,工作区在
+        无声膨胀。这里给一个看得见也删得掉的地方。
         """
-        base = self.workspace / UPLOAD_DIR
+        try:
+            base = self._workspace_dir(folder)
+        except ValueError as e:      # 桥的边界不往外扔异常:两个方法同一套回法
+            return {"ok": False, "msg": str(e), "items": [], "count": 0,
+                    "total_bytes": 0, "shown": 0}
         if not base.is_dir():
             return {"ok": True, "items": [], "count": 0, "total_bytes": 0,
-                    "shown": 0, "dir": UPLOAD_DIR}
+                    "shown": 0, "dir": str(folder)}
         files = [p for p in base.iterdir() if p.is_file()]
         total = sum(p.stat().st_size for p in files)
         files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         return {"ok": True, "count": len(files), "total_bytes": total,
-                "shown": min(len(files), self.UPLOAD_LIST_CAP), "dir": UPLOAD_DIR,
+                "shown": min(len(files), self.UPLOAD_LIST_CAP), "dir": str(folder),
                 "items": [{"name": p.name, "bytes": p.stat().st_size,
                            "mtime": time.strftime(
                                "%Y-%m-%d %H:%M",
                                time.localtime(p.stat().st_mtime))}
                           for p in files[:self.UPLOAD_LIST_CAP]]}
 
-    def uploads_delete(self, names_json: str = "[]") -> dict:
-        """删掉选中的附件。
+    def workspace_files_delete(self, names_json: str = "[]",
+                               folder: str = UPLOAD_DIR) -> dict:
+        """删掉选中的产物文件。
 
-        **只接受文件名**:带路径分隔符、绝对路径、`..`、解析后不在 `uploads/` 里的、
-        不是真文件的,一律拒并且原样报回去 —— 前端来的字符串不可信,而这是"删除"。
-        目录不删(要清的是文件);删掉的字节数如实报,不猜。
+        **只接受文件名**:带路径分隔符、绝对路径、`..`、解析后不在该目录里的、不是真
+        文件的,一律拒并且原样报回去 —— 前端来的字符串不可信,而这是"删除"。目录本身
+        不删(要清的是文件);删掉的字节数如实报,不猜。
         """
         try:
             names = json.loads(names_json) if isinstance(names_json, str) else names_json
@@ -1499,7 +1522,10 @@ class Bridge:
             return {"ok": False, "msg": "要删的文件名不是有效 JSON"}
         if not isinstance(names, list) or not names:
             return {"ok": False, "msg": "没有选中要删的文件"}
-        base = (self.workspace / UPLOAD_DIR)
+        try:
+            base = self._workspace_dir(folder)
+        except ValueError as e:
+            return {"ok": False, "msg": str(e)}
         base_dir = base.resolve()
         deleted: list[str] = []
         refused: list[str] = []
@@ -1517,7 +1543,7 @@ class Bridge:
                 refused.append(name)
                 continue
             if real.parent != base_dir or not real.is_file():
-                refused.append(name)       # 逃出 uploads/ 的、软链到别处的、目录,都算拒
+                refused.append(name)       # 逃出该目录的、软链到别处的、目录,都算拒
                 continue
             try:
                 size = real.stat().st_size
@@ -1528,9 +1554,9 @@ class Bridge:
             deleted.append(name)
             freed += size
         return {"ok": bool(deleted), "deleted": deleted, "refused": refused,
-                "freed_bytes": freed,
+                "freed_bytes": freed, "dir": str(folder),
                 "msg": (f"删掉 {len(deleted)} 个,腾出 {freed} 字节"
-                        + (f";{len(refused)} 个没删(不在 uploads/ 里或不是文件)"
+                        + (f";{len(refused)} 个没删(不在 {folder}/ 里或不是文件)"
                            if refused else ""))}
 
     def _attachment_item(self, att: Attachment) -> dict:
@@ -1648,9 +1674,43 @@ class Bridge:
         return -1, ""
 
     def get_suggestions(self) -> dict:
-        """首页建议 chips:根据近期聊天记录动态生成。"""
+        """首页两行 chips:「试试这些」按近期聊天打分,「接着做」读计划与待办的真状态。
+
+        第二行是 v0.9.42 补的:数据源里本来躺着任务状态(`plans/plan.md` 的调度视图、
+        今天到期的待办),而首页只会问"你想了解什么"。打开应用第一眼看到的应该是
+        "有什么接着做"。两样都没有时那一行整行不出 —— 读不到状态也绝不编一条出来。
+        """
+        from minicode import planning, reminders
         texts = collect_user_texts(self.sessions_dir, self.session.messages)
-        return {"suggestions": build_suggestions(texts)}
+        out = {"suggestions": build_suggestions(texts), "continue": []}
+        try:
+            out["continue"] = continue_chips(
+                planning.plan_state(self.workspace), reminders.due_soon())
+        except Exception:
+            # 计划文件或待办文件坏了,首页照样起得来,只是少一行真状态
+            pass
+        return out
+
+    def share_image(self, text: str = "") -> dict:
+        """把某段回答排成一张能发群的卡片图,落到工作区 `images/`。
+
+        前端只给文字:目录与文件名一律后端定、同名不覆盖 —— 路径不能由界面传进来。
+        失败回 `ok=False` 带真原因(没有 Pillow / 中文字体读不动 / 文字为空 /
+        超上限 / 写盘报错),那句话要原样显示给用户,不能缩成"生成失败"三个字。
+        """
+        from minicode import images
+        try:
+            got = images.save_share_card(self.workspace, text)
+        except Exception as e:      # 出图的意外不该掀翻桥线程
+            return {"ok": False, "msg": f"生成卡片时出了 {type(e).__name__}，没有写任何文件"}
+        if got.get("ok"):
+            bits = [f"{got.get('bytes', 0):,} 字节"]
+            if got.get("truncated"):
+                bits.append("内容较长，卡片只排了一部分")
+            srcs = got.get("sources") or []
+            bits.append(f"来源 {len(srcs)} 条" if srcs else "这段回答里没有来源链接")
+            got["msg"] = f"已生成分享图：{got.get('path')}（" + "；".join(bits) + "）"
+        return got
 
     def rate_message(self, rating: int, question: str = "", answer: str = "") -> dict:
         """消息级 👍/👎 反馈:追加到应用目录 message-feedback.jsonl。
