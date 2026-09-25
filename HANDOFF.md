@@ -451,6 +451,7 @@ cd /d/game/mini-code
     - **没跑的 `--live`**:方案 §2 第 8 条把行为评测定成"发版前手动那一道",要连内网模型、花真额度、还会读本机课表 —— **本轮一次都没跑**,脚本与断言引擎是拿假 LLM 测过的(绿 / 红 / 连不上三条出口都有断言)。下次谁要跑:`PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe scripts/eval_behavior.py --live`(先 `--case date` 跑三条最便宜的)。**用例表会长厚**:每条都带 `note` 写明断言依据,误判的修法是**收窄断言**而不是放宽红线(方案 §8 那条)。
     - **没打包、没推远端、没发 Release**:`dist/` 里还是 v0.9.39 那次构建的产物。本轮**六组新冻结针**(`compaction: clip_history/schema_tokens/HISTORY_HEAD_CAP`、`session: refresh_system_prompt`、`agent: _refresh_clock/_wrap_up`、`config: max_steps`)要等下次 `check_frozen_version.py` 才验得到 —— 漏收的表现很隐蔽:装好的包里"跨天不刷新""压缩还是保尾丢头""阈值还是只数消息",而界面一切正常。
     - **零备份这条仍然成立**:本分支只有本地提交,`origin` 是本地路径 `D:/game/mini-code`(§7 第 5 条)。上一轮就提过 `git bundle` 到第二块磁盘,**还没做**。
+    - **顺带换的浅色背景(2026-09-25,用户给图 p1「浅色模式的背景换成这个图」)**:覆盖 `frontend/img/campus_day.jpg` **沿用原文件名** —— `--hero-img` 的接线、`packaging/gcode.spec` 整目录收包、以及"切主题即换景"那条机制一处没动,深色仍是他原来那张暮色。新图 1361×784 与旧图同尺寸、EXIF 只有 Picasa 与方向(无 GPS、无机型),所以按字节原样放进去,不重编码不掉质量。**目视核对做了**:`scripts/_shot_themes.py` 起本地 http.server + 真 Chromium 各截一张,浅色那张白玻璃上的顶栏/侧栏/chips/「小提示」两行细字全部读得清,`--hero-dim` 那条"顶部轻提亮、底部轻压暗"的曲线**没改**(改了就是替用户决定他要的观感);深色那张与换图前逐像素无关(同一张图)。
     - **方案里划掉的东西别"顺手补回来"**:每轮时钟行、分块 map-reduce 压缩、"剩 N 轮"运行中提醒、LLM 当裁判、统一 `web_profile.py` 的提示词、改 `calendar.py` 不带时间的设计 —— 六条各有理由,写在方案 §6「刻意不做」,推翻前先回读。
 
 
