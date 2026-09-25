@@ -20,6 +20,7 @@ class GuiUI:
         self.window = None                # webview.Window,启动后注入
         self.stop_requested = False       # 停止按钮:在下一个输出增量处抛中断
         self.confirm_handler = None       # Bridge.confirm_tool,由 create_app 注入
+        self.on_llm_failure = None        # 模型的看门狗,由桥注入(见 GuiUI.llm_error)
         self._send_lock = threading.Lock()
         # ---- 实时表(v0.9.37):每个工具调用的**真实**开始/结束时刻。
         # 会话消息里没有时间戳(留档只有会话开始那一行),所以"跑了多久"这件事
@@ -94,7 +95,14 @@ class GuiUI:
     def llm_error(self, e: Exception) -> None:
         self.push("finish_stream")
         hint = "(请检查 config.json 中的 api_key)" if "401" in str(e) else ""
-        self.push("error", text=f"模型调用失败: {e} {hint}")
+        # `llm: true` 是给前端的信号:只有"这句根本没送到模型"才该把提问放回输入框。
+        # 工具跑到一半才错的情况不是没发出去,放回来说明会误导人。
+        self.push("error", text=f"模型调用失败: {e} {hint}", llm=True)
+        if self.on_llm_failure is not None:
+            try:
+                self.on_llm_failure(str(e))
+            except Exception:
+                pass      # 看门狗自己起不来,不该连带把这条错误提示也弄丢
 
     def max_steps_reached(self, limit: int) -> None:
         # 与 TerminalUI 同一句口径:只说"停止调用工具",不承诺后面一定有收尾。

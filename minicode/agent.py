@@ -16,7 +16,7 @@ from minicode.compaction import compact, estimate_tokens, schema_tokens
 from minicode.llm import LLMClient, ToolCall
 from minicode.model_catalog import context_window_for
 from minicode.permission import ASK, REJECT, PermissionGate
-from minicode.session import Session
+from minicode.session import Session, repair_tool_pairs
 from minicode.tools.base import (
     PathBlocked, PathOutsideWorkspace, Tool, ToolContext, resolve_path,
 )
@@ -116,7 +116,14 @@ class Agent:
                 return
 
             for call in turn.tool_calls:
-                result = self._execute(call)
+                try:
+                    result = self._execute(call)
+                except Exception as e:  # noqa: BLE001 —— 见下面为什么必须兜住
+                    # handler 自己抛错(不止 _execute 里那几种可预期的)也必须落一条
+                    # 结果:少这一条,上下文里就留下"有 call 没结果"的悬空对儿,从这一
+                    # 轮起每次请求都会 400,而用户看不出跟刚才那次报错有什么关系。
+                    result = (f"错误: 工具 {call.name} 执行时抛了 "
+                              f"{type(e).__name__}: {str(e)[:200]}")
                 self.session.add_tool_result(call.id, call.name, result)
         else:
             self.ui.max_steps_reached(self.max_steps)
@@ -174,7 +181,8 @@ class Agent:
             self.ui.info("已跨天,日期与课表已刷新")
 
     def _messages_for_request(self) -> list[dict]:
-        """这一次请求要发的消息 = 留档那份 +(必要时)一条**只活在这一次请求里**的先验。
+        """这一次请求要发的消息 = 留档那份(先过一遍工具调用配对)+(必要时)一条
+        **只活在这一次请求里**的先验。
 
         B1(差评避让)要"给模型一句提示,但不改用户消息、也不进留档正文":所以这里
         **复制**一份消息列表,把先验并进开头那条 system 提示的末尾。为什么并进 system
@@ -184,6 +192,10 @@ class Agent:
         先验只用一次(`_pending_prior` 用完即清),否则同一条会在后面每一步都重复出现。
         """
         msgs = self.session.messages
+        # 发出去前兜一遍配对:`load_from` 只在恢复时清洗,而**压缩**(`replace_messages`
+        # 保头+尾)与上面那个异常补记都可能从中间切断一对 call/result。非法序列被端点
+        # 拒的是整次请求,症状会出现在"下一轮",回溯不到这一轮 —— 所以这道闸要贴着出口。
+        msgs, _fixed = repair_tool_pairs(msgs)
         prior = self._pending_prior
         if not prior:
             return msgs

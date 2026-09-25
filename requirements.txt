@@ -7,3 +7,12 @@ pystray>=0.19          # 系统托盘(v0.9.22):Windows 后端只用 ctypes + six
 pytest>=8.0
 websockets>=12.0        # 浏览器能力(CDP WebSocket 客户端),纯 Python,可随包分发
 crawl4ai>=0.7           # 完整版才需要;轻量版打包时排除
+# 下面四个是**内容技能教模型现写的脚本**要 import 的模块(pptx/docx/openpyxl/pypdf)。
+# 打包那条路由 `packaging/gcode.spec` 的 hiddenimports 收进 exe(它们没有静态引用,
+# 不显式收就漏);源码运行这条只能靠这里声明 —— 少一行,同学跑论文/课件/简历技能的第一
+# 句 `from pypdf import PdfReader` 就是 ModuleNotFoundError。有 tests/test_skill_deps_declared.py
+# 逐块扫技能的 python 代码盯着,别只改一头。下限取本机 .venv 实测在用的版本。
+python-pptx>=1.0.2
+python-docx>=1.2.0
+openpyxl>=3.1.5
+pypdf>=6.19.0

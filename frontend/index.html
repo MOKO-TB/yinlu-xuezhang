@@ -2008,9 +2008,12 @@ try {
     <div class="ws-cur" id="wsCurrent"></div>
     <div class="ws-sub">最近用过（点一下切过去）</div>
     <div class="ws-list" id="wsList"></div>
+    <div class="ws-sub" id="wsUplTitle">这里的附件</div>
+    <div class="ws-list" id="wsUploads"></div>
     <div class="btns">
       <button class="b-no" id="btnWsPick">选择文件夹…</button>
       <button class="b-no" id="btnWsDefault">恢复默认</button>
+      <button class="b-no" id="btnWsUplDelete" title="删掉勾选的附件原件">删除选中附件</button>
       <button class="b-no" id="btnWsClose">关闭</button>
     </div>
   </div>
@@ -2027,6 +2030,7 @@ const chat = $("chat");
 let busy = false;
 let currentSessionKey = null;   // 当前视图对应的会话(后台任务的事件不带这个键就不渲染)
 let cur = null;          // 当前助手消息块 {wrap, body, reasoning, text, reasoningText, timer}
+let lastSent = null;     // 刚发出去、模型那边一句都没答的那句 {text, atts}:失败时放回输入框
 let lastTool = null;     // 最近一张工具卡片
 let lastTraceTurn = null; // 最近一輪的"工作过程"容器(工具卡片落进它的 trace)
 let nearBottom = true;
@@ -2726,6 +2730,7 @@ window.__gcodeEvent = function (e) {
     case "text_delta": {
       const c = ensureAssistant();
       foldAllTraces();
+      lastSent = null;      // 模型真的开始答了:这句是送到了的,不该再放回输入框
       c.text += e.text;
       renderAssistant(false);
       break;
@@ -2928,6 +2933,17 @@ window.__gcodeEvent = function (e) {
     }
     case "error":
       toast(e.text, true);
+      // 只有"整句根本没送到模型"那种失败(llm_error 带 llm 标记)才把话放回输入框。
+      // 工具跑到一半才错的不是"没发出去",放回来说明会误导;也**绝不自动重发**。
+      if (e.llm && lastSent) {
+        $("input").value = lastSent.text;
+        $("input").style.height = "auto";
+        attachments = lastSent.atts.slice();   // 文件一直在工作区 uploads/,复原的是那几枚标签
+        renderAttachments();
+        lastSent = null;
+        $("input").focus();
+        toast("这句没送到模型,已放回输入框 —— 要发自己点一下", true);
+      }
       break;
   }
 };
@@ -4154,6 +4170,9 @@ function send() {
   $("input").style.height = "auto";
   addUserMsg(text, atts);
   clearAttachments();
+  // 记一笔"这一句发出去了但还没人答":模型连不上时(`error` 事件带 llm 标记)把它
+  // 原样放回输入框。绝不自动重发 —— 用户没点头的话不该自己飞出去。
+  lastSent = { text, atts };
   pywebview.api.send_task(text, JSON.stringify(atts));
 }
 
@@ -6094,10 +6113,69 @@ function renderWsDlg(d) {
   }
 }
 
+/* 工作区 uploads/ 的清单:三个入口(📎、拖进来、剪贴板)只往里拷,以前没有任何地方
+   看得见它多大、也没法删 —— 天天拖 20MB 课件的人,工作区就在无声膨胀。 */
+let wsUplAt = 0;              // 「删除选中附件」二次确认的时间戳(与心情面板清空同一手法)
+let wsUplPicked = "";
+
+function renderUploads(r) {
+  const list = $("wsUploads");
+  list.innerHTML = "";
+  const items = (r && r.items) || [];
+  if (!items.length) {
+    $("wsUplTitle").textContent = "这里的附件（uploads/ 里还没有东西）";
+    return;
+  }
+  $("wsUplTitle").textContent =
+    `这里的附件（uploads/ 里 ${r.count} 个,共 ${humanSize(r.total_bytes)}`
+    + (r.shown < r.count ? `,下面只列最近 ${r.shown} 个` : "") + "）";
+  for (const it of items) {
+    const el = document.createElement("div");
+    el.className = "ws-row";
+    el.innerHTML = '<input type="checkbox" title="勾上才可删">'
+      + '<span class="n"></span><span class="p"></span>';
+    const box = el.querySelector("input");
+    box.dataset.name = it.name;
+    el.querySelector(".n").textContent = it.name;
+    el.querySelector(".p").textContent = `${humanSize(it.bytes)} · ${it.mtime}`;
+    el.addEventListener("click", (ev) => {
+      if (ev.target === box) return;
+      box.checked = !box.checked;
+    });
+    list.appendChild(el);
+  }
+}
+
+function refreshUploads() {
+  pywebview.api.uploads_list().then(renderUploads)
+    .catch(() => { $("wsUplTitle").textContent = "这里的附件（读不到 uploads/,不猜）"; });
+}
+
+$("btnWsUplDelete").addEventListener("click", () => {
+  const picked = Array.from(document.querySelectorAll("#wsUploads input:checked"))
+    .map(i => i.dataset.name);
+  if (!picked.length) { toast("先勾上要删的附件", true); return; }
+  const btn = $("btnWsUplDelete");
+  const key = picked.join("|");
+  if (key !== wsUplPicked || Date.now() - wsUplAt > 8000) {
+    wsUplAt = Date.now(); wsUplPicked = key;
+    btn.textContent = `真的删掉这 ${picked.length} 个?再点一次`;
+    toast("删的是附件原件:会话里引用的那条路径会跟着失效,这一步没有备份", true);
+    return;
+  }
+  wsUplAt = 0; wsUplPicked = ""; btn.textContent = "删除选中附件";
+  pywebview.api.uploads_delete(JSON.stringify(picked)).then(res => {
+    if (!res || !res.ok) { toast((res && res.msg) || "删除没成功", true); refreshUploads(); return; }
+    toast(res.msg || "已删除");
+    refreshUploads();
+  }).catch(e => toast("删除没成功:" + String(e).slice(0, 60), true));
+});
+
 function openWsDlg() {
   pywebview.api.get_workspaces().then(d => {
     renderWsDlg(d || {});
     $("wsOverlay").classList.add("show");
+    refreshUploads();
   }).catch(e => toast("读取工作区失败:" + String(e).slice(0, 60), true));
 }
 

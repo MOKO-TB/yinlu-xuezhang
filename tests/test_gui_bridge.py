@@ -154,6 +154,32 @@ def test_regenerate_replaces_the_last_answer(config, tmp_path):
     assert '"regenerated"' in log
 
 
+def test_llm_failure_watches_for_recovery_and_says_so(config, tmp_path, monkeypatch):
+    """模型连不上 → 起一条探活 → 通了在聊天里说一句 + 走一趟桌面通知(发现三那条死胡同)。
+
+    只把 `list_models` 这一层换成假的(探活打的是真 HTTP);第一问就通,所以不会真睡
+    60 秒。跑完必须把"一次只跑一条"那道闸放行,否则第二次失败就永远不再探活。
+    """
+    from minicode import model_probe, proactive, tray
+
+    llm = FakeLLM([RuntimeError("连接被拒绝")])
+    bridge, window, _session = make(config, tmp_path, llm)
+    monkeypatch.setattr(model_probe, "list_models", lambda *a, **k: (200, ["m"]))
+    monkeypatch.setattr(proactive, "wd_log", lambda msg: None)
+    notified = []
+    monkeypatch.setattr(tray, "notify",
+                        lambda title, body, **k: (notified.append((title, body)),
+                                                   {"ok": True})[1])
+
+    bridge.send_task("这句发不出去")
+    assert wait_until(lambda: any(e["type"] == "error" and e.get("llm")
+                                  for e in window.events)), "失败事件要带 llm 标记"
+    assert wait_until(lambda: any(e["type"] == "info" and "模型服务又能连上" in e.get("text", "")
+                                  for e in window.events)), "探活了要主动告诉用户一声"
+    assert notified and notified[0][0] == "模型恢复了"
+    assert bridge._liveness_running is False
+
+
 def test_regenerate_refuses_when_there_is_nothing_to_redo(config, tmp_path):
     llm = FakeLLM([AssistantTurn(text="答案")])
     bridge, _window, session = make(config, tmp_path, llm)

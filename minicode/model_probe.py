@@ -132,6 +132,30 @@ def list_models(base_url: str, api_key: str, timeout: float = 15.0) -> tuple[int
 
 # --------------------------------------------------------------- 解析
 
+LIVENESS_INTERVAL_SECONDS = 60.0
+LIVENESS_ATTEMPTS = 10        # 最长盯约 10 分钟:校园网/内网网关抖动通常几十秒就回来
+
+
+def watch_liveness(probe, *, interval: float = LIVENESS_INTERVAL_SECONDS,
+                   attempts: int = LIVENESS_ATTEMPTS, sleep=time.sleep) -> dict:
+    """模型调不通之后,盯一盯它活没活。返回 {"recovered": bool, "tried": int}。
+
+    为什么要有这条:`llm.py` 重试两次就抛错,界面上只剩一句「模型调用失败」。服务
+    恢复了没人说,用户以为得自己重启程序;这也是"死胡同"那半条。探活只问 `GET /models`
+    —— 不发对话请求,不动用户的 Key 额度。`probe`/`sleep` 都可注入,测试不真等 60 秒。
+    """
+    for i in range(1, max(1, int(attempts)) + 1):
+        try:
+            alive = bool(probe())
+        except Exception:
+            alive = False          # 探测自己出错 = 还没活,不该把看门狗弄死
+        if alive:
+            return {"recovered": True, "tried": i}
+        if i < attempts:
+            sleep(interval)
+    return {"recovered": False, "tried": max(1, int(attempts))}
+
+
 def _parse_window(text: str) -> int | None:
     """从服务端错误文本里抠出上下文窗口。抠不到返回 None(不猜数字)。"""
     for pat in _WINDOW_PATTERNS:

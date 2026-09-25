@@ -94,8 +94,13 @@ class Session:
                 continue
             if obj.get("role") in ("user", "assistant", "tool"):
                 loaded.append(obj)
+        loaded, fixed = repair_tool_pairs(loaded)
+        self._log_path = path  # 后续对话继续写入该文件(标记也得落进这同一份留档)
         self._replace_messages(loaded, log_marker="resumed")
-        self._log_path = path  # 后续对话继续写入该文件
+        if fixed:
+            self._log_only({"type": "repaired",
+                            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "changed": fixed})
         return len(loaded)
 
     def refresh_system_prompt(self, text: str) -> bool:
@@ -160,6 +165,62 @@ class Session:
             return
         with self._log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
+INTERRUPTED_TOOL_RESULT = ("程序中断:这一步当时没有跑完,也没有留下结果"
+                           "(这条是恢复历史时补记的,不是工具的真实输出)。")
+
+
+def repair_tool_pairs(msgs: list[dict]) -> tuple[list[dict], int]:
+    """把"assistant 喊了工具却没留下结果"的非法序列补齐,返回 (修好的列表, 改动条数)。
+
+    为什么要修:`add_assistant`(带 tool_calls)与逐条 `add_tool_result` 不是一个事务,
+    JSONL 又是逐条追加的 —— 在这两步之间断电、被强关、被 Windows 更新杀掉,留档里就留下
+    悬空的 call。恢复出来原样发给任何 OpenAI 兼容端点都会 400,而且**每一轮都 400**(坏
+    对儿一直躺在上下文里),用户唯一的自救是 `/clear` 把整个会话清空。压缩(`replace_messages`
+    保头+尾)同样可能把一对 call/result 从中间切断,所以这不只是崩溃才有的问题。
+
+    两个方向都管:
+    - 悬空 call → 补一条**事实性**的 tool 结果,而不是把那条 call 删掉 —— 删等于抹掉
+      "这里断过"这件事,模型会以为工具真跑完了,接着往下编。
+    - 孤儿 tool 结果(前面找不到对应的 call)→ 只能丢掉:协议里没有"无主的工具结果"。
+      这条改动会算进返回的条数里,不静默。
+    """
+    pending: dict[str, None] = {}     # 有序集合:当前这批还没闭合的 tool_call id
+    out: list[dict] = []
+    fixed = 0
+
+    def close_pending() -> None:
+        nonlocal fixed
+        for cid in pending:
+            out.append({"role": "tool", "tool_call_id": cid,
+                        "content": INTERRUPTED_TOOL_RESULT})
+            fixed += 1
+        pending.clear()
+
+    for m in msgs:
+        role = m.get("role")
+        if role == "tool":
+            cid = m.get("tool_call_id")
+            if cid in pending:
+                del pending[cid]
+                out.append(m)
+            else:
+                fixed += 1        # 无主/重复的工具结果:协议里没有这种位置,只能丢
+            continue
+        if pending:
+            close_pending()       # 下一句话开口前,上一批工具必须先闭合
+        out.append(m)
+        if role == "assistant":
+            pending = dict.fromkeys(
+                c.get("id") for c in (m.get("tool_calls") or [])
+                if isinstance(c, dict) and c.get("id"))
+    if pending:
+        close_pending()
+    # 一条都没动就交回**原来那个列表对象**:调用方(_messages_for_request)有一针钉
+    # "关掉回灌开关时发出去的就是 session.messages 本身,连复制都不做",每一步请求
+    # 都白复制一份长列表也是真开销。
+    return (msgs, fixed) if not fixed else (out, fixed)
 
 
 def _content_text(content) -> str:

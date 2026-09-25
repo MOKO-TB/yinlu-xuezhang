@@ -18,7 +18,7 @@ from minicode import model_probe
 from minicode import workspace as ws
 from minicode.app_setup import build_runner_agent, mcp_log
 from minicode.attachments import (
-    Attachment, build_content, display_text, is_image, mime_for,
+    UPLOAD_DIR, Attachment, build_content, display_text, is_image, mime_for,
     preview_data_url, save_attachments, save_dropped_bytes,
 )
 from minicode.campus import frontend_payload as campus_map_data
@@ -80,6 +80,14 @@ class PublicApi:
 
     def pick_attachments(self) -> dict:
         return self._b.pick_attachments()
+
+    def uploads_list(self) -> dict:
+        """工作区 uploads/ 的清单(名字/大小/日期 + 总共占多少)。"""
+        return self._b.uploads_list()
+
+    def uploads_delete(self, names_json: str = "[]") -> dict:
+        """删掉选中的附件;只认 uploads/ 里的真文件名。"""
+        return self._b.uploads_delete(names_json)
 
     def set_sandbox(self, enabled: bool) -> dict:
         return self._b.set_sandbox(enabled)
@@ -458,6 +466,9 @@ class Bridge:
         self.workspace_file = (Path(workspace_file) if workspace_file is not None
                                else ws.state_path(self.app_dir))
         self._shared_llm = llm
+        # 模型看门狗:一次只跑一条(探的是同一个服务端,多起只是多敲 GET)。
+        self._liveness_lock = threading.Lock()
+        self._liveness_running = False
         self._mcp_tools = list(mcp_tools or [])
         self._sandbox = sandbox
         self._mcp = None                     # create_app 注入,退出时统一关停
@@ -485,6 +496,7 @@ class Bridge:
         self._seq += 1
         ui = SessionGuiUI(self.ui, f"s{self._seq}")
         ui.confirm_handler = self.confirm_tool
+        ui.on_llm_failure = lambda _msg: self._watch_model_recovery(ui)
         agent, session = build_runner_agent(
             self.config, self.workspace, ui, self._shared_llm,
             sessions_dir=self.sessions_dir, mcp_tools=self._mcp_tools,
@@ -496,6 +508,51 @@ class Bridge:
         self._runners[runner.key] = runner
         self._current = runner
         return runner
+
+    def _watch_model_recovery(self, ui) -> None:
+        """模型调不通之后起一条看门狗,服务活了就告诉用户一声(发现三说的"死胡同")。
+
+        以前失败只有 `ui.llm_error` 那一句,之后没有任何恢复信号 —— 内网网关抖动几十秒
+        就回来的日常,用户只能自己反复点发送试。探活只问 `GET /models`:不发对话请求、
+        不动 Key 的额度。恢复通知走两条现成的路(聊天里一行 info + 一条桌面通知),
+        **刻意不新增提醒类别**:那要连通知开关、按天账本、托盘菜单一起改,不是一条
+        "告诉你服务回来了"该付的重量。
+        """
+        with self._liveness_lock:
+            if self._liveness_running:
+                return
+            self._liveness_running = True
+
+        def probe() -> bool:
+            status, _names = model_probe.list_models(
+                self.config.base_url, self.config.api_key, timeout=10.0)
+            # 404 也算"活着":这家没实现 /models,但网络与服务都是通的
+            return status in (200, 404)
+
+        def worker() -> None:
+            from minicode import proactive, tray
+            try:
+                got = model_probe.watch_liveness(probe)
+                if got["recovered"]:
+                    text = (f"模型服务又能连上了(第 {got['tried']} 次探活问通的),"
+                            "刚才没答上来的那句可以重发了")
+                    ui.push("info", text=text)
+                    sent = tray.notify("模型恢复了", text)
+                    proactive.wd_log(
+                        f"liveness: recovered at try {got['tried']}, "
+                        f"toast={'ok' if sent.get('ok') else sent.get('reason', 'no')}")
+                else:
+                    # 没恢复也要留一行:否则用户说"到底通没通过"时只能靠猜
+                    proactive.wd_log(
+                        f"liveness: still down after {got['tried']} tries,不再盯")
+            except Exception as e:      # 看门狗出错绝不影响正常使用
+                from minicode import proactive
+                proactive.wd_log(f"liveness: 探活自身出错 {type(e).__name__}: {e}")
+            finally:
+                with self._liveness_lock:
+                    self._liveness_running = False
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _runner_for_log(self, path: Path | None) -> SessionRunner | None:
         if path is None:
@@ -1402,6 +1459,79 @@ class Bridge:
         atts, errors = save_attachments(self.workspace, [str(p) for p in picked])
         return {"ok": True, "items": [self._attachment_item(a) for a in atts],
                 "errors": errors}
+
+    # ------------------------------------------------------------ 附件目录(uploads/)
+
+    UPLOAD_LIST_CAP = 300      # 一次最多列/删多少个:堆到几千个时界面不该跟着卡
+
+    def uploads_list(self) -> dict:
+        """工作区 `uploads/` 的清单:名字、多大、哪天进来的,外加总共占多少。
+
+        为什么要有这一条:附件有三个入口往这里拷(📎 选文件、拖进来、剪贴板),但**没有
+        任何地方看得见它** —— `mydata.py` 明写工作区里的东西不在「我的数据」面板范围内,
+        于是天天拖 20MB 课件的人,工作区在无声膨胀。这里给一个看得见也删得掉的地方。
+        """
+        base = self.workspace / UPLOAD_DIR
+        if not base.is_dir():
+            return {"ok": True, "items": [], "count": 0, "total_bytes": 0,
+                    "shown": 0, "dir": UPLOAD_DIR}
+        files = [p for p in base.iterdir() if p.is_file()]
+        total = sum(p.stat().st_size for p in files)
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return {"ok": True, "count": len(files), "total_bytes": total,
+                "shown": min(len(files), self.UPLOAD_LIST_CAP), "dir": UPLOAD_DIR,
+                "items": [{"name": p.name, "bytes": p.stat().st_size,
+                           "mtime": time.strftime(
+                               "%Y-%m-%d %H:%M",
+                               time.localtime(p.stat().st_mtime))}
+                          for p in files[:self.UPLOAD_LIST_CAP]]}
+
+    def uploads_delete(self, names_json: str = "[]") -> dict:
+        """删掉选中的附件。
+
+        **只接受文件名**:带路径分隔符、绝对路径、`..`、解析后不在 `uploads/` 里的、
+        不是真文件的,一律拒并且原样报回去 —— 前端来的字符串不可信,而这是"删除"。
+        目录不删(要清的是文件);删掉的字节数如实报,不猜。
+        """
+        try:
+            names = json.loads(names_json) if isinstance(names_json, str) else names_json
+        except json.JSONDecodeError:
+            return {"ok": False, "msg": "要删的文件名不是有效 JSON"}
+        if not isinstance(names, list) or not names:
+            return {"ok": False, "msg": "没有选中要删的文件"}
+        base = (self.workspace / UPLOAD_DIR)
+        base_dir = base.resolve()
+        deleted: list[str] = []
+        refused: list[str] = []
+        freed = 0
+        for raw in names[:self.UPLOAD_LIST_CAP]:
+            name = str(raw if raw is not None else "").strip()
+            if (not name or Path(name).is_absolute() or Path(name).name != name
+                    or name.startswith(".")):
+                refused.append(name[:60] or "(空)")
+                continue
+            target = base / name
+            try:
+                real = target.resolve()
+            except OSError:
+                refused.append(name)
+                continue
+            if real.parent != base_dir or not real.is_file():
+                refused.append(name)       # 逃出 uploads/ 的、软链到别处的、目录,都算拒
+                continue
+            try:
+                size = real.stat().st_size
+                real.unlink()
+            except OSError:
+                refused.append(name)
+                continue
+            deleted.append(name)
+            freed += size
+        return {"ok": bool(deleted), "deleted": deleted, "refused": refused,
+                "freed_bytes": freed,
+                "msg": (f"删掉 {len(deleted)} 个,腾出 {freed} 字节"
+                        + (f";{len(refused)} 个没删(不在 uploads/ 里或不是文件)"
+                           if refused else ""))}
 
     def _attachment_item(self, att: Attachment) -> dict:
         item = att.to_dict()
