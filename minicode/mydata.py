@@ -146,6 +146,8 @@ TABLE: tuple[Entry, ...] = (
     Entry("weather-cache.json", "天气缓存", CACHE, False, note="几分钟就过期"),
     Entry("pushed-today.json", "今天弹过哪些提醒", CACHE, False,
           note="带去新机器会把它的第一条补发误判成「已弹过」"),
+    Entry("jobs-state.json", "定时任务上次何时跑", CACHE, False,
+          note="周期任务的账本(周复盘/缺口周报那类);带去新机器会误判成「这周已跑过」"),
     # ---- 日志与留档
     Entry("tray.log", "托盘与通知日志", LOG, False),
     Entry("watchdog.log", "提醒看门狗日志", LOG, False,

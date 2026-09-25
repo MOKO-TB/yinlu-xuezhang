@@ -96,7 +96,7 @@
 ## 分享安装包之前
 
 跑 `python scripts/build_exe.py` 出包(它会按 `minicode/state_files.py::SHIP_NEVER`
-里那 37 条**遍历删除**本机运行时产物)。
+里那 38 条**遍历删除**本机运行时产物)。
 
 **不要手工拷 `dist/` 目录发给别人** —— 那会绕过清理清单,把你自己这台机器上的
 课表、心情史、教务登录态一起发出去。`scripts/check_docs.py` 会盯住两件事:
