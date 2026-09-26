@@ -14,6 +14,7 @@ from minicode.mood import mood_prompt_section
 from minicode.config import Config
 from minicode.kb import kb_dirs, kb_prompt_section
 from minicode.library import library_prompt_section
+from minicode.notices import notices_prompt_section
 from minicode.library_guide import library_guide_prompt_section
 from minicode.mcp import connect_servers, parse_servers
 from minicode.memory import memory_prompt_section
@@ -41,6 +42,7 @@ def build_system_prompt(workspace: Path) -> str:
             + schedule_prompt_section()
             + mood_prompt_section()
             + library_prompt_section(workspace)
+            + notices_prompt_section()
             + library_guide_prompt_section(workspace)
             + browser_prompt_section()
             + memory_prompt_section(workspace))

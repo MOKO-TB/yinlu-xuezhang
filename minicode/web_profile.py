@@ -58,6 +58,8 @@ EXCLUDED_TOOLS: dict[str, str] = {
     "task": "子代理会携带 implement 类写工具,绕过白名单",
     "web_crawl": "SSRF:可让服务端请求校园内网任意地址;且会写 crawled//kb/",
     "web_search": "对外形态不给网络访问(对外提示词也声明了没有联网能力)",
+    "campus_notices": "对外形态不给网络访问 —— 它要现拉官网(web_search 同一条线;"
+                    "访客看不到最近通知,桌面版/CLI 才有)",
     "kb_suggest": "会往服务器的候选文件写数据(访客侧无法审核)",
     "py_script": "能在服务器上执行任意代码(文档转换脚本),绝对不进白名单",
     "reminder": "会读写服务器的提醒清单文件(访客待办不该存在服务器上)",

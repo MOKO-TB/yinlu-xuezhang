@@ -252,11 +252,23 @@ def clean_title(raw: str) -> str:
     return (text[:30] + "…") if len(text) > 30 else text
 
 
+def _norm_notice_date(raw: str) -> str:
+    """列表页日期「09-11 2026」→「2026-09-11」;认不出返回空串(不编)。"""
+    nums = re.findall(r"\d+", str(raw or ""))
+    if len(nums) >= 3:
+        mm, dd, yyyy = nums[0], nums[1], nums[2]
+        if len(yyyy) == 4 and 1 <= int(mm) <= 12 and 1 <= int(dd) <= 31:
+            return f"{yyyy}-{int(mm):02d}-{int(dd):02d}"
+    return ""
+
+
 def fetch_latest(url: str, timeout: float = 12.0) -> list[dict]:
-    """拉一个栏目列表页,返回 [{title, url}](本页可见的通知条目)。
+    """拉一个栏目列表页,返回 [{date, title, url}](本页可见的通知条目)。
 
     只认 /info/ 深链的锚点(正文页),导航/翻页链接一律不要。
     任何网络/解析异常向上抛,由 check_once 统一吞掉。
+    date 是列表页标注的发布日期(站群模板第一个 div);没有结构化日期时留空
+    —— 宁可没有,不拿"看不出日期"硬凑一个。
     """
     import httpx
     from bs4 import BeautifulSoup
@@ -277,15 +289,21 @@ def fetch_latest(url: str, timeout: float = 12.0) -> list[dict]:
         if not full.startswith("http") or full in seen:
             continue
         divs = a.find_all("div")
-        if len(divs) >= 2 and _DATE_PREFIX.match(divs[0].get_text(" ", strip=True)):
-            raw = divs[1].get_text(" ", strip=True)       # 站群模板:日期div+标题div
+        date = ""
+        if len(divs) >= 2:
+            head = divs[0].get_text(" ", strip=True)
+            if _DATE_PREFIX.match(head):
+                date = _norm_notice_date(head)
+                raw = divs[1].get_text(" ", strip=True)   # 站群模板:日期div+标题div
+            else:
+                raw = a.get_text(" ", strip=True)
         else:
             raw = a.get_text(" ", strip=True)
         title = clean_title(raw)
         if len(title) < 8:
             continue
         seen.add(full)
-        items.append({"title": title, "url": full})
+        items.append({"date": date, "title": title, "url": full})
         if len(items) >= MAX_ITEMS_PER_SOURCE:
             break
     return items

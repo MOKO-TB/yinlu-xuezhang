@@ -14,7 +14,7 @@ def test_registry_contents():
                      "ocr_image", "render_chart", "generate_image",
                      "campus_calendar", "gpa_calc",
                      "kb_suggest", "library_search", "library_guide", "memory",
-                     "reminder", "mood", "schedule", "desktop_notify", "get_weather",
+                     "reminder", "mood", "schedule", "desktop_notify", "get_weather", "campus_notices",
                      "map_find_place", "map_show_list", "map_highlight_building",
                      "map_drop_pin", "map_clear"]
     assert len(set(names)) == len(names)
@@ -68,6 +68,7 @@ def test_read_only_flags():
         "desktop_notify": False,     # 会改提醒开关(写 notify-pref.json)、还能往桌面弹东西:
                                      # 与 schedule/reminder 同级先确认
         "get_weather": True,         # 只读天气数据(固定数据源),不驱动任何东西
+        "campus_notices": True,      # 只读现拉官网通知标题,不提交任何东西
         # 地图工具只改界面显示、不动文件:标只读,免得每次定位都弹确认框
         "map_find_place": True,
         "map_show_list": True,

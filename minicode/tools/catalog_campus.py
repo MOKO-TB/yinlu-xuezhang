@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from minicode import gpa, mood, reminders, schedule, tray, weather
+from minicode import gpa, mood, notices, reminders, schedule, tray, weather
 from minicode import calendar as school_calendar
 from minicode.tools.base import Tool
 
@@ -267,6 +267,28 @@ def remind_tools() -> list[Tool]:
                 },
             },
             handler=weather.get_weather,
+            trust="external",
+            read_only=True,
+        ),
+        Tool(
+            name="campus_notices",
+            description=(
+                "现拉学校官网通知公告栏目的最新标题与链接(教务处/学生处等栏目,博达站群静态页,"
+                "免登录)。用户问「最近/最新/近日 学校有什么事 / 大事件 / 通知 / 活动」时"
+                "**必须先调本工具**,以现拉结果为准 —— 本地知识库是爬虫旧语料,回答不了时效问题。"
+                "返回的是标题+链接,不是正文:要讲某件事的详情,再用 web_crawl 抓那条链接,"
+                "抓不到就如实说,绝不按标题编内容;拉不到(断网/改版)就如实说这次查不到,"
+                "工具会自动退回看门狗上次抓到的快照并注明。action=cached 只读快照不联网。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["latest", "cached"],
+                               "description": "latest=现拉官网(默认);cached=只读看门狗快照(不联网)"},
+                    "limit": {"type": "integer", "description": "最多列几条,默认 10,上限 15"},
+                },
+            },
+            handler=notices.campus_notices,
             trust="external",
             read_only=True,
         ),
