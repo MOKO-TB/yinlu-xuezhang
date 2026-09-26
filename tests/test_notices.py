@@ -3,6 +3,8 @@
 网络一律 stub:解析吃真博达站群形状的假 HTML,拉取在 handler 层被换掉,
 断网机器上也能跑。
 """
+from pathlib import Path
+
 import pytest
 
 from minicode import notices, proactive
@@ -70,7 +72,7 @@ def test_latest_lists_titles_links_and_source(monkeypatch):
 
     monkeypatch.setattr(proactive, "fetch_latest", fake_fetch)
     out = notices.campus_notices(None, action="latest")
-    assert "现拉于" in out and "2 个栏目" in out
+    assert "现拉于" in out and "4 个栏目" in out      # v0.9.48 起新闻网两栏入源
     assert "关于期中教学检查的通知" in out
     assert "[2026-09-26] " in out                # 有结构化日期的带日期
     assert "教务处通知" in out and "学生处通知" in out
@@ -204,3 +206,49 @@ def test_prompts_ban_convention_filling():
     kb_src = (Path(__file__).resolve().parent.parent / "minicode" / "kb.py").read_text(
         encoding="utf-8")
     assert "绝不是今年的安排" in kb_src           # 知识库段的旧通知年份禁令
+
+
+# ---------------------------------------------------------------- 打包内置 crawl4ai 与放假真数据(v0.9.48)
+
+def test_news_sources_registered():
+    """新闻网两栏(通知公告/综合新闻)进默认抓取源 —— 实测「中秋国庆连放 13 天」
+    那条在综合新闻,教务/学生处通知栏里没有。"""
+    names = [s["name"] for s in proactive.DEFAULT_SOURCES]
+    assert "新闻网通知" in names and "综合新闻" in names
+    assert all(s["url"].startswith("https://www.gzasc.edu.cn/") for s in proactive.DEFAULT_SOURCES)
+
+
+def test_school_calendar_has_real_holiday_with_source():
+    """校历里有学校自己的放假安排(连放 13 天),带官方通知链接 ——
+    没有这条,模型查校历只拿到国务院的「中秋3天/国庆7天」就会答错。"""
+    from datetime import date
+    from minicode import calendar as cal
+    events, _src = cal.load_events()
+    rows = [e for e in events if "学校安排" in str(e.get("name") or "")]
+    assert rows, "校历缺学校自己的放假条目"
+    row = rows[0]
+    assert row["start"] == "2026-09-25" and row["end"] == "2026-10-07"
+    assert "53040" in str(row.get("source") or "")     # 官方通知链接在来源里
+    # 工具出口真给得出链接与区间
+    out = cal.campus_calendar(None, action="query", query="中秋", today=date(2026, 9, 26))
+    assert "13天" in out and "53040" in out
+
+
+def test_packaging_ships_crawl4ai():
+    """用户拍板:每个打包版本内置 crawl4ai。spec 不再排除 crawl4ai/playwright,
+    build_exe 有拷浏览器内核的步骤;LLM 提取重依赖仍排除(主链实测不需要)。"""
+    spec = (Path(__file__).resolve().parent.parent / "packaging" / "gcode.spec").read_text(
+        encoding="utf-8")
+    assert '"crawl4ai", "patchright"' not in spec      # 不再排除 crawl4ai
+    assert '"pandas", "matplotlib", "playwright"]' not in spec
+    assert '"litellm"' in spec                          # 重依赖仍排除
+    build = (Path(__file__).resolve().parent.parent / "scripts" / "build_exe.py").read_text(
+        encoding="utf-8")
+    assert "bundle_playwright_browsers" in build
+    assert "chromium-1234" in build                     # playwright 1.62 对应内核
+
+
+def test_prompts_prefer_school_entry_over_national():
+    """国务院条目与学校条目并存:放假天数以学校那条为准(提示词钉住)。"""
+    from minicode import calendar as cal
+    assert "以" in cal.calendar_prompt_section() and "学校那条为准" in cal.calendar_prompt_section()

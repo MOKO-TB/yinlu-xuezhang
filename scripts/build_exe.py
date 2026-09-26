@@ -91,6 +91,34 @@ def stamp_library_db(dist: Path) -> Path | None:
     return sp
 
 
+def bundle_playwright_browsers(dist: Path) -> None:
+    """把 crawl4ai 需要的浏览器内核拷进包(exe 旁 ms-playwright/)。
+
+    crawl.py 的引擎链路是现成的:打包版看到 exe 旁 ms-playwright/ 就设
+    PLAYWRIGHT_BROWSERS_PATH 走 crawl4ai(能渲染 JS),没有就自动降级内置轻量
+    抓取器并写明原因 —— 所以拷不到(构建机没装)只警告不失败,功能不炸。
+    只拷 playwright 1.62 对应的 revision 1234:chromium(有头)+ chromium_headless_shell
+    (headless 默认走 shell),原始 ~700MB、zip 后 ~250MB。单文件版不带(每次启动
+    解压会慢到不可用),它自动降级。
+    """
+    base = Path(os.environ.get("LOCALAPPDATA", "")) / "ms-playwright"
+    if not base.is_dir():
+        print(f"!! 未找到 ms-playwright({base}),包内 crawl4ai 将自动降级轻量抓取器")
+        return
+    for name in ("chromium-1234", "chromium_headless_shell-1234"):
+        src = base / name
+        dst = dist / "ms-playwright" / name
+        if dst.is_dir():
+            print(f"浏览器内核已存在,跳过: {name}")
+            continue
+        if not src.is_dir():
+            print(f"!! 构建机没有 {name}(playwright 1.62 对应内核),"
+                  f"跳过 —— 包内 crawl4ai 将自动降级轻量抓取器")
+            continue
+        print(f"拷贝浏览器内核 {name} …")
+        shutil.copytree(src, dst)
+
+
 def write_user_files(dist: Path) -> None:
     """把面向用户的文件放到 exe 旁边(清理冒烟残留 + config 样例 + 使用说明)。
 
@@ -389,6 +417,8 @@ def main() -> None:
     # 内置离线馆藏库:必须在打安装包/zip 之前,否则分发出去不带图书馆数据
     bundle_library_db(dist)
     stamp_library_db(dist)
+    # 浏览器内核(crawl4ai)必须在编译安装包之前到位:安装包递归收 dist/引路学长/*
+    bundle_playwright_browsers(dist)
     # 用户可见文件也要在编译安装包之前写好(安装包递归收 dist/引路学长/*)
     write_user_files(dist)
     lib_db = dist / "crawled" / "mfindgzyykj.libsp.cn" / "library.db"

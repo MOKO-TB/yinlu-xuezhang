@@ -81,9 +81,13 @@ except Exception:
     pass
 hiddenimports += ["six", "minicode.tray"]
 
-# 不要把 crawl4ai/patchright/playwright 加回来:浏览器内核 270MB+、驱动 100MB,
-# 便携包放不下(会把 79MB 的 zip 撑到 500MB)。抓取用上面的内置轻量抓取器,
-# 看真实页面用 minicode/browser.py 的 CDP 路线(只需 websockets)。
+# v0.9.48 起用户拍板:打包版**内置 crawl4ai** —— exe 旁 ms-playwright/ 放浏览器内核
+# (build_exe.py 从构建机的 ms-playwright 拷 playwright 1.62 对应的 chromium-1234,
+# 约 430MB 原始/zip 后 ~200MB),crawl.py 的引擎链路看到它就自动走 crawl4ai。
+# 这里只放行 crawl4ai 与 playwright 两个 python 包(~10MB);LLM 提取用的重依赖
+# (litellm/nltk/shapely 等)与 numpy 实测抓取主链不需要(2026-09-26 逐个禁 import
+# 验证通过),继续排除 —— 抓取主链 = playwright 起无头 chromium,渲染后交 crawl4ai 抽正文。
+# 没带内核的单文件版会自动降级内置轻量抓取器(crawl.py _engine,不报错)。
 
 common = dict(
     pathex=[ROOT],
@@ -92,13 +96,10 @@ common = dict(
     hiddenimports=hiddenimports,   # 必须显式传入:bs4/websockets 靠静态分析侥幸
     hookspath=[],                  # 收进包,pptx/docx/openpyxl/pypdf 无静态引用,
     runtime_hooks=[],              # 全靠这里强制收集 —— 漏传 = 静默丢依赖(v0.9.16 踩过)
-    # crawl4ai 也在排除之列:crawl.py 里留着"优先用 crawl4ai"的 import,
-    # 不排除的话 PyInstaller 会把 crawl4ai 的模块收进包(约 4MB),但它的运行依赖
-    # (numpy)与浏览器驱动(patchright)都被排除了,import 必然失败 —— 收进去纯属死代码,
-    # 还会让人误以为打包版能用 crawl4ai。冻结版实际走 crawl.py 的内置轻量抓取器。
     excludes=["pytest", "tkinter", "setuptools", "pip", "nltk",
-                   "crawl4ai", "patchright", "scipy", "numpy", "tokenizers",
-                   "pandas", "matplotlib", "playwright"],
+                   "patchright", "scipy", "numpy", "tokenizers",
+                   "pandas", "matplotlib", "litellm", "shapely", "alphashape",
+                   "rank_bm25", "snowballstemmer"],
     noarchive=False,
 )
 

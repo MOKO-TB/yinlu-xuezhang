@@ -36,6 +36,10 @@ SEEN_CAP = 120                  # 每个源最多记这么多已见标题(旧的
 DEFAULT_SOURCES = [
     {"name": "教务处通知", "url": "https://www.gzasc.edu.cn/jwc/xwdt/tzgg.htm"},
     {"name": "学生处通知", "url": "https://www.gzasc.edu.cn/xsc/tzgg.htm"},
+    # v0.9.48:放假安排/大事件多走新闻网(实测「中秋国庆连放 13 天」那条在综合新闻,
+    # 教务/学生处通知栏里没有) —— 校历放假数据缺位时,模型现拉这两栏才找得到官方原文。
+    {"name": "新闻网通知", "url": "https://www.gzasc.edu.cn/news/tzgg.htm"},
+    {"name": "综合新闻", "url": "https://www.gzasc.edu.cn/news/zhxw.htm"},
 ]
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
