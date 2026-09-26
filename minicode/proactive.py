@@ -283,10 +283,13 @@ def fetch_latest(url: str, timeout: float = 12.0) -> list[dict]:
     seen: set[str] = set()
     for a in soup.find_all("a", href=True):
         href = a.get("href")
-        if not isinstance(href, str) or "/info/" not in href:
+        if not isinstance(href, str) or not href.strip():
             continue
+        # /info/ 深链判定必须在 urljoin **之后**做:学生处栏目改版后条目是相对路径
+        # (info/1274/18641.htm,开头没有 /),在原始 href 上判 "/info/" 会把它整栏
+        # 静默滤成 0 条 —— 看门狗和 campus_notices 双双瞎掉还看不出错(2026-09-26 实测)。
         full = urljoin(str(resp.url), href)
-        if not full.startswith("http") or full in seen:
+        if not full.startswith("http") or "/info/" not in full or full in seen:
             continue
         divs = a.find_all("div")
         date = ""

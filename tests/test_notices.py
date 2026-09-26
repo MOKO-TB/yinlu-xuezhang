@@ -156,3 +156,51 @@ def test_tool_registered_and_prompt_section():
     section = notices.notices_prompt_section()
     assert "campus_notices" in section and "必须先调" in section
     assert "旧语料" in section
+
+
+# ---------------------------------------------------------------- 相对路径栏目(v0.9.47)
+
+XSC_HTML = """
+<html><body><div class="list">
+  <a href="info/1274/18641.htm">关于开展2026年国家励志奖学金交叉评审工作的通知</a>
+  <a href="/xsc/info/1274/18621.htm"><div>09-20 2026</div>
+    <div>关于做好我校2026年退役士兵国家教育资助相关工作的通知 各学院:</div></a>
+  <a href="tzgg/1.htm">翻页链接不是通知</a>
+</div></body></html>
+"""
+
+
+def test_fetch_latest_accepts_relative_info_links(monkeypatch):
+    """学生处栏目改版后条目是相对路径(info/1274/...):
+    在原始 href 上判 "/info/" 会把整栏静默滤成 0 条 —— 看门狗与
+    campus_notices 双双瞎掉还看不出错。判定必须在 urljoin 之后做。"""
+    from urllib.parse import urljoin
+
+    class FakeResp:
+        status_code = 200
+        url = "https://www.gzasc.edu.cn/xsc/tzgg.htm"
+        text = XSC_HTML
+
+    import httpx
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: FakeResp())
+    items = proactive.fetch_latest("https://www.gzasc.edu.cn/xsc/tzgg.htm")
+    assert len(items) == 2                       # 相对/绝对都收,翻页仍排除
+    assert items[0]["url"] == urljoin(FakeResp.url, "info/1274/18641.htm")
+    assert items[0]["date"] == ""                # 无日期 div:如实留空
+    assert items[1]["date"] == "2026-09-20"
+
+
+def test_prompts_ban_convention_filling():
+    """放假天数禁用全国惯例填空:校历段/通知段/知识库段三处都要有这句。"""
+    from pathlib import Path
+    from minicode import calendar as cal
+    sec = cal.calendar_prompt_section()
+    assert "全国惯例" in sec and "campus_notices" in sec
+    assert "推不出放几天" in sec                  # yearly 投影只有节点没有天数
+    assert "https://www.gzasc.edu.cn/" in sec     # 溯源:给官网入口
+    nsec = notices.notices_prompt_section()
+    assert "放假" in nsec and "绝不用全国惯例" in nsec
+    assert "不是今年的不能当今年的安排说" in nsec
+    kb_src = (Path(__file__).resolve().parent.parent / "minicode" / "kb.py").read_text(
+        encoding="utf-8")
+    assert "绝不是今年的安排" in kb_src           # 知识库段的旧通知年份禁令
