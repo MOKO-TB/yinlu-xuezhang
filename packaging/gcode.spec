@@ -81,6 +81,26 @@ except Exception:
     pass
 hiddenimports += ["six", "minicode.tray"]
 
+# v0.9.48 crawl4ai 内置:两包都在 crawl.py 的**函数内**延迟 import,静态分析收不到
+# (首包实测 PYZ 里没有 crawl4ai/playwright,ms-playwright 内核白拷) —— 必须用
+# collect_all 强制收全:playwright 的 driver(node.exe + package)在 binaries/datas 里,
+# 漏了它 import playwright 直接 ModuleNotFoundError。litellm/numpy 等重依赖在
+# excludes 里,collect_all 不收被排除的模块,不冲突。
+try:
+    d, b, h = collect_all("crawl4ai")
+    datas += d
+    binaries += b
+    hiddenimports += h
+except Exception:
+    pass
+try:
+    d, b, h = collect_all("playwright")
+    datas += d
+    binaries += b
+    hiddenimports += h
+except Exception:
+    pass
+
 # v0.9.48 起用户拍板:打包版**内置 crawl4ai** —— exe 旁 ms-playwright/ 放浏览器内核
 # (build_exe.py 从构建机的 ms-playwright 拷 playwright 1.62 对应的 chromium-1234,
 # 约 430MB 原始/zip 后 ~200MB),crawl.py 的引擎链路看到它就自动走 crawl4ai。
