@@ -161,3 +161,36 @@ def test_add_skill_new_task_picks_it_up(config, tmp_path, monkeypatch):
     assert bridge.add_skill("fresh", "新技能", "正文", "app")["ok"]
     runner = bridge.open_session()      # 模拟「新建任务」
     assert "fresh —— 新技能" in runner.session.messages[0]["content"]
+
+
+# ---------------- 中文技能名 / 描述截断(v0.9.55) ----------------
+
+def test_create_skill_accepts_chinese_name(tmp_path, monkeypatch):
+    """中文技能名要能用(v0.9.55):校园用户最自然的起名就是中文,原来只留
+    ASCII,清洗成空串后收到「技能名不能为空」—— 第一步就撞墙。"""
+    from minicode import paths as paths_mod
+    monkeypatch.setattr(paths_mod, "APP_DIR", tmp_path / "app")
+    res = sk.create_skill(None, "论文助手", description="帮同学写论文提纲",
+                          body="正文", channel="app")
+    assert res["ok"], res["msg"]
+    d = tmp_path / "app" / "skills" / "论文助手"
+    assert (d / "SKILL.md").is_file()
+    text = (d / "SKILL.md").read_text(encoding="utf-8")
+    assert "name: 论文助手" in text
+    # 清洗出的技能名能被 load_skills 找到(同一条链路闭环)
+    found = sk.find_skill(sk.load_skills(sk.skill_dirs(None)), "论文助手")
+    assert found is not None
+
+
+def test_create_skill_clamps_description(tmp_path, monkeypatch):
+    """描述截 200 字(v0.9.55):描述由 skills_prompt_section 每轮全文携带,
+    面板里一句长描述会把系统提示词永久撑大。"""
+    from minicode import paths as paths_mod
+    monkeypatch.setattr(paths_mod, "APP_DIR", tmp_path / "app")
+    res = sk.create_skill(None, "long-desc", description="长" * 500,
+                          channel="app")
+    assert res["ok"], res["msg"]
+    text = (tmp_path / "app" / "skills" / "long-desc" / "SKILL.md").read_text(
+        encoding="utf-8")
+    desc_line = next(l for l in text.splitlines() if l.startswith("description:"))
+    assert len(desc_line) <= len("description: ") + 200

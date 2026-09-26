@@ -125,6 +125,23 @@ def skills_prompt_section(skills: list[Skill]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _clip_body(body: str, limit: int = SKILL_BODY_LIMIT) -> str:
+    """超限截断,但**回退到最后一个闭合代码围栏之后**:技能正文里是模型要照着
+    抄的脚本模板,硬切在 ```python 块中间等于给模型半截模板(§4 老坑的同型)。
+    统计截断点之前的围栏数,奇数 = 切在块内 → 回退到上一个闭合围栏(含);
+    回退点不存在(整段就是一个超长围栏)时保持硬切,尾注会提醒。
+    """
+    if len(body) <= limit:
+        return body
+    clipped = body[:limit]
+    if clipped.count("```") % 2 == 1:
+        last = clipped.rfind("```")
+        prev = clipped.rfind("```", 0, last)
+        if prev > 0:
+            clipped = clipped[:prev + 3]
+    return clipped
+
+
 def use_skill(ctx, name: str) -> str:
     """工具处理器:按名字返回技能全文(截断)。"""
     skills = load_skills(skill_dirs(ctx.workspace))
@@ -132,16 +149,19 @@ def use_skill(ctx, name: str) -> str:
     if skill is None:
         available = ", ".join(s.name for s in skills) or "(无)"
         return f"错误: 未找到技能 '{name}'。可用技能: {available}"
-    body = skill.body[:SKILL_BODY_LIMIT]
-    tail = "\n…(技能内容过长,已截断)" if len(skill.body) > SKILL_BODY_LIMIT else ""
+    body = _clip_body(skill.body)
+    tail = ("\n…(技能内容过长,已截断;若尾部有未完整的代码模板,不要凭空补全 —— "
+            "按已有的部分说明缺什么即可)" if len(skill.body) > SKILL_BODY_LIMIT else "")
     return f"# 技能: {skill.name}\n\n{body}{tail}"
 
 
 # ------------------------------------------------------------ 技能面板(渠道)
 
 def _channel_slug(text: str) -> str:
-    """技能名/目录名清洗:只留文件名安全字符;清空后给空串(由调用方拒绝)。"""
-    return re.sub(r"[^A-Za-z0-9_\-]+", "-", text.strip()).strip("-")
+    """技能名/目录名清洗:中文保留(v0.9.55 —— 校园用户最自然的起名就是中文,
+    原来只留 ASCII 等于让技能面板对中文用户第一步就撞墙),其余只留文件名安全
+    字符;清空后给空串(由调用方拒绝)。"""
+    return re.sub(r"[^A-Za-z0-9_\-\u4e00-\u9fff]+", "-", text.strip()).strip("-")
 
 
 def describe_channels(workspace: Path | None = None,
@@ -198,7 +218,9 @@ def create_skill(workspace: Path | None, name: str, description: str = "",
         return {"ok": False, "msg": f"同名技能目录已存在:{name}(换个名字,或先删掉旧的)"}
     try:
         d.mkdir(parents=True, exist_ok=False)
-        desc = (description or "").strip().replace("\n", " ")
+        desc = (description or "").strip().replace("\n", " ")[:200]
+        # 描述进 frontmatter 后由 skills_prompt_section **每一轮**全文携带:
+        # 不截断的话,面板里一句长描述就把系统提示词永久撑大(创建时截,后端不管)。
         front = f"---\nname: {name}\ndescription: {desc}\n---\n"
         (d / "SKILL.md").write_text(front + (body or "").strip() + "\n",
                                     encoding="utf-8")

@@ -211,19 +211,6 @@ def _tokens(text: str) -> set[str]:
     return tokens
 
 
-def score_entry(entry: KbEntry, query_tokens: set[str]) -> int:
-    if not query_tokens:
-        return 0
-    title = _tokens(entry.title)
-    tags = _tokens(" ".join(entry.tags))
-    content = _tokens(entry.content)
-    score = 0
-    score += 3 * len(query_tokens & title)
-    score += 2 * len(query_tokens & tags)
-    score += 1 * len(query_tokens & content)
-    return score
-
-
 @dataclass
 class SearchHit:
     """一条命中:条目 + 分数 + 命中依据(哪个词落在哪个字段)+ 这一条是靠哪档进来的。"""

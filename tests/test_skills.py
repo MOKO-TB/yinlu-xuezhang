@@ -72,3 +72,24 @@ def test_skill_dirs_includes_workspace(tmp_path):
     assert resource_path("skills") in dirs             # 打包内置资源(_MEIPASS)
     assert dirs[-1] == tmp_path / "skills"
     assert len(dirs) == len({str(d) for d in dirs})    # 开发态去重后不重复
+
+
+# ---------------- use_skill 截断避代码块(v0.9.55) ----------------
+
+def test_clip_body_retreats_to_closed_fence():
+    """超限截断回退到最后一个闭合围栏之后:技能正文里是模型要照着抄的模板,
+    硬切在 ```python 块中间等于给模型半截模板。"""
+    part1 = "开头说明\n\n```python\nprint('step1')\n```\n\n中间说明\n"
+    part2 = "```python\nprint('step2')\n```\n\n结尾"
+    body = part1 + part2
+    limit = len(part1) + len("```python\nprint('ste")   # 恰好切在第二块中间
+    clipped = sk._clip_body(body, limit)
+    assert clipped.count("```") % 2 == 0, "截断点落在代码块内 = 模型拿到半截模板"
+    assert clipped.startswith("开头说明")
+
+
+def test_clip_body_hard_cut_when_one_giant_fence():
+    """整段就是一个超长围栏时保持硬切(没有可回退的闭合点),别死循环。"""
+    body = "```python\n" + "x" * 9000 + "\n```"
+    clipped = sk._clip_body(body, 8000)
+    assert len(clipped) == 8000
