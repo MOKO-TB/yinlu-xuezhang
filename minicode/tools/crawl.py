@@ -35,6 +35,7 @@ SKIP_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
 KB_CONTENT_LIMIT = 2000      # 单条知识库内容截断,防 kb/*.json 膨胀
 KB_MIN_CONTENT = 200         # 正文有效字数下限,低于此值视为纯导航页,不入库
 SUMMARY_TITLES_LIMIT = 20
+FETCH_MAX_BYTES = 5 * 1024 * 1024   # 单页响应体上限(v0.9.54):异常大页面不进内存
 _ENGINE_NOTE = ""            # 降级到内置抓取器的原因(由 _engine() 写入)
 
 # 站群 CMS 的页脚起始标记:正文之后的"上一条/版权所有/联系方式"都从这里切掉
@@ -281,18 +282,35 @@ class NativeCrawler:
 
     async def arun(self, url: str, config=None):
         try:
-            resp = await self._client.get(url)
+            # 流式读 + 大小上限(v0.9.54):URL 来自模型/用户,一个异常大的响应体
+            # 不该把内存吃满(与网页版 MAX_BODY_BYTES 同一族的资源闸)。
+            req = self._client.build_request("GET", url)
+            resp = await self._client.send(req, stream=True)
         except Exception as e:                      # 网络/超时:交给 BFS 记录失败
             return _NativeResult(url, success=False,
                                  error=f"{type(e).__name__}: {e}"[:200])
-        ctype = (resp.headers.get("content-type") or "").lower()
-        if resp.status_code >= 400:
-            return _NativeResult(url, success=False,
-                                 error=f"HTTP {resp.status_code}")
-        if "html" not in ctype and "xml" not in ctype:
-            return _NativeResult(url, success=False, error=f"非 HTML 内容({ctype[:40]})")
+        try:
+            if resp.status_code >= 400:
+                return _NativeResult(url, success=False,
+                                     error=f"HTTP {resp.status_code}")
+            ctype = (resp.headers.get("content-type") or "").lower()
+            if "html" not in ctype and "xml" not in ctype:
+                return _NativeResult(url, success=False,
+                                     error=f"非 HTML 内容({ctype[:40]})")
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in resp.aiter_bytes():
+                total += len(chunk)
+                if total > FETCH_MAX_BYTES:
+                    return _NativeResult(url, success=False,
+                                         error=f"响应体超过 {FETCH_MAX_BYTES // (1 << 20)}MB 上限,已中止")
+                chunks.append(chunk)
+        finally:
+            await resp.aclose()
         final = str(resp.url)
-        title, md, links = html_to_markdown(resp.text, final)
+        html = (b"".join(chunks)).decode(resp.charset_encoding or "utf-8",
+                                         errors="replace")
+        title, md, links = html_to_markdown(html, final)
         return _NativeResult(final, success=True, title=title, markdown=md,
                              links={"internal": links, "external": []})
 
@@ -492,8 +510,16 @@ def crawl_web(ctx: ToolContext, url: str, max_pages: int = 10, max_depth: int = 
         kb_path, written, skipped = _write_kb(
             ctx.workspace, host, pages, kb_source.strip(),
             category=kb_category.strip(), extra_tags=extra)
+        # 可信度**按实际写入的等级说**(v0.9.54):白名单内是 A,其余域名写入的是
+        # B-抓取(未核实) —— 这里原来写死 "credibility=A",等于让回话与磁盘
+        # 真相不符,模型会照着告诉同学「已按 A 级可信入库」。
+        from minicode.kb import crawl_credibility
+        cred = crawl_credibility(host)
         lines.append(f"已写入知识库 kb/{kb_path.name}(新增/更新 {written} 条,"
-                     f"credibility=A),可用 search_knowledge 检索。")
+                     f"credibility={cred}),可用 search_knowledge 检索。")
+        if cred != "A":
+            lines.append(f"(该域名不在校官网白名单里,入库条目标为 {cred};"
+                         "引用时按 kb 的可信度口径说明,不要当官方口径转述。)")
         if skipped:
             lines.append(f"另有 {skipped} 页正文过短(纯导航/列表页),只归档未入库。")
         if not written:
@@ -522,13 +548,27 @@ SEARCH_TIMEOUT = 15.0
 
 
 def _http_get(url: str, timeout: float = SEARCH_TIMEOUT) -> tuple[int, str]:
-    """同步 GET(与 NativeCrawler 同一套 httpx,冻结版已内置该依赖)。"""
+    """同步 GET(与 NativeCrawler 同一套 httpx,冻结版已内置该依赖)。
+
+    流式读 + 同一份大小上限:搜索结果页正常几十 KB,超限截断即可 —— 搜索
+    前几 KB 就有结果,不值得为异常响应把内存吃满。
+    """
     import httpx
     with httpx.Client(follow_redirects=True, timeout=timeout,
                       headers={"User-Agent": USER_AGENT,
                                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}) as client:
-        resp = client.get(url)
-        return resp.status_code, resp.text
+        with client.stream("GET", url) as resp:
+            status = resp.status_code
+            if status >= 400:
+                return status, ""
+            parts: list[str] = []
+            total = 0
+            for chunk in resp.iter_text():
+                total += len(chunk)
+                parts.append(chunk)
+                if total >= FETCH_MAX_BYTES:
+                    break                     # 超限截断:搜索用不着整个响应
+            return status, "".join(parts)
 
 
 def _parse_bing(html: str) -> list[dict]:
@@ -651,4 +691,7 @@ def web_search(ctx, query: str, top_k: int = 6) -> str:
             lines.append(f"   摘要: {r['snippet']}")
     lines.append("注意: 以上来自公开网络,回答时注明来源网址;与校园官方信息"
                  "(知识库/官网)冲突时,以官方信息为准。")
+    lines.append("结果的发布日期搜索引擎未必标明 —— 时效类问题(报名时间/放假安排/"
+                 "招生计划)先用 campus_notices 或 campus_calendar 查官方,别把一条"
+                 "没有日期的搜索结果当「今年的」回答。")
     return "\n".join(lines)

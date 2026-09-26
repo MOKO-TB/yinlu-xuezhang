@@ -222,3 +222,90 @@ def test_write_kb_merges_by_url(ctx):
     assert len(data) == 2                                    # a 更新 + b 新增,不重复
     a = next(e for e in data if e["url"] == "https://h.cn/a")
     assert a["title"] == "A页新版" and a["content"] == "新" * 300
+
+
+# ---------------- 采集层四件(v0.9.54):回话真相 / 解析器健康针 / 大小闸 / 时效提醒 ----------------
+
+def test_crawl_web_kb_message_carries_real_credibility(ctx, monkeypatch):
+    """to_kb 回话的可信度要按实际写入的等级说(v0.9.54):白名单外域名写入的是
+    B-抓取(未核实),回话原来写死 credibility=A —— 模型会照着告诉同学「已按
+    A 级可信入库」,与磁盘真相不符(M4 修复时漏掉的半截)。"""
+    def fake_engine():
+        pages = {A: FakeResult(A, "首页", "x" * 3000),
+                 OTHER: FakeResult(OTHER, "示例页", "y" * 3000)}
+        return "fake", (lambda: FakeCrawler(pages)), None
+    monkeypatch.setattr(crawl, "_engine", fake_engine)
+    out = crawl.crawl_web(ctx, A, max_pages=1, max_depth=0, to_kb=True)
+    assert "credibility=A" in out                      # 校官网在白名单里,照常标 A
+
+    out2 = crawl.crawl_web(ctx, OTHER, max_pages=1, max_depth=0, to_kb=True)
+    assert "B-抓取(未核实)" in out2
+    assert "credibility=A)" not in out2
+    assert "不要当官方口径转述" in out2                 # 非白名单要提醒口径
+
+
+def test_bing_parser_still_works_on_recorded_page():
+    """搜索解析器的健康对账针(v0.9.54):必应改版会让 _parse_bing 静默返回空,
+    两个引擎都空 = 「搜索坏了」却没人知道为什么(proactive 学生处改版的同型)。
+    样本页(tests/fixtures/bing_search.html,真实结果页)解析不出结果时这条红
+    —— 重新录制 fixture 并更新 _parse_bing 的选择器。"""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "tests" / "fixtures"
+            / "bing_search.html").read_text(encoding="utf-8")
+    rows = crawl._parse_bing(html)
+    assert len(rows) >= 3, "必应结果页解析不出结果 —— 站方可能已改版,请重录 fixture 并更新 _parse_bing"
+    assert all(r["url"].startswith("http") and r["title"] for r in rows[:3])
+
+
+def test_http_get_truncates_oversized_response(ctx, monkeypatch):
+    """响应体超 5MB 截断(v0.9.54):搜索用不着整个响应,异常大页面不该吃满内存
+    (与网页版 MAX_BODY_BYTES 同一族的资源闸)。"""
+    class FakeStream:
+        status_code = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def iter_text(self):
+            for _ in range(6):
+                yield "x" * (1024 * 1024)              # 共 6MB > 5MB 上限
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def stream(self, method, url): return FakeStream()
+    import httpx as _httpx
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+    status, text = crawl._http_get("https://example.com/big")
+    assert status == 200
+    assert len(text) < 6 * 1024 * 1024                 # 被截在上限附近,不是全量
+
+
+def test_native_crawler_aborts_oversized_body(ctx):
+    """NativeCrawler 流式读超限即中止:URL 来自模型/用户,异常大响应体不该进内存。"""
+    class FakeResp:
+        status_code = 200
+        headers = {"content-type": "text/html"}
+        url = OTHER
+        charset_encoding = "utf-8"
+        async def aiter_bytes(self):
+            for _ in range(7):
+                yield b"y" * (1024 * 1024)
+        async def aclose(self): pass
+    class FakeClient:
+        def build_request(self, *a, **k): return object()
+        async def send(self, req, stream=True): return FakeResp()
+    crawler = crawl.NativeCrawler()
+    crawler._client = FakeClient()
+    res = asyncio.run(crawler.arun(OTHER))
+    assert not res.success and "上限" in res.error_message
+
+
+def test_web_search_notes_freshness_caveat(ctx, monkeypatch):
+    """时效提醒(v0.9.54):搜索结果的发布日期搜索引擎未必标明,尾部固定提醒
+    别把没有日期的结果当「今年的」回答。"""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "tests" / "fixtures"
+            / "bing_search.html").read_text(encoding="utf-8")
+    monkeypatch.setattr(crawl, "_http_get", lambda url, timeout=15: (200, html))
+    out = crawl.web_search(ctx, "四六级报名时间")
+    assert "时效类问题" in out and "没有日期的搜索结果" in out
+    assert "campus_notices" in out
