@@ -83,3 +83,41 @@ def test_retry_still_happens_when_nothing_was_emitted(monkeypatch):
                            on_retry=lambda e, n: retries.append(n))
     assert calls["n"] == MAX_RETRIES + 1
     assert retries == list(range(1, MAX_RETRIES + 1))
+
+
+# ---------------- usage 里带缓存命中(v0.9.50) ----------------
+
+def _usage_chunk(prompt=100, completion=20, cached=None):
+    """带 usage 的收尾分片;cached 给了就带 prompt_tokens_details。"""
+    details = types.SimpleNamespace(cached_tokens=cached) if cached is not None else None
+    usage = types.SimpleNamespace(prompt_tokens=prompt, completion_tokens=completion,
+                                  prompt_tokens_details=details)
+    delta = types.SimpleNamespace(content=None, reasoning_content=None,
+                                  reasoning=None, tool_calls=None)
+    return types.SimpleNamespace(usage=usage,
+                                 choices=[types.SimpleNamespace(delta=delta)])
+
+
+def _client_streaming(monkeypatch, chunks: list):
+    client = LLMClient(_cfg())
+    monkeypatch.setattr(client._client.chat.completions, "create",
+                        lambda **_kw: iter(chunks))
+    monkeypatch.setattr("minicode.llm.time",
+                        types.SimpleNamespace(perf_counter=_time.perf_counter,
+                                              sleep=lambda _s: None))
+    return client
+
+
+def test_usage_carries_cached_tokens_when_reported(monkeypatch):
+    """端点回报 prompt_tokens_details.cached_tokens 时透传 —— 提示词前缀
+    稳定化(v0.9.49)之后,这是那件事收益的唯一可见证据。"""
+    client = _client_streaming(monkeypatch, [_usage_chunk(cached=80)])
+    turn = client.stream_chat([{"role": "user", "content": "hi"}], [])
+    assert turn.usage["cached_tokens"] == 80
+
+
+def test_usage_omits_cached_tokens_when_absent(monkeypatch):
+    """端点没给 details 就不带这个键 —— 绝不估算,消费方按缺省处理。"""
+    client = _client_streaming(monkeypatch, [_usage_chunk(cached=None)])
+    turn = client.stream_chat([{"role": "user", "content": "hi"}], [])
+    assert "cached_tokens" not in turn.usage

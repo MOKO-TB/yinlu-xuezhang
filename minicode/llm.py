@@ -166,6 +166,13 @@ class LLMClient:
                     "prompt_tokens": chunk.usage.prompt_tokens,
                     "completion_tokens": chunk.usage.completion_tokens,
                 }
+                # 缓存命中的 prompt 部分:端点在 usage.prompt_tokens_details.cached_tokens
+                # 里回报,缺了就不带这个键 —— 绝不估算。提示词前缀稳定化(v0.9.49
+                # 静态段前置)之后,这是那件事收益的唯一可见证据。
+                details = getattr(chunk.usage, "prompt_tokens_details", None)
+                cached = getattr(details, "cached_tokens", None)
+                if isinstance(cached, int) and cached >= 0:
+                    turn.usage["cached_tokens"] = cached
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta

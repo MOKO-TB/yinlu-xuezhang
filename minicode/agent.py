@@ -87,6 +87,10 @@ class Agent:
         for _ in range(self.max_steps):
             if deadline is not None and time.monotonic() > deadline:
                 self.ui.turn_time_limited(limit, steps)
+                # 与撞步数上限同一口径:此刻工具结果已经躺在上下文里,模型还没
+                # 读过一眼 —— 不补这次收尾,长任务就停在最戛然而止的地方。
+                # wrap_up 自己失败就静默退回,不会把"到点停止"变成第二次故障。
+                self._wrap_up()
                 return
             steps += 1
             self._maybe_compact()
@@ -261,10 +265,14 @@ class Agent:
             maybe = u.get("completion_tokens")
             tokens = maybe if isinstance(maybe, int) and maybe > 0 else None
         tps = round(tokens / seconds, 1) if tokens else None
+        u = turn.usage if isinstance(turn.usage, dict) else {}
+        cached = u.get("cached_tokens")
         try:
             push("turn_stats", elapsed_ms=turn.elapsed_ms,
                  tokens=tokens, tps=tps,
-                 reasoning=bool(turn.reasoning))
+                 reasoning=bool(turn.reasoning),
+                 cached_tokens=(cached if isinstance(cached, int) and cached >= 0
+                                else None))
         except Exception:
             pass
 
@@ -303,7 +311,16 @@ class Agent:
         threshold = int(window * cfg.compact_at_ratio)
         if not force and self.context_tokens() <= threshold:
             return False
-        new_msgs, before = compact(self.session.messages, self.llm)
+        # 压缩是一次**真实的模型调用**(把早期对话发出去做摘要,要走网络):
+        # 它必须像 _wrap_up 一样自己兜住 —— 抛出去会把整个回合带走,用户那句
+        # 提问连模型都没见到,报的还不是"模型调用失败"这句人话。失败这一轮
+        # 不压、原样继续,阈值逻辑还在,下一轮会再试。
+        self.ui.info("上下文接近窗口上限,先把早期对话整理成摘要(可能要几秒)…")
+        try:
+            new_msgs, before = compact(self.session.messages, self.llm)
+        except Exception:
+            self.ui.info("这次上下文整理没做成(模型暂时连不上?),先直接回答;之后还会再试。")
+            return False
         if len(new_msgs) >= before:
             if force:
                 self.ui.info("没有可压缩的早期对话。")

@@ -52,9 +52,13 @@ class FakeUI:
     def tool_rejected_hard(self, tool, args):
         self.hard_rejected.append((tool.name, dict(args)))
 
-    def compacted(self, before, after): pass
+    def compacted(self, before, after):
+        self.compacted_calls = getattr(self, "compacted_calls", [])
+        self.compacted_calls.append((before, after))
 
-    def info(self, text): pass
+    def info(self, text):
+        self.infos = getattr(self, "infos", [])
+        self.infos.append(text)
 
     def turn_interrupted(self):
         self.interrupted = True
@@ -518,21 +522,26 @@ def test_context_tokens_is_messages_plus_tool_definitions(config, ctx):
 # ------------------------------------------------------- 一轮总时限
 
 def test_turn_time_limit_stops_between_steps(config, ctx, monkeypatch):
-    """到点只在两步之间收手:不再问模型,但已发出去的那一步照常走完。"""
+    """到点只在两步之间收手:不再问模型,但已发出去的那一步照常走完。
+    v0.9.50 起到点后补一次**不带工具**的收尾(wrap_up) —— 与撞步数上限同一
+    口径:此刻工具结果已躺在上下文里,直接 return 就是最戛然而止的出口。"""
     from minicode import agent as agent_mod
     monkeypatch.setattr(agent_mod, "time", Clock(6.0))
     config.turn_time_limit_seconds = 10
     llm = FakeLLM([
         AssistantTurn(tool_calls=[ToolCall(
             id="c1", name="glob", arguments=json.dumps({"pattern": "**/*"}))]),
-        AssistantTurn(text="这一轮不该再被请求"),
+        AssistantTurn(text="已经跑完这一步,剩下的下次接着来。"),
     ])
     ui = FakeUI()
-    make_agent(config, ctx, llm, ui).run_turn("找文件")
+    agent = make_agent(config, ctx, llm, ui)
+    agent.run_turn("找文件")
 
-    assert llm.calls and len(llm.calls) == 1        # 第二次请求没发生
     assert ui.time_limited == [(10, 1)]             # 报告:时限 + 已经走了几步
     assert ui.tool_results                          # 已派出去的那一步有结果
+    assert len(llm.calls) == 2                      # 第二次 = wrap_up 收尾
+    assert llm.calls[1][-1]["content"] == WRAP_UP_NOTE
+    assert agent.session.messages[-1]["content"] == "已经跑完这一步,剩下的下次接着来。"
 
 
 def test_turn_time_limit_zero_means_unlimited(config, ctx, monkeypatch):
@@ -549,3 +558,47 @@ def test_turn_time_limit_zero_means_unlimited(config, ctx, monkeypatch):
     make_agent(config, ctx, llm, ui).run_turn("找文件")
 
     assert ui.time_limited == [] and len(llm.calls) == 2
+
+
+def test_compact_failure_does_not_kill_the_turn(config, ctx, monkeypatch):
+    """压缩是一次真实的模型调用(把早期对话发出去做摘要):它失败绝不能把整个
+    回合带走 —— 那样用户的提问连模型都没见到,报的还不是"模型调用失败"那句
+    人话。失败退回不压缩,回答照常产出(v0.9.50)。"""
+    config.context_window = 100          # 阈值 = 1 token,任何消息都超 → 必触发
+    config.compact_at_ratio = 0.01
+    llm = FakeLLM([
+        RuntimeError("模型连不上"),      # 第一次调用 = 压缩那次:抛
+        AssistantTurn(text="回答照常"),
+    ])
+    ui = FakeUI()
+    agent = make_agent(config, ctx, llm, ui)
+    for i in range(3):                       # 预置 3 轮历史:否则 compact 认定
+        agent.session.add_user(f"旧问题{i}")  # "无可压缩"(<=keep_recent)压根不调模型
+        agent.session.add_assistant(AssistantTurn(text=f"旧回答{i}"))
+    agent.run_turn("给我讲讲选课")
+
+    assert agent.session.messages[-1]["content"] == "回答照常"
+    assert "先直接回答" in "".join(ui.infos)        # 失败要说人话,不是炸
+    assert any("整理成摘要" in t for t in ui.infos)  # 开始整理时有提示,不再是静默黑洞
+    # 本轮的提问在 recent 轮里,没有被压掉(压掉的是更早的"旧问题0")
+    assert any(m.get("role") == "user" and m.get("content") == "给我讲讲选课"
+               for m in agent.session.messages)
+
+
+def test_compact_success_still_replaces_messages(config, ctx):
+    """失败兜底不能把成功路径改坏:压得动时照常替换并推 compacted。"""
+    config.context_window = 100
+    config.compact_at_ratio = 0.01
+    llm = FakeLLM([
+        AssistantTurn(text="(此前对话的摘要)同学问了选课。"),
+        AssistantTurn(text="回答"),
+    ])
+    ui = FakeUI()
+    agent = make_agent(config, ctx, llm, ui)
+    for i in range(3):
+        agent.session.add_user(f"旧问题{i}")
+        agent.session.add_assistant(AssistantTurn(text=f"旧回答{i}"))
+    agent.run_turn("给我讲讲选课")
+
+    assert getattr(ui, "compacted_calls", None), "压缩成功要推 compacted 事件"
+    assert agent.session.messages[-1]["content"] == "回答"

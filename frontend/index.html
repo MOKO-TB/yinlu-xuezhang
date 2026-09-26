@@ -2740,6 +2740,10 @@ function renderTurnStats(c, e) {
   } else if (sec) {
     bits.push(`<span class="st">⚡ 速度未知(服务端未返回 token 数)</span>`);
   }
+  // 缓存命中(prompt 的一部分由服务端 KV 缓存返回):端点没给就不显示这一格
+  if (e.cached_tokens > 0) {
+    bits.push(`<span class="st">📦 命中缓存 <b>${e.cached_tokens}</b> token</span>`);
+  }
   if (e.reasoning) bits.push(`<span class="st">🧠 已思考</span>`);
   if (!bits.length) { el.hidden = true; return; }
   el.innerHTML = bits.join("");
