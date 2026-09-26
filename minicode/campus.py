@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from pathlib import Path
 
-from minicode.paths import resource_path
+from minicode.paths import app_path, resource_path
 
 INDEX_REL = ("frontend", "campus-index.json")
 COLORS = ("orange", "teal", "red", "blue", "gold")
@@ -233,6 +235,65 @@ def _item(index: dict, b: dict) -> dict:
 
 # ------------------------------------------------------------------ 工具实现
 
+# ---------------------------------------------------------------- 歧义答案的记忆
+#
+# 「A栋」这类真实歧义(学思苑A / 集贤苑A座)每次都要问用户 —— 问是对的,但
+# 同一个同学每次都得到同一个答案,问完就忘就是浪费他时间。这里把**用户自己
+# 认过的那个答案**记下来:下次再遇到同一歧义,把"上次你说是哪栋"回给他,
+# 让他确认或改口 —— 绝不自动替他选(猜错一次就把人指到反方向)。
+# 记录里只有他亲口说的对应关系,不是我们推断的,所以不违反"不编数据"。
+
+CHOICES_FILE = "campus-choices.json"
+MAX_CHOICES = 200                  # 歧义别名撑死几十个,200 上限只是防手工乱塞
+_choices_lock = threading.Lock()
+
+
+def choices_path() -> Path:
+    return app_path(CHOICES_FILE)
+
+
+def load_choices() -> dict:
+    """读歧义答案账本:{归一化别名: {no, name, ts}}。坏文件当空账。"""
+    try:
+        data = json.loads(choices_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def recall_choice(query: str) -> dict | None:
+    """这个说法用户上一次认的是哪栋;没记过返回 None。"""
+    key = normalize(query)
+    if not key:
+        return None
+    rec = load_choices().get(key)
+    return rec if isinstance(rec, dict) and rec.get("no") else None
+
+
+def remember_choice(query: str, building: dict) -> bool:
+    """记下"用户说 X 指的是这栋"。写失败静默(下次顶多再问一遍)。"""
+    key = normalize(query)
+    no = int(building.get("no") or 0)
+    if not key or not no:
+        return False
+    rec = {"no": no, "name": str(building.get("name") or ""), "alias": str(query or ""),
+           "ts": time.strftime("%Y-%m-%d")}
+    with _choices_lock:
+        data = load_choices()
+        data[key] = rec
+        data = {k: data[k] for k in list(data)[-MAX_CHOICES:]}
+        try:
+            p = choices_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1),
+                           encoding="utf-8")
+            tmp.replace(p)
+            return True
+        except OSError:
+            return False
+
+
 def _push(ctx, payload: dict) -> bool:
     """把图形指令推给 GUI;终端/无 UI 时静默跳过(文字结论仍然返回)。"""
     ui = getattr(ctx, "ui", None)
@@ -272,8 +333,16 @@ def _miss_text(index: dict, query: str) -> str:
             f"(另有非建筑登记:{'、'.join(str(p.get('name')) for p in (index.get('not_buildings') or []))})")
 
 
-def map_find_place(ctx, query: str, color: str | None = None) -> str:
-    """按用户口语找一处地点:命中就框出来并出单栋标注图,歧义就把候选都摆出来。"""
+def map_find_place(ctx, query: str, color: str | None = None,
+                   chosen: str | None = None) -> str:
+    """按用户口语找一处地点:命中就框出来并出单栋标注图,歧义就把候选都摆出来。
+
+    歧义的处理(「A栋」这类真实歧义):
+    - 用户还没答 → 候选全标出来,**不替他挑**;
+    - 用户答了 → 把答案从 `chosen` 传进来:认得是候选之一就出图并**记住他认的**
+      (下次问同一说法会先提"上次你说的是 X");
+    - 不管记没记,候选永远一起摆出,用户改口随时能换(账本只存他亲口说的对应)。
+    """
     index = load_index()
     color = color if color in COLORS else "orange"
     res = resolve(index, query)
@@ -295,6 +364,49 @@ def map_find_place(ctx, query: str, color: str | None = None) -> str:
 
     if status == "ambiguous":
         cands = res["candidates"]
+        pick = None
+        if chosen:
+            key = normalize(chosen)
+            for b in cands:
+                if key and key in {normalize(str(b.get("name", ""))),
+                                   *{normalize(a) for a in _aliases_of(b)}}:
+                    pick = b
+                    break
+            if pick is None:
+                shown = _push(ctx, {"op": "focus", "title": f"「{query}」对应 {len(cands)} 处",
+                                    "items": [_item(index, b) for b in cands],
+                                    "color": "gold", "ask": True})
+                lines = [f"「{chosen}」不在「{query}」的候选里,没有标它 —— 候选只有这 {len(cands)} 处:",
+                         *(f"- {describe(b)}" for b in cands),
+                         "请问清用户指的是哪一栋,把他说出的楼名从 chosen 传回来。"]
+                return "\n".join(lines)
+        else:
+            prev = recall_choice(query)
+            if prev:
+                shown = _push(ctx, {"op": "focus", "title": f"「{query}」对应 {len(cands)} 处",
+                                    "items": [_item(index, b) for b in cands],
+                                    "color": "gold", "ask": True})
+                lines = [f"「{query}」在地图上对应 {len(cands)} 处"
+                         f"(上次 {str(prev.get('ts') or '')} 你说的是「{prev.get('name')}」):"
+                         + "、".join(str(b.get("name")) for b in cands) + "。"]
+                lines.append("**不要替用户挑一个** —— 先问这次还是不是那一栋;"
+                             "他确认或改口后,把他说的楼名从 chosen 传回来。")
+                for b in cands:
+                    lines.append(f"- {describe(b)};学生常叫:{'、'.join(_aliases_of(b)) or '—'}")
+                return "\n".join(lines)
+
+        if pick is not None:
+            remember_choice(query, pick)
+            shown = _push(ctx, {"op": "focus", "title": f"定位:{pick.get('name')}",
+                                "items": [_item(index, pick)], "color": color})
+            lines = [f"「{query}」按用户认的记为「{pick.get('name')}」"
+                     + ("并已框出单栋标注图。" if shown else "(无图形界面)。"),
+                     f"位置:{pick.get('area_on_map', '')};类别:{pick.get('category', '')};"
+                     f"邻近:{'、'.join(str(x) for x in (pick.get('nearby') or [])) or '—'}。",
+                     "这个对应关系已记下(只记他亲口认的那次);下次他改口随时能换。",
+                     _caveat_line(index)]
+            return "\n".join(lines)
+
         fixed = _conflicts_for(index, query)
         shown = _push(ctx, {"op": "focus", "title": f"「{query}」对应 {len(cands)} 处",
                             "items": [_item(index, b) for b in cands],
@@ -303,7 +415,7 @@ def map_find_place(ctx, query: str, color: str | None = None) -> str:
             f"「{query}」在地图上对应 {len(cands)} 处:{'、'.join(str(b.get('name')) for b in cands)}"
             + ("。" if shown else "(无图形界面)。" + ""),
             "**不要替用户挑一个** —— 这是真实歧义,两处相距很远,猜错就把人指到反方向。",
-            "已把候选都标在图上了,请先问用户指的是哪一栋。",
+            "已把候选都标在图上了,请先问用户指的是哪一栋,把他说出的楼名从 chosen 传回来。",
         ]
         for b in cands:
             lines.append(f"- {describe(b)};学生常叫:{'、'.join(_aliases_of(b)) or '—'}")

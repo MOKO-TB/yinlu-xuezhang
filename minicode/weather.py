@@ -26,7 +26,6 @@ CACHE_FILE = "weather-cache.json"
 CACHE_TTL = 30 * 60                    # 首页 chip 半小时内的结果算新鲜
 FETCH_TIMEOUT = 8.0
 DEFAULT_CITY = {"lat": 23.15, "lon": 112.57, "label": "肇庆·鼎湖"}
-
 # WMO 天气代码 → (图标, 中文)。只列 Open-Meteo 常见值,认不出的回"变化"。
 _WMO = {
     0: ("☀️", "晴"), 1: ("🌤", "基本晴朗"), 2: ("⛅", "多云"), 3: ("☁️", "阴"),
@@ -44,38 +43,123 @@ _WMO = {
 _refresh_lock = threading.Lock()
 _refreshing = False
 
+# 雨类天气码(降雨/冻雨/雷雨;雾与雪不算"要带伞")
+RAIN_CODES = frozenset({51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99})
 
-def _city() -> dict:
+
+def _places() -> list[dict]:
+    """weather.json → 地点列表(至少一条,坏了回落默认坐标)。
+
+    两种写法都认(向后兼容):
+    - 旧单对象: {"lat": .., "lon": .., "label": "肇庆·鼎湖"}
+    - 多地点:   {"places": [{"name": "学校", "lat": .., "lon": .., "label": ".."}, …],
+                 "default": "学校"}
+    `name` 是工具里切地点用的键;`default` 只是把谁排到第一位(首页 chip 跟着
+    第一位走),没有 default 就按文件里的顺序。**不做自动定位**:地点是用户
+    自己命名的,程序不猜他在哪。
+    """
     try:
         raw = json.loads(app_path(CITY_FILE).read_text(encoding="utf-8"))
-        lat, lon = float(raw["lat"]), float(raw["lon"])
-        return {"lat": lat, "lon": lon,
-                "label": str(raw.get("label") or DEFAULT_CITY["label"])}
     except Exception:
-        return dict(DEFAULT_CITY)
+        raw = {}
+    out: list[dict] = []
+
+    def _add(entry, fallback_label: str = "") -> None:
+        if not isinstance(entry, dict):
+            return
+        try:
+            lat, lon = float(entry["lat"]), float(entry["lon"])
+        except (KeyError, TypeError, ValueError):
+            return                      # 坐标坏的条目跳过,不拖垮其余地点
+        label = str(entry.get("label") or entry.get("name")
+                    or fallback_label).strip()
+        if not label:
+            return
+        name = str(entry.get("name") or label).strip()
+        out.append({"name": name or label, "label": label, "lat": lat, "lon": lon})
+
+    if isinstance(raw, dict) and isinstance(raw.get("places"), list):
+        for entry in raw["places"]:
+            _add(entry)
+        default = str(raw.get("default") or "").strip().lower()
+        if default:
+            for i, p in enumerate(out):
+                if p["name"].lower() == default:
+                    out.insert(0, out.pop(i))     # 默认地点排第一
+                    break
+    elif isinstance(raw, dict) and raw.get("lat") is not None:
+        _add(raw, DEFAULT_CITY["label"])          # 旧单对象格式
+    if not out:
+        out = [{**DEFAULT_CITY, "name": DEFAULT_CITY["label"]}]
+    return out
+
+
+def _city(name: str = "") -> dict | None:
+    """按名字取一个地点;name 空 = 默认(列表第一位)。认不出返回 None ——
+    调用方要如实说"没有这个地点",不能悄悄落回默认(那是编)。"""
+    rows = _places()
+    if not name or not str(name).strip():
+        return rows[0]
+    key = str(name).strip().lower()
+    for p in rows:
+        if p["name"].lower() == key or p["label"].lower() == key:
+            return p
+    return None
 
 
 def _cache_path() -> Path:
     return app_path(CACHE_FILE)
 
 
-def _load_cache() -> dict | None:
+def _load_cache() -> dict:
+    """读缓存文件原样返回;没有/坏了返回空 dict。
+
+    两种格式:旧 {"ts", "data"}(单地点时代)与新 {"entries": {名: {"ts","data"}}}。
+    归一化交给 _cache_entry / _save_entry。
+    """
     try:
         data = json.loads(_cache_path().read_text(encoding="utf-8"))
-        if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        if isinstance(data, dict):
             return data
     except (OSError, json.JSONDecodeError, ValueError):
         pass
-    return None
+    return {}
 
 
-def _save_cache(payload: dict) -> None:
+def _cache_entry(name: str) -> tuple[dict | None, float | None]:
+    """(该地点的预报数据, 抓取时刻)。旧格式只有默认地点一条。"""
+    raw = _load_cache()
+    if not raw:
+        return None, None
+    entries = raw.get("entries")
+    if isinstance(entries, dict):                      # 新格式
+        hit = entries.get(name) or {}
+    elif raw.get("data") is not None:                  # 旧格式:就是默认那一条
+        default = _places()[0]["name"]
+        hit = {"ts": raw.get("ts"), "data": raw.get("data")} if name == default else {}
+    else:
+        hit = {}
+    data = hit.get("data")
+    ts = hit.get("ts")
+    return (data if isinstance(data, dict) else None,
+            float(ts) if isinstance(ts, (int, float)) else None)
+
+
+def _save_entry(name: str, payload: dict) -> None:
+    """把一个地点的预报写进缓存(其余地点的条目原样保留)。"""
     try:
+        raw = _load_cache()
+        entries = raw.get("entries")
+        entries = dict(entries) if isinstance(entries, dict) else {}
+        if not entries and raw.get("data") is not None:
+            # 旧格式迁移:原有那条归到默认地点名下
+            default = _places()[0]["name"]
+            entries[default] = {"ts": raw.get("ts"), "data": raw.get("data")}
+        entries[name] = {"ts": time.time(), "data": payload}
         path = _cache_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps({"ts": time.time(), "data": payload}, ensure_ascii=False),
-            encoding="utf-8")
+        path.write_text(json.dumps({"entries": entries}, ensure_ascii=False),
+                        encoding="utf-8")
     except OSError:
         pass                      # 写不进缓存只是下次再拉,不影响使用
 
@@ -97,8 +181,11 @@ def _fetch(city: dict) -> dict:
     return data
 
 
-def refresh_async() -> None:
-    """后台线程刷新缓存;同一进程同时只允许一个在途请求。"""
+def refresh_async(name: str = "") -> None:
+    """后台线程刷新缓存;同一进程同一地点只允许一个在途请求。
+
+    name 空 = 默认地点(首页 chip 就是它)。断网/超时静默:chip 保持旧值或不出现。
+    """
     global _refreshing
     with _refresh_lock:
         if _refreshing:
@@ -108,7 +195,9 @@ def refresh_async() -> None:
     def run() -> None:
         global _refreshing
         try:
-            _save_cache(_fetch(_city()))
+            city = _city(name)
+            if city is not None:
+                _save_entry(city["name"], _fetch(city))
         except Exception:
             pass                  # 断网/超时:静默,chip 保持旧值或不出现
         finally:
@@ -209,23 +298,22 @@ def card_text(data: dict, today: date | None = None) -> str:
 # ---------------------------------------------------------------- 出口
 
 def weather_card(today: date | None = None) -> dict | None:
-    """首页 chip 的数据:只读缓存、绝不当场等网络。
+    """首页 chip 的数据:只读缓存、绝不当场等网络(地点恒为默认那一个)。
 
     返回 {icon,text,tip,city,refreshing};缓存完全不存在时**顺手 kick 一次
     后台刷新**并返回 None(前端看到 refreshing 会过几秒再要一次)。
     """
-    cached = _load_cache()
-    fresh = cached and (time.time() - float(cached.get("ts") or 0) < CACHE_TTL)
+    city = _places()[0]
+    data, ts = _cache_entry(city["name"])
+    fresh = ts is not None and (time.time() - ts < CACHE_TTL)
     if not fresh:
-        refresh_async()
-    if not cached:
+        refresh_async(city["name"])
+    if data is None:
         return None
-    data = cached["data"]
     icon_text = card_text(data, today)
     icon = icon_text.split(" ")[0] if icon_text else "🌡"
     rest = icon_text[len(icon):].strip()
-    city = _city()
-    ago = "" if fresh else f"(缓存于 {time.strftime('%H:%M', time.localtime(float(cached.get('ts') or 0)))})"
+    ago = "" if fresh else f"(缓存于 {time.strftime('%H:%M', time.localtime(ts or 0))})"
     return {"icon": icon, "text": rest,
             "tip": " · ".join(x for x in (umbrella_tip(data, today),
                                           city.get("label", "") + ago) if x),
@@ -233,16 +321,58 @@ def weather_card(today: date | None = None) -> dict | None:
             "refreshing": bool(not fresh)}
 
 
-def get_weather(ctx, days: int = 1) -> str:
-    """get_weather 工具处理器:今天起 N 天(0-3)的预报文本。"""
+def cached_data(name: str = "") -> dict | None:
+    """只读缓存(不联网、不触发刷新):新鲜返回该地点的预报,过期/没有返回 None。
+
+    给看门狗的"明天有雨"提醒用 —— 提醒绝不为检查天气去联网(简报同款纪律),
+    缓存是旧的就这一轮跳过,6 小时后下一轮大概率是新的。
+    """
+    city = _city(name)
+    if city is None:
+        return None
+    data, ts = _cache_entry(city["name"])
+    if data is None or ts is None:
+        return None
+    return data if (time.time() - ts < CACHE_TTL) else None
+
+
+def tomorrow_rain(data: dict, today: date | None = None) -> dict | None:
+    """明天会不会下雨:降水概率 ≥40% 或预报码是雨类(与今天带伞同一条线)。
+
+    数据是**预报**,不是事实 —— 调用方的文案要带"预报"字样。明天不在预报
+    范围内(理论上不会,fetch 拉 4 天)返回 None。
+    """
+    row = _day_row(data, _today_index(data, today) + 1)
+    if not row:
+        return None
+    try:
+        code = int(row["code"]) if row.get("code") is not None else None
+    except (TypeError, ValueError):
+        code = None
+    pct = row.get("rain_pct")
+    try:
+        prob = int(float(pct)) if pct is not None else None
+    except (TypeError, ValueError):
+        prob = None
+    if not ((prob is not None and prob >= 40) or (code in RAIN_CODES)):
+        return None
+    return {"date": str(row.get("date") or ""), "pct": prob, "code": code}
+
+
+def get_weather(ctx, days: int = 1, place: str = "") -> str:
+    """get_weather 工具处理器:今天起 N 天(0-3)的预报文本;place 可切地点。"""
     days = max(0, min(3, int(days or 0)))
-    cached = _load_cache()
-    fresh = cached and (time.time() - float(cached.get("ts") or 0) < CACHE_TTL)
-    data = cached["data"] if fresh else None
-    if data is None:
+    city = _city(place)
+    if city is None:
+        names = "、".join(p["name"] for p in _places())
+        return (f"错误: 没有叫「{place}」的地点。可用地点:{names}"
+                "(要增删地点请编辑数据目录里的 weather.json)。")
+    data, ts = _cache_entry(city["name"])
+    fresh = ts is not None and (time.time() - ts < CACHE_TTL)
+    if data is None or not fresh:
         try:
-            fetched = _fetch(_city())
-            _save_cache(fetched)
+            fetched = _fetch(city)
+            _save_entry(city["name"], fetched)
             data = fetched["data"] if isinstance(fetched.get("data"), dict) else fetched
         except Exception:
             return ("错误: 天气服务暂时连不上(校园网外/断网)。"
@@ -264,4 +394,5 @@ def get_weather(ctx, days: int = 1) -> str:
     out = " · ".join(x for x in lines if x)
     if tip:
         out += f"。建议:{tip}"
-    return out + "。(数据:Open-Meteo,仅供参考)"
+    where = "" if city["name"] == _places()[0]["name"] else f"({city['label']})"
+    return out + f"{where}。(数据:Open-Meteo,仅供参考)"

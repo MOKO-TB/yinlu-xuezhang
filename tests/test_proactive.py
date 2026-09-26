@@ -660,7 +660,10 @@ def test_round_lets_the_briefing_cover_the_singles_and_says_so(monkeypatch):
     _stub_round_sources(monkeypatch, near=TODO, note=FIRST_CLASS, alerts=[ALERT])
     monkeypatch.setattr(proactive, "briefing_pushed_today", lambda day=None: True)
     bridge, ui = _push_bridge()
-    assert proactive._round(bridge) == {"briefing": True}
+    out = proactive._round(bridge)
+    assert out["briefing"] is True
+    assert "calendar" not in out and "reminders" not in out and "schedule" not in out
+    assert "weather" in out                # v0.9.43 起「明天有雨」独立于简报(简报管今天)
     assert ui.events == []
     assert any("今日简报已覆盖" in r for r in proactive.wd_log_tail(10))
 
@@ -785,3 +788,57 @@ def test_desktop_text_shows_the_clock_when_the_todo_has_one():
     items[0]["due_at"] = ""
     assert proactive.desktop_text("reminders", {"items": items}) \
         == "交实验报告(2026-09-22,还有 0 天)"
+
+
+# ---------------------------------------------------------------- 明日雨提醒(v0.9.43)
+
+def _write_weather_cache(tmp_path, *, rain=True):
+    """按真实今天造 4 天预报缓存(明日雨 → 明天那格给雨码+高概率)。"""
+    from datetime import timedelta
+    from minicode import paths, weather
+    import time as _time
+    today = date.today()
+    days = [(today + timedelta(days=i)).isoformat() for i in range(4)]
+    data = {"current": {"temperature_2m": 27, "apparent_temperature": 28,
+                        "precipitation": 0.0},
+            "daily": {"time": days,
+                      "weather_code": [2, 61 if rain else 0, 0, 0],
+                      "temperature_2m_max": [31, 30, 30, 30],
+                      "temperature_2m_min": [24, 24, 24, 24],
+                      "precipitation_probability_max": [10, 70 if rain else 10, 20, 20]}}
+    p = paths.APP_DIR / weather.CACHE_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"ts": _time.time(), "data": data}), encoding="utf-8")
+
+
+def test_push_weather_pushes_once_and_dedupes(tmp_path):
+    _write_weather_cache(tmp_path, rain=True)
+    bridge, ui = _push_bridge()
+    assert proactive._push_weather(bridge) is True
+    assert [e["kind"] for e in ui.events] == ["weather"]
+    assert "预报有雨" in ui.events[0]["text"] and "伞" in ui.events[0]["text"]
+    # 同一天再查(重启后同日):账本去重,不再弹
+    assert proactive._push_weather(bridge) is False
+    assert len(ui.events) == 1
+
+
+def test_push_weather_skips_without_cache(tmp_path):
+    """没缓存/过期就跳过 —— 提醒绝不为检查天气联网。"""
+    bridge, ui = _push_bridge()
+    assert proactive._push_weather(bridge) is False
+    assert ui.events == []
+    assert any("不为提醒联网" in r for r in proactive.wd_log_tail(10))
+
+
+def test_push_weather_quiet_when_no_rain_tomorrow(tmp_path):
+    _write_weather_cache(tmp_path, rain=False)
+    bridge, ui = _push_bridge()
+    assert proactive._push_weather(bridge) is False
+    assert ui.events == []
+
+
+def test_weather_kind_in_notify_kinds():
+    """新类别必须进 tray 的类别表,否则用户关不掉(七类扩成八类)。"""
+    from minicode import tray
+    assert "weather" in tray.NOTIFY_KINDS
+    assert tray.KIND_LABELS.get("weather") == "天气提醒"

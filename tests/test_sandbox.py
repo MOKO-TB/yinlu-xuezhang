@@ -230,3 +230,47 @@ def test_cli_confirm_denies_on_missing_stdin(monkeypatch):
     monkeypatch.setattr(ui.console, "input", boom)
     tool = _tool("read_file")
     assert ui.confirm_tool(tool, {"path": "x"}) == "no"
+
+
+# ------------------------------------------------------------ 会话内记住批准(v0.9.43)
+
+def _ws(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir(exist_ok=True)
+    return ws
+
+
+def test_approve_path_turn_vs_session(tmp_path):
+    """「允许」只管本回合;「总是允许」跨回合,但换工作区一起清。"""
+    st = SandboxState(SandboxPolicy(), _ws(tmp_path))
+    p = tmp_path / "elsewhere" / "note.txt"
+    st.approve_path(p)                            # 回合级
+    assert st.path_allowed(p)
+    st.new_turn()
+    assert not st.path_allowed(p)                 # 新回合:忘了
+    st.approve_path(p, session=True)              # 会话级
+    st.new_turn()
+    assert st.path_allowed(p)                     # 还在
+    st.retarget(_ws(tmp_path) / "ws2")
+    assert not st.path_allowed(p)                 # 换工作区:也清
+
+
+def test_session_approved_not_cleared_by_new_turn_but_still_gated(tmp_path):
+    """new_turn 只清回合级集合;敏感路径判定照旧,会话级不越 BLOCKED 红线。"""
+    st = SandboxState(SandboxPolicy(), _ws(tmp_path))
+    outside = tmp_path / "docs"
+    st.approve_path(outside, session=True)
+    st.new_turn()
+    assert st.path_allowed(outside)
+    # 凭据/敏感目录另有 BLOCKED 门,approve_path 改变不了 classify 的结论
+    kind, _ = classify_path(_ws(tmp_path), str(tmp_path / "elsewhere" / "x"),
+                            home=tmp_path)
+    assert kind == OUTSIDE
+
+
+def test_describe_mentions_session_paths(tmp_path):
+    st = SandboxState(SandboxPolicy(), _ws(tmp_path))
+    assert "本会话已记住" not in st.describe()
+    st.approve_path(tmp_path / "a", session=True)
+    st.approve_path(tmp_path / "b", session=True)
+    assert "本会话已记住 2 个工作区外路径" in st.describe()

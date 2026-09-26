@@ -114,6 +114,8 @@ TABLE: tuple[Entry, ...] = (
                "要带去新机器请用情绪面板的「导出」自己存、自己拷"),
     Entry("kb/reviewed.json", "人工核实过的知识", PERSONAL, True,
           note="你在候选面板点过「并入」的内容"),
+    Entry("campus-choices.json", "地图歧义答案", PERSONAL, True,
+          note="你在「A栋」这类说法上亲口认过指哪栋,下次不用再问"),
     Entry("skills", "自己添加的技能", PERSONAL, True, kind="family", pattern="*.md",
           note="技能面板里你自己写的提示词"),
     Entry("kb-gaps.jsonl", "没答上来的问题", PERSONAL, False,

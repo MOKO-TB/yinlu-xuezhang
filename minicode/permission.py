@@ -188,14 +188,18 @@ class PermissionGate:
         classify = classify_for_write if tool_name in WRITE_TOOLS else classify_path
         return classify(self.sandbox.workspace, raw)
 
-    def approve_outside(self, tool: Tool, args: dict) -> None:
-        """用户点了允许:记住这个工作区外路径(本回合内有效)。"""
+    def approve_outside(self, tool: Tool, args: dict, session: bool = False) -> None:
+        """用户点了允许:记住这个工作区外路径。
+
+        `session=False`(点「允许」):本回合内有效;`session=True`(点「总是允许」):
+        本会话内该路径不再询问(不落盘,换工作区/重启即失效)。
+        """
         if self.sandbox is None:
             return
         name = tool.name.rsplit("·", 1)[-1]
         kind = self._path_kind(name, args.get("path"))
         if kind and kind[0] == OUTSIDE:
-            self.sandbox.approve_path(kind[1])
+            self.sandbox.approve_path(kind[1], session=session)
 
     # ------------------------------------------------------------ 升级门判定
 
@@ -357,7 +361,8 @@ class PermissionGate:
         if not token:
             return ALLOW
         self._note(f"这条命令引用了工作区外的路径 {token} —— 沙箱默认只让它在工作区内活动。"
-                   "确认不是你要的请点拒绝;需要长期放开请在 config.json 打开 "
+                   "确认不是你要的请点拒绝;点「总是允许」则本会话内记住这个路径"
+                   "(不落盘,换工作区或重启即失效);需要长期放开请在 config.json 打开 "
                    "sandbox.allow_outside_workspace。")
         return ASK
 

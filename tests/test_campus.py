@@ -5,6 +5,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from minicode import campus
 
 
@@ -310,3 +312,66 @@ def test_map_tool_runs_through_agent_and_pushes_event(tmp_path, config):
     assert ev["ask"] is True and len(ev["items"]) == 2
     tool_msg = next(m for m in agent.session.messages if m["role"] == "tool")
     assert "不要" in tool_msg["content"]      # 明确禁止模型自己挑一个
+
+
+# ------------------------------------------------------------ 歧义答案的记忆(v0.9.43)
+
+@pytest.fixture
+def _app(tmp_path, monkeypatch):
+    """campus-choices.json 落 APP_DIR:钉到临时目录,测试互不串。"""
+    from minicode import paths
+    monkeypatch.setattr(paths, "APP_DIR", tmp_path / "app")
+    return tmp_path / "app"
+
+
+def test_choice_roundtrip_and_bad_file(_app, tmp_path):
+    assert campus.recall_choice("E栋") is None          # 没记过
+    assert campus.remember_choice("E栋", {"no": 21, "name": "学思苑E"})
+    rec = campus.recall_choice("E 栋!")                 # 归一化后同一个键
+    assert rec and rec["name"] == "学思苑E" and rec["no"] == 21
+    (_app / campus.CHOICES_FILE).write_text("{坏了", encoding="utf-8")
+    assert campus.load_choices() == {}                  # 坏文件当空账,不炸
+
+
+def test_find_place_ambiguous_without_memory_lists_candidates(_app, config, tmp_path):
+    ctx = make_ctx(tmp_path, config)
+    out = campus.map_find_place(ctx, "E栋")
+    assert "上次" not in out and "不要替用户挑一个" in out
+
+
+def test_find_place_chosen_records_and_focuses(_app, config, tmp_path):
+    ctx = make_ctx(tmp_path, config)
+    out = campus.map_find_place(ctx, "E栋", chosen="学思苑E")
+    assert "已记下" in out and "学思苑E" in out
+    ev = ctx.ui.of("focus")[0]
+    assert len(ev["items"]) == 1 and ev["items"][0]["name"] == "学思苑E"
+    assert campus.recall_choice("E栋")["name"] == "学思苑E"
+
+
+def test_find_place_chosen_by_alias_also_wins(_app, config, tmp_path):
+    """用户说的楼名带俗称(别名)也要认得出是候选之一。"""
+    ctx = make_ctx(tmp_path, config)
+    out = campus.map_find_place(ctx, "A栋", chosen="学思苑A")
+    assert "已记下" in out
+    assert campus.recall_choice("A栋")["no"]
+
+
+def test_find_place_chosen_outside_candidates_refuses(_app, config, tmp_path):
+    """chosen 不是候选:不记账、不出单栋图,把候选再摆一遍。"""
+    ctx = make_ctx(tmp_path, config)
+    out = campus.map_find_place(ctx, "E栋", chosen="图书馆")
+    assert "不在" in out and "候选" in out
+    assert campus.recall_choice("E栋") is None
+    assert len(ctx.ui.of("focus")) == 1                 # 只有候选那次,没有定位图
+
+
+def test_find_place_recall_offers_previous_choice(_app, config, tmp_path):
+    """有记忆的歧义:先把"上次你说是 X"摆出来,候选照旧全标,仍不自动选。"""
+    ctx = make_ctx(tmp_path, config)
+    campus.map_find_place(ctx, "E栋", chosen="学思苑E")
+    ctx2 = make_ctx(tmp_path, config)
+    out = campus.map_find_place(ctx2, "E栋")
+    assert "上次" in out and "学思苑E" in out
+    assert "不要替用户挑一个" in out or "先问" in out
+    ev = ctx2.ui.of("focus")[0]
+    assert len(ev["items"]) == 2                        # 候选全标,不自动缩成一栋

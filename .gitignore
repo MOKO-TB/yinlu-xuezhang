@@ -107,6 +107,10 @@ _build_*.log
 /mood.json
 /mood.json.tmp
 
+# v0.9.43 地图歧义答案账本(campus.py):用户在「A栋」这类歧义上亲口认过的对应
+/campus-choices.json
+/campus-choices.json.tmp
+
 # 向量检索的本地缓存与「用时下载」的模型权重(都是本机可再生资源,绝不进仓库)
 # kb-vectors/ = 条目指纹+向量档(embed.py);models/ = 本地 embedding 权重目录
 /kb-vectors/

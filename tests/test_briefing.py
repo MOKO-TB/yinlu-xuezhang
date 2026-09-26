@@ -18,7 +18,7 @@ TODAY = date(2026, 9, 7)                      # 周一,开学第 1 周
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "APP_DIR", tmp_path / "app")
-    monkeypatch.setattr(weather, "refresh_async", lambda: None)
+    monkeypatch.setattr(weather, "refresh_async", lambda *a, **k: None)
     monkeypatch.setattr(weather, "_refreshing", False)
     # 校历默认不给数据,单个用例自己喂
     monkeypatch.setattr(cal, "load_events", lambda: ([], "test"))
@@ -116,14 +116,14 @@ def test_briefing_names_unplaceable_classes_instead_of_rounding_them_away():
 # ---------------------------------------------------------------- 其余三段
 
 def test_weather_section_from_cache_only():
-    weather._save_cache(_weather_payload())
+    weather._save_entry("肇庆·鼎湖", _weather_payload())
     b = briefing.build(TODAY)
     assert b and "27℃" in b["text"] and "带伞" not in b["text"]
     assert "【天气】" in b["ask"]
 
 
 def test_weather_umbrella_flagged():
-    weather._save_cache(_weather_payload(precip=0.5))
+    weather._save_entry("肇庆·鼎湖", _weather_payload(precip=0.5))
     assert "带伞" in briefing.build(TODAY)["text"]
 
 
@@ -163,7 +163,7 @@ def test_calendar_nearest_event(monkeypatch):
 
 def test_all_four_sections_present(monkeypatch):
     _save_schedule([{"name": "高等数学", "day": 1, "start_time": "08:00"}])
-    weather._save_cache(_weather_payload(precip=0.5))
+    weather._save_entry("肇庆·鼎湖", _weather_payload(precip=0.5))
     reminders.add("交材料", due=TODAY.isoformat())
     monkey_events = [{"name": "新生见面会", "start": "2026-09-07", "kind": "other"}]
     monkeypatch.setattr(cal, "load_events", lambda: (monkey_events, "test"))

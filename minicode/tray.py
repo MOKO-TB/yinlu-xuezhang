@@ -43,7 +43,7 @@ LOG_FILE = "tray.log"
 # 这份管"要不要弹到桌面右下角" —— 两件事各自开关,合在一起改一个会撞坏另一个。
 NOTIFY_PREF = "notify-pref.json"
 NOTIFY_KINDS = ("briefing", "class", "schedule", "reminders",
-                "calendar", "notices", "update")
+                "calendar", "notices", "update", "weather")
 NOTIFY_DEFAULTS = {"enabled": True,
                    "kinds": {k: True for k in NOTIFY_KINDS},
                    "quiet_when_focused": True}
@@ -942,7 +942,8 @@ def close_choice(action: str, remember: bool = False) -> dict:
 # 工具文本里给用户看的中文名(内部键仍是英文,别反过来拿中文当键)
 KIND_LABELS = {"briefing": "今日简报", "class": "课前提醒", "schedule": "课程提醒",
                "reminders": "待办临期", "calendar": "校历倒计时",
-               "notices": "校园新通知", "update": "新版本"}
+               "notices": "校园新通知", "update": "新版本",
+               "weather": "天气提醒"}
 
 
 def desktop_notify(ctx, action: str = "status", kind: str = "",

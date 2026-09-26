@@ -76,3 +76,30 @@ def test_disaster_reject_overrides_accept_all(config, registry):
     config.permission_mode = "accept_all"
     gate = PermissionGate(config)
     assert gate.check(registry["bash"], {"command": "rm -rf /"}) == REJECT
+
+
+# ------------------------------------------------------------ 会话内记住(v0.9.43)
+
+def test_approve_outside_session_flag_reaches_sandbox(tmp_path, config):
+    """点「总是允许」时 session 标志要传到沙箱:路径进 session_approved;
+    点「允许」(默认)只进回合级集合。"""
+    from minicode.sandbox import SandboxPolicy, SandboxState
+    from minicode.tools.base import Tool
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    outside = tmp_path / "elsewhere" / "doc.txt"
+    tool = Tool(name="read_file", description="d",
+                parameters={"type": "object"}, handler=lambda ctx, **kw: "ok",
+                read_only=True)
+    target = str(outside.resolve())
+
+    gate = PermissionGate(config, sandbox=SandboxState(SandboxPolicy(), ws))
+    gate.approve_outside(tool, {"path": target}, session=True)
+    assert target in gate.sandbox.session_approved
+    assert gate.sandbox.path_allowed(outside.resolve())
+
+    gate2 = PermissionGate(config, sandbox=SandboxState(SandboxPolicy(), ws))
+    gate2.approve_outside(tool, {"path": target})          # 默认仍是回合级
+    assert target not in gate2.sandbox.session_approved
+    assert gate2.sandbox.path_allowed(outside.resolve())   # 但本回合放行

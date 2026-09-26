@@ -115,6 +115,9 @@ def save(term_start: str, classes: list) -> tuple[bool, str]:
         msg += f" 与上一版比对:{diff['msg']}\n{describe_changes(diff)}"
     if dropped:
         msg += f" {len(dropped)} 条没通过校验被跳过: {'; '.join(dropped[:5])}"
+    align = term_alignment(data)
+    if align:
+        msg += "\n" + align["msg"]
     msg += (" 之后问「今天/明天有什么课」不用再看图;课有变动重新 save 覆盖即可。"
             + ("旧版已备份,发现不对可用 schedule(action=undo) 换回来。" if has_prev else "")
             + " 现在把结果(尤其变动清单和被跳过的条目)向同学确认一遍。")
@@ -451,6 +454,60 @@ def describe_changes(res: dict, limit: int = 8) -> str:
 
 # ---------------------------------------------------------------- 查询
 
+def term_alignment(data: dict | None = None) -> dict | None:
+    """课表的「第 1 周周一」与校历里的官方学期节点对一次账。
+
+    为什么要有这条对账闸:term_start 是导入时问来的(可能记错),周次判断全看
+    它 —— 错一周,今天的课、空档、换楼、课前提醒**整体漂移**,而且没有任何
+    东西会报错。校历(kb/school-calendar.json)里 `kind=term` 的事件是有官方
+    来源的学期节点,拿它对一次账就能发现漂移。
+
+    诚实口径:
+    - **只认 kind=term 的事件**,不按名字猜"开学"(那是替学校编语义);
+    - 校历没有 term 事件 / 课表没存 / 两边日期一致 → 返回 None(什么都不说,
+      与 library.health_notice 同款"一切正常不吵");
+    - 对不上时返回差异与一句给用户看的核对提示,**不替用户改** —— 哪边是对的
+      我们不知道,只知道两边说的是两个日子。
+    - 取离 term_start 最近的 term 事件(相距超过 180 天的不算:那是另一学期的
+      节点,拿出来对账只会添乱)。
+    """
+    data = data if data is not None else load()
+    if not data:
+        return None
+    term = _parse_date(data.get("term_start"))
+    if term is None:
+        return None
+    from minicode import calendar as school_calendar   # 延迟导入,与 view 里的 walk 同理
+    try:
+        events, _src = school_calendar.load_events()
+    except Exception:                       # 校历读不出来:不说话,更不能连累课表
+        return None
+    rows = []
+    for e in events:
+        if str(e.get("kind") or "") != "term":
+            continue
+        d = _parse_date(e.get("start"))
+        gap = abs((d - term).days) if d else None
+        if gap is not None and gap <= 180:
+            rows.append((gap, d, e))
+    if not rows:
+        return None
+    rows.sort(key=lambda x: (x[0], x[1]))
+    _gap, cal_day, e = rows[0]
+    if cal_day == term:
+        return None
+    days_off = (cal_day - term).days
+    return {"term_start": term.isoformat(),
+            "calendar_date": cal_day.isoformat(),
+            "calendar_name": str(e.get("name") or ""),
+            "calendar_source": str(e.get("source") or ""),
+            "days_off": days_off,
+            "msg": (f"⚠ 对账:课表里第 1 周周一 = {term.isoformat()},校历里的学期节点"
+                    f"「{e.get('name')}」= {cal_day.isoformat()},差 {days_off} 天"
+                    "(正负号:校历比课表晚为正)。周次判断全看这个日子,"
+                    "请核对哪边是对的 —— 课表存错了就重新 save,校历没录就补录校历。")}
+
+
 def week_of(today: date | None = None, data: dict | None = None) -> int | None:
     """今天是本学期第几周;假期/开学前返回 None。"""
     data = data if data is not None else load()
@@ -643,11 +700,14 @@ def view(today: date | None = None) -> dict:
                 "events": overlay["event_map"].get(iso, [])}
 
     grid = [_pack(day) for day in span]
+    align = term_alignment(data)
     return {"registered": True,
             "term_start": data.get("term_start"),
             "updated_at": data.get("updated_at"),
             "can_undo": prev_path().exists(),
             "week": wk,
+            # 周次基准与校历对不上时在这里给真话(面板可显示;一致时是 None)
+            "term_alignment": (align or {}).get("msg", "") or None,
             # 面板顶部那句话的口径开关:填过作息表才允许说"几点到几点有空"
             "clock": bool(times.get("total")),
             # 地图索引缺了就没法判断换楼:顶层给一次,面板不必七天各提示一遍
@@ -1127,7 +1187,11 @@ def schedule(ctx, action: str = "save", term_start: str = "",
                 return "错误: when 需要具体日期(2026-09-22 这种写法)。"
         else:
             day = date.today()
-        return format_day(day, data)
+        body = format_day(day, data)
+        align = term_alignment(data)
+        # 周次基准漂了就每次都提醒:show/free/risk 的"第 N 周"全部跟着这个日子,
+        # 数据错误必须反复说,不嫌吵(对上了就是一个字都不加)。
+        return body + (f"\n\n{align['msg']}" if align else "")
     if action == "clear":
         return clear() if load() else "没有已登记的课表,不用清。"
     if action == "free":

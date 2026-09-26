@@ -1,4 +1,5 @@
 """个人课表(minicode/schedule.py):周次解析/推算、存取校验、看门狗文案、工具回环。"""
+import json
 import re
 from datetime import date
 
@@ -774,3 +775,69 @@ def test_facade_forwards_the_timetable_form():
     payload = '[{"start":"08:00","end":"08:45"}]'
     assert PublicApi.schedule_save_times(api, payload)["ok"] is True
     assert seen == [("schedule_save_times", (payload,))]
+
+
+# ---------------------------------------------------------------- 学期基准对账(v0.9.43)
+
+def _write_calendar(events):
+    """在 APP_DIR 放一份校历(与 calendar.load_events 同形)。"""
+    from minicode import paths
+    p = paths.APP_DIR / "kb" / "school-calendar.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"events": events}, ensure_ascii=False), encoding="utf-8")
+
+
+def test_term_alignment_silent_when_calendar_has_no_term_events():
+    """校历里没有 kind=term 的条目 → 什么都不说(不按名字猜"开学")。"""
+    from minicode import paths
+    paths.APP_DIR.mkdir(parents=True, exist_ok=True)
+    _write_calendar([{"name": "运动会", "start": "2026-09-09", "kind": "event"}])
+    _save()          # term_start 与运动会差 2 天,但 kind 不对,不该对账
+    assert schedule.term_alignment() is None
+
+
+def test_term_alignment_silent_when_dates_agree():
+    from minicode import paths
+    paths.APP_DIR.mkdir(parents=True, exist_ok=True)
+    _write_calendar([{"name": "2026-2027学年第一学期", "start": "2026-09-07",
+                      "kind": "term", "source": "校历"}])
+    _save()
+    assert schedule.term_alignment() is None
+
+
+def test_term_alignment_flags_mismatch_with_nearest_term_event():
+    from minicode import paths
+    paths.APP_DIR.mkdir(parents=True, exist_ok=True)
+    _write_calendar([
+        {"name": "另一学期", "start": "2027-03-01", "kind": "term"},
+        {"name": "2026-2027学年第一学期", "start": "2026-09-01", "kind": "term"},
+    ])
+    _save()          # term_start=2026-09-07,校历写 09-01,差 6 天
+    res = schedule.term_alignment()
+    assert res and res["calendar_name"] == "2026-2027学年第一学期"
+    assert res["days_off"] == -6
+    assert "差 -6 天" in res["msg"] and "请核对" in res["msg"]
+
+
+def test_save_message_carries_alignment_warning(monkeypatch):
+    from minicode import paths
+    paths.APP_DIR.mkdir(parents=True, exist_ok=True)
+    _write_calendar([{"name": "2026-2027学年第一学期", "start": "2026-09-01",
+                      "kind": "term"}])
+    ok, msg = schedule.save("2026-09-07", [
+        {"name": "高数", "day": 1, "periods": "1-2", "weeks": "1-16"}])
+    assert ok and "对账" in msg and "差 -6 天" in msg
+
+
+def test_show_appends_alignment_but_format_day_stays_clean(monkeypatch):
+    from minicode import paths
+    from minicode.tools.base import ToolContext
+    paths.APP_DIR.mkdir(parents=True, exist_ok=True)
+    _write_calendar([{"name": "2026-2027学年第一学期", "start": "2026-09-01",
+                      "kind": "term"}])
+    _save()
+    ctx = ToolContext(workspace=None, config=None)
+    out = schedule.schedule(ctx, action="show", when="2026-09-07")
+    assert "对账" in out
+    # 纯格式函数保持干净:简报/提示词不因对账多一个字节
+    assert "对账" not in schedule.format_day(date(2026, 9, 7))

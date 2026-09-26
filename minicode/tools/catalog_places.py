@@ -81,7 +81,9 @@ def map_tools() -> list[Tool]:
                 "用户问「XX 在哪 / 怎么走 / 带我去 XX / XX 远不远」时用它——这是回答位置类问题的第一步。"
                 "支持学生俗称(旧图=图书馆、综合馆=体育综合馆、E栋、s5)。"
                 "注意:「A栋~E栋」在地图上是两栋楼(学思苑X 与 集贤苑X座),工具会返回 ambiguous,"
-                "此时必须把候选摆给用户确认,不要自己挑一个。"
+                "此时必须把候选摆给用户确认,不要自己挑一个;用户答出是哪栋后,**重新调用一次并把他说的"
+                "楼名传进 chosen**:工具会框出那一栋,并记住他认的对应关系(下次遇到同一说法会先提上次"
+                "他认的是哪栋,仍由他确认,绝不自动替他选)。"
             ),
             parameters={
                 "type": "object",
@@ -89,6 +91,9 @@ def map_tools() -> list[Tool]:
                     "query": {"type": "string", "description": "用户说的地点,如 图书馆 / E栋 / S5 / 正校门"},
                     "color": {"type": "string", "enum": list(campus.COLORS),
                               "description": "标注框颜色,默认 orange"},
+                    "chosen": {"type": "string",
+                               "description": "歧义确认用:用户答出指哪一栋后,把**他说出的楼名**"
+                                              "(如 学思苑A)原样传进来;只认候选里的楼,不认就照错误提示再问"},
                 },
                 "required": ["query"],
             },

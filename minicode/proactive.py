@@ -388,7 +388,8 @@ def check_update(current: str, timeout: float = 10.0) -> dict | None:
 # 免得同一件事两处各写一遍、日后各说各话。
 KIND_TITLES = {"briefing": "今日简报", "class": "快上课了", "schedule": "今天的课",
                "reminders": "待办临期", "calendar": "校历提醒",
-               "notices": "校园新通知", "update": "引路学长有新版本"}
+               "notices": "校园新通知", "update": "引路学长有新版本",
+               "weather": "天气提醒"}
 
 
 def desktop_text(kind: str, payload: dict) -> str | None:
@@ -549,6 +550,34 @@ def push_briefing(bridge, force: bool = False) -> bool:
     return True
 
 
+def _push_weather(bridge) -> bool:
+    """明天有雨的前一晚提醒:只读天气缓存,绝不为提醒联网(与今日简报同纪律)。
+
+    缓存过期/没有就这一轮跳过 —— 6 小时后下一轮缓存大概率是新的,那时的判断
+    才是站在真数据上的;"有雨"的口径与今天带伞那条同一条线(weather.tomorrow_rain,
+    降水概率 ≥40% 或预报码是雨类),文案带"预报"字样,不下保证。
+    去重键带明天的日期:今天推过,明天(以及同一天再开机)都不会再弹。
+    """
+    try:
+        from minicode import weather as _weather
+        data = _weather.cached_data()
+        if not data:
+            wd_log("skip weather [-]:天气缓存没有或已过期,不为提醒联网")
+            return False
+        tip = _weather.tomorrow_rain(data)
+    except Exception as e:
+        wd_log(f"fail weather [-]:{type(e).__name__} {e}")
+        return False
+    if not tip:
+        return False
+    when = str(tip.get("date") or "")[5:]
+    pct = tip.get("pct")
+    body = f"明天({when})预报有雨,今晚把伞放到包里"
+    if pct is not None:
+        body += f"(降水概率 {pct}%)"
+    return _push_once(bridge, "weather", f"rain|{tip.get('date')}", text=body)
+
+
 def _push_calendar(bridge) -> int:
     """校历倒计时:7 天内的事件,每个事件每天最多催一条。"""
     pushed = 0
@@ -661,6 +690,7 @@ def _round(bridge) -> dict:
             out["notices"] = len(items)
             wd_log(f"push notices [{len(items)} 条]:提示栏"
                    f"{'已推' if r['ui'] else '推失败'} · " + _desktop_outcome(r["desktop"]))
+        out["weather"] = _push_weather(bridge)     # 明天有雨(独立于简报:简报管今天)
     from minicode import __version__
     update = check_update(__version__)     # 内部已把断网/改版全吞成 None
     if update:

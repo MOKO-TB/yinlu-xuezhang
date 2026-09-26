@@ -1,9 +1,11 @@
 """library_search 工具:本地馆藏库检索的单元测试(用临时库,不依赖线上数据)。"""
+import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+import minicode.paths as paths_mod
 from minicode import library
 from minicode.tools.base import ToolContext
 
@@ -452,3 +454,64 @@ def test_health_ignores_stampless_db(tmp_path, monkeypatch):
     _isolate(monkeypatch, tmp_path)
     _make_db(tmp_path)
     assert library.catalog_health(tmp_path)["status"] == "ok"
+
+
+# ---------------------------------------------------------------- 快照口径与搜书账本(v0.9.43)
+
+def test_snapshot_note_empty_without_stamp(tmp_path, monkeypatch):
+    """没有构建凭证就不说日期 —— 不拿库文件 mtime 冒充抓取时间。"""
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    assert library.snapshot_date(tmp_path) == ""
+    assert library.snapshot_note(tmp_path) == ""
+
+
+def test_snapshot_note_carries_built_at(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    db = _make_db(tmp_path)
+    library.write_stamp(db, count=5)
+    day = library.snapshot_date(tmp_path)
+    assert day and len(day) == 10
+    note = library.snapshot_note(tmp_path)
+    assert day in note and "快照" in note
+
+
+def test_search_result_mentions_snapshot(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    db = _make_db(tmp_path)
+    library.write_stamp(db, count=5)
+    out = library.library_search(_ctx(tmp_path), "活着")
+    assert "抓取于" in out and "快照" in out
+
+
+def test_search_miss_logs_library_gap(tmp_path, monkeypatch):
+    """搜书落空(库正常)要进成长账本 reason=library;库坏/库空不算缺口不记。"""
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    from minicode import growth
+    monkeypatch.setattr(paths_mod, "APP_DIR", tmp_path / "app")
+    growth._SEEN_GAPS.clear()
+    ctx = _ctx(tmp_path)
+    out = library.library_search(ctx, "不存在的书名XYZ")
+    assert "没有匹配" in out
+    gap_file = (tmp_path / "app" / growth.GAPS_FILE)
+    rows = [json.loads(line) for line in gap_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()]
+    assert len(rows) == 1 and rows[0]["reason"] == "library"
+    assert rows[0]["query"] == "不存在的书名XYZ"
+
+
+def test_search_miss_not_logged_when_db_unreadable(tmp_path, monkeypatch):
+    """库读不出来(CatalogUnavailable)是环境问题,不记缺口、不替图书馆下结论。"""
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    from minicode import growth
+    monkeypatch.setattr(paths_mod, "APP_DIR", tmp_path / "app")
+    growth._SEEN_GAPS.clear()
+    # 把库写成半个字节:catalog_health 会判 unreadable/empty,搜书报 CatalogUnavailable
+    db = library.db_path(tmp_path)
+    real = db.read_bytes()
+    db.write_bytes(real[:200])
+    out = library.library_search(_ctx(tmp_path), "活着")
+    assert "检索数据" in out
+    assert not (tmp_path / "app" / growth.GAPS_FILE).exists()

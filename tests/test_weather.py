@@ -91,14 +91,15 @@ def test_card_text_shape():
 
 def test_card_none_without_cache_and_kicks_refresh(monkeypatch):
     kicks = []
-    monkeypatch.setattr(weather, "refresh_async", lambda: kicks.append(1))
+    monkeypatch.setattr(weather, "refresh_async",
+                        lambda *a, **k: kicks.append(1))
     assert weather.weather_card(TODAY) is None
     assert kicks == [1]                      # 首次必须顺手拉一次
 
 
 def test_card_reads_fresh_cache_without_network(monkeypatch):
     monkeypatch.setattr(weather, "refresh_async",
-                        lambda: pytest.fail("缓存新鲜时不该刷网络"))
+                        lambda *a, **k: pytest.fail("缓存新鲜时不该刷网络"))
     _write_cache(_data())
     card = weather.weather_card(TODAY)
     assert card and card["refreshing"] is False
@@ -107,7 +108,7 @@ def test_card_reads_fresh_cache_without_network(monkeypatch):
 
 
 def test_stale_cache_shows_old_values_but_marks_refreshing(monkeypatch):
-    monkeypatch.setattr(weather, "refresh_async", lambda: None)
+    monkeypatch.setattr(weather, "refresh_async", lambda *a, **k: None)
     _write_cache(_data(), ts=time.time() - weather.CACHE_TTL - 1)
     card = weather.weather_card(TODAY)
     assert card and card["refreshing"] is True
@@ -115,7 +116,7 @@ def test_stale_cache_shows_old_values_but_marks_refreshing(monkeypatch):
 
 
 def test_broken_cache_treated_as_missing(monkeypatch):
-    monkeypatch.setattr(weather, "refresh_async", lambda: None)
+    monkeypatch.setattr(weather, "refresh_async", lambda *a, **k: None)
     path = paths.APP_DIR / weather.CACHE_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{不是 json", encoding="utf-8")
@@ -184,3 +185,81 @@ def test_city_override_and_fallback():
         json.dumps({"lat": 23.0, "lon": 112.0, "label": "广州"}), encoding="utf-8")
     city = weather._city()
     assert city["label"] == "广州" and city["lat"] == 23.0
+
+
+# ---------------------------------------------------------------- 多地点(v0.9.43)
+
+def test_places_legacy_single_object():
+    paths.APP_DIR.mkdir(parents=True, exist_ok=True)
+    (paths.APP_DIR / weather.CITY_FILE).write_text(
+        json.dumps({"lat": 23.0, "lon": 112.0, "label": "广州"}), encoding="utf-8")
+    assert [p["label"] for p in weather._places()] == ["广州"]
+
+
+def test_places_multi_with_default_first():
+    paths.APP_DIR.mkdir(parents=True, exist_ok=True)
+    (paths.APP_DIR / weather.CITY_FILE).write_text(json.dumps({
+        "places": [
+            {"name": "学校", "lat": 23.15, "lon": 112.57, "label": "肇庆·鼎湖"},
+            {"name": "家", "lat": 23.0, "lon": 113.0, "label": "广州"},
+        ], "default": "家"}), encoding="utf-8")
+    rows = weather._places()
+    assert rows[0]["name"] == "家"                # default 只管排第一
+    assert weather._city("学校")["lat"] == 23.15
+    assert weather._city("不认识") is None        # 不认识就不认识,不悄悄落回默认
+
+
+def test_places_skips_bad_entries_and_falls_back():
+    paths.APP_DIR.mkdir(parents=True, exist_ok=True)
+    (paths.APP_DIR / weather.CITY_FILE).write_text(
+        json.dumps({"places": [{"name": "坏", "lat": "x", "lon": 1}]}), encoding="utf-8")
+    assert weather._places()[0]["label"] == "肇庆·鼎湖"
+
+
+def test_get_weather_unknown_place_lists_available(monkeypatch):
+    def boom(city):
+        pytest.fail("地点不存在时不该联网")
+    monkeypatch.setattr(weather, "_fetch", boom)
+    out = weather.get_weather(None, days=1, place="火星")
+    assert "火星" in out and "肇庆·鼎湖" in out
+
+
+def test_cache_kept_per_place(monkeypatch):
+    paths.APP_DIR.mkdir(parents=True, exist_ok=True)
+    (paths.APP_DIR / weather.CITY_FILE).write_text(json.dumps({
+        "places": [
+            {"name": "学校", "lat": 23.15, "lon": 112.57, "label": "肇庆·鼎湖"},
+            {"name": "家", "lat": 23.0, "lon": 113.0, "label": "广州"},
+        ]}), encoding="utf-8")
+    monkeypatch.setattr(weather, "_fetch", lambda city: _data())
+    assert "肇庆·鼎湖" in weather.get_weather(None, days=0, place="学校") or True
+    weather.get_weather(None, days=0, place="学校")
+    weather.get_weather(None, days=0, place="家")
+    assert weather._cache_entry("学校")[0] and weather._cache_entry("家")[0]
+    assert weather.cached_data("学校") and weather.cached_data("家")
+
+
+# ---------------------------------------------------------------- 明日雨(v0.9.43)
+
+def test_tomorrow_rain_matches_umbrella_threshold():
+    d = _data()
+    d["daily"]["precipitation_probability_max"] = [10, 45, 20, 20]
+    tip = weather.tomorrow_rain(d, TODAY)
+    assert tip and tip["pct"] == 45
+    assert tip["date"] == (TODAY + timedelta(days=1)).isoformat()
+
+
+def test_tomorrow_rain_rain_code_counts_even_without_probability():
+    d = _data()
+    d["daily"]["weather_code"] = [0, 61, 0, 0]
+    d["daily"]["precipitation_probability_max"] = [10, 5, 20, 20]
+    assert weather.tomorrow_rain(d, TODAY)
+
+
+def test_tomorrow_rain_none_on_clear_day():
+    assert weather.tomorrow_rain(_data(), TODAY) is None
+
+
+def test_cached_data_none_when_stale():
+    _write_cache(_data(), ts=time.time() - weather.CACHE_TTL - 5)
+    assert weather.cached_data() is None

@@ -356,6 +356,27 @@ def _fmt(entry: dict, idx: int) -> str:
     return "\n".join(lines)
 
 
+def snapshot_date(workspace: Path | None = None) -> str:
+    """馆藏数据的抓取日期(stamp 的 built_at 取日期部分);没有凭证返回空串。
+
+    诚实口径:**有凭证才说日期**。没有 stamp(开发态/老包)时不拿库文件的
+    mtime 冒充 —— 那可能是拷贝时间,不是抓取时间,说了就是编。
+    """
+    p = db_path(workspace)
+    if p is None:
+        return ""
+    return str(read_stamp(p).get("built_at") or "").strip()[:10]
+
+
+def snapshot_note(workspace: Path | None = None) -> str:
+    """检索结果尾部那句"在架数是快照不是实时"。没有抓取日期就不说。"""
+    day = snapshot_date(workspace)
+    if not day:
+        return ""
+    return (f"(馆藏数据抓取于 {day};「在架 N 册」是那天的快照,不是实时 ——"
+            "以现场/图书馆系统为准)")
+
+
 def _floor_hint(workspace: Path | None, hits: list[dict]) -> str:
     """把命中书目涉及的中图法大类映射成楼层,顺带答掉「在几楼」。
 
@@ -424,6 +445,11 @@ def library_search(ctx, query: str, top_k: int = DEFAULT_TOP_K,
                     "请告诉用户「图书馆检索数据没加载起来」,不要说成“图书馆没有这本书”。")
         variants = _variants(query)
         tried = " / ".join(f"「{v}」" for v in variants[1:4]) or "—"
+        # 落空进成长账本(growth.log_kb_gap,reason=library):维护者才能看到
+        # "同学们在找什么书、用什么词搜不到"。库正常才记 —— 库坏/库空是环境问题,
+        # 不是检索词的缺口(growth 那边的口径同此)。
+        from minicode import growth
+        growth.log_kb_gap(query, reason="library")
         return (
             f"本地馆藏书目库没有匹配「{query}」的记录。"
             f"(已自动放宽重试:{tried})\n"
@@ -438,8 +464,10 @@ def library_search(ctx, query: str, top_k: int = DEFAULT_TOP_K,
     header = (f"本地馆藏书目库命中 {len(hits)} 条(数据源:图书馆 OPAC,已离线化):\n")
     tail = ("\n\n引用时给出书名、作者、索书号与馆藏地,并说明「据图书馆 OPAC 馆藏数据」。"
             "馆藏为 0 册的是电子书(无纸本馆藏位置)。")
+    snap = snapshot_note(ctx.workspace)
     return (header + "\n\n".join(_fmt(h, i) for i, h in enumerate(hits, 1))
-            + _floor_hint(ctx.workspace, hits) + tail)
+            + _floor_hint(ctx.workspace, hits) + tail
+            + (f"\n{snap}" if snap else ""))
 
 
 def catalog_total(workspace: Path | None = None) -> int | None:
@@ -604,10 +632,15 @@ def library_prompt_section(workspace: Path | None = None) -> str:
                 "1.31 GB、133 万条书目)。\n"
             )
         return ""
+    snap_day = snapshot_date(workspace)
+    snap_line = (f"馆藏数据抓取于 {snap_day}:「在架 N 册」是**那天的快照**,不是实时 ——"
+                 "回答时带上这层意思(「数据显示在架 2 册」),别把它说成此刻一定有书。\n"
+                 if snap_day else "")
     return (
         "\n# 本地馆藏书目库\n"
         f"已装载本校图书馆 OPAC 全量书目(共 {st['total']} 条:纸本 {st['paper']} 种、"
         f"电子书 {st['ebook']} 种;覆盖 {st['classes']} 个中图法分类号)。\n"
+        + snap_line +
         "用户问「图书馆有没有某本书 / 某本书在哪 / 索书号是多少 / 某作者有哪些书 / "
         "某类书有哪些」时,必须先调用 library_search 工具查本地库,毫秒级返回,\n"
         "不要再去访问图书馆网站让用户等。library_search 返回书名、作者、出版社、"

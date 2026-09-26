@@ -55,17 +55,26 @@ def main() -> int:
 
     print(f"== 知识库成长复盘(最近 {args.days} 天,应用目录 {app_path()})==\n")
 
-    # 1. 未命中查询
+    # 1. 未命中查询(reason 缺省=知识库未命中;reason=library 是馆藏搜书落空。
+    #    两者补法不同:前者补 kb 语料;后者多是"检索词与库里书名写法对不上",
+    #    一般不用动手,只有高频同词才值得看库要不要更新)
     rows = [r for r in read_jsonl(app_path(GAPS_FILE))
             if _within_days(r.get("ts"), cutoff)]
-    print(f"一、答不上来的查询({len(rows)} 条登记,去重后按频次):")
-    if not rows:
+    kb_rows = [r for r in rows if str(r.get("reason") or "no-hit") != "library"]
+    lib_rows = [r for r in rows if str(r.get("reason") or "") == "library"]
+    print(f"一、答不上来的查询({len(kb_rows)} 条登记,去重后按频次):")
+    if not kb_rows:
         print("  (最近没有未命中登记 —— 要么没人问,要么都接住了)")
-    counter = Counter(r.get("query", "") for r in rows)
+    counter = Counter(r.get("query", "") for r in kb_rows)
     for query, n in counter.most_common(args.gaps):
         print(f"  {n:>3} ×  {query}")
         if n >= 3:
             print("       ^ 高频缺口:建议优先跑对应主题爬虫/补条目")
+    if lib_rows:
+        print(f"\n   附:馆藏搜书落空 {len(lib_rows)} 条(与上面分开算,按频次):")
+        for query, n in Counter(r.get("query", "") for r in lib_rows).most_common(10):
+            print(f"  {n:>3} ×  {query}")
+        print("  (搜书落空多数是写法差异,不用补语料;高频同词再看看库要不要更新)")
 
     # 2. 候选
     cands = [r for r in read_jsonl(app_path(CANDIDATES_FILE))

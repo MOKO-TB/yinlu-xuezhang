@@ -213,7 +213,7 @@ def remind_tools() -> list[Tool]:
                 "就等于没提醒;开了之后同时弹到桌面。用户说「提醒直接弹桌面」「别弹通知」"
                 "「提醒做成两种:栏里一条 + 桌面一条」「看不到通知」时用:action=status 看"
                 "现状(哪些类别会弹、托盘在不在),action=on/off 开或关(kind 可只动一类:"
-                "briefing/class/schedule/reminders/calendar/notices/update),action=test "
+                "briefing/class/schedule/reminders/calendar/notices/update/weather),action=test "
                 "当场发一条测试通知(**排查「看不到通知」先走这条**:回了「已发出」"
                 "就说明是系统挡的,要用户去 设置→系统→通知 里放行本应用)。"
                 "另外管开机自启:action=startup_on / startup_off 开或关「开机自动启动学长」"
@@ -240,7 +240,7 @@ def remind_tools() -> list[Tool]:
                     "kind": {"type": "string",
                              "description": "可选:只开关这一类提醒(briefing 今日简报 / class 课前 / "
                                             "schedule 课程 / reminders 待办 / calendar 校历 / "
-                                            "notices 校园通知 / update 新版本)"},
+                                            "notices 校园通知 / update 新版本 / weather 天气提醒)"},
                     "reason": {"type": "string",
                                "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
                 },
@@ -250,8 +250,10 @@ def remind_tools() -> list[Tool]:
         Tool(
             name="get_weather",
             description=(
-                "查学校所在地(肇庆鼎湖)的实况与未来几天天气预报(Open-Meteo,免费数据源)。"
+                "查天气实况与未来几天预报(Open-Meteo,免费数据源),默认是学校所在地(肇庆鼎湖)。"
                 "用户问「今天/这周末下不下雨、要不要带伞、降温吗」时用;days=今天起往后几天(0-3)。"
+                "用户问的是另一个地方(家/另一个校区)时给 place,名字须在已配置地点里,"
+                "报不出可用地点就是没配置,不要猜经纬度。"
                 "查不到就如实说查不到,绝不编数字;首页已有天气 chip,日常一句话不必总调本工具。"
             ),
             parameters={
@@ -259,6 +261,9 @@ def remind_tools() -> list[Tool]:
                 "properties": {
                     "days": {"type": "integer",
                              "description": "连同今天往后报几天(0-3,默认 1)"},
+                    "place": {"type": "string",
+                              "description": "可选:地点名(需已在 weather.json 里配置,"
+                                             "报错时会列出可用的);不填=默认地点(学校)"},
                 },
             },
             handler=weather.get_weather,

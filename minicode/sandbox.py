@@ -490,32 +490,42 @@ KNOWN_LIMITS = {
 # --------------------------------------------------------------------- 状态
 
 class SandboxState:
-    """一次会话内的沙箱状态:记录用户本回合批准过的工作区外路径。"""
+    """一次会话内的沙箱状态:记录用户批准过的工作区外路径。
+
+    两档记忆(v0.9.43 起):
+    - `approved_paths`:本回合内有效(每次 new_turn 清空) —— 用户点「允许」的默认;
+    - `session_approved`:用户点「总是允许」时的路径,本会话内不再问,换工作区即清空。
+    都**不落盘**:进程退出就没了,下一次会话从零开始 —— "会话内记住"是给同一份
+    工作的连续操作省确认,不是把授权存成永久白名单。
+    """
 
     def __init__(self, policy: SandboxPolicy, workspace: Path):
         self.policy = policy
         self.workspace = Path(workspace)
         self.approved_paths: set[str] = set()
+        self.session_approved: set[str] = set()
 
     def new_turn(self) -> None:
-        self.approved_paths.clear()
+        self.approved_paths.clear()      # session_approved 跨回合保留,见类注释
 
     def path_allowed(self, p: Path) -> bool:
         if self.policy.allow_outside_workspace:
             return True
-        return str(p) in self.approved_paths
+        return str(p) in self.approved_paths or str(p) in self.session_approved
 
-    def approve_path(self, p: Path) -> None:
-        self.approved_paths.add(str(p))
+    def approve_path(self, p: Path, session: bool = False) -> None:
+        (self.session_approved if session else self.approved_paths).add(str(p))
 
     def retarget(self, workspace: Path) -> None:
         """切换工作区:换围栏根,并清掉本回合批准过的工作区外路径。
 
         `approved_paths` 是按**绝对路径**攒的,换根以后旧授权不该继续生效 ——
-        否则用户在新工作区里会莫名继承上一个工作区的放行。
+        否则用户在新工作区里会莫名继承上一个工作区的放行。会话级那一份同理,
+        而且更要清:它跨回合还活着,不清的话旧工作区的授权会跟到新工作区来。
         """
         self.workspace = Path(workspace)
         self.approved_paths.clear()
+        self.session_approved.clear()
 
     def describe(self) -> str:
         if not self.policy.enabled:
@@ -526,4 +536,6 @@ class SandboxState:
                      else "禁网(按命令名/脚本导入拦,不是防火墙)")
         if self.policy.strip_env_secrets:
             parts.append("子进程已摘密钥环境变量")
+        if self.session_approved:
+            parts.append(f"本会话已记住 {len(self.session_approved)} 个工作区外路径")
         return " · ".join(parts)

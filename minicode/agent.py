@@ -351,8 +351,9 @@ class Agent:
                 self.gate.approve_for_turn(tool.name)
             elif choice != "yes":
                 return "用户拒绝了本次工具调用。请停止重试,询问用户希望如何处理。"
-            # 用户放行后记住工作区外路径(本回合内有效)
-            self.gate.approve_outside(tool, args)
+            # 用户放行后记住工作区外路径:「允许」管本回合;「总是允许」升为
+            # 会话级(不落盘,换工作区/重启即失效)
+            self.gate.approve_outside(tool, args, session=(choice == "always"))
 
         self._note_low_rated_prior(tool, args)
         self._snapshot_before_mutation(tool, args)
