@@ -150,11 +150,19 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
         sub_session = Session(
             system_prompt=build_system_prompt(ctx.workspace) + spec.extra_prompt,
             log_dir=None)
+        # 权限门必须带沙箱(v0.9.51):主代理在 app_setup 里就是
+        # PermissionGate(config, sandbox=…)。不带的那条后果实测推得出来 ——
+        # check() 的沙箱块(凭据文件一律确认/脚本内容扫描/工作区外路径)整段
+        # 跳过,read_only 子代理就能**免确认读走工作区内的凭据文件**、
+        # py_script 也不再有"读一遍要跑的脚本再问用户"那层;批量静默模式下
+        # 连确认框都不会弹。副作用是良性的:子代理 new_turn 会清掉主代理
+        # "本回合批准过的工作区外路径"(会话级批准保留),主代理下次访问
+        # 重新确认一次,方向安全。
         sub_agent = Agent(
             llm=llm,
             registry=sub_tool_registry(registry, spec),
             session=sub_session,
-            gate=PermissionGate(config),
+            gate=PermissionGate(config, sandbox=ctx.sandbox),
             ui=ui,
             ctx=ctx,
             max_steps=MAX_SUB_STEPS,
@@ -246,9 +254,12 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
 
         limit = max(0, int(getattr(config, "subagent_time_limit_seconds", 0) or 0))
         workspace = getattr(ctx, "workspace", None)
+        # 路由理由要与实际提示词同源:available 传进去,hit_line 里"会先加载技能
+        # xxx"才是核对过本机技能库的说法(缺的技能路由理由就不会许诺)。
+        available = _available_skill_names(workspace)
         specs = []
         for t, text in zip(types, tasks):
-            key, note = router.resolve_type(str(t).strip(), text)
+            key, note = router.resolve_type(str(t).strip(), text, available)
             spec = type_spec(key, workspace)
             if spec is None:
                 return (f"错误: 未知子代理类型 '{t}'。"
@@ -263,7 +274,12 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             if report is None:
                 report = _timeout_note(limit)
             head = f"[{spec.label}子代理完成]" + (f"\n{note}" if note else "")
-            return (head + "\n" + report)[:REPORT_LIMIT]
+            body = head + "\n" + report
+            # 单发也要有截断标注(批量合并一直有):硬切掉的报告末尾不说明,
+            # 模型拿到的是半句话,回答就会顺着半句话编。
+            if len(body) > REPORT_LIMIT:
+                body = body[:REPORT_LIMIT] + f"\n…(报告超过 {REPORT_LIMIT} 字符,已截断)"
+            return body
 
         # ---- 批量:只读才并发(写类型共享一条确认通道,会串味)----
         writers = [s.type for s, _, _ in specs if not s.read_only]

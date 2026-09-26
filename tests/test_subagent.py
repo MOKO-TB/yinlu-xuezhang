@@ -491,3 +491,43 @@ def test_subagent_timeout_is_visible_and_not_called_a_failure(config, tmp_path):
     assert "超时未返回" in result and "上限 1 秒" in result
     assert "不算它失败" in result and "仍在后台跑完" in result
     assert "迟到的报告" not in result      # 迟到的结果不假装收到
+
+
+def test_task_subagent_gate_has_sandbox_credential_ask(config, tmp_path):
+    """子代理的权限门必须带沙箱(v0.9.51):否则 M3.1 的「凭据文件任何只读都
+    要确认」在子代理里整段失效 —— read_only 直接 ALLOW,工具层的 SECRET
+    放行逻辑就把 .env 的内容送进子代理上下文,批量静默模式连确认框都不弹。"""
+    (tmp_path / ".env").write_text("API_KEY=secret123", encoding="utf-8")
+    llm = QueueLLM([
+        _task_turn("explore", "读 .env"),
+        AssistantTurn(tool_calls=[_call("explore·read_file",
+                                        {"path": ".env"}, "s1")]),
+        _final("跑完一步"),
+        _final("主代理收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("读 .env")
+    assert wait_until(lambda: len(window.of_type("confirm_request")) >= 1)
+    bridge.confirm_reply("yes")                       # task 派发的确认
+    assert wait_until(lambda: len(window.of_type("confirm_request")) >= 2)
+    bridge.confirm_reply("no")                        # 拒绝子代理读 .env
+    assert wait_until(lambda: not bridge._busy)
+
+    # 行为证据:.env 的读取以「凭据确认框」的形式弹给了用户(拒绝消息留在子代理
+    # 内存会话里,主会话只见报告);只要确认框弹了、handler 就没跑,内容进不了上下文
+    confirms = [c["tool"] for c in window.of_type("confirm_request")]
+    assert any(t.startswith("explore·read_file") for t in confirms),         f"子代理读 .env 没有弹凭据确认: {confirms}"
+    assert "secret123" not in _tool_result(session),         "凭据内容进了上下文 = 沙箱门在子代理里失效"
+
+
+def test_task_auto_route_note_checks_available_skills(config, tmp_path):
+    """auto 路由的「会先加载技能 xxx」要与实际提示词同源:登记的技能本机没有时,
+    理由行不得许诺(v0.9.51 起 resolve_type 传 available)。"""
+    from minicode import router
+    # code 档登记了 code-review/python-testing/git-commit;本机只有后者时,
+    # 理由行只许诺加载得到的那个,缺的两个要被点名跳过 —— 不许诺不存在的。
+    key, note = router.resolve_type("auto", "帮我改代码", ["python-testing"])
+    assert key == "code"
+    assert "会先加载技能 python-testing" in note
+    assert "会先加载技能 code-review" not in note
+    assert "本机没有的技能已跳过" in note and "code-review" in note
