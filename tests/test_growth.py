@@ -178,3 +178,27 @@ def test_review_survives_broken_line(monkeypatch):
     # 重写后坏行被丢弃,只剩合法记录
     rows = _read_lines(growth.CANDIDATES_FILE)
     assert len(rows) == 1 and rows[0]["status"] == "rejected"
+
+
+def test_log_kb_gap_dedups_across_processes(tmp_path, monkeypatch):
+    """跨进程当日去重:e2e 每轮都是新进程,_SEEN_GAPS 会清空 —— 但账本里
+    今天已有同一词就不该再记(一场评测跑 20 遍不是 20 个同学在问)。"""
+    import time as _time
+    q = "社团招新"
+    assert growth.log_kb_gap(q) is True
+    # 模拟"重启":清空进程内集合,账本文件还在
+    growth._SEEN_GAPS.clear()
+    growth._seen_cache_key = ""          # 缓存也失效,强制重读账本
+    assert growth.log_kb_gap(q) is False          # 账本里今天有了 → 不再记
+    assert growth.log_kb_gap("社团 招新!") is False   # 归一化后同词同理
+    assert growth.log_kb_gap("另一个问题") is True   # 新词照记
+    # 昨天的行不算:把文件里那行改成昨天,同词应该能再记
+    path = app_path(growth.GAPS_FILE)
+    rows = path.read_text(encoding="utf-8").splitlines()
+    old_day = _time.strftime("%Y-%m-%d", _time.localtime(_time.time() - 86400))
+    rows = [r.replace(_time.strftime("%Y-%m-%d"), old_day) if q in r else r
+            for r in rows]
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    growth._seen_cache_key = ""
+    growth._SEEN_GAPS.clear()
+    assert growth.log_kb_gap(q) is True

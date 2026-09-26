@@ -27,10 +27,46 @@ FEEDBACK_FILE = "message-feedback.jsonl"
 QUERY_EXCERPT = 200       # gap 登记里查询词的截断长度
 FEEDBACK_EXCERPT = 400    # 反馈里答案摘要的截断长度
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()      # 可重入:log_kb_gap 持锁时还要调 _file_seen_today
 # 当日已登记过的查询(进程内去重):同一个词反复搜不命中只记一条,
 # 重启后清空 —— 文件里可能有跨进程的重复,review 脚本按频次归并时自然处理。
 _SEEN_GAPS: set[tuple[str, str]] = set()
+
+# 跨进程的当日去重(v0.9.45):_SEEN_GAPS 只活在进程内,而 e2e 界面实测每轮
+# 都是全新进程 —— 一场评测跑 20 遍,「社团招新」「图书馆几点闭馆」就能在
+# 账本里各灌 20 条,review 时像 20 个同学在问一样。写之前先看账本里今天
+# 已有哪些词(按天缓存一次),与原设计"同一天同一查询只记一次"完全同一意图,
+# 只是把去重从进程内升级到账本内。
+_seen_cache_key: str = ""      # "{账本路径}|{日期}":路径变了(monkeypatch/换 APP_DIR)缓存必须失效
+_seen_from_file: set[str] = set()
+
+
+def _file_seen_today(today: str) -> set[str]:
+    """账本里**今天**已登记过的查询(归一化后);按(路径,日期)缓存,坏行跳过。"""
+    global _seen_cache_key, _seen_from_file
+    path = str(app_path(GAPS_FILE))
+    with _LOCK:
+        key = f"{path}|{today}"
+        if _seen_cache_key == key:
+            return set(_seen_from_file)
+        rows: set[str] = set()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if today not in line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(rec, dict) and str(rec.get("ts") or "").startswith(today):
+                        rows.add(normalize_query(str(rec.get("query") or "")))
+        except OSError:
+            pass
+        rows.discard("")                     # 空查询行不该挡住任何东西
+        _seen_cache_key, _seen_from_file = key, rows
+        return set(rows)
 
 
 def _append(path, record: dict) -> bool:
@@ -66,7 +102,7 @@ def within_days(ts, cutoff_epoch: float) -> bool:
 
 
 def log_kb_gap(query: str, reason: str = "no-hit") -> bool:
-    """search_knowledge 未命中时登记一条;同一天同一查询只记一次。
+    """search_knowledge 未命中时登记一条;同一天同一查询只记一次(跨进程也算)。
 
     reason: no-hit=库里有数据但没匹配上(真正要补的缺口)。
     知识库为空的报错不算缺口,调用方不应在这种情况下调本函数。
@@ -77,7 +113,7 @@ def log_kb_gap(query: str, reason: str = "no-hit") -> bool:
     today = time.strftime("%Y-%m-%d")
     key = (today, normalize_query(query))
     with _LOCK:
-        if key in _SEEN_GAPS:
+        if key in _SEEN_GAPS or key[1] in _file_seen_today(today):
             return False
         _SEEN_GAPS.add(key)
     return _append(app_path(GAPS_FILE), {
