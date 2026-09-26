@@ -1550,6 +1550,12 @@ try {
   #wsOverlay .ws-row .p{ flex:1; min-width:0; font-size:11px; color:var(--text-3);
                          overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
                          direction:rtl; text-align:left; }
+  /* 大小与日期用这个类,**不能复用 .p** —— .p 是 `direction:rtl`(为了让长路径截头留尾),
+     把 "2.0 MB · 2026-09-26 07:45" 塞进去会被双向算法重排成 "MB · 2026-09-26 07:45 2.0"
+     (真截图里看到的就是这个)。 */
+  #wsOverlay .ws-row .sz{ flex:1; min-width:0; font-size:11px; color:var(--text-3);
+                          overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+                          text-align:right; }
   #wsOverlay .ws-row .x{ flex:none; border:none; background:transparent; cursor:pointer;
                          color:var(--text-3); font-size:12px; padding:2px 4px; }
   #wsOverlay .ws-row .x:hover{ color:var(--danger); }
@@ -2666,7 +2672,8 @@ function ensureAssistant() {
     if (!api || !api.share_image || shr.classList.contains("pending")) return;
     if (!(wrap.dataset.raw || "").trim()) { toast("这段回答还没有文字，排不出卡片", true); return; }
     shr.classList.add("pending");
-    toast("在排卡片图…");
+    // 不另弹一条"在排卡片图…"的 toast:按钮自己变暗就是进度,再弹一条会和结果那条叠在
+    // 一起挂在角上(真截图里看到过两条并排,像出了两张图)
     api.share_image(wrap.dataset.raw).then(r => {
       shr.classList.remove("pending");
       if (!r || r.ok === false) { toast((r && r.msg) || "没生成成功", true); return; }
@@ -6399,11 +6406,11 @@ function renderWsFiles() {
     const el = document.createElement("div");
     el.className = "ws-row";
     el.innerHTML = '<input type="checkbox" title="勾上才可删">'
-      + '<span class="n"></span><span class="p"></span>';
+      + '<span class="n"></span><span class="sz"></span>';
     const box = el.querySelector("input");
     box.dataset.name = it.name;
     el.querySelector(".n").textContent = it.name;
-    el.querySelector(".p").textContent = `${humanSize(it.bytes)} · ${it.mtime}`;
+    el.querySelector(".sz").textContent = `${humanSize(it.bytes)} · ${it.mtime}`;
     el.addEventListener("click", (ev) => {
       if (ev.target === box) return;
       box.checked = !box.checked;

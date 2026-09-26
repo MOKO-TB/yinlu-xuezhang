@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import threading
 from functools import partial
@@ -130,7 +131,12 @@ def main() -> int:
         check("3 KB" in first_title and "2 个" in first_title,
               f"② 标签的悬停说明里是后端给的总数:{first_title}")
         row = page.text_content("#wsFiles .ws-row")
-        check("2 KB" in row and "2026-09-24" in row, "② 每行有大小与日期,不是一串字节数")
+        check("2026-09-24" in row and "2 KB" in row, "② 每行有大小与日期,不是一串字节数")
+        # 钉住 bidi 那个坑:大小与日期绝不能复用 .p(那是 direction:rtl,给路径截头留尾的),
+        # 否则 "2 KB · 2026-09-24 15:02" 会被重排成 "KB · 2026-09-24 15:02 2"。
+        size_txt = page.text_content("#wsFiles .ws-row .sz").strip()
+        check(re.fullmatch(r"[\d.]+ [KM]?B · \d{4}-\d{2}-\d{2} \d{2}:\d{2}", size_txt),
+              f"② 尺寸串的顺序没被双向算法打乱(实得:{size_txt})")
 
         # ---- 3) 切标签看另一个目录
         page.click(".ws-tab:nth-of-type(2)")
