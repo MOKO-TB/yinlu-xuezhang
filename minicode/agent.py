@@ -477,7 +477,9 @@ class Agent:
         return False
 
     def _snapshot_before_mutation(self, tool: Tool, args: dict) -> None:
-        if tool.name not in SNAPSHOT_TOOLS:
+        # 子代理的工具名带类型前缀(implement·write_file),取末段比对 ——
+        # 不剥前缀的话,子代理的写永远不进快照,「/undo 撤不掉子代理的改动」。
+        if tool.name.rsplit("·", 1)[-1] not in SNAPSHOT_TOOLS:
             return
         raw = str(args.get("path", ""))
         try:

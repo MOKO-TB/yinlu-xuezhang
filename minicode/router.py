@@ -179,6 +179,8 @@ def resolve_type(requested: str, task_text: str,
 
     显式指定时不改写(理由为空);只有 `auto` 才走路由。
     没命中任何领域关键词时退回 explore,并在理由里说明是没命中 —— 不硬派一档。
+    命中多档时按 docstring 的口径把备选列出来:主代理看到"也命中 data(计分 n)"
+    就知道这一档不合用时还能改派,而不是以为只有一种分法。
     """
     key = str(requested or "").strip()
     if key != "auto":
@@ -187,4 +189,10 @@ def resolve_type(requested: str, task_text: str,
     if match is None:
         return "explore", ("路由:这句话没命中任何领域关键词,按只读侦察(explore)派,"
                            "没有凭领域特征选档。")
-    return match.spec.key, hit_line(match, available)
+    note = hit_line(match, available)
+    others = [m for m in classify(task_text) if m.spec.key != match.spec.key]
+    if others:
+        note += ("(也命中:" + ";".join(f"{m.spec.key} 计分 {m.score}"
+                                       for m in others[:2])
+                 + " —— 本档不合用可改派)")
+    return match.spec.key, note

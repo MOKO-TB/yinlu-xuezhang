@@ -29,7 +29,7 @@ from minicode.tools.base import ToolContext
 from minicode.tools.registry import build_default_registry
 
 
-def build_system_prompt(workspace: Path) -> str:
+def build_system_prompt(workspace: Path, for_subagent: bool = False) -> str:
     template = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
     prompt = (template
               .replace("{workspace}", str(workspace))
@@ -40,16 +40,21 @@ def build_system_prompt(workspace: Path) -> str:
     # 情绪、记忆条数…)任何一段出现或消失,其后的前缀全部变化,KV Cache 从那里
     # 失效 —— 全部排到尾部,静态段(skills/calendar/notices/browser)才能整段
     # 稳定命中缓存。每段自身已遵守"不带当前时间"的口径。
+    #
+    # for_subagent=True(v0.9.53):子代理是派出去干具体活的独立执行者,**裁掉
+    # 个人数据段** —— 情绪日记是主对话的陪伴语境,长期记忆是主代理的偏好上下文,
+    # 对"只产出报告"的子代理没有用处,却让每一路都背着主人的私事在工作区里跑
+    # (批量只读模式一次四路)。课表/馆藏/校历保留:data 与 english 档真的会用。
     return (prompt + skills_prompt_section(skills)
             + calendar_prompt_section()
             + notices_prompt_section()
             + browser_prompt_section()
             + kb_prompt_section(kb_dirs(workspace))
             + schedule_prompt_section()
-            + mood_prompt_section()
             + library_prompt_section(workspace)
             + library_guide_prompt_section(workspace)
-            + memory_prompt_section(workspace))
+            + (mood_prompt_section() if not for_subagent else "")
+            + (memory_prompt_section(workspace) if not for_subagent else ""))
 
 
 def _mcp_log(ui):
@@ -87,8 +92,12 @@ def build_runner_agent(config: Config, workspace: Path, ui, llm,
     ctx.llm = llm    # 记忆整理(memory action=dream)用它做一次性归纳
     registry = build_default_registry()
     registry.extend(mcp_tools or [])
-    # 子代理(task 工具):闭包持有 LLM/UI/配置,主循环可派发独立子任务
-    registry.append(build_task_tool(ctx, llm, ui, config, registry))
+    # 主/子代理共用一个回滚栈(v0.9.53):先建容器传给 task 工具,Agent 建好后
+    # 把自己的栈替换成同一个对象 —— implement 子代理的写快照,主代理 /undo
+    # 弹到的就是它,子代理改坏文件救得回来。
+    undo_ref: list = []
+    registry.append(build_task_tool(ctx, llm, ui, config, registry,
+                                    parent_undo=undo_ref))
     session = Session(system_prompt=build_system_prompt(workspace),
                       log_dir=sessions_dir or SESSIONS_DIR,
                       workspace=workspace)
@@ -100,6 +109,7 @@ def build_runner_agent(config: Config, workspace: Path, ui, llm,
         ui=ui,
         ctx=ctx,
     )
+    agent._undo_stack = undo_ref
     return agent, session
 
 
