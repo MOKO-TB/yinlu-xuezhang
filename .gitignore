@@ -5,6 +5,8 @@ config.json
 sessions/
 web-sessions/
 web-usage.log
+/web-daily.json
+/web-daily.json.tmp
 .pytest_cache/
 build/
 dist/

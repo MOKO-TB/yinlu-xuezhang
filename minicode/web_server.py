@@ -35,10 +35,13 @@ COOKIE_NAME = "ylxz_web"
 
 TURN_CAP = 3             # 全局同时进行的回合上限:保护校园模型端点
 RATE_PER_MINUTE = 12     # 每个访客每分钟的发问上限
-DAILY_CAP = 2000         # 全局每日发问上限(内存计数,进程重启清零)
+DAILY_CAP = 2000         # 全局每日发问上限(账本落盘 web-daily.json,重启不清零)
 IDLE_EVICT_SECONDS = 1800
 MAX_BODY_BYTES = 1 << 20
 SWEEP_INTERVAL = 60.0
+MAX_VISITORS = 200       # 访客对象数上限:伪造 cookie 或 SSE 风暴不能无限堆对象
+USAGE_LOG_CAP_LINES = 5000      # web-usage.log 的行数上限(与 watchdog.log 同款滚动)
+USAGE_LOG_TRIM_EVERY = 50       # 每写这么多行才回头收一次盘
 
 # 一开始就建好访客(不等 SSE),这样页面首屏就能拿到数据
 INJECT_SCRIPT = '<script src="/bridge-web.js"></script>'
@@ -65,21 +68,62 @@ class RateLimiter:
 
 
 class DailyCounter:
-    def __init__(self, cap: int):
+    """全局每日发问上限,账本落盘(web-daily.json):重启不清零。
+
+    旧版只在内存里数,注释自己写着"进程重启清零" —— 滥用者等一次服务重启
+    就把额度洗掉,而管理员想知道"今天用了多少"只能去数日志。账本按天滚动+
+    原子写,模式与 proactive 的 pushed-today.json 完全同款:
+    - 写不进盘(只读目录)退回纯内存:**本次运行**仍然不会超,重启后可能重新
+      计数,如实接受 —— 账本不能把额度功能本身弄崩;
+    - `path=None` = 纯内存模式(单元测试用,不碰盘)。
+    """
+
+    def __init__(self, cap: int, path=None):
         self.cap = cap
+        self.path = path
         self.day = time.strftime("%Y-%m-%d")
-        self.count = 0
+        self.count = self._load(self.day)
         self._lock = threading.Lock()
+
+    def _load(self, day: str) -> int:
+        if self.path is None:
+            return 0
+        try:
+            data = json.loads(Path(self.path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return 0
+        if isinstance(data, dict) and data.get("date") == day:
+            n = data.get("count")
+            return n if isinstance(n, int) and n >= 0 else 0
+        return 0
+
+    def _save(self) -> None:
+        if self.path is None:
+            return
+        try:
+            p = Path(self.path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"date": self.day, "count": self.count},
+                                      ensure_ascii=False), encoding="utf-8")
+            tmp.replace(p)
+        except OSError:
+            pass                      # 写不进就本次运行内存兜底,下次启动重试
 
     def allow(self) -> bool:
         with self._lock:
             today = time.strftime("%Y-%m-%d")
             if today != self.day:
-                self.day, self.count = today, 0
+                self.day, self.count = today, self._load(today)
             if self.count >= self.cap:
                 return False
             self.count += 1
+            self._save()
             return True
+
+    def used_today(self) -> int:
+        with self._lock:
+            return self.count
 
 
 class Visitor:
@@ -122,6 +166,7 @@ class WebApp:
     def __init__(self, config: Config, workspace: Path, *, frontend_dir: Path | None = None,
                  sessions_root: Path | None = None, config_path: Path | None = None,
                  turn_cap: int = TURN_CAP, daily_cap: int = DAILY_CAP,
+                 daily_path=None, max_visitors: int = MAX_VISITORS,
                  llm_factory=None):
         self.config = config
         self.workspace = Path(workspace)
@@ -129,7 +174,8 @@ class WebApp:
         self.sessions_root = Path(sessions_root) if sessions_root else app_path("web-sessions")
         self.config_path = Path(config_path) if config_path else CONFIG_PATH
         self.turn_cap = max(1, turn_cap)
-        self.daily = DailyCounter(daily_cap)
+        self.daily = DailyCounter(daily_cap, path=daily_path)
+        self.max_visitors = max(1, int(max_visitors))
         self.llm_factory = llm_factory or LLMClient      # 测试可注入假模型
 
         self._visitors: dict[str, Visitor] = {}
@@ -139,16 +185,27 @@ class WebApp:
         self.reserved_turns = 0
         self._log_lock = threading.Lock()
         self._log_path = app_path("web-usage.log")
+        self._log_since_trim = 0
 
     # ------------------------------------------------------------ 访客
 
-    def visitor(self, vid: str) -> Visitor:
+    def visitor(self, vid: str) -> Visitor | None:
+        """按 cookie 取访客;新的就建。满了返回 None(调用方回 503)。
+
+        为什么要有上限:无登录态下 cookie 是访客自己说了算的,一个循环脚本
+        可以凭空造出任意多个 vid —— 每个 Visitor 都带着一整套 WebBridge/
+        LLMClient/队列,不设上限就是"任何人都能让这台机器吃内存"。
+        """
         with self._lock:
             v = self._visitors.get(vid)
-            if v is None:
-                self.sessions_root.mkdir(parents=True, exist_ok=True)
-                v = Visitor(vid, self)
-                self._visitors[vid] = v
+            if v is not None:
+                v.touch()
+                return v
+            if len(self._visitors) >= self.max_visitors:
+                return None
+            self.sessions_root.mkdir(parents=True, exist_ok=True)
+            v = Visitor(vid, self)
+            self._visitors[vid] = v
             v.touch()
             return v
 
@@ -189,7 +246,26 @@ class WebApp:
             with self._log_lock, self._log_path.open("a", encoding="utf-8") as f:
                 f.write(line)
         except OSError:
-            pass
+            return
+        # 行数滚动(watchdog.log 同款):这份日志装着来源 IP 与发问内容,
+        # 是最常被翻的文件之一,不该随挂机天数无限长。
+        self._log_since_trim += 1
+        if self._log_since_trim >= USAGE_LOG_TRIM_EVERY:
+            self._log_since_trim = 0
+            self._trim_usage_log()
+
+    def _trim_usage_log(self) -> None:
+        try:
+            with self._log_lock:
+                lines = self._log_path.read_text(encoding="utf-8").splitlines()
+                if len(lines) <= USAGE_LOG_CAP_LINES:
+                    return
+                tmp = self._log_path.with_suffix(".tmp")
+                tmp.write_text("\n".join(lines[-USAGE_LOG_CAP_LINES:]) + "\n",
+                               encoding="utf-8")
+                tmp.replace(self._log_path)
+        except OSError:
+            pass                      # 收盘失败不影响记账本身
 
     # ------------------------------------------------------------ 回收线程
 
@@ -269,8 +345,8 @@ class Handler(BaseHTTPRequestHandler):
                 return False
         return True
 
-    def _visitor(self) -> Visitor:
-        """按 cookie 取访客;没有就发一个。"""
+    def _visitor(self) -> Visitor | None:
+        """按 cookie 取访客;没有就发一个。访客满了返回 None(调用方回 503)。"""
         vid = ""
         for part in (self.headers.get("Cookie") or "").split(";"):
             name, _, value = part.strip().partition("=")
@@ -298,6 +374,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path = urlparse(self.path).path
             if path == "/api/events":
+                # SSE 与 POST 过同一道 Origin 校验:跨站虽然读不到流(响应无
+                # CORS 头),但**连接本身会建立** —— 任意网页都能让访问者的
+                # 浏览器对这台服务器开 SSE 风暴,每条连接都要建一个访客。
+                if not self._origin_ok():
+                    self._json({"ok": False, "msg": "跨站请求被拒绝"}, 403)
+                    return
                 self._sse()
                 return
             if not self._origin_ok():
@@ -349,6 +431,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _sse(self) -> None:
         visitor = self._visitor()
+        if visitor is None:
+            self._json({"ok": False, "msg": "在线访客已满,请稍后再试"}, 503)
+            return
         self.close_connection = True        # 流式响应不复用连接
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -415,6 +500,9 @@ class Handler(BaseHTTPRequestHandler):
 
             name = path[len("/api/"):]
             visitor = self._visitor()
+            if visitor is None:
+                self._json({"ok": False, "msg": "在线访客已满,请稍后再试"}, 503)
+                return
             result = self._dispatch(visitor, name, args)
             self._json(result)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -499,6 +587,8 @@ def serve(config: Config, workspace: Path, host: str = "0.0.0.0",
     # 不刷的话"启动横幅一个字都看不到",用户会以为没起来。
     print(f"引路学长 · 校园助手网页版已启动(工作区 {workspace})", flush=True)
     print(f"  本机访问:  http://127.0.0.1:{real_port}", flush=True)
+    # 额度可见性:账本落盘后这就是一个真数字(重启不清零),不再是"只能去数日志"
+    print(f"  今日发问额度:已用 {httpd.web_app.daily.used_today()}/{httpd.web_app.daily.cap}", flush=True)
     for ip in ips:
         print(f"  局域网访问:http://{ip}:{real_port}", flush=True)
     if not any(ip.startswith("10.") for ip in ips):

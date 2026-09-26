@@ -33,6 +33,30 @@
   const W = () => (data && data.size ? num(data.size.width) : 2559);
   const H = () => (data && data.size ? num(data.size.height) : 1279);
 
+  /* ------------------------------------------------ 图钉持久化(v0.9.44)
+     图钉 = 用户亲手钉的长期标记(集合点/约见位置),落 localStorage:
+     关掉窗口、切换会话、第二天再来都还在。标注框则是"这一轮对话的临时
+     高亮",两份账刻意分开 —— reset() 只清标注框,不动图钉。
+     上限 100 枚,超出丢最老的;localStorage 不可用(隐私模式等)静默降级
+     成纯内存,功能照常,只是不记得。 */
+  const PIN_KEY = "ylxz_map_pins";
+  const PIN_CAP = 100;
+
+  function loadPins() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(PIN_KEY) || "[]");
+      if (!Array.isArray(raw)) return [];
+      return raw.filter((p) => p && typeof p.x === "number" && typeof p.y === "number")
+                .slice(-PIN_CAP);
+    } catch (e) { return []; }
+  }
+
+  function savePins() {
+    try {
+      localStorage.setItem(PIN_KEY, JSON.stringify(pins.slice(-PIN_CAP)));
+    } catch (e) { /* 隐私模式/配额满:不记得就算了,别把地图弄崩 */ }
+  }
+
   /* 与后端 campus.normalize() 同一套规则:剥掉提问词、去标点、栋/座/楼等价、拉丁转小写。
      前端搜索框要在本地匹配俗称,规则不一致就会出现"问了能查到、手输搜不到"。 */
   const ASK_WORDS = ["怎么走", "怎么去", "怎么到", "怎么过去", "咋走", "如何去", "怎样走",
@@ -390,10 +414,12 @@
 
   /* 会话切换时把地图恢复到"刚打开"的样子(B12)。
      不能复用 apply({op:'clear'}):它第一行就是 openPanel(),会把地图又弹开;
-     这里只清状态、不动面板,关不关由调用方决定。 */
+     这里只清状态、不动面板,关不关由调用方决定。
+     图钉是用户钉的长期标记,不随会话清 —— 从 localStorage 重读一遍(别的
+     会话/标签页可能钉过新的),标注框与搜索照常归零。 */
   function reset() {
     if (!svg) return;              // 底图还没加载,没有可清的状态
-    boxes = []; pins = []; activeCat = ""; boxColor = "orange";
+    boxes = []; pins = loadPins(); activeCat = ""; boxColor = "orange";
     closeLightbox();
     $("mapSearch").value = ""; $("mapSearchInfo").textContent = "";
     $("mapList").style.display = "none";
@@ -523,6 +549,7 @@
       $("mapSub").textContent = ev.title || "";
     } else if (ev.op === "pin") {
       pins.push({ x: num(ev.x), y: num(ev.y), label: ev.label, color: ev.color });
+      savePins();
       drawBoxes();
       const px = num(ev.x), py = num(ev.y);
       fitTo([px - 320, py - 320, px + 320, py + 320]);
@@ -534,7 +561,7 @@
         renderCard([]); renderNotice(null); renderLegend();
         $("mapSearch").value = ""; $("mapSearchInfo").textContent = "";
       }
-      if (scope === "all" || scope === "pin") pins = [];
+      if (scope === "all" || scope === "pin") { pins = []; savePins(); }
       if (scope === "all" || scope === "list") $("mapList").style.display = "none";
       drawBoxes();
     }
@@ -550,6 +577,7 @@
         ? data.title : "🗺 " + data.title;
     }
     byNo = new Map((data.items || []).map((it) => [it.no, it]));
+    pins = loadPins();               // 打开面板先把用户钉过的图钉摆回去
     const stage = $("mapStage");
     stage.textContent = "";
     svg = node("svg", { class: "cm-svg" });

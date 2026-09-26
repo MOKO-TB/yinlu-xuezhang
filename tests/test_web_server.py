@@ -63,6 +63,7 @@ def server(tmp_path, config):
         frontend_dir=frontend,
         sessions_root=tmp_path / "web-sessions",
         config_path=tmp_path / "config.json",
+        daily_path=tmp_path / "web-daily.json",
         llm_factory=lambda cfg: FakeLLM(),
     )
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -440,3 +441,79 @@ def test_bad_request_bodies(server):
     assert status == 400 and payload.get("ok") is False
     status, payload = client.post("send_task", raw="[1,2,3]")
     assert status == 400 and payload.get("ok") is False
+
+
+# ---------------------------------------------------------------- 账本与闸(v0.9.44)
+
+def test_daily_counter_persists_across_restart(tmp_path):
+    """每日额度落盘:重启(新对象)不清零;跨天归零;写不进退回内存。"""
+    path = tmp_path / "web-daily.json"
+    c1 = DailyCounter(3, path=path)
+    assert c1.allow() and c1.allow()
+    assert c1.used_today() == 2
+    # "重启":同 path 的新实例必须接着数 —— 否则滥用者等一次重启就洗掉额度
+    c2 = DailyCounter(3, path=path)
+    assert c2.used_today() == 2
+    assert c2.allow() is True
+    assert c2.allow() is False                  # 2(账本)+1 = 3 封顶
+    # 手工把账本改成"昨天":跨天重置
+    import json as _json
+    path.write_text(_json.dumps({"date": "2000-01-01", "count": 999}), encoding="utf-8")
+    assert DailyCounter(3, path=path).used_today() == 0
+    # 写不进(路径是目录):allow 仍工作,只是这次运行内存兜底
+    c3 = DailyCounter(2, path=tmp_path)
+    assert c3.allow() and c3.allow() and c3.allow() is False
+
+def test_daily_counter_memory_mode():
+    """path=None = 纯内存(单元测试同款):行为不变,不碰盘。"""
+    c = DailyCounter(1)
+    assert c.allow() and not c.allow()
+
+def test_visitor_cap_rejects_new_cookies(server):
+    """访客数上限:伪造 cookie 循环建访客,满了回 503;老访客不受影响。"""
+    from minicode import web_server as ws
+    app = server.web_app
+    app.max_visitors = 2
+    first = app.visitor("vid-a")
+    assert first is not None
+    assert app.visitor("vid-b") is not None     # 第二个:满
+    assert app.visitor("vid-c") is None         # 第三个:拒
+    assert app.visitor("vid-a") is not None     # 已存在的照常服务
+    app.max_visitors = ws.MAX_VISITORS          # 还原,别连累别的用例
+
+def test_sse_cross_origin_rejected(server):
+    """SSE 与 POST 同一道 Origin 校验:跨站开不出流(也建不了访客)。
+    不带 Origin 的请求(curl/桌面端)仍放行 —— 与全站同一口径。"""
+    import http.client as _h
+
+    def get_events(origin_header):
+        conn = _h.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+        headers = {"Host": f"127.0.0.1:{server.server_address[1]}"}
+        if origin_header:
+            headers["Origin"] = origin_header
+        conn.request("GET", "/api/events", headers=headers)
+        resp = conn.getresponse()
+        status = resp.status
+        if status == 403:
+            body = resp.read().decode("utf-8", "replace")
+        else:
+            body = ""       # 放行的 SSE 是条永不结束的流:拿到状态头就撤,别 read()
+        conn.close()
+        return status, body
+
+    status, body = get_events("http://evil.example")
+    assert status == 403, body
+    status, _ = get_events(None)                # 非浏览器客户端:放行
+    assert status == 200
+
+def test_usage_log_is_trimmed(server, tmp_path, monkeypatch):
+    """web-usage.log 行数滚动:超上限留最新的,不无限长。"""
+    from minicode import web_server as ws
+    app = server.web_app
+    monkeypatch.setattr(ws, "USAGE_LOG_CAP_LINES", 5)
+    monkeypatch.setattr(ws, "USAGE_LOG_TRIM_EVERY", 2)
+    for i in range(12):
+        app.log_usage(f"vid{i:03d}", "10.0.0.9", f"问题{i}")
+    lines = app._log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) <= 5
+    assert lines[-1].endswith("问题11")          # 最新那行在

@@ -155,6 +155,8 @@ TABLE: tuple[Entry, ...] = (
     Entry("watchdog.log", "提醒看门狗日志", LOG, False,
           note="只记结论,不记正文;截图发给维护者看的就是它"),
     Entry("injection-events.log", "上下文注入日志", LOG, False),
+    Entry("web-daily.json", "网页版每日额度账本", LOG, False,
+          note="今天网页版用了多少发问额度;带去别人机器会把他的额度误判成已用"),
     Entry("web-usage.log", "网页版问答记录", LOG, False,
           note="含发问内容与来源 IP,只留在本机"),
     Entry("web-sessions", "网页版会话留档", LOG, False, kind="family",
