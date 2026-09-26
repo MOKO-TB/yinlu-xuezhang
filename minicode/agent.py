@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import ast
 import json
 import time
 from datetime import date
@@ -23,6 +24,8 @@ from minicode.tools.base import (
 from minicode.ui import TerminalUI
 
 SNAPSHOT_TOOLS = ("write_file", "edit_file")  # bash 的改动无法安全跟踪,不在回滚范围
+SYNTAX_CHECK_TOOLS = ("write_file", "edit_file")   # 落盘 .py 的两种来源(借鉴 aider 的 lint-after-edit)
+SYNTAX_SCAN_LIMIT = 512 * 1024                     # 只自检 512 KB 以内:再大不是"手写代码"的场景
 
 # 撞步数上限后那一次收尾调用要说的话。它**只活在这次请求里**(不进会话留档),
 # 因为没有别的地方需要读它;不给这句,模型不知道自己被"断了工具",收尾常常写成
@@ -384,6 +387,7 @@ class Agent:
         self.ui.tool_done(tool, result)
         result = self._truncate(result)
         result = self._mark_repeat_empty(tool, args, result)
+        result = self._py_syntax_feedback(tool, args, result)
         # 外部内容围栏:在 _truncate **之后**包壳,否则长内容会把结束标记裁掉。
         # 收口只在这里,禁止各 handler 自行拼壳(方案 §8 决策 1)。
         if self._is_external_result(tool, args):
@@ -491,3 +495,39 @@ class Agent:
         if len(text) <= limit:
             return text
         return text[:limit] + f"\n…(输出超过 {limit} 字符,已截断)"
+
+    def _py_syntax_feedback(self, tool: Tool, args: dict, result: str) -> str:
+        """Python 写后自检(借鉴 aider 的 lint-after-edit):write_file/edit_file
+        落盘 .py 成功后立刻 ast.parse 一遍,解析不过就把行号与报错原文回填进
+        工具结果 —— 模型当场修,而不是留着"文件已写好"的假象,等到运行或下一
+        轮才发现。这条闸对着 HANDOFF §4 反复出现的坑(Edit 锚点吞掉 except、
+        生成的脚本被写坏),ast 是标准库,零新依赖。
+
+        只检"真的写成功了"的落盘(失败结果没有新内容可检);路径解析不了/
+        文件不在/超过大小上限一律静默跳过 —— 自检是反馈,不能变成第二个故障源。
+        """
+        if tool.name.rsplit("·", 1)[-1] not in SYNTAX_CHECK_TOOLS:
+            return result
+        from minicode.toolsum import is_failure
+        if is_failure(result):
+            return result
+        raw = str(args.get("path") or "")
+        if not raw.rstrip().lower().endswith(".py"):
+            return result
+        try:
+            p = resolve_path(self.ctx, raw, for_write=True)
+        except (PathOutsideWorkspace, PathBlocked, OSError):
+            return result
+        try:
+            if not p.is_file() or p.stat().st_size > SYNTAX_SCAN_LIMIT:
+                return result
+            source = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return result
+        try:
+            ast.parse(source, filename=str(p))
+        except SyntaxError as e:
+            return (result + f"\n\n⚠ 语法自检:这个 Python 文件现在解析不过 —— "
+                    f"第 {e.lineno} 行:{e.msg}。请立刻修好它再继续做别的,"
+                    "不要留着一个解析不过的文件。")
+        return result

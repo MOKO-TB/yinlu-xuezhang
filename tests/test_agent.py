@@ -602,3 +602,45 @@ def test_compact_success_still_replaces_messages(config, ctx):
 
     assert getattr(ui, "compacted_calls", None), "压缩成功要推 compacted 事件"
     assert agent.session.messages[-1]["content"] == "回答"
+
+
+def test_write_bad_python_gets_syntax_feedback(config, ctx, tmp_path):
+    """Python 写后自检(借鉴 aider 的 lint-after-edit):write_file 落盘解析不过
+    的 .py,工具结果当场带回行号与报错 —— 模型立刻修,而不是留一个假象。"""
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="write_file",
+            arguments=json.dumps({"path": "oops.py", "content": "def f(:\n"}))]),
+        AssistantTurn(text="已修正"),
+    ])
+    ui = FakeUI()
+    agent = make_agent(config, ctx, llm, ui)
+    agent.run_turn("写个脚本")
+
+    feedback = agent.session.messages[-2]["content"]      # 工具结果那条
+    assert "语法自检" in feedback and "第 1 行" in feedback
+    assert (tmp_path / "oops.py").exists()
+
+
+def test_write_good_python_has_no_syntax_noise(config, ctx, tmp_path):
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="write_file",
+            arguments=json.dumps({"path": "ok.py", "content": "x = 1\n"}))]),
+        AssistantTurn(text="完成"),
+    ])
+    agent = make_agent(config, ctx, llm, FakeUI())
+    agent.run_turn("写个脚本")
+
+    feedback = agent.session.messages[-2]["content"]
+    assert "语法自检" not in feedback
+    # 非 .py 文件不检
+    llm2 = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c2", name="write_file",
+            arguments=json.dumps({"path": "note.txt", "content": "def f(:\n"}))]),
+        AssistantTurn(text="完成"),
+    ])
+    agent2 = make_agent(config, ctx, llm2, FakeUI())
+    agent2.run_turn("写个笔记")
+    assert "语法自检" not in agent2.session.messages[-2]["content"]

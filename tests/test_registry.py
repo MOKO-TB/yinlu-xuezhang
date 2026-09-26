@@ -5,7 +5,7 @@ def test_registry_contents():
     tools = build_default_registry()
     names = [t.name for t in tools]
     assert names == ["read_file", "write_file", "edit_file", "bash", "py_script",
-                     "glob", "grep", "web_crawl", "web_search",
+                     "glob", "grep", "repo_outline", "web_crawl", "web_search",
                      "browser_open", "browser_eval", "browser_snapshot",
                      "browser_click", "browser_fill", "browser_screenshot",
                      "browser_close", "browser_status", "page_parse",
@@ -30,6 +30,7 @@ def test_read_only_flags():
         "py_script": False,          # 内置运行时执行脚本:能读写文件,要确认
         "glob": True,
         "grep": True,
+        "repo_outline": True,        # 只读大纲:不写任何东西
         "web_crawl": False,
         "web_search": False,         # 联网访问搜索引擎:与 web_crawl 同级要确认
         # 浏览器会带用户的登录态、browser_eval 能在页面里执行 JS:要确认,

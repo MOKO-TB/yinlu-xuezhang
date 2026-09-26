@@ -201,6 +201,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 不报错(它只是拼不出那一段),模型侧表现是"这个能力没有了"。
     "minicode.tools.registry": ("build_default_registry",),
     "minicode.tools.catalog_files": ("tools",),
+    "minicode.tools.fs": ("repo_outline", "write_file", "edit_file"),
     "minicode.tools.catalog_web": ("tools",),
     "minicode.tools.catalog_knowledge": ("skills_plan_search", "kb_suggest_tool",
                                          "memory_tool"),

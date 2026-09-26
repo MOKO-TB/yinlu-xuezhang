@@ -1,4 +1,5 @@
 from minicode.tools import fs
+from minicode.tools.fs import repo_outline
 
 
 def test_write_then_read(ctx, tmp_path):
@@ -46,3 +47,39 @@ def test_edit_multiline_exact_match(ctx):
     fs.write_file(ctx, "f.py", "def foo():\n    return 1\n")
     assert "已编辑" in fs.edit_file(ctx, "f.py", "    return 1", "    return 2")
     assert "return 2" in fs.read_file(ctx, "f.py")
+
+
+# ---------------- repo_outline(v0.9.52,借鉴 aider repo map 的 stdlib 简化版) ----------------
+
+def test_repo_outline_lists_py_symbols_and_skips_junk(ctx, tmp_path):
+    (tmp_path / "alpha.py").write_text(
+        "MAX = 3\n\ndef load():\n    pass\n\nclass Loader:\n    pass\n",
+        encoding="utf-8")
+    sub = tmp_path / "pkg"
+    sub.mkdir()
+    (sub / "beta.py").write_text("def run():\n    pass\n", encoding="utf-8")
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / ".venv" / "hidden.py").write_text("def hidden():\n    pass\n",
+                                                  encoding="utf-8")
+    (tmp_path / "README.md").write_text("# 项目\n", encoding="utf-8")
+
+    out = repo_outline(ctx, "")
+    assert "alpha.py" in out and "def load" in out and "class Loader" in out
+    assert "MAX" in out
+    assert "pkg/" in out and "beta.py" in out and "def run" in out
+    assert "README.md" in out
+    assert "hidden" not in out                       # .venv 与隐藏文件不成大纲
+
+
+def test_repo_outline_truncates_and_rejects_non_dir(ctx, tmp_path):
+    for i in range(30):
+        (tmp_path / f"f{i:02d}.py").write_text("x = 1\n", encoding="utf-8")
+    out = repo_outline(ctx, "", max_entries=10)
+    assert "超出条目上限" in out
+    assert repo_outline(ctx, "no_such_dir").startswith("错误")
+
+
+def test_repo_outline_reports_unparsable_py(ctx, tmp_path):
+    (tmp_path / "broken.py").write_text("def oops(:\n", encoding="utf-8")
+    out = repo_outline(ctx, "")
+    assert "解析不了" in out                          # 照实说,不硬猜

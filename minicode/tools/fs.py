@@ -101,3 +101,98 @@ def edit_file(ctx: ToolContext, path: str, old_string: str, new_string: str,
     p.write_text(new_text, encoding="utf-8", newline="\n")
     n = count if replace_all else 1
     return f"已编辑 {path}(替换 {n} 处)。"
+
+
+# ---------------------------------------------------------------- 结构大纲
+# 借鉴 aider 的 repo map 思路,做的是 stdlib 简化版:没有 tree-sitter、没有
+# 引用图排序 —— 我们给的是"一眼看清工作区有什么",不是"猜你正在用哪个符号"。
+# 探索任务先调它,少几轮 glob+grep。
+
+_OUTLINE_SKIP = {
+    # 依赖与缓存
+    ".git", ".venv", "venv", "__pycache__", "node_modules", ".idea",
+    ".pytest_cache", ".ruff_cache", "kb-vectors", "models",
+    # 构建产物与运行时产物
+    "dist", "build", "_internal", "crawled", "browser-profile",
+    "uploads", "images", "charts", "sessions", "memory", "kb",
+}
+
+_OUTLINE_DIR_DEPTH = 6        # 目录最多下钻几层:再深是依赖或数据,不是代码
+
+
+def _outline_symbols(py_path: Path) -> str:
+    """一个 .py 文件的顶层符号(def/class/大写常量);解析不了就照实说。"""
+    import ast
+    try:
+        tree = ast.parse(py_path.read_text(encoding="utf-8", errors="replace"))
+    except (SyntaxError, OSError, ValueError):
+        return "(解析不了,可能不是源码或已损坏)"
+    names: list[str] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            names.append(f"def {node.name}")
+        elif isinstance(node, ast.ClassDef):
+            names.append(f"class {node.name}")
+        elif isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id.isupper():
+                    names.append(t.id)      # 只收大写常量,小写赋值是噪声
+    body = ", ".join(names[:12]) + ("…" if len(names) > 12 else "")
+    return body or "(无顶层符号)"
+
+
+def repo_outline(ctx: ToolContext, path: str = "", max_entries: int = 120) -> str:
+    """工作区结构大纲:目录树 + 每个 Python 文件的顶层符号,一次调用看清全貌。"""
+    root = resolve_path(ctx, path or ".", for_write=False)
+    if not root.is_dir():
+        return f"错误: {path or '.'} 不是目录。"
+    try:
+        max_entries = max(10, min(int(max_entries or 120), 400))
+    except (TypeError, ValueError):
+        max_entries = 120
+
+    lines: list[str] = []
+    counted = 0
+    truncated = False
+
+    def _walk(d: Path, prefix: str, depth: int) -> None:
+        nonlocal counted, truncated
+        if truncated or depth > _OUTLINE_DIR_DEPTH:
+            return
+        try:
+            children = sorted(d.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+        except OSError:
+            return
+        for child in children:
+            if truncated:
+                return
+            name = child.name
+            if name in _OUTLINE_SKIP or name.startswith("."):
+                continue                    # 隐藏文件(含 .env)与运行时目录不成大纲
+            if child.is_dir():
+                counted += 1
+                lines.append(f"{prefix}{name}/")
+                _walk(child, prefix + "  ", depth + 1)
+                continue
+            try:
+                size = child.stat().st_size
+            except OSError:
+                continue
+            if size > (1 << 20):
+                counted += 1
+                lines.append(f"{prefix}{name}(大文件 {size // 1048576} MB+,略)")
+            elif name.endswith(".py"):
+                counted += 1
+                lines.append(f"{prefix}{name}: {_outline_symbols(child)}")
+            else:
+                counted += 1
+                lines.append(f"{prefix}{name}")
+            if counted >= max_entries:
+                truncated = True
+
+    _walk(root, "", 0)
+    if not counted:
+        return "这个目录是空的(或只有被跳过的运行时目录/隐藏文件)。"
+    tail = ("\n…(超出条目上限只列到这里 —— 用 path 参数缩小范围再看)"
+            if truncated else "")
+    return f"工作区结构大纲({counted} 项):\n" + "\n".join(lines) + tail

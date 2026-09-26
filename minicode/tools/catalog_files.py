@@ -134,4 +134,24 @@ def tools() -> list[Tool]:
             handler=search.grep,
             read_only=True,
         ),
+        Tool(
+            name="repo_outline",
+            description=(
+                "工作区结构大纲:目录树 + 每个 Python 文件的顶层 def/class/常量,一次调用看清全貌。"
+                "开始一个探索/修改任务前先调它,能省掉反复的 glob+grep;可用 path 缩小到子目录。"
+                "依赖目录(.venv/__pycache__ 等)、.git、隐藏文件与超大文件(如 crawled/ 馆藏库宿主)自动跳过,"
+                "条目上限防大仓库刷屏。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "可选:从工作区内哪个子目录开始(默认整个工作区)"},
+                    "max_entries": {"type": "integer",
+                                    "description": "最多列多少项(默认 120,防大仓库刷屏)"},
+                },
+            },
+            handler=fs.repo_outline,
+            read_only=True,
+        ),
     ]
