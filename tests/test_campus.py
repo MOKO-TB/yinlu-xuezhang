@@ -375,3 +375,14 @@ def test_find_place_recall_offers_previous_choice(_app, config, tmp_path):
     assert "不要替用户挑一个" in out or "先问" in out
     ev = ctx2.ui.of("focus")[0]
     assert len(ev["items"]) == 2                        # 候选全标,不自动缩成一栋
+
+
+def test_system_prompt_wires_chosen_roundtrip():
+    """歧义确认的动线必须闭环到 chosen(v0.9.46 针):记忆机制的入口在
+    map_find_place(chosen=),提示词只教到「问清是哪一栋」的话,模型答完不会把
+    答案传回来 —— 记忆形同虚设,还会多一轮往返。改提示词别把这半步删了。"""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "system_prompt.md").read_text(
+        encoding="utf-8")
+    assert "chosen" in src, "系统提示词丢了 chosen 回传指引(v0.9.46 加的)"
+    assert "重调一次" in src

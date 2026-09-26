@@ -36,15 +36,19 @@ def build_system_prompt(workspace: Path) -> str:
               .replace("{date}", time.strftime("%Y-%m-%d"))
               .replace("{os}", platform.platform()))
     skills = load_skills(skill_dirs(workspace))
+    # 段序:**静态段在前、动态段在后**(v0.9.46)。动态段(有没有课表、这周记没记
+    # 情绪、记忆条数…)任何一段出现或消失,其后的前缀全部变化,KV Cache 从那里
+    # 失效 —— 全部排到尾部,静态段(skills/calendar/notices/browser)才能整段
+    # 稳定命中缓存。每段自身已遵守"不带当前时间"的口径。
     return (prompt + skills_prompt_section(skills)
-            + kb_prompt_section(kb_dirs(workspace))
             + calendar_prompt_section()
+            + notices_prompt_section()
+            + browser_prompt_section()
+            + kb_prompt_section(kb_dirs(workspace))
             + schedule_prompt_section()
             + mood_prompt_section()
             + library_prompt_section(workspace)
-            + notices_prompt_section()
             + library_guide_prompt_section(workspace)
-            + browser_prompt_section()
             + memory_prompt_section(workspace))
 
 
