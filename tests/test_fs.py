@@ -104,3 +104,26 @@ def test_edit_ambiguous_lists_line_numbers(ctx):
     out = fs.edit_file(ctx, "dup.txt", "alpha", "beta")
     assert "出现 3 次" in out and "第 1 行" in out and "第 3 行" in out and "第 5 行" in out
 
+
+
+def test_search_files_filters_and_skips_junk_dirs(ctx, tmp_path):
+    """@ 引用的数据源:按名字过滤、跳过依赖与产物目录、浅层优先。"""
+    (tmp_path / "agent.py").write_text("x", encoding="utf-8")
+    (tmp_path / "docs" / "notes.md").parent.mkdir(parents=True)
+    (tmp_path / "docs" / "notes.md").write_text("x", encoding="utf-8")
+    (tmp_path / ".venv").mkdir(parents=True)
+    (tmp_path / ".venv" / "lib.py").write_text("x", encoding="utf-8")
+    (tmp_path / "uploads").mkdir(parents=True)
+    (tmp_path / "uploads" / "big.bin").write_text("x", encoding="utf-8")
+    hits = fs.search_files(ctx, "py")
+    assert hits == ["agent.py"]                       # .venv/uploads 不出现
+    all_hits = fs.search_files(ctx, "")
+    assert "docs/notes.md" in all_hits and "agent.py" in all_hits
+    assert not any(".venv" in h or "uploads" in h for h in all_hits)
+    assert all_hits.index("agent.py") < all_hits.index("docs/notes.md")  # 浅层优先
+
+
+def test_search_files_empty_workspace(tmp_path):
+    from minicode.tools.base import ToolContext
+    ctx = ToolContext(workspace=tmp_path / "nope", config=None)
+    assert fs.search_files(ctx, "") == []

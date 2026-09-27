@@ -1020,3 +1020,16 @@ def test_write_file_new_confirm_keeps_preview(config, tmp_path):
     detail = bridge._permission_detail_text(tool, {
         "path": "new.txt", "content": "第一行\n第二行\n"})
     assert "新建文件: new.txt" in detail and "第一行" in detail
+
+
+
+def test_workspace_search_files_returns_relative_paths(config, tmp_path):
+    (tmp_path / "agent.py").write_text("x", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "note.md").write_text("x", encoding="utf-8")
+    bridge, _w, _s = make(config, tmp_path, _StreamOkLLM())
+    out = bridge.workspace_search_files("agent")
+    assert out["ok"] is True and out["items"] == ["agent.py"]
+    empty = bridge.workspace_search_files("")
+    assert set(empty["items"]) == {"agent.py", "sub/note.md"}
+    assert all("\\" not in i for i in empty["items"])   # 一律 posix 斜杠

@@ -1603,6 +1603,32 @@ try {
   .usage-legend span{ display:inline-flex; align-items:center; gap:5px;
                       color:var(--text-2); font-size:11px; }
   .usage-legend i{ width:8px; height:8px; border-radius:50%; display:inline-block; }
+
+/* ---------------- @ 文件引用补全(v0.9.64) ---------------- */
+.at-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 216px;
+  overflow-y: auto;
+  background: var(--glass);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .25);
+  z-index: 30;
+}
+.at-item {
+  padding: 7px 12px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.at-item.on, .at-item:hover { background: rgba(127, 127, 127, .18); }
+.at-item .at-hint { opacity: .55; font-size: 11px; margin-left: 6px; }
 </style>
 </head>
 <body>
@@ -1681,7 +1707,8 @@ try {
         <button id="btnEditCancel">取消编辑</button>
       </div>
       <div class="attachbar" id="attachBar" style="display:none"></div>
-      <div class="box">
+      <div class="box" style="position:relative">
+        <div class="at-menu" id="atMenu" style="display:none"></div>
         <button class="attach" id="btnAttach" title="上传文件或图片(会复制到工作区 uploads/)">📎</button>
         <textarea id="input" rows="1" placeholder="描述任务，Enter 发送，Shift+Enter 换行"></textarea>
         <button class="send" id="btnSend">发送</button>
@@ -6254,13 +6281,112 @@ function renderPermOptions(info) {
 }
 $("perm").addEventListener("change", (e) => pywebview.api.set_permission_mode(e.target.value));
 
+/* @ 文件引用:v0.9.64 —— 输入 @ 弹出工作区文件补全(Codex/Cursor 同款交互)。
+   数据是真的:每 keystroke 防抖 150ms 问桥(桥上走 fs.search_files,跳过依赖/产物目录)。
+   菜单开着时 Enter/Tab 选词、↑↓ 换选、Esc 关菜单,都不触发发送。 */
+const atState = { active: false, tokenStart: -1, items: [], sel: 0, timer: null };
+
+function atMenuClose() {
+  atState.active = false;
+  $("atMenu").style.display = "none";
+  atState.items = [];
+}
+
+function atMenuPick(i) {
+  const ta = $("input");
+  const it = atState.items[i];
+  if (!it) return;
+  const end = ta.selectionStart;
+  const text = ta.value;
+  ta.value = text.slice(0, atState.tokenStart) + it.path + " " + text.slice(end);
+  ta.selectionStart = ta.selectionEnd = atState.tokenStart + it.path.length + 1;
+  atMenuClose();
+  ta.focus();
+  ta.style.height = "auto";
+  ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
+}
+
+function atMenuRender() {
+  const menu = $("atMenu");
+  if (!atState.active) { atMenuClose(); return; }
+  if (!atState.items.length) {
+    // 加载中 / 无匹配:不关菜单(关了 fetch 回来就会被 active 闸拦掉),
+    // 摆一行实话 —— 这两种样子用户都该看得见。
+    menu.innerHTML = '<div class="at-item">没有匹配的文件 — 直接贴相对路径也可以</div>';
+    menu.style.display = "block";
+    return;
+  }
+  menu.innerHTML = "";
+  atState.items.forEach((it, i) => {
+    const el = document.createElement("div");
+    el.className = "at-item" + (i === atState.sel ? " on" : "");
+    el.textContent = it.path;
+    const hint = document.createElement("span");
+    hint.className = "at-hint";
+    hint.textContent = "@" + (i === atState.sel ? "↵ 引用" : "");
+    el.appendChild(hint);
+    el.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      atMenuPick(i);
+    });
+    menu.appendChild(el);
+  });
+  menu.style.display = "block";
+}
+
+function atMenuQuery() {
+  const ta = $("input");
+  const caret = ta.selectionStart;
+  const text = ta.value.slice(0, caret);
+  const at = text.lastIndexOf("@");
+  atState.active = false;
+  if (at < 0) { atMenuClose(); return; }
+  const before = at === 0 ? "\n" : text[at - 1];
+  if (!/[ \t\r\n]/.test(before)) { atMenuClose(); return; }   // @ 必须独立成词
+  const token = text.slice(at + 1);
+  if (token.length > 64 || /[ \t\r\n]/.test(token)) { atMenuClose(); return; }
+  atState.active = true;
+  atState.tokenStart = at;
+  atState.sel = 0;
+  clearTimeout(atState.timer);
+  atState.timer = setTimeout(() => {
+    const api = window.pywebview && pywebview.api;
+    if (!api || !api.workspace_search_files) { atMenuClose(); return; }
+    api.workspace_search_files(token, 8).then(r => {
+      if (!atState.active) return;                        // 期间菜单已关
+      atState.items = ((r && r.items) || []).map(p => ({ path: p }));
+      atMenuRender();
+    }).catch(() => atMenuClose());
+  }, 150);
+  if (atState.active) atMenuRender();                     // 先画骨架(加载中)
+}
+
 $("input").addEventListener("keydown", (e) => {
+  if (atState.active) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const n = atState.items.length;
+      if (n) {
+        atState.sel = (atState.sel + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+        atMenuRender();
+      }
+      return;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      atMenuPick(atState.sel);
+      return;
+    }
+    if (e.key === "Escape") { e.preventDefault(); atMenuClose(); return; }
+  }
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
 });
 $("input").addEventListener("input", function () {
   this.style.height = "auto";
   this.style.height = Math.min(this.scrollHeight, 180) + "px";
+  atMenuQuery();
 });
+
 
 /* ---------------- 附件上传(文件 / 图片) ---------------- */
 let attachments = [];      // [{name, path, size, kind, preview}]

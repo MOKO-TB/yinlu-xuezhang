@@ -1,6 +1,7 @@
 """文件读写与精确编辑工具。"""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from minicode.tools.base import (
@@ -162,6 +163,39 @@ _OUTLINE_SKIP = {
 }
 
 _OUTLINE_DIR_DEPTH = 6        # 目录最多下钻几层:再深是依赖或数据,不是代码
+
+
+def search_files(ctx: ToolContext, query: str = "", limit: int = 20) -> list[str]:
+    """工作区内按名字搜文件,返回相对路径(posix 斜杠)—— @ 引用的数据源。
+
+    跳过的目录与 repo_outline 同一份 `_OUTLINE_SKIP`(依赖/产物/会话数据,
+    那些地方没有值得引用的文件);空 query 返回工作区顶层与浅层文件。
+    只读操作:绝不触碰任何文件内容。
+    """
+    root = Path(ctx.workspace)
+    if not root.is_dir():
+        return []
+    q = str(query or "").strip().lower()
+    limit = max(1, min(int(limit or 20), 50))
+    hits: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root)
+        if rel_dir != ".":
+            parts = Path(rel_dir).parts
+            if any(part in _OUTLINE_SKIP or part.startswith(".") for part in parts):
+                dirnames[:] = []
+                continue
+        dirnames[:] = [d for d in dirnames
+                       if d not in _OUTLINE_SKIP and not d.startswith(".")]
+        for fn in filenames:
+            rel = Path(os.path.relpath(os.path.join(dirpath, fn), root)).as_posix()
+            if not q or q in rel.lower():
+                hits.append(rel)
+        if len(hits) >= limit * 4:
+            break
+    # 浅层优先:引用的常是工作区顶层的代码与文档,不是深处依赖
+    hits.sort(key=lambda s: (s.count("/"), len(s), s.lower()))
+    return hits[:limit]
 
 
 def _outline_symbols(py_path: Path) -> str:

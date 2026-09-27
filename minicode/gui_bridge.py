@@ -81,6 +81,10 @@ class PublicApi:
     def pick_attachments(self) -> dict:
         return self._b.pick_attachments()
 
+    def workspace_search_files(self, query: str = "", limit: int = 20) -> dict:
+        """输入框 @ 引用:工作区内按名字搜文件(只读,相对路径)。"""
+        return self._b.workspace_search_files(query, limit)
+
     def workspace_files_list(self, folder: str = "uploads") -> dict:
         """工作区产物目录的清单(uploads/images/charts,名字/大小/日期 + 总占用)。"""
         return self._b.workspace_files_list(folder)
@@ -1595,6 +1599,21 @@ class Bridge:
         if name not in self.WORKSPACE_DIRS:
             raise ValueError(f"只认这几个工作区目录:{'/'.join(self.WORKSPACE_DIRS)}")
         return self.workspace / name
+
+    def workspace_search_files(self, query: str = "", limit: int = 20) -> dict:
+        """工作区内按名字搜文件(相对路径)—— 输入框 @ 引用补全的数据源。
+
+        只读:只列名字,不碰内容;跳过依赖/产物目录(与 repo_outline 同一份名单)。
+        """
+        try:
+            from minicode.tools import fs
+            from minicode.tools.base import ToolContext
+            hits = fs.search_files(ToolContext(workspace=self.workspace,
+                                               config=self.config),
+                                   query, limit)
+        except Exception as e:
+            return {"ok": False, "msg": f"{type(e).__name__}: {e}", "items": []}
+        return {"ok": True, "items": hits}
 
     def workspace_files_list(self, folder: str = UPLOAD_DIR) -> dict:
         """工作区某个产物目录的清单:名字、多大、哪天进来,外加总共占多少。
