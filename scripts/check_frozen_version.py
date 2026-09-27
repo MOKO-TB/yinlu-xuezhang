@@ -393,6 +393,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                          "read_frames", "ensure_visible", "_endpoint_port",
                          "FRAME_MAX_CHARS"),
     # ---- v0.9.24:MCP 三种传输(stdio 之外只有网址的服务器也连得上) ----
+    # v0.9.62:校历补录助手(漏收 = 「贴通知录考试周」在包里做不到,
+    # 考试周数据继续空置,A5 考试闭环继续卡着)
+    "minicode.calendar_edit": ("validate", "preview_text", "commit",
+                               "calendar_edit_tool"),
     "minicode.mcp": ("Transport", "StdioTransport", "HttpTransport", "SseTransport",
                      "make_transport", "_iter_sse", "_safe_url", "_usable_url",
                      "_norm_transport",

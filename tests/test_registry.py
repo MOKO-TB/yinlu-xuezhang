@@ -13,7 +13,7 @@ def test_registry_contents():
                      "use_skill", "plan",
                      "search_knowledge", "search_history",
                      "ocr_image", "render_chart", "generate_image",
-                     "campus_calendar", "gpa_calc",
+                     "campus_calendar", "calendar_edit", "gpa_calc",
                      "scores",
                      "kb_suggest", "library_search", "library_guide", "memory",
                      "reminder", "mood", "schedule", "desktop_notify", "get_weather", "campus_notices",
@@ -76,6 +76,7 @@ def test_read_only_flags():
         "export_ics": False,         # 往工作区写 .ics 文件:与 write_file 同一层确认
         "scores": False,             # action=clear 删整份存档:非只读,与 mood 同理
         "mcp": False,                # 改配置并重连外部服务:绝不是只读
+        "calendar_edit": False,      # 往校历文件追加条目:非只读
         # 地图工具只改界面显示、不动文件:标只读,免得每次定位都弹确认框
         "map_find_place": True,
         "map_show_list": True,

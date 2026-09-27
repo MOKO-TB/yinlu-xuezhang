@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from minicode import gpa, ics_export, mood, notices, reminders, schedule, scores, tray, weather
+from minicode import calendar_edit, gpa, ics_export, mood, notices, reminders, schedule, scores, tray, weather
 from minicode import calendar as school_calendar
 from minicode.tools.base import Tool
 
@@ -35,6 +35,35 @@ def calendar_gpa() -> list[Tool]:
             },
             handler=school_calendar.campus_calendar,
             read_only=True,
+        ),
+        Tool(
+            name="calendar_edit",
+            description=(
+                "校历补录助手:把用户贴来的教务处通知/校历文字里抽出的**日期候选**"
+                "校验后入库 kb/school-calendar.json。两步走:**action=preview 先生成核对单**"
+                "(每条带通知原文引用与可信度),完整念给用户、得到明确同意;"
+                "**action=commit 才入库**(追加,绝不改写已有条目)。"
+                "硬规矩:每条候选必须带 quote(通知原文里支撑这个日期的那一句)——"
+                "没有引用的日期就是编的,preview 会点名列出不收;kind 用"
+                "holiday/exam/term/deadline/event;可信度按来源定,拿不准就 B-待核实。"
+                "入库后考试倒计时/考前提醒等既有机制自动生效。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["preview", "commit"],
+                               "description": "preview=校验并生成核对单(先做这个);"
+                                              "commit=用户明确同意后才入库"},
+                    "entries": {"type": "array",
+                                "description": "候选条目数组,每条:{name(必填), start(ISO 日期,必填),"
+                                               "quote(通知原文引用,必填), end(可选), kind(可选),"
+                                               "source(通知网址或「用户提供」), note(可选),"
+                                               "credibility(可选,默认按来源定)}"},
+                    "reason": {"type": "string",
+                               "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
+                },
+            },
+            handler=calendar_edit.calendar_edit_tool,
         ),
         Tool(
             name="gpa_calc",
