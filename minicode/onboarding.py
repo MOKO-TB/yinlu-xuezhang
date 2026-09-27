@@ -18,7 +18,8 @@ from pathlib import Path
 from minicode.paths import app_path
 
 PREF_FILE = "onboarding.json"
-WIZARD_KEY = "first_run"          # 目前只有一个向导;键留着以后加分步提示
+WIZARD_KEY = "first_run"          # 配密钥向导:只对"还没配好"的人弹
+TOUR_KEY = "tour"                 # 功能导览(v0.9.67):独立 key,面向所有人一次
 SCHEMA_VERSION = 1
 
 # 三步的内容写在这里,界面上只负责排版:文案改了不用动前端,也不会两处对不上。
@@ -32,6 +33,24 @@ STEPS = (
     {"key": "try", "title": "③ 先试一句话",
      "body": "「今天有什么课」「帮我看看官网有没有新通知」「把这份表格理一下」——"
              "课表可以在课表面板里从教务系统一键导入(登录那步必须你自己来)。"},
+)
+
+
+# 功能导览的三步(v0.9.67):把攒了二十多个版本的入口在第一次打开时说清 ——
+# 内置校园模型开箱即用,大多数同学永远不会因为"没配密钥"看到上面那个向导,
+# 这条是他们的第一面。仍然只讲**真实存在**的东西,不讲没做的。
+TOUR_STEPS = (
+    {"key": "rail", "title": "① 左栏那排图标是全部入口",
+     "body": "地图、课表(可一键从教务导入,登录只由你自己输)、心情、计划、任务监控、"
+             "技能、记忆、用量、我的数据都在那里;顶栏只留工作区、模型、权限这几个状态。"},
+    {"key": "composer", "title": "② 输入框的三个小抄",
+     "body": "打 @ 引用工作区文件(路径不用手敲);打 / 弹动作面板(导出、压缩、换主题"
+             "这些一步直达);Enter 发送,Shift+Enter 换行。桌面提醒开关在右下角托盘图标"
+             "的右键菜单里 —— 简报、课前、待办、通知、周报都会弹到桌面。"},
+    {"key": "trust", "title": "③ 数据都在本机,来源都可核对",
+     "body": "对话、课表、成绩、心情全部存在下面这个数据目录里,换电脑用「💾 数据」"
+             "导出迁移包;API 密钥不会随安装包外发。放假安排、成绩这些以官网为准 ——"
+             "学长会给通知原文和链接,找不到就说找不到,绝不编。"},
 )
 
 
@@ -90,6 +109,10 @@ def payload(*, key_configured: bool, paths: dict | None = None) -> dict:
     """
     st = read()
     show = (not key_configured) and (WIZARD_KEY not in st["dismissed"])
+    # 功能导览:独立 key、面向所有人一次。**首启向导正在弹时先让位** ——
+    # 同一个弹层不排队,先解决"能不能用",导览下次启动或配好密钥后再露面。
+    tour_show = (TOUR_KEY not in st["dismissed"]) and (not show)
     return {"ok": True, "show": show, "steps": [dict(s) for s in STEPS],
+            "tour_show": tour_show, "tour_steps": [dict(s) for s in TOUR_STEPS],
             "key_configured": bool(key_configured), "paths": paths or {},
             "data_dir": str((paths or {}).get("app_dir") or state_path().parent)}

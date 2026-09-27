@@ -1989,7 +1989,7 @@ try {
 <div class="overlay" id="firstRun">
   <div class="dialog" style="width:540px">
     <div class="sc-head">
-      <h3>👋 第一次打开引路学长</h3>
+      <h3 id="frTitle">👋 第一次打开引路学长</h3>
       <span class="sc-week" id="frStep"></span>
     </div>
     <div class="jw-steps" id="frSteps"></div>
@@ -6031,6 +6031,10 @@ function scheduleManualImport(kind) {
    v0.9.22 那轮"配了不保存"的根因是数据目录不可写,而界面上看不见它在哪。
    现在:模型管理面板常驻一行目录实况;没配密钥的首次运行则走一遍三步向导。 */
 let frData = null, frIdx = 0, infoPaths = null;
+// v0.9.67:同一弹层两副面孔 —— "first_run"(配密钥向导) 与 "tour"(功能导览,
+// 独立 dismiss key、面向所有人一次;配好密钥的同学也能看到)。
+let frMode = "first_run";
+const FR_TITLES = { first_run: "👋 第一次打开引路学长", tour: "🧭 三件上手小抄" };
 
 function pathsLine(p) {
   if (!p || !p.app_dir) return "";
@@ -6042,8 +6046,17 @@ function pathsLine(p) {
         : "");
 }
 
+function frSteps() {
+  // 步数只有一个来源:渲染与"最后一步"判断都用它 —— 两处各取一次,
+  // 导览(frData.steps 只有 1 条)会在第一次点击就误判成最后一步直接关窗
+  // (e2e_ui_v0967 抓到的真 bug:点一次就 dismiss)。
+  return (frMode === "tour"
+    ? (frData && frData.tour_steps) : (frData && frData.steps)) || [];
+}
+
 function renderFr() {
-  const steps = (frData && frData.steps) || [];
+  const steps = frSteps();
+  $("frTitle").textContent = FR_TITLES[frMode] || FR_TITLES.first_run;
   $("frSteps").innerHTML = steps.map((s, i) =>
     `<div class="jw-step${i === frIdx ? " on" : (i < frIdx ? " done" : "")}">${esc(s.title)}</div>`
   ).join("");
@@ -6053,14 +6066,15 @@ function renderFr() {
     <div class="msg">${esc(s.body || "")}</div>`;
   $("frPaths").textContent = pathsLine(frData && frData.paths);
   $("btnFrPrev").disabled = frIdx === 0;
-  $("btnFrNext").textContent = frIdx >= steps.length - 1 ? "开始用" : "下一步";
+  $("btnFrNext").textContent = frIdx >= steps.length - 1
+    ? (frMode === "tour" ? "知道了" : "开始用") : "下一步";
 }
 
 function frDont(silent) {
   const api = window.pywebview && pywebview.api;
   $("firstRun").classList.remove("show");
   if (!api || !api.dismiss_onboarding) return;
-  api.dismiss_onboarding("first_run").then(r => {
+  api.dismiss_onboarding(frMode).then(r => {
     if (!silent && r && !r.ok) toast(r.msg || "这台机器记不下「不再显示」", true);
   }).catch(() => {});
 }
@@ -6069,14 +6083,18 @@ function showFirstRun() {
   const api = window.pywebview && pywebview.api;
   if (!api || !api.get_onboarding) return;
   api.get_onboarding().then(r => {
-    if (!r || !r.show) return;                // 配好密钥/关过/网页版:一律不打扰
+    if (!r) return;
+    // 可选两个向导:先解决"能不能用";首启向导正在弹时导览让位(下次再露面)。
+    if (r.show) frMode = "first_run";
+    else if (r.tour_show) frMode = "tour";
+    else return;                              // 都关过/网页版:一律不打扰
     frData = r; frIdx = 0; renderFr();
     $("firstRun").classList.add("show");
   }).catch(() => {});                         // 向导是锦上添花,读不到不能拦人
 }
 
 $("btnFrNext").addEventListener("click", () => {
-  const n = ((frData && frData.steps) || []).length;
+  const n = frSteps().length;
   if (frIdx >= n - 1) frDont(true); else { frIdx++; renderFr(); }
 });
 $("btnFrPrev").addEventListener("click", () => { if (frIdx > 0) { frIdx--; renderFr(); } });

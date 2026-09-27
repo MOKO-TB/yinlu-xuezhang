@@ -77,3 +77,36 @@ def test_bridge_get_onboarding_uses_config_and_paths(config, tmp_path, monkeypat
     b.config = Boom()
     r2 = Bridge.get_onboarding(b)
     assert r2["show"] is False and "出错" in r2["msg"]   # 读不到也不能把启动卡住
+
+
+
+# -------------------------------------------------- 功能导览(v0.9.67)
+
+def test_tour_shows_for_key_configured_users():
+    """盲区修复:内置校园模型开箱即用的人,首启向导永远不弹 —— 导览是他们第一面。"""
+    p = onboarding.payload(key_configured=True, paths={"app_dir": "D:/x"})
+    assert p["show"] is False and p["tour_show"] is True
+    assert len(p["tour_steps"]) == 3
+
+
+def test_tour_waits_while_first_run_is_showing():
+    """两个向导不排队:首启向导正在弹时,导览让位到下次。"""
+    p = onboarding.payload(key_configured=False)
+    assert p["show"] is True and p["tour_show"] is False
+
+
+def test_tour_dismiss_is_independent():
+    onboarding.dismiss(onboarding.TOUR_KEY)
+    p = onboarding.payload(key_configured=True)
+    assert p["tour_show"] is False
+    # 首启向导不受影响:没配密钥的人照旧能看到它
+    assert onboarding.payload(key_configured=False)["show"] is True
+
+
+def test_tour_steps_wording_stays_honest():
+    body = " ".join(s["body"] for s in onboarding.TOUR_STEPS)
+    assert "@" in body and "/" in body and "托盘" in body      # 三个小抄都在
+    assert "密钥" in body and "官网" in body                    # 数据/来源边界都在
+    assert "密码" not in body, "导览也不该向人要密码"
+    for s in onboarding.TOUR_STEPS:
+        assert not s["body"].startswith("即将"), "只讲真实存在的东西,不讲没做的"
