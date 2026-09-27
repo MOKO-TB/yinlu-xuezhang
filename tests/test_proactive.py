@@ -769,6 +769,8 @@ def test_tick_survives_one_broken_source(monkeypatch):
     monkeypatch.setattr(schedule, "upcoming_class",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("课表坏了")))
     monkeypatch.setattr(reminders, "upcoming_due", lambda *a, **k: DUE_SOON_NOTE)
+    # 任务表是外部数据源(v0.9.57):不按住的话,真时钟撞上周报到点窗就翻红
+    monkeypatch.setattr(proactive, "JOB_SPECS", [])
     bridge, ui = _push_bridge()
     assert proactive._tick(bridge) == {"class": False, "due": True, "jobs": []}
     assert [e["kind"] for e in ui.events] == ["reminders"]

@@ -693,6 +693,96 @@ class Bridge:
         mcp = getattr(self.agent, "mcp", None)
         return mcp.tools_summary() if mcp is not None else []
 
+    # ------------------------------------- 对话里自助管理 MCP(v0.9.61)
+
+    def _mcp_admin(self, action: str, name: str = "", raw: dict | None = None) -> str:
+        """mcp 工具的落盘与热重载(装进 mcp.set_admin_hook 的那半)。
+
+        config.json 是唯一事实:这里改完 save_config 立刻落盘,再整组重连
+        (旧进程关掉、启用的重连、工具清单原地去旧换新 —— 现有会话的注册表
+        也当场换,新清单下一轮就能用,不用重启学长)。
+        """
+        from minicode import mcp as mcp_mod
+        from minicode.config import save_config
+        action = (action or "").strip().lower()
+        name = str(name or "").strip()
+        cfg = self.config
+        servers = [dict(s) for s in (cfg.mcp_servers or []) if isinstance(s, dict)]
+
+        def _sid_of(s: dict) -> str:
+            return str((s.get("id") or s.get("name") or "")).strip()
+
+        def _persist_and_reload(extra: str) -> str:
+            cfg.mcp_servers = servers
+            save_config(self.config_path, cfg)
+            old = self._mcp
+            try:
+                if old is not None:
+                    old.close_all()          # 旧子进程不留孤儿
+            except Exception:
+                pass
+            new = mcp_mod.connect_servers(
+                mcp_mod.parse_servers(cfg.mcp_servers), log=mcp_log(self.ui))
+            self._mcp = new
+            self._mcp_tools[:] = new.build_tools()   # 原列表换内容:所有会话注册表同步
+            for runner in self._runners.values():
+                runner.agent.mcp = new
+                reg = runner.agent.registry
+                reg[:] = ([t for t in reg if not t.name.startswith("mcp_")]
+                          + self._mcp_tools)
+            n = len(self._mcp_tools)
+            return (extra + f"(已热重载:当前 {len(servers)} 个服务器 / {n} 个工具,"
+                    "现有会话下一轮即可用,不用重启)")
+
+        if action == "list":
+            if not servers:
+                return ("还没有配置任何 MCP 服务器。用 action=add 加一个:"
+                        "本地进程给 name+command(+args),远程给 name+transport"
+                        "(http/sse)+url;需要鉴权的 headers 里写「Authorization: "
+                        "${MY_TOKEN}」—— 密钥走环境变量,不落 config.json。")
+            lines = [f"- {s.get('id') or s.get('name')}"
+                     f"({'启用' if s.get('enabled', True) else '停用'},"
+                     f"{s.get('transport') or 'stdio'})" for s in servers]
+            tools = ", ".join(x.name for x in self._mcp_tools) or "(无)"
+            return ("已配置的 MCP 服务器:\n" + "\n".join(lines)
+                    + "\n当前挂着的工具:" + tools)
+        if action == "add":
+            if not isinstance(raw, dict) or not raw:
+                return ("错误: action=add 需要给 raw(服务器配置):name 必填,"
+                        "stdio 给 command(+args),http/sse 给 url(+headers)。")
+            sid = str(raw.get("id") or raw.get("name") or "").strip()
+            if not sid:
+                return "错误: 配置里要有 name 字段作为服务器标识。"
+            if any(_sid_of(s) == sid for s in servers):
+                return (f"错误: 已有叫「{sid}」的服务器。要改配置先 remove 再 add,"
+                        "或直接编辑 config.json。")
+            probe = mcp_mod.probe_server(raw, log=mcp_log(self.ui))
+            if not probe["ok"]:
+                return (f"错误: 探测失败,没有写入配置 —— {probe['error']}。"
+                        "服务器可能只是暂时不在线:修好命令/地址后再加一次。")
+            servers.append(dict(raw))
+            return _persist_and_reload(
+                f"已添加「{sid}」({probe['server'] or '服务器'}),"
+                f"探到 {probe['n_tools']} 个工具。")
+        if action in ("remove", "enable", "disable"):
+            if not name:
+                return f"错误: action={action} 需要 name。"
+            hit = next((s for s in servers if _sid_of(s) == name), None)
+            if hit is None:
+                return (f"错误: 没有叫「{name}」的服务器。"
+                        f"现有的:{', '.join(_sid_of(s) for s in servers) or '(无)'}")
+            if action == "remove":
+                servers.remove(hit)
+                return _persist_and_reload(f"已移除「{name}」。")
+            hit["enabled"] = (action == "enable")
+            if hit["enabled"]:
+                probe = mcp_mod.probe_server(hit, log=mcp_log(self.ui))
+                if not probe["ok"]:
+                    return (f"错误: 启用前探测失败,配置没有改动 —— {probe['error']}。")
+            return _persist_and_reload(
+                f"已{'启用' if action == 'enable' else '停用'}「{name}」。")
+        return "错误: 未知 action。可用: list / add / remove / enable / disable。"
+
     def get_providers(self) -> dict:
         """模型管理弹窗的数据源:每个供应商 + 它底下的模型清单。
 
@@ -2677,4 +2767,8 @@ def create_app(config, workspace: Path, llm=None, ui: GuiUI | None = None,
     bridge._mcp = mcp
     for runner in bridge._runners.values():
         runner.agent.mcp = mcp          # 退出时 bridge.close() 统一关停
+    # v0.9.61:mcp 工具的落盘与热重载。钩子挂在**模块**上(局部变量 mcp 是
+    # McpManager 实例,不是模块 —— 装错对象就是 AttributeError)。
+    from minicode import mcp as mcp_module
+    mcp_module.set_admin_hook(bridge._mcp_admin)
     return bridge, ui, bridge.agent, bridge.session

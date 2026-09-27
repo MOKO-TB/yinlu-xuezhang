@@ -27,6 +27,7 @@ def build_default_registry() -> list[Tool]:
     return [
         *catalog_files.tools(),
         *catalog_web.tools(),
+        *catalog_web.mcp_admin_tool(),
         *catalog_knowledge.skills_plan_search(),
         *catalog_knowledge.history_tool(),
         *catalog_media.tools(),

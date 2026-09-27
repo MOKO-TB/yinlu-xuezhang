@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+from minicode import mcp as mcp_mod
 from minicode import site_parse
 from minicode.tools import crawl
 from minicode.tools import browser as browser_tools
@@ -264,5 +265,43 @@ def tools() -> list[Tool]:
             handler=site_parse.page_parse,
             trust="external",
             read_only=True,
+        ),
+    ]
+
+
+def mcp_admin_tool() -> list[Tool]:
+    """MCP 服务器自助管理(v0.9.61):list/add/remove/enable/disable。"""
+    return [
+        Tool(
+            name="mcp",
+            description=(
+                "管理 MCP 外接服务器(对话里自助,不用手编 config.json):"
+                "action=list 看已配置的与当前挂着的工具;action=add 加一个 —— "
+                "raw 给配置(name 必填;本地进程给 command+args,远程给 "
+                "transport=http/sse 与 url,鉴权 headers 写 ${环境变量} 占位),"
+                "**加之前会真连一次探测,连不上就不写入**;remove/enable/disable "
+                "按 name 操作。改动立即热重载(现有会话下一轮可用)。"
+                "注意:这是管理动作,不是调用 MCP 工具本身 —— 外接工具以 "
+                "mcp_开头,直接调它们即可。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["list", "add", "remove", "enable", "disable"],
+                               "description": "list=看清单(默认);add=加(先探测后写入);"
+                                              "remove/enable/disable 按 name 操作"},
+                    "name": {"type": "string",
+                             "description": "remove/enable/disable 用:服务器标识(清单里能看到)"},
+                    "raw": {"type": "object",
+                            "description": "add 用:服务器配置对象。字段:name(必填)、"
+                                           "command/args(stdio 本地进程)或 transport+url"
+                                           "(http/sse 远程)、env/headers(值写 ${环境变量} 占位)、"
+                                           "read_only/trusted(可信的自建服务器才写 true)"},
+                    "reason": {"type": "string",
+                               "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
+                },
+            },
+            handler=mcp_mod.admin_tool,
         ),
     ]

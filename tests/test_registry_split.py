@@ -31,6 +31,8 @@ ORDER = [
     "web_crawl", "web_search", "browser_open", "browser_eval", "browser_snapshot",
     "browser_click", "browser_fill", "browser_screenshot", "browser_close",
     "browser_status", "page_parse",
+    # v0.9.61:MCP 自助管理,挨着它服务的外接家族(web/浏览器)
+    "mcp",
     "use_skill", "plan", "search_knowledge", "search_history",
     "ocr_image", "render_chart", "generate_image",
     "campus_calendar", "gpa_calc",
@@ -81,8 +83,8 @@ def test_registry_returns_the_same_forty_one_tools_in_the_same_order():
 
 
 def test_order_pin_is_not_stale():
-    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 45 个不重名。"""
-    assert len(ORDER) == len(set(ORDER)) == 45
+    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 46 个不重名。"""
+    assert len(ORDER) == len(set(ORDER)) == 46
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

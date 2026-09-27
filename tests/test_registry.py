@@ -9,6 +9,7 @@ def test_registry_contents():
                      "browser_open", "browser_eval", "browser_snapshot",
                      "browser_click", "browser_fill", "browser_screenshot",
                      "browser_close", "browser_status", "page_parse",
+                     "mcp",
                      "use_skill", "plan",
                      "search_knowledge", "search_history",
                      "ocr_image", "render_chart", "generate_image",
@@ -74,6 +75,7 @@ def test_read_only_flags():
         "campus_notices": True,      # 只读现拉官网通知标题,不提交任何东西
         "export_ics": False,         # 往工作区写 .ics 文件:与 write_file 同一层确认
         "scores": False,             # action=clear 删整份存档:非只读,与 mood 同理
+        "mcp": False,                # 改配置并重连外部服务:绝不是只读
         # 地图工具只改界面显示、不动文件:标只读,免得每次定位都弹确认框
         "map_find_place": True,
         "map_show_list": True,

@@ -397,12 +397,12 @@ class StdioTransport(_StreamedTransport):
     def _write(self, msg: dict) -> None:
         proc = self._proc
         if proc is None or proc.stdin is None or proc.poll() is not None:
-            raise McpError(f"服务器 {self.cfg.sid} 未在运行")
+            raise McpTransportError(f"服务器 {self.cfg.sid} 未在运行")
         try:
             proc.stdin.write(json.dumps(msg, ensure_ascii=False) + "\n")
             proc.stdin.flush()
         except OSError as e:
-            raise McpError(f"写入 {self.cfg.sid} 失败: {e}")
+            raise McpTransportError(f"写入 {self.cfg.sid} 失败: {e}")
 
     def close(self) -> None:
         proc = self._proc
@@ -647,6 +647,11 @@ class McpError(Exception):
     """MCP 协议层、进程层或网络层错误。"""
 
 
+class McpTransportError(McpError):
+    """**通道层**失败(进程死/管道断/写失败)—— 与"服务器明确报错"分开,
+    call_tool 据此决定要不要自动重连:通道死了重连一次,服务器拒绝不重连。"""
+
+
 class McpClient:
     """单个 MCP 服务器的客户端:握手 + 拉工具清单 + 调用(通道细节在 Transport 里)。"""
 
@@ -699,6 +704,21 @@ class McpClient:
         self._closed = True
         self.transport.close()
 
+    def restart(self) -> bool:
+        """断线重连:换一条**全新通道**并重新握手,本对象身份不变。
+
+        为什么必须原地重启:注册表里的工具 handler 在启动时就绑定了**这个**
+        McpClient 实例 —— 换新对象等于旧绑定全部悬空。重连后 tools/list 会
+        重新拉一遍(self.tools 刷新),但注册表里的工具清单仍是启动时那一份;
+        服务器换了工具集的话,调用会如实报错,不做静默对账。
+        """
+        with contextlib.suppress(Exception):
+            self.transport.close()
+        self._closed = False
+        self.tools, self.server_info, self.error = [], {}, ""
+        self.transport = make_transport(self.cfg, log=self._log)
+        return self.start()
+
     def stderr_tail(self) -> str:
         """最近输出(stdio 是 stderr,HTTP 是最近一次网络错误)。"""
         return self.transport.tail()
@@ -727,13 +747,45 @@ class McpClient:
         return self.tools
 
     def call_tool(self, name: str, arguments: dict) -> str:
-        """调用远端工具,返回可直接回填给模型的文本。"""
+        """调用远端工具,返回可直接回填给模型的文本。
+
+        **通道层**失败(McpTransportError:进程死/管道断)→ 自动重连**一次**再试,
+        两条结果都如实标注;服务器自己返回的协议错误(McpError)不重连 ——
+        那是"它活着但拒绝了这个调用",重连解决不了。
+        """
         try:
             result = self._request("tools/call",
                                    {"name": name, "arguments": arguments or {}},
                                    timeout=self.cfg.call_timeout)
         except McpError as e:
-            return f"错误: 调用 MCP 工具 {self.cfg.sid}/{name} 失败: {e}"
+            if not (isinstance(e, McpTransportError) or not self.alive):
+                return f"错误: 调用 MCP 工具 {self.cfg.sid}/{name} 失败: {e}"
+            self._warn(f"MCP 服务器 {self.cfg.sid} 通道异常,自动重连一次…")
+            if not self.restart():
+                return (f"错误: 调用 MCP 工具 {self.cfg.sid}/{name} 失败: {e}"
+                        f"(检测到连接断开,已自动重连但仍连不上: {self.error})")
+            try:
+                result = self._request("tools/call",
+                                       {"name": name, "arguments": arguments or {}},
+                                       timeout=self.cfg.call_timeout)
+            except Exception as e2:
+                return (f"错误: 调用 MCP 工具 {self.cfg.sid}/{name} 失败: {e2}"
+                        "(重连已成功,但调用仍失败 —— 可能服务器重启后状态变了)")
+            return format_call_result(result) + "\n(检测到连接断开,已自动重连后重试成功)"
+        except Exception as e:
+            self._warn(f"MCP 服务器 {self.cfg.sid} 通道异常"
+                       f"({type(e).__name__}),自动重连一次…")
+            if not self.restart():
+                return (f"错误: 调用 MCP 工具 {self.cfg.sid}/{name} 失败: {e}"
+                        f"(检测到连接断开,已自动重连但仍连不上: {self.error})")
+            try:
+                result = self._request("tools/call",
+                                       {"name": name, "arguments": arguments or {}},
+                                       timeout=self.cfg.call_timeout)
+            except Exception as e2:
+                return (f"错误: 调用 MCP 工具 {self.cfg.sid}/{name} 失败: {e2}"
+                        "(重连已成功,但调用仍失败 —— 可能服务器重启后状态变了)")
+            return format_call_result(result) + "\n(检测到连接断开,已自动重连后重试成功)"
         return format_call_result(result)
 
     # ------------------------------------------------------------- 日志
@@ -870,3 +922,83 @@ def connect_servers(servers: list[McpServerConfig], log=None) -> McpManager:
     mgr = McpManager(servers, log=log)
     mgr.connect_all()
     return mgr
+
+
+# ---------------------------------------------------------------- 管理面(v0.9.61)
+#
+# 「对话里自助加/删 MCP 服务器」的三块拼图,分别住在这三处:
+# - probe_server(这里):真连一次验证配置,连不上就不许落盘;
+# - 钩子 set_admin_hook(这里):GUI 桥(create_app)安装 —— 它才知道自己的
+#   config_path、_mcp 管理器和 _mcp_tools 列表在哪;CLI 没装钩子,admin 如实
+#   说"配置已写入,重启后生效";
+# - mcp 工具(catalog_web):模型的手,把上面两块拼起来。
+
+_ADMIN_HOOK = None            # (action, name, raw) -> str;由 create_app 安装
+
+
+def set_admin_hook(fn) -> None:
+    global _ADMIN_HOOK
+    _ADMIN_HOOK = fn
+
+
+def probe_server(raw: dict, log=None) -> dict:
+    """把一份**候选**服务器配置真连一次:握手 + 拉工具清单,立刻关掉。
+
+    这是 mcp 工具 add/enable 的准入闸:连不上的配置绝不静默写进 config.json
+    (写进去的表现是"每次启动失败一条 + 工具莫名缺失",而用户只会在几周后
+    偶然发现)。返回 {ok, error, n_tools, server};连接对象用完即弃,不留进程。
+    """
+    try:
+        cfg_list = parse_servers([raw])
+    except Exception as e:
+        return {"ok": False, "error": f"配置不合法: {type(e).__name__}: {e}",
+                "n_tools": 0, "server": ""}
+    if not cfg_list:
+        return {"ok": False, "error": "配置不合法(缺 command/url 等必要字段)",
+                "n_tools": 0, "server": ""}
+    client = McpClient(cfg_list[0], log=log)
+    ok = client.start()
+    out = {"ok": ok, "error": "" if ok else client.error,
+           "n_tools": len(client.tools) if ok else 0,
+           "server": str((client.server_info or {}).get("name") or "")}
+    client.close()
+    return out
+
+
+def admin(action: str, name: str = "", raw: dict | None = None) -> str:
+    """mcp 工具的落盘与重载,全部委托给环境钩子;没钩子就照实说。"""
+    if _ADMIN_HOOK is None:
+        return ("错误: 当前环境不支持在对话里管理 MCP 服务器(CLI 请直接编辑 "
+                "config.json 的 mcp_servers 数组,改完重启学长)。")
+    try:
+        return _ADMIN_HOOK(action, name, raw)
+    except Exception as e:
+        return f"错误: MCP 管理操作失败: {type(e).__name__}: {e}"
+
+
+def admin_tool(ctx, action: str = "list", name: str = "", raw=None) -> str:
+    """mcp 工具处理器:list 本地读配置(到处都能用);增删改委托 admin(钩子)。"""
+    action = (action or "list").strip().lower()
+    if action == "list":
+        servers = getattr(ctx.config, "mcp_servers", None) or []
+        servers = [s for s in servers if isinstance(s, dict)]
+        if not servers:
+            return ("还没有配置任何 MCP 服务器。用 action=add 加一个:"
+                    "本地进程给 name+command(+args),远程给 name+transport"
+                    "(http/sse)+url;鉴权 headers 里写「Authorization: "
+                    "${MY_TOKEN}」—— 密钥走环境变量,不落 config.json。")
+        lines = [f"- {s.get('id') or s.get('name')}"
+                 f"({'启用' if s.get('enabled', True) else '停用'},"
+                 f"{s.get('transport') or 'stdio'})" for s in servers]
+        return ("已配置的 MCP 服务器:\n" + "\n".join(lines)
+                + "\n(当前挂着的工具与增删改,见 GUI;CLI 改 config.json 后重启生效)")
+    if action == "add":
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                return "错误: raw 必须是 JSON 对象(服务器配置)。"
+        return admin("add", name=str((raw or {}).get("name")
+                                     or (raw or {}).get("id") or ""),
+                     raw=raw if isinstance(raw, dict) else None)
+    return admin(action, name=name)
