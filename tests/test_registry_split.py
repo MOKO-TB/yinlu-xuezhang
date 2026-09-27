@@ -38,6 +38,8 @@ ORDER = [
     "library_search", "library_guide",
     "memory",
     "reminder", "mood", "schedule", "desktop_notify", "get_weather", "campus_notices",
+    # v0.9.58:.ics 兜底导出,挨着它吃的三路数据(课表/待办/校历)所在的组
+    "export_ics",
     "map_find_place", "map_show_list", "map_highlight_building", "map_drop_pin",
     "map_clear",
 ]
@@ -77,8 +79,8 @@ def test_registry_returns_the_same_forty_one_tools_in_the_same_order():
 
 
 def test_order_pin_is_not_stale():
-    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 43 个不重名。"""
-    assert len(ORDER) == len(set(ORDER)) == 43
+    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 44 个不重名。"""
+    assert len(ORDER) == len(set(ORDER)) == 44
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

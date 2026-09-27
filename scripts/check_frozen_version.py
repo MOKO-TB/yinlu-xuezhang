@@ -229,6 +229,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     #      必须进包 —— 漏收 = import proactive 直接炸,整个看门狗起不来 ----
     "minicode.jobs": ("JobSpec", "due", "due_jobs", "load_state", "last_run",
                       "runs_of", "mark_run", "log_outcome", "STATE_FILE"),
+    # ---- v0.9.58:.ics 兜底导出(漏收 = 「把课表导进系统日历」在装好的包里
+    #      做不到,而对话里什么错都不报——工具压根没注册) ----
+    "minicode.ics_export": ("collect", "render", "export", "export_ics_tool",
+                            "ICS_FILE_NAME", "_week_runs"),
     # ---- v0.9.18:注入防御(provenance 是函数内 import,必须核它真进包了) ----
     "minicode.provenance": ("wrap", "strip_marks", "is_external",
                             "contains_external", "log_escalation"),
@@ -268,6 +272,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           # v0.9.35:走堂预警接进工具/提示词/面板(漏收 = 装好的包
                           # 里 walk 模块在但没人调,问"赶不赶得及"仍靠模型心算)
                           "risk 的 when", "upcoming_lines", "walk_index_ready",
+                          # v0.9.58:课起止钟点的公开口(.ics 导出/后续面板共用;
+                          # 漏收 = 导出的日历里课全降级成全天事件)
+                          "row_clock",
                           # v0.9.36:面板的处数与"本周最多那天"由后端一次算好(漏收 =
                           # 徽章回退成列表长度、周视图那句汇总干脆不出现)
                           "walk_total", "walk_week",

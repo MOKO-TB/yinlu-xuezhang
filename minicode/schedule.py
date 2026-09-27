@@ -610,6 +610,25 @@ def _parse_hm(value) -> tuple[int, int] | None:
     return (hh, mm) if 0 <= hh <= 23 and 0 <= mm <= 59 else None
 
 
+def row_clock(row: dict, times: dict | None = None) -> "tuple[str, str] | None":
+    """这门课**真实的起止钟点**(作息表口径);给不出就 None,调用方按节次/全天口径说。
+
+    v0.9.58 为 .ics 导出开的公开口(内部走 `_row_periods` 同一份判定,含
+    start_time 反查那层):节次要落在作息表的**连续段**内、且每节都有钟点才给 ——
+    "第 1-2 节 08:00~09:40"是课表加作息表算出来的事实;没填作息表、节次断档
+    (如 1-2,5)、超出连续段,都是我们不知道的东西,绝不替它编一个 45 分钟。
+    """
+    times = times if times is not None else load_period_times()
+    got = _row_periods(row, times)
+    if not got:
+        return None
+    lo, hi = min(got), max(got)
+    total = times.get("total") or 0
+    if not total or hi > total or len(got) != hi - lo + 1:
+        return None
+    return times["periods"][lo]["start"], times["periods"][hi]["end"]
+
+
 def _week_overlay(days: list[date]) -> dict:
     """把待办 DDL 与校历事件按天摊到这一周(面板一格一格显示用)。
 

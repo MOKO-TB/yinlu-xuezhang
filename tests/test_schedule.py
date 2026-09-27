@@ -841,3 +841,25 @@ def test_show_appends_alignment_but_format_day_stays_clean(monkeypatch):
     assert "对账" in out
     # 纯格式函数保持干净:简报/提示词不因对账多一个字节
     assert "对账" not in schedule.format_day(date(2026, 9, 7))
+
+
+# ---------------------------------------------------------------- 起止钟点(v0.9.58,.ics 导出的公开口)
+
+def test_row_clock_returns_real_period_bounds():
+    times = {"periods": {n: {"start": f"{7+n:02d}:00", "end": f"{7+n:02d}:45"}
+                         for n in range(1, 13)},
+             "total": 12, "source": "测试"}
+    assert schedule.row_clock({"periods": "1-2"}, times) == ("08:00", "09:45")
+    assert schedule.row_clock({"periods": "3"}, times) == ("10:00", "10:45")
+    # 没填节次但填了 start_time:反查那一节(_row_periods 同一份判定)
+    assert schedule.row_clock({"start_time": "08:00"}, times) == ("08:00", "08:45")
+
+
+def test_row_clock_refuses_what_it_cannot_know():
+    times = {"periods": {n: {"start": f"{7+n:02d}:00", "end": f"{7+n:02d}:45"}
+                         for n in range(1, 13)},
+             "total": 4, "source": "测试"}
+    empty = {"periods": {}, "total": 0, "source": ""}
+    assert schedule.row_clock({"periods": "1-2"}, empty) is None      # 没填作息表
+    assert schedule.row_clock({"periods": "5-6"}, times) is None      # 超出连续段
+    assert schedule.row_clock({"periods": "1,3"}, times) is None      # 断档:中间那节不知道

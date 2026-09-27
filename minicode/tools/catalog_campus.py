@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from minicode import gpa, mood, notices, reminders, schedule, tray, weather
+from minicode import gpa, ics_export, mood, notices, reminders, schedule, tray, weather
 from minicode import calendar as school_calendar
 from minicode.tools.base import Tool
 
@@ -298,5 +298,24 @@ def remind_tools() -> list[Tool]:
             handler=notices.campus_notices,
             trust="external",
             read_only=True,
+        ),
+        Tool(
+            name="export_ics",
+            description=(
+                "把课表、待办截止、校历导出成一个 .ics 日历文件(工作区「引路学长日历.ics」),"
+                "同学双击导进 Windows 日历或发到手机导入 —— 到点响的是系统,学长没在跑也提醒得到"
+                "(v0.9.42 方案 A5 的兜底半件)。三条诚实边界:没填作息表的课按**全天事件**导"
+                "(那天有课,但不编一个钟点,回话里点名哪几门、怎么补);校历里按往年推的投影日子"
+                "**不导**(写进系统日历就成了每年照着过的事实);没有日期的待办跳过并报数。"
+                "用户说「把课表导进手机日历」「导出个日历文件」时用。重复导出按 UID 更新不堆重。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string",
+                               "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
+                },
+            },
+            handler=ics_export.export_ics_tool,
         ),
     ]

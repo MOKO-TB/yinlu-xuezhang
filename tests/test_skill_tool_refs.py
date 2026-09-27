@@ -24,6 +24,8 @@ PIN = {
     "browser_open", "grep", "kb_suggest", "library_guide", "library_search",
     "py_script", "read_file", "search_knowledge", "use_skill", "web_crawl",
     "web_search", "write_file",
+    # v0.9.58:ics-calendar 技能开头指向内置 export_ics(定制场景才走手写模板)
+    "export_ics",
 }
 
 _SNAKE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
