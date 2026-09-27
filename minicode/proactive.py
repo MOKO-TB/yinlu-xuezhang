@@ -370,7 +370,8 @@ def calendar_alerts(today: date | None = None,
             if not e.get("projected")]
     return [{"name": str(e.get("name") or ""),
              "start": str(e.get("start") or ""),
-             "days_left": int(e.get("days_left") or 0)} for e in rows]
+             "days_left": int(e.get("days_left") or 0),
+             "kind": str(e.get("kind") or "")} for e in rows]
 
 
 # ---------------------------------------------------------------- 新版本检查
@@ -606,12 +607,21 @@ def _push_weather(bridge) -> bool:
 
 
 def _push_calendar(bridge) -> int:
-    """校历倒计时:7 天内的事件,每个事件每天最多催一条。"""
+    """校历倒计时:7 天内的事件,每个事件每天最多催一条。
+
+    考试类(kind=exam)多带一句**可复制的追问**(排复习计划)—— 这是 A5 考试
+    闭环的最后一格:**只说不做**,计划由用户把追问发回来、模型走 plan 工具排,
+    这里绝不自动生成(自动排计划 = 替用户决定怎么复习)。
+    """
     pushed = 0
     for alert in calendar_alerts():
+        extra = {}
+        if alert.get("kind") == "exam":
+            extra["ask"] = (f"帮我给{alert.get('name')}排一份复习计划,"
+                            "按剩余天数分配到每天")
         if _push_once(bridge, "calendar", f"{alert.get('name')}|{alert.get('start')}",
                       name=alert["name"], days_left=alert["days_left"],
-                      start=alert["start"]):
+                      start=alert["start"], **extra):
             pushed += 1
     return pushed
 

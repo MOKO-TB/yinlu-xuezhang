@@ -70,6 +70,7 @@ _build_*.log
 /schedule.json
 /schedule.prev.json
 scores.json
+skill-usage.jsonl
 /weather-cache.json
 /notice-watch.json
 

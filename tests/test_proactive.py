@@ -1041,3 +1041,28 @@ def test_a_weekly_job_runs_end_to_end_through_the_table(monkeypatch):
     assert proactive._run_due_jobs(bridge, now=SUNDAY_EVE) == ["mood_weekly_review"]
     row = _jobs.load_state()["mood_weekly_review"]
     assert row["runs"] == 1 and row["result"] == "已推"
+
+
+# ---------------- A5 尾巴:考试类校历推送带排复习计划追问(v0.9.63) ----------------
+
+def test_calendar_alerts_carry_kind(monkeypatch):
+    from minicode import calendar as cal
+    events = [{"name": "期末考试周", "start": "2026-09-25", "kind": "exam"},
+              {"name": "中秋节", "start": "2026-09-24", "kind": "holiday"}]
+    monkeypatch.setattr(cal, "load_events", lambda: (events, "test"))
+    alerts = proactive.calendar_alerts(today=date(2026, 9, 19))
+    kinds = {a["name"]: a["kind"] for a in alerts}
+    assert kinds == {"期末考试周": "exam", "中秋节": "holiday"}
+
+
+def test_push_calendar_exam_adds_plan_ask(monkeypatch):
+    """考试类推送带一句可复制的「排复习计划」追问 —— 只说不做,计划由用户发回追问才有。"""
+    monkeypatch.setattr(proactive, "calendar_alerts", lambda: [
+        {"name": "期末考试周", "start": "2026-09-25", "days_left": 5, "kind": "exam"},
+        {"name": "中秋节", "start": "2026-09-24", "days_left": 4, "kind": "holiday"}])
+    bridge, ui = _push_bridge()
+    pushed = proactive._push_calendar(bridge)
+    assert pushed == 2
+    by_name = {e.get("name"): e for e in ui.events}
+    assert "复习计划" in by_name["期末考试周"]["ask"]     # 考试类带追问
+    assert "ask" not in by_name["中秋节"]                   # 非考试类不带

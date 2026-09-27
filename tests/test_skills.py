@@ -59,10 +59,26 @@ def test_prompt_section():
 def test_use_skill_tool(ctx, tmp_path, monkeypatch):
     _make_skill(tmp_path, "git-commit", body="提交规范正文")
     monkeypatch.setattr(sk, "skill_dirs", lambda ws: [tmp_path / "skills"])
+    monkeypatch.setattr(sk, "usage_path", lambda: tmp_path / "skill-usage.jsonl")
     out = sk.use_skill(ctx, "git-commit")
     assert "提交规范正文" in out
     assert "未找到" in sk.use_skill(ctx, "nope")
     assert "git-commit" in sk.use_skill(ctx, "nope")   # 报错里提示可用技能
+    # 成功的调用记进使用账;失败的("nope")不算用过
+    summary = sk.usage_summary()
+    assert [r["skill"] for r in summary] == ["git-commit"]
+    assert summary[0]["uses"] == 1
+
+
+def test_log_skill_use_isolates_and_aggregates(tmp_path, monkeypatch):
+    monkeypatch.setattr(sk, "usage_path", lambda: tmp_path / "skill-usage.jsonl")
+    assert sk.log_skill_use("论文助手") is True
+    assert sk.log_skill_use("论文助手") is True          # 不去重:次数就是频次
+    assert sk.log_skill_use("") is False                 # 空名不记
+    summary = sk.usage_summary()
+    assert summary == [{"skill": "论文助手", "uses": 2,
+                        "last": summary[0]["last"]}]
+    assert summary[0]["last"]                            # 最近时刻有据可查
 
 
 def test_skill_dirs_includes_workspace(tmp_path):

@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
+import json
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -142,13 +144,71 @@ def _clip_body(body: str, limit: int = SKILL_BODY_LIMIT) -> str:
     return clipped
 
 
+# ---------------------------------------------------- 技能使用账(v0.9.63)
+#
+# 「22 个技能里哪 3 个真有人用」一直没有账 —— 这份 jsonl 就是那本账。
+# **每次成功调 use_skill 都记一条**(失败的不算:没读到的技能谈不上用过);
+# 不去重,次数就是频次本身。审计脚本 scripts/review_skill_usage.py 汇总它。
+
+USAGE_FILE = "skill-usage.jsonl"
+
+
+def usage_path() -> Path:
+    return app_path(USAGE_FILE)
+
+
+def log_skill_use(name: str) -> bool:
+    """记一次技能使用;写失败静默回 False(账是锦上添花,不能拖垮调用)。"""
+    text = str(name or "").strip()
+    if not text:
+        return False
+    try:
+        path = usage_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "skill": text[:60]}, ensure_ascii=False) + "\n")
+        return True
+    except OSError:
+        return False
+
+
+def usage_summary() -> "list[dict]":
+    """按技能聚合:用了几次、最近一次什么时候。没有记录回空表。"""
+    try:
+        raw = usage_path().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    agg: dict[str, dict] = {}
+    for line in raw:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        name = str(rec.get("skill") or "").strip()
+        ts = str(rec.get("ts") or "")
+        if not name:
+            continue
+        row = agg.setdefault(name, {"skill": name, "uses": 0, "last": ""})
+        row["uses"] += 1
+        if ts > row["last"]:
+            row["last"] = ts
+    return sorted(agg.values(), key=lambda r: -r["uses"])
+
+
 def use_skill(ctx, name: str) -> str:
-    """工具处理器:按名字返回技能全文(截断)。"""
+    """工具处理器:按名字返回技能全文(截断)。每次成功调用记一笔使用账。"""
     skills = load_skills(skill_dirs(ctx.workspace))
     skill = find_skill(skills, name)
     if skill is None:
         available = ", ".join(s.name for s in skills) or "(无)"
         return f"错误: 未找到技能 '{name}'。可用技能: {available}"
+    log_skill_use(skill.name)
     body = _clip_body(skill.body)
     tail = ("\n…(技能内容过长,已截断;若尾部有未完整的代码模板,不要凭空补全 —— "
             "按已有的部分说明缺什么即可)" if len(skill.body) > SKILL_BODY_LIMIT else "")

@@ -171,7 +171,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.40 D1/D2:压缩保头+尾、工具 schema 进估算(漏收 = 装好的包里这两条退化
     # 回"保尾丢头"和"只数消息"的旧尺子,而界面看不出来)
     "minicode.compaction": ("clip_history", "schema_tokens", "HISTORY_HEAD_CAP"),
-    "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill"),
+    "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill",
+                        # v0.9.63:技能使用账(漏收 = 装好的包里用了技能不记账,
+                        # 「哪些技能真有人用」永远没有答案)
+                        "log_skill_use", "usage_summary", "USAGE_FILE"),
     "minicode.web_profile": ("网页版不开放会话导出", "search_sessions",
                              # v0.9.23:教务导入需要本机浏览器窗口,网页版必须挡掉
                              "教务课表导入",
