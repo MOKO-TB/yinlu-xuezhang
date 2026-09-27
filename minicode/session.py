@@ -157,6 +157,10 @@ class Session:
 
     def _append(self, msg: dict) -> None:
         self._ensure_log()   # 只有真实消息才创建留档文件;标记类写入不创建
+        # v0.9.66:消息级时间戳。留档与内存同形;**发往模型端点前会被剥掉**
+        # (agent._messages_for_request),严格端点不认多余字段。恢复旧留档时
+        # 没有这个键 —— 所有消费方都必须把"没有 ts"当正常形状。
+        msg = {**msg, "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
         self.messages.append(msg)
         self._log_only(msg)
 
@@ -240,6 +244,15 @@ def _content_text(content) -> str:
     return ""
 
 
+def outbound(messages: list[dict]) -> list[dict]:
+    """发往模型端点的消息:剥掉 `ts` 这类**本地记账字段**。
+
+    留档里的键比协议多(时间戳是给监控栏/导出用的),而严格端点会对未知字段
+    报 400 —— 所以出口必须净。拷贝剥离,不动 session.messages 本体。
+    """
+    return [{k: v for k, v in m.items() if k != "ts"} for m in messages]
+
+
 def to_markdown(sess: "Session", title: str = "") -> str:
     """把会话导出成 Markdown:只留用户与助手的正文。
 
@@ -258,7 +271,11 @@ def to_markdown(sess: "Session", title: str = "") -> str:
         body = _content_text(msg.get("content")).strip()
         if not body:
             continue
-        lines += [("## 我" if role == "user" else "## 引路学长"), "", body, ""]
+        head = "## 我" if role == "user" else "## 引路学长"
+        ts = str(msg.get("ts") or "")[:16]
+        if ts:
+            head += f"({ts})"          # v0.9.66:旧留档没有 ts 就照旧不带时刻
+        lines += [head, "", body, ""]
     return "\n".join(lines).strip() + "\n"
 
 
@@ -270,6 +287,32 @@ def export_filename(sess: "Session", prefix: str = "引路学长会话") -> str:
         if m:
             stamp = f"{m.group(1)}-{m.group(2)}"
     return f"{prefix}-{stamp}.md"
+
+
+def prune_sessions(log_dir: Path, keep_last: int,
+                   protect: "set[Path] | None" = None) -> "list[str]":
+    """按保留策略删旧会话留档;keep_last<=0 = 不清理(默认),返回删掉的文件名。
+
+    口径:**只认 keep_last,不玩年龄/体积的花样** —— 一个数讲得清,用户在
+    config.json 里写 30 就是"留最近 30 个"。当前会话的留档(protect)永不删,
+    哪怕它不在最新 N 个里(理论上是最新,但时钟被手改时宁可不删)。
+    """
+    keep_last = max(0, int(keep_last or 0))
+    if keep_last <= 0 or not log_dir.exists():
+        return []
+    files = sorted(log_dir.glob("session_*.jsonl"),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    protected = {Path(x).resolve() for x in (protect or ()) if x}
+    removed: list[str] = []
+    for path in files[keep_last:]:
+        try:
+            if path.resolve() in protected:
+                continue
+            path.unlink()
+        except OSError:
+            continue                  # 删不掉(正被占用)留着就好,不碍事
+        removed.append(path.name)
+    return removed
 
 
 def search_logs(log_dir: Path, query: str, limit: int = 50,

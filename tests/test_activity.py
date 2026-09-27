@@ -443,7 +443,7 @@ def test_failed_running_and_interrupted_are_three_different_counts(tmp_path):
 
 
 def test_live_times_pair_onto_rows_and_unmatched_rows_stay_silent(tmp_path):
-    """时刻只可能是实时表给的:配得上的行有时间和时长,配不上的**留空**。"""
+    """v0.9.66 口径:实时表优先;没配上的行用消息 ts 还原;无 ts 的旧留档留空。"""
     s = _session(tmp_path, [[
         {"id": "a", "name": "read_file", "args": {"path": "a.py"}, "result": "x"},
         {"id": "b", "name": "bash", "args": {"command": "pytest -q"}, "result": "y"},
@@ -452,10 +452,32 @@ def test_live_times_pair_onto_rows_and_unmatched_rows_stay_silent(tmp_path):
     act = activity.session_activity(s.messages, workspace=tmp_path, live=live)
     rows = _rows(act)
     assert rows[0]["time"] and rows[0]["dur_text"] == "7s"
-    assert rows[1]["time"] == "" and rows[1]["dur_text"] == ""
-    # 完全没实时表(终端/网页版/上一版程序):整条时间线一个时间都不许有
+    # 实时表只记了第一行:第二行由消息 ts 还原(不再是"宁空不编"的老规则)
+    assert rows[1]["time"], "有 ts 的消息重启后也还原得出时刻"
+    # 完全没实时表:新留档每行都有 ts 还原出的时刻
     plain = _rows(activity.session_activity(s.messages, workspace=tmp_path))
-    assert all(r["time"] == "" for r in plain)
+    assert all(r["time"] for r in plain)
+    # **旧留档没有 ts**:照旧一个时间都不给 —— 宁可空着,不猜
+    old_msgs = [{k: v for k, v in m.items() if k != "ts"} for m in s.messages]
+    old = _rows(activity.session_activity(old_msgs, workspace=tmp_path))
+    assert all(r["time"] == "" for r in old)
+
+
+def test_ts_restored_duration_is_the_real_call_to_result_gap(tmp_path):
+    """ts 还原的 dur = 发起调用 → 结果落档 的真实间隔(重启后也能看到耗时)。"""
+    import time as _time
+    s = _session(tmp_path, [[
+        {"id": "a", "name": "bash", "args": {"command": "pytest -q"}, "result": "x"},
+    ]])
+    msgs = s.messages
+    call_ts = next(m["ts"] for m in msgs if m.get("role") == "assistant")
+    # 人为把结果的时间戳推后 12 秒:还原出的 dur 必须是 12s,不是"看起来像"的别的数
+    for m in msgs:
+        if m.get("role") == "tool":
+            t = _time.mktime(_time.strptime(call_ts, "%Y-%m-%d %H:%M:%S")) + 12
+            m["ts"] = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(t))
+    row = _rows(activity.session_activity(msgs, workspace=tmp_path))[0]
+    assert row["dur_text"] == "12s"
 
 
 def test_same_call_twice_pairs_in_order_not_both_to_the_first(tmp_path):

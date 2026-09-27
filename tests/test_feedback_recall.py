@@ -356,8 +356,16 @@ def test_switch_off_sends_the_archived_messages_themselves(tmp_path, config, app
     agent, llm = _agent(tmp_path, config, [
         _search_turn("国家励志奖学金要怎么申请", "c1"), AssistantTurn(text="收工")])
     agent.run_turn("问一句")
-    assert llm.seen[1] is agent.session.messages, \
-        "关掉开关后应该是同一份对象,连复制都不做"
+    # v0.9.66 语义微调:出口必经 outbound 剥离拷贝(ts 是本地记账字段,严格端点
+    # 会 400),所以"同一份对象零拷贝"不再可能 —— 真正要守的是**留档本体一个字
+    # 没动**,且出口内容 = 留档减 ts(关掉开关时没有任何先验被并进去)。
+    from minicode.session import outbound
+    sent = llm.seen[1]
+    assert sent is not agent.session.messages
+    assert all("ts" not in m for m in sent), "出口净场:没有本地记账字段"
+    # 请求发出时"收工"还没落档,所以按前缀比:出口 = 留档同时刻的前缀减 ts
+    assert sent == outbound(agent.session.messages)[:len(sent)]
+    assert all("ts" in m for m in agent.session.messages if m.get("role") != "system")
 
 
 def test_a_broken_feedback_file_cannot_break_the_turn(tmp_path, config, app_dir, only_tmp_kb):

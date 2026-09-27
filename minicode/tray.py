@@ -76,8 +76,25 @@ def log(msg: str) -> None:
     """托盘/关窗这条链路只在用户机器上才复现,留一行现场记录比猜有用。"""
     try:
         with _LOCK:
-            with open(_ensure_parent(app_path(LOG_FILE)), "a", encoding="utf-8") as f:
+            path = _ensure_parent(app_path(LOG_FILE))
+            with open(path, "a", encoding="utf-8") as f:
                 f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+            _trim_log(path)
+    except Exception:
+        pass
+
+
+LOG_CAP_LINES = 500            # v0.9.66:与 watchdog.log 同款滚动,别让诊断日志无限长
+
+
+def _trim_log(path) -> None:
+    """超上限只留最近的 LOG_CAP_LINES 行;写失败照旧静默(日志不能拖垮托盘)。"""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if len(lines) > LOG_CAP_LINES:
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text("\n".join(lines[-LOG_CAP_LINES:]) + "\n", encoding="utf-8")
+            tmp.replace(path)
     except Exception:
         pass
 

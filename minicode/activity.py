@@ -165,16 +165,19 @@ def _call_index(messages) -> tuple[dict, dict, list]:
                 continue
             if not cid:
                 cid = f"{name}#{len(order)}"      # 没 id 的兜底:照样算一次调用
-            calls[cid] = {"name": name, "args": _args(call)}
+            calls[cid] = {"name": name, "args": _args(call),
+                          "ts": str(m.get("ts") or "")}
             order.append(cid)
     results: dict[str, str] = {}
+    result_ts: dict[str, str] = {}
     for m in messages or []:
         if isinstance(m, dict) and m.get("role") == "tool":
             cid = str(m.get("tool_call_id") or "")
             body = m.get("content")
             if cid and isinstance(body, str):
                 results[cid] = body
-    return calls, results, order
+                result_ts[cid] = str(m.get("ts") or "")
+    return calls, results, order, result_ts
 
 
 def _extract_subagents(calls, results) -> list[dict]:
@@ -457,6 +460,42 @@ def _dur(entry: dict):
     return max(0, int(round(float(end) - float(start))))
 
 
+def _ts_epoch(ts: str) -> "float | None":
+    """消息时间戳("YYYY-MM-DD HH:MM:SS")→ epoch;解析不了回 None。"""
+    import time as _time
+    try:
+        return _time.mktime(_time.strptime(str(ts or "")[:19],
+                                           "%Y-%m-%d %H:%M:%S"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _restore_from_ts(rows: list[dict], calls: dict, result_ts: dict) -> int:
+    """实时表没配到的行,用 v0.9.66 起的消息时间戳还原时刻与耗时。
+
+    诚实边界:①只填 `start/end/dur` 为**空**的行 —— 实时表的时刻永远优先
+    (它在调用那一刻记的,精度到秒;消息 ts 也是那一刻,但两者并存时没必要
+    重新计算);②**老留档没有 ts,照旧不给时间** —— 宁可空着,不猜;
+    ③dur 是"发起调用 → 结果落档"的真实间隔,不含模型思考的间隙,口径与
+    实时表一致(实时表也是 start=tool_start/end=tool_done)。
+    """
+    restored = 0
+    for row in rows:
+        if row.get("start") is not None:
+            continue
+        call = calls.get(row.get("cid")) or {}
+        start = _ts_epoch(call.get("ts"))
+        if start is None:
+            continue
+        row["start"] = start
+        end = _ts_epoch(result_ts.get(row.get("cid")))
+        if end is not None and end >= start:
+            row["end"] = end
+            row["dur"] = _dur({"start": start, "end": end})   # 与实时表同一格式
+        restored += 1
+    return restored
+
+
 def _clock(epoch) -> str:
     if epoch is None:
         return ""
@@ -491,10 +530,11 @@ def timeline(messages, workspace=None, live=None, busy=True) -> dict:
 
     诚实口径三条:①轮次上的次数永远是**真总数**,`MAX/TURN_LIMIT` 截断只少列行、
     并写明"另有 N 次没列出";②时刻只来自 GUI 实时表,没记到的行不给时间
-    (并行子代理的内部工具、上一版程序跑的都算没记到);③在跑的那一步单独标,
+    (并行子代理的内部工具、上一版程序跑的都算没记到;v0.9.66 起重启后可用
+消息时间戳还原,**再老的留档没有 ts 仍旧不给时间**);③在跑的那一步单独标,
     不和"已经失败"混在一个数里。
     """
-    calls, results, _order = _call_index(messages)
+    calls, results, _order, result_ts = _call_index(messages)
     rows: list[dict] = []
     for turn in _turn_split(messages):
         for cid in turn["cids"]:
@@ -517,6 +557,7 @@ def timeline(messages, workspace=None, live=None, busy=True) -> dict:
                          "start": None, "end": None, "dur": None,
                          "result": result if isinstance(result, str) else ""})
     _pair_times(rows, live)
+    _restore_from_ts(rows, calls, result_ts)
     by_turn: dict[int, list[dict]] = {}
     for row in rows:
         by_turn.setdefault(row["turn"], []).append(row)
@@ -589,7 +630,7 @@ def session_activity(messages, workspace=None, live=None, now=None, busy=True) -
     已中断:用户按了停止之后,`tool_done` 不会再来到,消息里那条调用就永远没有
     回话 —— 这时还写"写入中"就是谎话。
     """
-    calls, results, order = _call_index(messages)
+    calls, results, order, result_ts = _call_index(messages)
     groups = {
         "subagents": _extract_subagents(calls, results),
         "files": _extract_files(calls, results, workspace),

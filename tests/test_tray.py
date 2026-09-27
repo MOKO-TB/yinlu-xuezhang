@@ -1245,3 +1245,16 @@ def test_start_in_tray_is_honest_when_tray_missing(tray_icon, monkeypatch):
     assert tray.start_in_tray() is False
     monkeypatch.setattr(tray, "_CONTROLLER", None)
     assert tray.start_in_tray() is False
+
+
+
+def test_tray_log_rolls_at_cap(tmp_path, monkeypatch):
+    from minicode import tray, paths
+    monkeypatch.setattr(paths, "APP_DIR", tmp_path / "app")
+    monkeypatch.setattr(tray, "LOG_CAP_LINES", 10)
+    for i in range(15):
+        tray.log(f"line {i}")
+    log = tmp_path / "app" / "tray.log"
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 10
+    assert "line 14" in lines[-1] and "line 0" not in "".join(lines)

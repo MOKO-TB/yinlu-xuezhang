@@ -17,7 +17,7 @@ from minicode.compaction import compact, estimate_tokens, schema_tokens
 from minicode.llm import LLMClient, ToolCall
 from minicode.model_catalog import context_window_for
 from minicode.permission import ASK, REJECT, PermissionGate
-from minicode.session import Session, repair_tool_pairs
+from minicode.session import Session, outbound as session_outbound, repair_tool_pairs
 from minicode.tools.base import (
     PathBlocked, PathOutsideWorkspace, Tool, ToolContext, resolve_path,
 )
@@ -203,6 +203,9 @@ class Agent:
         # 保头+尾)与上面那个异常补记都可能从中间切断一对 call/result。非法序列被端点
         # 拒的是整次请求,症状会出现在"下一轮",回溯不到这一轮 —— 所以这道闸要贴着出口。
         msgs, _fixed = repair_tool_pairs(msgs)
+        # v0.9.66:剥掉本地记账字段(ts) —— 留档里的键比协议多,严格端点会对
+        # 未知字段报 400。拷贝剥离,不动 session.messages 本体。
+        msgs = session_outbound(msgs)
         prior = self._pending_prior
         if not prior:
             return msgs

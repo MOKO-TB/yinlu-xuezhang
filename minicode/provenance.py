@@ -75,6 +75,9 @@ def is_wrapped(text: str) -> bool:
     return isinstance(text, str) and HEAD_PREFIX in text
 
 
+INJECTION_LOG_CAP_LINES = 500   # v0.9.66:留排查现场,但别无限长
+
+
 def log_escalation(gate_name: str, tool_name: str, args: dict, note: str,
                    choice: str) -> None:
     """把"升级门/凭据门过问过的敏感动作"记一行本地日志(注入防御 M6)。
@@ -104,8 +107,16 @@ def log_escalation(gate_name: str, tool_name: str, args: dict, note: str,
             "why": note[:300],
             "user": choice,
         }
-        with app_path("injection-events.log").open("a", encoding="utf-8") as fh:
+        path = app_path("injection-events.log")
+        with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        # v0.9.66:与 watchdog/tray 同款滚动 —— 排查现场要留,但别无限长
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if len(lines) > INJECTION_LOG_CAP_LINES:
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text("\n".join(lines[-INJECTION_LOG_CAP_LINES:]) + "\n",
+                           encoding="utf-8")
+            tmp.replace(path)
     except Exception:
         pass
 

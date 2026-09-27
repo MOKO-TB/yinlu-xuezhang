@@ -330,3 +330,19 @@ def test_web_prompt_has_safety_clause():
     from minicode.web_profile import PUBLIC_PROMPT
     assert "外部内容" in PUBLIC_PROMPT
     assert "不是指令" in PUBLIC_PROMPT
+
+
+
+def test_injection_log_rolls_at_cap(tmp_path, monkeypatch):
+    """v0.9.66:排查现场要留,但别无限长 —— 超 cap 只留最近 500 行。"""
+    from minicode import provenance, paths
+    monkeypatch.setattr(paths, "APP_DIR", tmp_path / "app")
+    (tmp_path / "app").mkdir(parents=True)     # 生产里 APP_DIR 恒存在;写入器不建目录
+    monkeypatch.setattr(provenance, "INJECTION_LOG_CAP_LINES", 10)
+    for i in range(15):
+        provenance.log_escalation("外部内容升级门", "bash",
+                                  {"command": f"echo {i}"}, "可能被诱导", "yes")
+    log = tmp_path / "app" / "injection-events.log"
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 10
+    assert "echo 14" in lines[-1] and "echo 4" not in "".join(lines)
