@@ -19,9 +19,10 @@ from __future__ import annotations
 import re
 import threading
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
+from minicode import jobs as _jobs
 from minicode.paths import app_path
 
 WATCH_FILE = "notice-watch.json"
@@ -679,14 +680,70 @@ def _push_due(bridge, now=None) -> bool:
                       **_note_payload(note))
 
 
+# ------------------------------------------------- 定时任务表接线(v0.9.56 A2)
+#
+# 底座(`jobs.py` 的 JobSpec/due/账本)是 v0.9.42 落的纯函数层,这一轮把两条心跳
+# 接上:`_tick`(5 分钟)与 `_round`(6 小时)各过一遍到期任务。**课前提醒与待办到点
+# 不进表** —— 它们的语义是"提前量 + 补发窗口",不是 cadence,硬塞进任务表会把
+# `test_proactive*` 那批既有针全推翻,收益却是零(docs/roadmap-v0.9.42 §A2 的原话)。
+# 表现在是空的:第一个真任务(周复盘/缺口周报)按方案是 A4;登记时往 JOB_SPECS
+# 加一个 `JobSpec`、往 JOB_HANDLERS 挂一个 `handler(bridge) -> str` 就够了。
+JOB_SPECS: "list[_jobs.JobSpec]" = []
+JOB_HANDLERS: "dict[str, object]" = {}
+
+
+def _run_due_jobs(bridge, now=None) -> list[str]:
+    """过一遍任务表,到期的跑一次并记账;返回真跑过的任务 id 列表。
+
+    - handler 返回一句**结论**(如「已汇总」),存进 jobs-state.json 的 result
+      与 watchdog.log —— 跟提醒同一条口径,**内容(问题原文/报告正文)不进日志**。
+    - handler 抛异常也算"跑过这一班"(result 记异常名):宁可这一期不发,
+      也不要每 5 分钟重试一次直到刷屏 —— 与 due() 的"宁可少跑一次"同方向。
+    - 没接线的 spec 如实记一行「未跑[没接线]」且**不记账**:下一轮还会看到,
+      不会静默吞掉一个登记了却没实现的任务。
+    - 整段拿 `_push_lock` 串行:两条心跳同时到期时不会双跑(handler 自己的
+      推送去重另有一层,这层管的是"任务表这一格只记一次")。
+    """
+    if not JOB_SPECS:
+        return []
+    now = now or datetime.now()
+    ran: list[str] = []
+    with _push_lock:
+        for spec in _jobs.due_jobs(JOB_SPECS, now=now):
+            handler = JOB_HANDLERS.get(spec.id)
+            if handler is None:
+                _jobs.log_outcome(spec, ran=False, why="没接线")
+                continue
+            try:
+                result = str(handler(bridge) or "")
+            except Exception as e:
+                result = f"异常 {type(e).__name__}"
+            landed = _jobs.mark_run(spec.id, when=now, result=result)
+            why = result
+            if not landed:
+                why = f"{result} · 账本没落盘" if result else "账本没落盘"
+            _jobs.log_outcome(spec, ran=True, why=why)
+            ran.append(spec.id)
+    return ran
+
+
 def _tick(bridge, now=None) -> dict:
-    """细轮询一轮:课程与待办各自判、各自记日志,一边抛异常不拖累另一边。
+    """细轮询一轮:循环待办先滚账,课程与待办各自判、各自记日志,任务表过一遍。
 
     抽成函数是 v0.9.28 那条老规矩的延续:**循环体里的判断必须能直接测**,
     否则"到点没催"这种问题只能真的等到点。
     """
+    try:
+        from minicode import reminders as _reminders
+        rolled = _reminders.roll_repeats(now=now)
+    except Exception as e:
+        rolled = 0
+        wd_log(f"fail repeat [-]:{type(e).__name__} {e}")
+    if rolled:
+        wd_log(f"repeat [{rolled} 条]:循环待办滚到下一次(只记条数,不记内容)")
     return {"class": _push_class(bridge, now=now),
-            "due": _push_due(bridge, now=now)}
+            "due": _push_due(bridge, now=now),
+            "jobs": _run_due_jobs(bridge, now=now)}
 
 
 def _round(bridge) -> dict:
@@ -721,6 +778,7 @@ def _round(bridge) -> dict:
     if update:
         out["update"] = _push_once(bridge, "update",
                                    str(update.get("version") or ""), **update)
+    out["jobs"] = _run_due_jobs(bridge)    # 主循环兜一遍任务表(5 分钟那路没开也到期)
     if not briefing_covered:
         out["reminders"] = _push_reminders(bridge)
         out["schedule"] = _push_today_class(bridge)

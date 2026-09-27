@@ -76,24 +76,31 @@ def remind_tools() -> list[Tool]:
                 "用户说「提醒我 X 月 X 日交材料」「别忘了周五要报名」「我有哪些事没做完」时用:"
                 "action=add 记一条(title 必填,due 给 2026-10-08 / 10-08 这类能确定的日期,"
                 "说不准就不填——绝不猜日期);"
+                "循环的事(「每周三交周记」「每3天背单词」)再给 repeat=「每周」或「每N天」,"
+                "并尽量配上一个能确定的日期作锚点;完成后自动排下一次,停掉用 delete;"
                 "action=list 看清单;action=finish/delete 带 item_id。"
                 "催的精度取决于你手上有确切信息到哪一层:只有日期 → 临期(3 天内)按天催;"
                 "日期 + 钟点(at)都确凿 → 到点前 20 分钟催一次,错过了开机还能补一条;"
-                "钟点说不准(用户只说「3点」没讲上午下午)就**别填 at**,按天催比猜错时间好。"
+                "钟点说不准(用户只说「3点」没讲上午下午)就**别填 at**,按天催比猜错时间好;"
+                "repeat 认不出或没有锚点日期时,会按一次性提醒记下并说明,不会猜一个规则。"
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["add", "list", "finish", "delete"],
-                               "description": "add=记提醒;list=看清单;finish=标记完成;delete=删除"},
+                               "description": "add=记提醒;list=看清单;finish=标记完成"
+                                              "(循环待办是完成这一次、自动排下一次);delete=删除"},
                     "title": {"type": "string", "description": "add 用:要记的事(如:交奖学金材料)"},
                     "due": {"type": "string",
                             "description": "add 用:截止日期(2026-10-08 / 2026/10/8 / 10-08;"
-                                           "说不准就留空,不要猜)"},
+                                           "说不准就留空,不要猜;循环提醒要尽量给确凿日期作锚点)"},
                     "at": {"type": "string",
                            "description": "add 用:截止钟点(17:00 / 下午5点 / 中午12点半)。"
                                           "只在用户明确说过时间时才填;光「3点」这类歧义写法"
                                           "填了也不会生效,不如留空按天催"},
+                    "repeat": {"type": "string",
+                               "description": "add 用:循环规则,只认「每周」和「每N天」(如「每3天」);"
+                                              "「每月」这类认不准的不要猜,留空按一次性提醒记"},
                     "note": {"type": "string", "description": "add 用:补充说明(可选)"},
                     "item_id": {"type": "string",
                                 "description": "finish/delete 用:提醒的 id(如 r3,清单里能看到)"},

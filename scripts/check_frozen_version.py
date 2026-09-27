@@ -214,7 +214,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # v0.9.29:待办带钟点 → 到点前 20 分钟催(漏收 = 记进去了
                            # 但那条细轮询压根不看它,表现是"到点没反应")
                            "parse_clock", "parse_when", "upcoming_due",
-                           "late_due", "DUE_LEAD_MINUTES", "LATE_WINDOW_MINUTES"),
+                           "late_due", "DUE_LEAD_MINUTES", "LATE_WINDOW_MINUTES",
+                           # v0.9.56:循环待办(漏收 = 「每周/每N天」的规则在装好的包里
+                           # 静默失明:到期不滚、finish 不推进,清单一整天停在过期的那班)
+                           "parse_repeat", "repeat_days", "next_occurrence",
+                           "roll_repeats", "REPEAT_WEEKLY"),
+    # ---- v0.9.42:定时任务底座(纯函数 + 账本);v0.9.56 A2 起被 proactive 引用,
+    #      必须进包 —— 漏收 = import proactive 直接炸,整个看门狗起不来 ----
+    "minicode.jobs": ("JobSpec", "due", "due_jobs", "load_state", "last_run",
+                      "runs_of", "mark_run", "log_outcome", "STATE_FILE"),
     # ---- v0.9.18:注入防御(provenance 是函数内 import,必须核它真进包了) ----
     "minicode.provenance": ("wrap", "strip_marks", "is_external",
                             "contains_external", "log_escalation"),
@@ -330,6 +338,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "_push_reminders", "_push_today_class", "_note_payload",
                            # v0.9.29:课前那条细轮询泛化成"到点提醒器"(课前 + 待办)
                            "_push_class", "_push_due", "_tick",
+                           # v0.9.56:定时任务表接线(漏收 = A4 的周期任务在装好的
+                           # 包里永远没人跑,而界面一切正常)
+                           "JOB_SPECS", "JOB_HANDLERS", "_run_due_jobs",
                            "WATCHDOG_LOG", "watchdog_log_path",
                            "wd_log", "wd_log_tail"),
     # ---- v0.9.23:教务课表导入(整套新模块,漏收 = 点「导入课表」直接报错) ----

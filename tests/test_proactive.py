@@ -1,6 +1,6 @@
 """主动推荐(proactive)测试:标题清洗 / 列表页解析 / 快照去重 / 校历提醒 / 开关。"""
 import json
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -754,7 +754,7 @@ def test_tick_pushes_class_and_todo_independently(monkeypatch):
     """两路各推各的:一节课和一条待办同时在 20 分钟内,该听到两条。"""
     _stub_tick(monkeypatch)
     bridge, ui = _push_bridge()
-    assert proactive._tick(bridge) == {"class": True, "due": True}
+    assert proactive._tick(bridge) == {"class": True, "due": True, "jobs": []}
     assert [e["kind"] for e in ui.events] == ["class", "reminders"]
 
 
@@ -765,7 +765,7 @@ def test_tick_survives_one_broken_source(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("课表坏了")))
     monkeypatch.setattr(reminders, "upcoming_due", lambda *a, **k: DUE_SOON_NOTE)
     bridge, ui = _push_bridge()
-    assert proactive._tick(bridge) == {"class": False, "due": True}
+    assert proactive._tick(bridge) == {"class": False, "due": True, "jobs": []}
     assert [e["kind"] for e in ui.events] == ["reminders"]
     assert any("fail class" in r for r in proactive.wd_log_tail(10))
 
@@ -842,3 +842,106 @@ def test_weather_kind_in_notify_kinds():
     from minicode import tray
     assert "weather" in tray.NOTIFY_KINDS
     assert tray.KIND_LABELS.get("weather") == "天气提醒"
+
+
+# ============ 定时任务表接线(v0.9.56 A2)
+#
+# 底座(v0.9.42 的 jobs.py)只有纯函数和账本,这里钉的是接线本身:两条心跳各过
+# 一遍任务表、跑了记账、没接线的如实说、异常也算"跑过这一班"。表在 A4 之前是
+# 空的 —— 所以先钉"空表零开销",再用假 spec 把整条路走到。
+
+def test_run_due_jobs_is_a_no_op_with_an_empty_table():
+    """现状(还没有登记任何任务)连账本文件都不许碰。"""
+    from minicode import jobs as _jobs
+    bridge, _ui = _push_bridge()
+    assert proactive._run_due_jobs(bridge, now=datetime(2026, 9, 28, 9, 0)) == []
+    assert not _jobs.state_path().exists()
+
+
+def _register_job(monkeypatch, spec, handler=None):
+    monkeypatch.setattr(proactive, "JOB_SPECS", [spec])
+    monkeypatch.setattr(proactive, "JOB_HANDLERS",
+                        {spec.id: handler} if handler else {})
+
+
+def test_a_due_job_runs_its_handler_and_books_the_ledger(monkeypatch):
+    from minicode import jobs as _jobs
+    seen = []
+    _register_job(monkeypatch, _jobs.JobSpec("digest", cadence="daily", hour=8),
+                  handler=lambda b: (seen.append(b), "已汇总")[1])
+    bridge, _ui = _push_bridge()
+    now = datetime(2026, 9, 28, 9, 0)
+    assert proactive._run_due_jobs(bridge, now=now) == ["digest"]
+    assert seen == [bridge]
+    assert _jobs.last_run("digest") == now
+    row = _jobs.load_state()["digest"]
+    assert row["runs"] == 1 and row["result"] == "已汇总"
+    assert proactive._run_due_jobs(bridge, now=now) == []     # 同一天不再到期
+
+
+def test_a_job_before_its_hour_waits(monkeypatch):
+    from minicode import jobs as _jobs
+    _register_job(monkeypatch, _jobs.JobSpec("digest", cadence="daily", hour=8),
+                  handler=lambda b: "已汇总")
+    bridge, _ui = _push_bridge()
+    assert proactive._run_due_jobs(bridge, now=datetime(2026, 9, 28, 7, 59)) == []
+    assert _jobs.last_run("digest") is None
+
+
+def test_a_spec_without_a_handler_is_reported_not_swallowed(monkeypatch):
+    """登记了却没接线的任务要留一行现场,且不记账 —— 不会假装跑过。"""
+    from minicode import jobs as _jobs
+    _register_job(monkeypatch, _jobs.JobSpec("digest", cadence="daily", hour=8))
+    bridge, _ui = _push_bridge()
+    assert proactive._run_due_jobs(bridge, now=datetime(2026, 9, 28, 9, 0)) == []
+    assert any("未跑[没接线]" in r for r in proactive.wd_log_tail(10))
+    assert _jobs.last_run("digest") is None
+
+
+def test_a_broken_handler_still_counts_as_run(monkeypatch):
+    """宁可这一期不发,也不要每 5 分钟重试一次:异常也记账,result 留异常名。"""
+    from minicode import jobs as _jobs
+
+    def boom(b):
+        raise RuntimeError("源炸了")
+
+    _register_job(monkeypatch, _jobs.JobSpec("digest", cadence="daily", hour=8),
+                  handler=boom)
+    bridge, _ui = _push_bridge()
+    now = datetime(2026, 9, 28, 9, 0)
+    assert proactive._run_due_jobs(bridge, now=now) == ["digest"]
+    row = _jobs.load_state()["digest"]
+    assert row["runs"] == 1 and "RuntimeError" in row["result"]
+    assert _jobs.last_run("digest") == now
+
+
+def test_a_failed_ledger_write_is_reported_in_the_log(monkeypatch, tmp_path):
+    """handler 成了但账本写不进去,日志要如实说 —— 不能看起来一切正常。"""
+    from minicode import jobs as _jobs
+    _register_job(monkeypatch, _jobs.JobSpec("digest", cadence="daily", hour=8),
+                  handler=lambda b: "已汇总")
+    blocker = tmp_path / "blocker"
+    blocker.write_text("我是个文件,不是目录", encoding="utf-8")
+    monkeypatch.setattr(_jobs, "state_path",
+                        lambda: blocker / "sub" / _jobs.STATE_FILE)
+    bridge, _ui = _push_bridge()
+    assert proactive._run_due_jobs(bridge, now=datetime(2026, 9, 28, 9, 0)) == ["digest"]
+    assert any("账本没落盘" in r for r in proactive.wd_log_tail(10))
+
+
+def test_tick_sweeps_repeats_and_the_job_table(monkeypatch):
+    """_tick 一轮的三件事:循环待办滚账、课前/待办照旧、任务表过一遍。"""
+    from minicode import reminders
+    _stub_tick(monkeypatch, cls=None, due=None)
+    reminders.add("交周记", due="2026-10-07", at="17:00", repeat="每周")
+    bridge, _ui = _push_bridge()
+    out = proactive._tick(bridge, now=datetime(2026, 10, 9, 10, 0))
+    assert out == {"class": False, "due": False, "jobs": []}
+    item = reminders.list_items()[0]
+    assert item["due"] == "2026-10-14" and item["projected"] is True
+
+
+def test_round_also_sweeps_the_job_table(monkeypatch):
+    _stub_round_sources(monkeypatch)
+    bridge, _ui = _push_bridge()
+    assert proactive._round(bridge)["jobs"] == []

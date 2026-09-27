@@ -178,3 +178,132 @@ def test_state_survives_reload(tmp_path):
     assert items[0]["title"] == "跨重启的提醒"
     data = json.loads(reminders.state_path().read_text(encoding="utf-8"))
     assert data["next_id"] == 2
+
+
+# ---------------------------------------------------------------- 循环待办(v0.9.56 A3)
+
+def test_parse_repeat_accepts_only_confident_rules():
+    assert reminders.parse_repeat("每周") == "weekly"
+    assert reminders.parse_repeat("weekly") == "weekly"
+    assert reminders.parse_repeat("每天") == "every:1"
+    assert reminders.parse_repeat("每3天") == "every:3"
+    assert reminders.parse_repeat("3天一次") == "every:3"
+    assert reminders.parse_repeat("14") == "every:14"
+    # 认不准的一律回空:月不是固定天数,「每两周」要说成「每14天」
+    assert reminders.parse_repeat("每月") == ""
+    assert reminders.parse_repeat("每两周") == ""
+    assert reminders.parse_repeat("0") == ""
+    assert reminders.parse_repeat("400") == ""
+    assert reminders.parse_repeat("") == ""
+
+
+def test_add_with_repeat_stores_rule_and_anchor():
+    out = reminders.reminder(None, action="add", title="交周记",
+                             due="2026-10-14", at="17:00", repeat="每周")
+    assert "循环:每周一次" in out and "锚点 2026-10-14" in out
+    assert "delete" in out                                  # 停循环的路要说清
+    item = reminders.list_items()[0]
+    assert item["repeat"] == "weekly" and item["anchor"] == "2026-10-14"
+    assert item["due_at"] == "2026-10-14T17:00"
+
+
+def test_add_with_repeat_but_no_date_stores_a_one_off_and_says_so():
+    """光有「每周」没有日期,下一次从哪天起算无从谈起 —— 存成一次性并说明。"""
+    out = reminders.reminder(None, action="add", title="交周记", repeat="每周")
+    assert "一次性提醒" in out and "锚点" in out
+    item = reminders.list_items()[0]
+    assert item["repeat"] == "" and item["anchor"] == ""
+
+
+def test_add_with_unknown_repeat_says_so():
+    out = reminders.reminder(None, action="add", title="交学费",
+                             due="2026-10-14", repeat="每月")
+    assert "没存上" in out and "每月" in out
+    assert reminders.list_items()[0]["repeat"] == ""
+
+
+def test_list_marks_the_repeat_rule():
+    soon = (date.today() + timedelta(days=7)).isoformat()
+    reminders.add("交周记", due=soon, at="17:00", repeat="每周")
+    out = reminders.reminder(None, action="list")
+    assert "(每周)" in out
+
+
+def test_roll_moves_a_missed_weekly_to_the_next_occurrence():
+    reminders.add("交周记", due="2026-10-07", at="17:00", repeat="每周")
+    assert reminders.roll_repeats(datetime(2026, 10, 9, 10, 0)) == 1
+    item = reminders.list_items()[0]
+    assert item["due"] == "2026-10-14" and item["due_at"] == "2026-10-14T17:00"
+    assert item["projected"] is True and item["anchor"] == "2026-10-07"
+
+
+def test_roll_respects_the_late_backfill_window():
+    """补发窗口内不许滚 —— 窗口内 late_due 还可能补一条,先滚了就把补发吃掉。"""
+    reminders.add("交周记", due="2026-10-07", at="17:00", repeat="每周")
+    assert reminders.roll_repeats(datetime(2026, 10, 7, 17, 30)) == 0
+    assert reminders.roll_repeats(datetime(2026, 10, 7, 18, 1)) == 1
+
+
+def test_roll_never_stores_a_past_occurrence():
+    """三周没开机也只得到下一个该出现的那次:不补幽灵班次,更不存过去的日子。"""
+    reminders.add("每日打卡", due="2026-09-20", at="08:00", repeat="每天")
+    now = datetime(2026, 10, 9, 7, 0)          # 今天那一次还没到,照旧要发生
+    reminders.roll_repeats(now)
+    item = reminders.list_items()[0]
+    assert item["due"] == "2026-10-09" and item["due_at"] == "2026-10-09T08:00"
+    assert datetime.fromisoformat(item["due_at"]) > now
+
+
+def test_roll_leaves_one_off_and_done_items_alone():
+    reminders.add("一次性的事", due="2026-09-01")
+    reminders.add("已停的循环", due="2026-09-01", at="08:00", repeat="每周")
+    items = reminders.load_items()
+    items[1]["done"] = True                     # 手工停掉的循环(finish 只推进不关闸)
+    reminders.save_items(items)
+    assert reminders.roll_repeats(datetime(2026, 10, 9, 10, 0)) == 0
+    r1 = [i for i in reminders.list_items(include_done=True) if i["id"] == "r1"][0]
+    assert r1["due"] == "2026-09-01"            # 一次性的事不滚
+
+
+def test_roll_handles_date_only_weekly():
+    reminders.add("交周记", due="2026-10-07", repeat="每周")
+    assert reminders.roll_repeats(datetime(2026, 10, 8, 0, 1)) == 1
+    item = reminders.list_items()[0]
+    assert item["due"] == "2026-10-14" and item["due_at"] == ""
+
+
+def test_a_projected_occurrence_still_fires_when_its_time_comes():
+    """滚出来的下一次是用户自己定的规则:未来班次照常到点催(这正是功能本身)。"""
+    reminders.add("交周记", due="2026-10-07", at="17:00", repeat="每周")
+    reminders.roll_repeats(datetime(2026, 10, 9, 10, 0))
+    note = reminders.upcoming_due(datetime(2026, 10, 14, 16, 50), lead_minutes=20)
+    assert note and "交周记" in note["text"] and "17:00" in note["text"]
+    assert note["key"] == "r1|2026-10-14T17:00"             # 下周是新键,会重新催
+
+
+def test_finish_on_a_series_advances_it_instead_of_closing():
+    soon = (date.today() + timedelta(days=7)).isoformat()
+    after = (date.today() + timedelta(days=14)).isoformat()
+    reminders.add("交周记", due=soon, at="17:00", repeat="每周")
+    out = reminders.reminder(None, action="finish", item_id="r1")
+    assert "已完成这一次" in out and "循环继续" in out
+    item = reminders.list_items()[0]
+    assert item.get("done") is False                        # 整个系列没有停
+    assert item["due"] == after and item["due_at"] == f"{after}T17:00"
+    assert item["projected"] is True
+
+
+def test_finish_early_still_counts_the_current_occurrence():
+    """提前完成(周三的事周一就交了)也从当前截止往后排,不把没发生的这次跳过去。"""
+    due = (date.today() + timedelta(days=7)).isoformat()
+    next_due = (date.today() + timedelta(days=14)).isoformat()
+    reminders.add("交周记", due=due, at="17:00", repeat="每周")
+    reminders.finish("r1")                                  # 今天就完成了下一次的活
+    assert reminders.list_items()[0]["due"] == next_due
+
+
+def test_finish_on_a_plain_item_still_marks_done():
+    reminders.add("一次性的事", due="2026-10-01")
+    out = reminders.reminder(None, action="finish", item_id="r1")
+    assert out.startswith("已完成") and "循环继续" not in out
+    assert reminders.list_items() == []
