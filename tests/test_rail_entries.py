@@ -52,7 +52,9 @@ HANDLES = {
 }
 
 # 顶栏这轮之后**应该**只剩状态,不该再有导航
-TOPBAR_STATUS_IDS = ["wsPill", "tok", "modelPill", "perm"]
+# "tok" 曾在列:v0.9.04 计数搬进任务面板后它成了永远空着的死元素,v0.9.65 删除
+# (上轮前端审计的实锤发现)。将来顶栏若放新状态件,记得加回这份清单。
+TOPBAR_STATUS_IDS = ["wsPill", "modelPill", "perm"]
 
 
 def _block(tag: str, opener: str) -> str:

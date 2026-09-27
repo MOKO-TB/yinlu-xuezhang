@@ -168,7 +168,7 @@ def test_llm_failure_watches_for_recovery_and_says_so(config, tmp_path, monkeypa
     monkeypatch.setattr(proactive, "wd_log", lambda msg: None)
     notified = []
     monkeypatch.setattr(tray, "notify",
-                        lambda title, body, **k: (notified.append((title, body)),
+                        lambda title, body, **k: (notified.append((title, body, k)),
                                                    {"ok": True})[1])
 
     bridge.send_task("这句发不出去")
@@ -177,6 +177,7 @@ def test_llm_failure_watches_for_recovery_and_says_so(config, tmp_path, monkeypa
     assert wait_until(lambda: any(e["type"] == "info" and "模型服务又能连上" in e.get("text", "")
                                   for e in window.events)), "探活了要主动告诉用户一声"
     assert notified and notified[0][0] == "模型恢复了"
+    assert notified[0][2].get("kind") == "recovery"      # v0.9.65:进了类别表才关得掉
     assert bridge._liveness_running is False
 
 

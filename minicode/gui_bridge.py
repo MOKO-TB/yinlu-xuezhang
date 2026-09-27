@@ -570,7 +570,7 @@ class Bridge:
                     text = (f"模型服务又能连上了(第 {got['tried']} 次探活问通的),"
                             "刚才没答上来的那句可以重发了")
                     ui.push("info", text=text)
-                    sent = tray.notify("模型恢复了", text)
+                    sent = tray.notify("模型恢复了", text, kind="recovery")
                     proactive.wd_log(
                         f"liveness: recovered at try {got['tried']}, "
                         f"toast={'ok' if sent.get('ok') else sent.get('reason', 'no')}")

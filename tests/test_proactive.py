@@ -851,6 +851,13 @@ def test_weather_kind_in_notify_kinds():
     assert tray.KIND_LABELS.get("weather") == "天气提醒"
 
 
+def test_recovery_kind_in_notify_kinds():
+    """「模型恢复了」收编成类别(v0.9.65):进表用户才关得掉,否则就是强制打扰。"""
+    from minicode import tray
+    assert "recovery" in tray.NOTIFY_KINDS
+    assert tray.KIND_LABELS.get("recovery") == "模型恢复提醒"
+
+
 # ============ 定时任务表接线(v0.9.56 A2)
 #
 # 底座(v0.9.42 的 jobs.py)只有纯函数和账本,这里钉的是接线本身:两条心跳各过

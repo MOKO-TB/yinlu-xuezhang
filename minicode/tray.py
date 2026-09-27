@@ -46,7 +46,9 @@ NOTIFY_KINDS = ("briefing", "class", "schedule", "reminders",
                 "calendar", "notices", "update", "weather",
                 # v0.9.57 A4:两个周期任务上的真类别 —— 不进这张表用户就关不掉
                 # (test_proactive 那根"新类别必须进表"的针盯的就是这件事)
-                "review", "gaps")
+                "review", "gaps",
+                # v0.9.65:「模型恢复了」从裸 notify 收编 —— 不进表 = 关不掉
+                "recovery")
 NOTIFY_DEFAULTS = {"enabled": True,
                    "kinds": {k: True for k in NOTIFY_KINDS},
                    "quiet_when_focused": True}
@@ -946,7 +948,8 @@ def close_choice(action: str, remember: bool = False) -> dict:
 KIND_LABELS = {"briefing": "今日简报", "class": "课前提醒", "schedule": "课程提醒",
                "reminders": "待办临期", "calendar": "校历倒计时",
                "notices": "校园新通知", "update": "新版本",
-               "weather": "天气提醒", "review": "每周回顾", "gaps": "缺口周报"}
+               "weather": "天气提醒", "review": "每周回顾", "gaps": "缺口周报",
+               "recovery": "模型恢复提醒"}
 
 
 def desktop_notify(ctx, action: str = "status", kind: str = "",
