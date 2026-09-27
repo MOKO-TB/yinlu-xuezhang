@@ -43,7 +43,10 @@ LOG_FILE = "tray.log"
 # 这份管"要不要弹到桌面右下角" —— 两件事各自开关,合在一起改一个会撞坏另一个。
 NOTIFY_PREF = "notify-pref.json"
 NOTIFY_KINDS = ("briefing", "class", "schedule", "reminders",
-                "calendar", "notices", "update", "weather")
+                "calendar", "notices", "update", "weather",
+                # v0.9.57 A4:两个周期任务上的真类别 —— 不进这张表用户就关不掉
+                # (test_proactive 那根"新类别必须进表"的针盯的就是这件事)
+                "review", "gaps")
 NOTIFY_DEFAULTS = {"enabled": True,
                    "kinds": {k: True for k in NOTIFY_KINDS},
                    "quiet_when_focused": True}
@@ -943,7 +946,7 @@ def close_choice(action: str, remember: bool = False) -> dict:
 KIND_LABELS = {"briefing": "今日简报", "class": "课前提醒", "schedule": "课程提醒",
                "reminders": "待办临期", "calendar": "校历倒计时",
                "notices": "校园新通知", "update": "新版本",
-               "weather": "天气提醒"}
+               "weather": "天气提醒", "review": "每周回顾", "gaps": "缺口周报"}
 
 
 def desktop_notify(ctx, action: str = "status", kind: str = "",

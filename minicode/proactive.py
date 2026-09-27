@@ -415,7 +415,8 @@ def check_update(current: str, timeout: float = 10.0) -> dict | None:
 KIND_TITLES = {"briefing": "今日简报", "class": "快上课了", "schedule": "今天的课",
                "reminders": "待办临期", "calendar": "校历提醒",
                "notices": "校园新通知", "update": "引路学长有新版本",
-               "weather": "天气提醒"}
+               "weather": "天气提醒", "review": "每周心情回顾",
+               "gaps": "知识库缺口周报"}
 
 
 def desktop_text(kind: str, payload: dict) -> str | None:
@@ -680,16 +681,72 @@ def _push_due(bridge, now=None) -> bool:
                       **_note_payload(note))
 
 
-# ------------------------------------------------- 定时任务表接线(v0.9.56 A2)
+# ------------------------------------------------- 定时任务表(v0.9.56 A2 接线,v0.9.57 A4 两个真任务)
 #
-# 底座(`jobs.py` 的 JobSpec/due/账本)是 v0.9.42 落的纯函数层,这一轮把两条心跳
-# 接上:`_tick`(5 分钟)与 `_round`(6 小时)各过一遍到期任务。**课前提醒与待办到点
-# 不进表** —— 它们的语义是"提前量 + 补发窗口",不是 cadence,硬塞进任务表会把
+# 底座(`jobs.py` 的 JobSpec/due/账本)是 v0.9.42 落的纯函数层,A2(v0.9.56)把两条
+# 心跳接上:`_tick`(5 分钟)与 `_round`(6 小时)各过一遍到期任务。**课前提醒与待办
+# 到点不进表** —— 它们的语义是"提前量 + 补发窗口",不是 cadence,硬塞进任务表会把
 # `test_proactive*` 那批既有针全推翻,收益却是零(docs/roadmap-v0.9.42 §A2 的原话)。
-# 表现在是空的:第一个真任务(周复盘/缺口周报)按方案是 A4;登记时往 JOB_SPECS
-# 加一个 `JobSpec`、往 JOB_HANDLERS 挂一个 `handler(bridge) -> str` 就够了。
-JOB_SPECS: "list[_jobs.JobSpec]" = []
-JOB_HANDLERS: "dict[str, object]" = {}
+# 登记新任务:往 JOB_SPECS 加一个 `JobSpec`、往 JOB_HANDLERS 挂一个
+# `handler(bridge) -> str`(返回一句结论进账本与看门狗日志,**内容不进日志**)。
+#
+# A4 的两个任务都是**只说不做**(方案 §A4:不自动调模型、不自动爬 —— 那会花同学的
+# Key 额度,补什么必须由人点头):推一条带「追问」的通知,做不做由用户把追问发回来。
+# 节奏刻意错开:周复盘在周日晚上(一周收尾回看心情),缺口周报在周五傍晚(趁周末
+# 补语料)。**已知边界**:weekly 到期要求"当天 + 到点",机器整晚没开这一班就跳过
+# —— due() 的"宁可少跑一次"口径,下周同一时间自然再来;临时想看随时能问。
+def _job_weekly_review(bridge) -> str:
+    """周复盘:回读 mood 每周回顾(与 mood 工具同一份真相),到点说一句。
+
+    这一周一条都没记就**不发** —— 心情模块的硬口径是不做打卡催促,
+    "你什么都没记"这种通知是压力不是帮助,哪怕措辞再软。
+    """
+    from minicode import mood as _mood
+    review = _mood.weekly_review(days=7)
+    if not review.get("count"):
+        return "没记就不打扰"
+    key = f"review|{_day_key()}"
+    if was_pushed("review", key):
+        return "今天已推过"
+    ok = _push_once(bridge, "review", key,
+                    title=KIND_TITLES["review"],
+                    text=str(review.get("text") or ""),
+                    ask="把每周回顾里值得注意的地方展开说说",
+                    count=review.get("count"))
+    return "已推" if ok else "没送出"
+
+
+def _job_gap_digest(bridge) -> str:
+    """缺口周报:聚合 kb-gaps.jsonl 最近一周的问法,报"哪些问题没接住"。
+
+    **只报不补**:补语料是显式动作(追问发回来才动),且不管补不补,
+    这份账都让"库里缺什么"从维护者的私 knowing 变成用户看得见的一行行。
+    """
+    from minicode import growth as _growth
+    gaps = _growth.gap_digest(days=7, top=5)
+    if not gaps:
+        return "这周没有缺口"
+    lines = [f"最近 7 天有 {len(gaps)} 个问法学长在知识库里没接住,问得最多的:"]
+    lines += [f"- {g['query']}(出现 {g['days']} 天)" for g in gaps]
+    lines.append("(这些是检索没命中的原话;要不要查、查什么,你来定 —— 学长不会自己联网填库)")
+    key = f"gaps|{_day_key()}"
+    if was_pushed("gaps", key):
+        return "今天已推过"
+    ok = _push_once(bridge, "gaps", key,
+                    title=KIND_TITLES["gaps"],
+                    text="\n".join(lines),
+                    ask="把这几个问题查证后补进知识库,补之前先给我看来源")
+    return "已推" if ok else "没送出"
+
+
+JOB_SPECS: "list[_jobs.JobSpec]" = [
+    _jobs.JobSpec("mood_weekly_review", cadence="weekly", weekday=6, hour=20),
+    _jobs.JobSpec("kb_gap_digest", cadence="weekly", weekday=5, hour=18),
+]
+JOB_HANDLERS: "dict[str, object]" = {
+    "mood_weekly_review": _job_weekly_review,
+    "kb_gap_digest": _job_gap_digest,
+}
 
 
 def _run_due_jobs(bridge, now=None) -> list[str]:

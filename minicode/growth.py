@@ -116,11 +116,52 @@ def log_kb_gap(query: str, reason: str = "no-hit") -> bool:
         if key in _SEEN_GAPS or key[1] in _file_seen_today(today):
             return False
         _SEEN_GAPS.add(key)
+
     return _append(app_path(GAPS_FILE), {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "query": query[:QUERY_EXCERPT],
         "reason": reason,
     })
+
+
+def gap_digest(days: int = 7, top: int = 5,
+               now: "float | None" = None) -> "list[dict] | None":
+    """kb-gaps.jsonl 最近 `days` 天的问法聚合(top N);一条都没有回 None。
+
+    A4 缺口周报(proactive._job_gap_digest)的唯一数据源。按 normalize_query
+    归组 —— 同一个问法的变体算一条,展示**最早**出现的那条原文;days 数的是
+    **出现过的不同日期**:账本按「同一天同一问法只记一次」落盘(v0.9.45 起),
+    但旧账本/手工编辑可能留有同日重复,数日期才不会虚报"出现 N 天"。
+    no-hit(库里有数据没匹配上)与 library(馆藏搜书落空)都算缺口,一起进。
+    **只读**:这里绝不改任何文件。
+    """
+    try:
+        raw = app_path(GAPS_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    moment = time.time() if now is None else float(now)
+    cutoff = moment - max(1, int(days)) * 86400
+    groups: "dict[str, dict]" = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue                      # 半截行:跳过,不让整份周报崩掉
+        if not isinstance(rec, dict) or not within_days(rec.get("ts"), cutoff):
+            continue
+        q = str(rec.get("query") or "").strip()
+        if not q:
+            continue
+        row = groups.setdefault(normalize_query(q), {"query": q, "dates": set()})
+        row["dates"].add(str(rec.get("ts"))[:10])
+    if not groups:
+        return None
+    rows = [{"query": g["query"], "days": len(g["dates"])}
+            for g in groups.values()]
+    return sorted(rows, key=lambda g: -g["days"])[:max(1, int(top))]
 
 
 def save_candidate(question: str, answer: str = "", source_url: str = "",

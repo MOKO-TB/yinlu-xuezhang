@@ -562,13 +562,15 @@ FIRST_CLASS = {"text": "课表:今天第一节课 08:00 高等数学", "ask": "�
 
 
 def _stub_round_sources(monkeypatch, *, near=None, note=None, alerts=None):
-    """把 `_round` 的六个外部源都按住,只留"该不该推"这一件真的东西。"""
+    """把 `_round` 的外部源都按住,只留"该不该推"这一件真的东西。"""
     monkeypatch.setattr(proactive, "briefing_pushed_today", lambda day=None: False)
     monkeypatch.setattr(proactive, "push_briefing", lambda b, force=False: False)
     monkeypatch.setattr(proactive, "calendar_alerts",
                         lambda *a, **k: list(alerts or []))
     monkeypatch.setattr(proactive, "check_once", lambda state=None: [])
     monkeypatch.setattr(proactive, "check_update", lambda cur: None)
+    # 任务表也是外部源(v0.9.57 起有真任务),按住防时间相关翻红。
+    monkeypatch.setattr(proactive, "JOB_SPECS", [])
     from minicode import reminders, schedule
     monkeypatch.setattr(reminders, "due_soon", lambda *a, **k: list(near or []))
     monkeypatch.setattr(schedule, "next_class_note", lambda today=None: note)
@@ -705,10 +707,13 @@ CLASS_SOON = {"text": "快上课了:高等数学 08:00 开始(还有约 15 分�
 
 
 def _stub_tick(monkeypatch, *, cls=CLASS_SOON, due=DUE_SOON_NOTE):
-    """按住到点提醒器的两个数据源,只留"该不该推"这一件真的东西。"""
+    """按住到点提醒器的两个数据源与任务表,只留"该不该推"这一件真的东西。"""
     from minicode import reminders, schedule
     monkeypatch.setattr(schedule, "upcoming_class", lambda *a, **k: cls)
     monkeypatch.setattr(reminders, "upcoming_due", lambda *a, **k: due)
+    # 任务表是真数据源(v0.9.57 起有两个周期任务):不按住的话,周日晚上/
+    # 周五傍晚跑测试会让真 handler 冒出来,`jobs` 键时间相关地翻红。
+    monkeypatch.setattr(proactive, "JOB_SPECS", [])
 
 
 def test_push_due_goes_out_as_the_reminders_kind_the_user_can_toggle(monkeypatch):
@@ -850,9 +855,10 @@ def test_weather_kind_in_notify_kinds():
 # 一遍任务表、跑了记账、没接线的如实说、异常也算"跑过这一班"。表在 A4 之前是
 # 空的 —— 所以先钉"空表零开销",再用假 spec 把整条路走到。
 
-def test_run_due_jobs_is_a_no_op_with_an_empty_table():
-    """现状(还没有登记任何任务)连账本文件都不许碰。"""
+def test_run_due_jobs_is_a_no_op_with_an_empty_table(monkeypatch):
+    """空表(如测试里显式置空)连账本文件都不许碰。"""
     from minicode import jobs as _jobs
+    monkeypatch.setattr(proactive, "JOB_SPECS", [])
     bridge, _ui = _push_bridge()
     assert proactive._run_due_jobs(bridge, now=datetime(2026, 9, 28, 9, 0)) == []
     assert not _jobs.state_path().exists()
@@ -945,3 +951,91 @@ def test_round_also_sweeps_the_job_table(monkeypatch):
     _stub_round_sources(monkeypatch)
     bridge, _ui = _push_bridge()
     assert proactive._round(bridge)["jobs"] == []
+
+
+# ============ 周报两件(v0.9.57 A4):任务表上的头两个真任务
+#
+# 钉四件事:两个任务真的登记在表上(节奏/星期/钟点)、handler 走的是 mood 与
+# growth 的**同一份真相**、没内容就不打扰(心情模块不做打卡催促)、
+# 只说不做 —— 推的是带追问的通知,补不补语料由用户把追问发回来才动。
+
+SUNDAY_EVE = datetime(2026, 10, 4, 20, 30)     # 2026-10-04 是周日(复盘到点)
+FRIDAY_EVE = datetime(2026, 10, 2, 18, 30)     # 2026-10-02 是周五(缺口周报到点)
+
+
+def test_the_two_weekly_jobs_are_registered():
+    from minicode import tray
+    specs = {s.id: s for s in proactive.JOB_SPECS}
+    assert set(specs) == {"mood_weekly_review", "kb_gap_digest"}
+    assert specs["mood_weekly_review"].weekday == 6 and specs["mood_weekly_review"].hour == 20
+    assert specs["kb_gap_digest"].weekday == 5 and specs["kb_gap_digest"].hour == 18
+    for job_id in specs:
+        assert job_id in proactive.JOB_HANDLERS
+    # 新类别必须进 tray 的类别表,否则用户关不掉(与 weather 那根针同一口径)
+    for kind in ("review", "gaps"):
+        assert kind in tray.NOTIFY_KINDS
+        assert kind in tray.KIND_LABELS
+        assert kind in proactive.KIND_TITLES
+
+
+def test_weekly_review_job_pushes_the_real_review():
+    """走真数据:mood 里真记了一条,推出来的就是 weekly_review 的原文。"""
+    from minicode import mood
+    mood.log(score=2, note="实验搞崩了,烦")
+    bridge, ui = _push_bridge()
+    result = proactive._job_weekly_review(bridge)
+    assert result == "已推"
+    assert [e["kind"] for e in ui.events] == ["review"]
+    assert "实验搞崩了" in ui.events[0]["text"]           # 回顾原文,不是另写一套
+    assert "每周心情回顾" == ui.events[0]["title"]
+    assert ui.events[0]["ask"]                            # 带一条可复制的追问
+    assert proactive.was_pushed("review", f"review|{date.today().isoformat()}")
+
+
+def test_weekly_review_job_dedupes_by_day():
+    """任务账本防跨周重复,按天账本防同日重复 —— 两层各自兜一边。"""
+    from minicode import mood
+    mood.log(score=3, note="还行")
+    bridge, _ui = _push_bridge()
+    assert proactive._job_weekly_review(bridge) == "已推"
+    assert proactive._job_weekly_review(bridge) == "今天已推过"
+
+
+def test_weekly_review_job_stays_quiet_when_nothing_logged():
+    """一周一条没记就不发:通知"你什么都没记"是压力不是帮助。"""
+    bridge, ui = _push_bridge()
+    assert proactive._job_weekly_review(bridge) == "没记就不打扰"
+    assert ui.events == []
+
+
+def test_gap_digest_job_pushes_the_real_gaps():
+    from minicode import growth
+    growth.log_kb_gap("学校快递站在哪")
+    growth.log_kb_gap("社团招新什么时候开始")
+    bridge, ui = _push_bridge()
+    assert proactive._job_gap_digest(bridge) == "已推"
+    assert [e["kind"] for e in ui.events] == ["gaps"]
+    assert "快递站在哪" in ui.events[0]["text"]
+    assert "社团招新" in ui.events[0]["text"]
+    assert "你来定" in ui.events[0]["text"]               # 只说不做的口径写进正文
+    assert ui.events[0]["ask"]
+
+
+def test_gap_digest_job_quiet_without_gaps():
+    bridge, ui = _push_bridge()
+    assert proactive._job_gap_digest(bridge) == "这周没有缺口"
+    assert ui.events == []
+
+
+def test_a_weekly_job_runs_end_to_end_through_the_table(monkeypatch):
+    """接线全链路:到期的 weekly 任务在 _run_due_jobs 里真跑真记账。"""
+    from minicode import jobs as _jobs, mood
+    monkeypatch.setattr(proactive, "JOB_SPECS",
+                        [s for s in proactive.JOB_SPECS
+                         if s.id == "mood_weekly_review"])
+    mood.log(score=4, note="还行")
+    bridge, _ui = _push_bridge()
+    assert proactive._run_due_jobs(bridge, now=FRIDAY_EVE) == []   # 周五:不是它的班
+    assert proactive._run_due_jobs(bridge, now=SUNDAY_EVE) == ["mood_weekly_review"]
+    row = _jobs.load_state()["mood_weekly_review"]
+    assert row["runs"] == 1 and row["result"] == "已推"

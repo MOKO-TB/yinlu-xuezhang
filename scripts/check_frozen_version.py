@@ -130,6 +130,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                       "notify", "notify_status", "read_notify_pref",
                       "write_notify_pref", "notify_enabled", "set_notify",
                       "desktop_notify", "KIND_LABELS", "NOTIFY_PREF",
+                      # v0.9.57 A4:类别表本身也要在包里(漏收 = review/gaps
+                      # 两类在装好的包里关不掉,set_notify 把它们当未知丢掉)
+                      "NOTIFY_KINDS",
                       # v0.9.25 修:Win11 不显示托盘气球,真通道是 WinRT toast
                       # (漏收 = 装好的包又回到"通知永远看不见")
                       "_toast", "_balloon", "register_notify_identity",
@@ -175,7 +178,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "REVIEWED_KB_FILE",
                         # v0.9.39 B0/B1:归一化与时间窗是"是不是同一个词/还在不在窗口里"
                         # 的唯一口径(漏收 = 回灌按自己的规矩另判一套)
-                        "normalize_query", "within_days", "FEEDBACK_FILE"),
+                        "normalize_query", "within_days", "FEEDBACK_FILE",
+                        # v0.9.57 A4:缺口周报的聚合器(漏收 = 周五那条永远
+                        # "这周没有缺口",而界面一切正常)
+                        "gap_digest"),
     # v0.9.39 B0/B1:把已经记下来的信号回头用起来(反复搜空 / 差评避让)。
     # 漏收的表现是"装了包之后,连着搜空不再提示、历史差评不再影响答法",而界面一切正常。
     "minicode.feedback_recall": ("empty_hits", "empty_hits_by_call",
@@ -341,6 +347,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # v0.9.56:定时任务表接线(漏收 = A4 的周期任务在装好的
                            # 包里永远没人跑,而界面一切正常)
                            "JOB_SPECS", "JOB_HANDLERS", "_run_due_jobs",
+                           # v0.9.57 A4:两个真任务(漏收 = 周五周日什么都不发生,
+                           # 任务表在装好的包里退回装饰品)
+                           "_job_weekly_review", "_job_gap_digest",
                            "WATCHDOG_LOG", "watchdog_log_path",
                            "wd_log", "wd_log_tail"),
     # ---- v0.9.23:教务课表导入(整套新模块,漏收 = 点「导入课表」直接报错) ----

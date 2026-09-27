@@ -202,3 +202,55 @@ def test_log_kb_gap_dedups_across_processes(tmp_path, monkeypatch):
     growth._seen_cache_key = ""
     growth._SEEN_GAPS.clear()
     assert growth.log_kb_gap(q) is True
+
+
+# ---------------------------------------------------------------- 缺口周报聚合(v0.9.57 A4)
+
+def _write_gap_lines(rows):
+    path = app_path(growth.GAPS_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def test_gap_digest_groups_by_normalized_query_and_counts_days():
+    """同一问法的变体归一条;days 数**不同日期**,同日重复不虚报。"""
+    import time as _time
+    fresh = _time.strftime("%Y-%m-%d %H:%M:%S")
+    yesterday = _time.strftime(
+        "%Y-%m-%d %H:%M:%S", _time.localtime(_time.time() - 86400))
+    _write_gap_lines([
+        json.dumps({"ts": fresh, "query": "学校快递站在哪", "reason": "no-hit"}),
+        json.dumps({"ts": fresh, "query": "学校 快递站 在哪!", "reason": "no-hit"}),
+        json.dumps({"ts": fresh, "query": "学校快递站在哪", "reason": "no-hit"}),
+        json.dumps({"ts": yesterday, "query": "学校快递站在哪", "reason": "no-hit"}),
+    ])
+    rows = growth.gap_digest(days=7)
+    assert rows is not None and len(rows) == 1        # 变体归组,不数行数
+    assert rows[0]["days"] == 2                       # 两个不同日期;同日三条只算一天
+    assert rows[0]["query"] == "学校快递站在哪"         # 展示最早那条原文
+
+
+def test_gap_digest_ranks_tops_and_keeps_the_first_wording():
+    import time as _time
+    fresh = _time.strftime("%Y-%m-%d %H:%M:%S")
+    _write_gap_lines([
+        json.dumps({"ts": fresh, "query": "放假安排", "reason": "no-hit"}),
+        json.dumps({"ts": fresh, "query": "四六级报名时间", "reason": "no-hit"}),
+    ])
+    rows = growth.gap_digest(days=7, top=1)
+    assert [r["query"] for r in rows] == ["放假安排"]   # 同为 1 天取先登的,不瞎排序
+
+
+def test_gap_digest_ignores_stale_and_broken_lines():
+    """窗口外的旧账与半截行都不进周报;坏行跳过,不把整份聚合弄崩。"""
+    _write_gap_lines([
+        json.dumps({"ts": "2000-01-01 08:00:00", "query": "三年前的问题", "reason": "no-hit"}),
+        "{半截的 json",
+        json.dumps({"ts": "", "query": "", "reason": "no-hit"}),
+    ])
+    assert growth.gap_digest(days=7) is None
+
+
+def test_gap_digest_returns_none_without_a_file():
+    assert growth.gap_digest(days=7) is None
+
