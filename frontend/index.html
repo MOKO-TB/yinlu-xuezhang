@@ -1847,6 +1847,8 @@ try {
     <div class="sc-body" id="scBody"></div>
     <div class="btns">
       <button class="b-yes" id="btnScheduleImport">导入 / 更新课表</button>
+      <button class="b-no" id="btnScoresImport"
+              title="从教务系统导入正式成绩(含学分),绩点从此按存档算">导入成绩</button>
       <button class="b-no" id="btnScheduleTimes"
               title="填一次每节课的起止时刻,存本机 period-times.json —— 之后问空档才会带钟点">
         填作息表</button>
@@ -1938,7 +1940,7 @@ try {
 <div class="overlay" id="jwOverlay">
   <div class="dialog" style="width:640px">
     <div class="sc-head">
-      <h3>🎓 从教务系统导入课表</h3>
+      <h3 id="jwTitle">🎓 从教务系统导入课表</h3>
       <span class="sc-week" id="jwTerm"></span>
     </div>
     <div class="jw-steps" id="jwSteps">
@@ -4763,7 +4765,8 @@ $("btnScheduleTimes").addEventListener("click", () => {
   scSyncTabs();
   renderSchedule();
 });
-$("btnScheduleImport").addEventListener("click", openJwDlg);
+$("btnScheduleImport").addEventListener("click", () => openJwDlg("schedule"));
+$("btnScoresImport").addEventListener("click", () => openJwDlg("scores"));
 $("btnScheduleUndo").addEventListener("click", () => {
   const api = window.pywebview && window.pywebview.api;
   if (!api || !api.schedule_undo) { toast("这个功能只在桌面版有"); return; }
@@ -5742,39 +5745,58 @@ function jwSay(html) { $("jwBody").innerHTML = html; }
 function jwBusyOn(text) { jwBusy = true; jwStepOn(jwStep); jwSay(`<div class="msg">${esc(text)}</div>`); }
 function jwBusyOff() { jwBusy = false; jwStepOn(jwStep); }
 
-function openJwDlg() {
+let jwMode = "schedule";   // "schedule" 课表 / "scores" 成绩(v0.9.59):同一个向导两副面孔
+
+function openJwDlg(mode) {
   $("scheduleOverlay").classList.remove("show");
   jwParsed = null;
+  jwMode = mode === "scores" ? "scores" : "schedule";
+  const isScores = jwMode === "scores";
+  $("jwTitle").textContent = isScores ? "📊 从教务系统导入成绩" : "🎓 从教务系统导入课表";
+  const steps = $("jwSteps").querySelectorAll(".jw-step");
+  steps[1].textContent = isScores ? "② 学长读成绩" : "② 学长读课表";
+  $("btnJwRead").textContent = isScores ? "② 读取成绩" : "② 读取课表";
   $("btnJwConfirm").textContent = "③ 确认导入";   // 上一次的"确认更新(新增 N…)"不能留着
   const api = jwApi();
-  if (!api) {                       // 网页版/桥未就绪:老老实实退回文字导入
-    scheduleManualImport();
+  if (!api || (isScores && !api.scores_import_open)) {
+    scheduleManualImport(jwMode);   // 网页版/桥未就绪:老老实实退回文字导入
     return;
   }
   jwStepOn(1);
-  jwSay(`<div class="msg">学长先帮你把<b>教务登录页</b>开在桌面上。这一步之后:
+  jwSay(isScores ? `<div class="msg">学长先帮你把<b>教务登录页</b>开在桌面上。这一步之后:
+    你自己输账号密码和验证码,再点开<b>「成绩查询」</b>,<b>选好学期、点了「查询」</b>,
+    让成绩表出现在页面上(学长不替你点页面 —— 各校成绩页长得不一样)。<br>
+    登录状态只留在本机那个独立浏览器配置里,不进对话、也不写进成绩文件。</div>
+    <div class="jw-links"><button id="lnJwClear">清掉教务登录状态</button></div>`
+    : `<div class="msg">学长先帮你把<b>教务登录页</b>开在桌面上。这一步之后:
     你自己输账号密码和验证码,再点开「课表查询 → 学期课表」,把<b>周次选成(全部)</b>
     —— 只有整学期那张表才读得全。<br>
     登录状态只留在本机那个独立浏览器配置里,不进对话、也不写进课表文件。</div>
     <div class="jw-links"><button id="lnJwManual">我自己贴课表文字/截图</button>
     <button id="lnJwClear">清掉教务登录状态</button></div>`);
-  $("lnJwManual").addEventListener("click", scheduleManualImport);
+  const man = $("lnJwManual");
+  if (man) man.addEventListener("click", () => scheduleManualImport("schedule"));
   $("lnJwClear").addEventListener("click", jwClearLogin);
   $("jwOverlay").classList.add("show");
 }
 
 function jwOpenLogin() {
   const api = jwApi(); if (!api) return scheduleManualImport();
+  const isScores = jwMode === "scores";
   jwBusyOn("正在打开教务登录页(第一次拉起浏览器可能要十几秒)…");
-  api.schedule_import_open().then(r => {
+  (isScores ? api.scores_import_open() : api.schedule_import_open()).then(r => {
     jwBusyOff();
     if (!r || !r.ok) { jwSayErr((r && r.msg) || "打不开教务登录页"); return; }
     jwStepOn(2);
-    jwSay(`<div class="msg">登录页已经开了(<b>${esc(r.title || r.url || "")}</b>)。
+    jwSay(isScores ? `<div class="msg">登录页已经开了(<b>${esc(r.title || r.url || "")}</b>)。
+      请在<b>那个窗口里</b>登录教务系统,点开<b>「成绩查询」</b>,
+      <b>选好学期、点了「查询」</b>。弄好回来点下面的「② 读取成绩」。</div>`
+      : `<div class="msg">登录页已经开了(<b>${esc(r.title || r.url || "")}</b>)。
       请在<b>那个窗口里</b>登录教务系统,点开「课表查询 → 学期课表」,
       周次选<b>(全部)</b>。弄好回来点下面的「② 读取课表」。</div>
       <div class="jw-links"><button id="lnJwManual2">我自己贴课表文字/截图</button></div>`);
-    $("lnJwManual2").addEventListener("click", scheduleManualImport);
+    const man = $("lnJwManual2");
+    if (man) man.addEventListener("click", () => scheduleManualImport("schedule"));
   }).catch(e => { jwBusyOff(); jwSayErr("学长这边出错了:" + e); });
 }
 
@@ -5782,7 +5804,10 @@ function jwRead(model) {
   const api = jwApi(); if (!api) return scheduleManualImport();
   jwBusyOn(model ? "正在把页面文字交给模型整理(确定性解析没认出来的那条退路)…"
                  : "正在读学期课表…");
-  const p = model ? api.schedule_import_model() : api.schedule_import_read();
+  const isScores = jwMode === "scores";
+  const p = isScores
+    ? (model ? api.scores_import_model() : api.scores_import_read())
+    : (model ? api.schedule_import_model() : api.schedule_import_read());
   p.then(r => {
     jwBusyOff();
     if (!r || !r.ok) {
@@ -5861,7 +5886,26 @@ function jwTermNote(d, val) {
   return `<div class="jw-warn">第 1 周周一 ${esc(old)} → ${esc(val)}:周次与课前提醒会按新日期重算。</div>`;
 }
 
+function jwRenderScores() {
+  const r = jwParsed, s = r.summary || {};
+  const rows = (r.rows || []);
+  $("jwTerm").textContent = s.semesters && s.semesters.length
+    ? "学期 " + s.semesters.join(" / ") : "";
+  $("btnJwConfirm").textContent = "③ 确认导入";
+  jwSay(`<div class="msg"><b>${rows.length} 条成绩</b>。请对着教务页扫一眼:</div>
+    <div style="margin-top:6px">${rows.map(cc => `<div class="jw-row">
+      <span class="t">${esc(cc.score || "?")}分${cc.credit ? " · " + esc(cc.credit) + "学分" : " · 无学分"}</span>
+      ${esc(cc.name)}${cc.semester ? " <span style=\"opacity:.6\">" + esc(cc.semester) + "</span>" : ""}
+    </div>`).join("")}</div>
+    ${s.no_credit && s.no_credit.length ? `<div class="jw-warn">这些行没有学分(算绩点时会跳过):${esc(s.no_credit.join("、"))}</div>` : ""}
+    ${s.odd_score && s.odd_score.length ? `<div class="jw-warn">这些行的成绩既不是 0-100 的数,也不是优/良/中/及格(存档照原样收,算绩点时按学校规定核对):${esc(s.odd_score.join("、"))}</div>` : ""}
+    ${(r.notes || []).map(n => `<div class="jw-warn">⚠ ${esc(n)}</div>`).join("")}
+    <div class="sc-note">确认后会<b>整表覆盖</b>本机成绩存档(scores.json,不上传);
+      点「③ 确认导入」之前,学长不会写任何文件。</div>`);
+}
+
 function jwRenderPreview() {
+  if (jwMode === "scores") return jwRenderScores();
   const r = jwParsed, s = r.summary || {}, d = r.diff || null;
   $("jwTerm").textContent = (r.term ? "学期 " + r.term : "") + (r.week ? " · 第" + r.week + "周" : "");
   const days = JW_DAYS;
@@ -5898,25 +5942,30 @@ function jwRenderPreview() {
 
 function jwConfirm() {
   if (!jwParsed) return;
+  const isScores = jwMode === "scores";
   const ts = ($("jwTermStart") || {}).value || "";
-  if (!ts) { toast("先填「第 1 周周一」的日期,不然提醒和周次都算不准"); return; }
+  if (!isScores && !ts) { toast("先填「第 1 周周一」的日期,不然提醒和周次都算不准"); return; }
   const api = jwApi(); if (!api) return;
-  jwBusyOn("正在存课表…");
-  api.schedule_import_confirm(ts).then(r => {
+  jwBusyOn(isScores ? "正在存成绩…" : "正在存课表…");
+  (isScores ? api.scores_import_confirm() : api.schedule_import_confirm(ts)).then(r => {
     jwBusyOff();
-    if (!r || !r.ok) { jwSayErr((r && r.msg) || "课表没存进去"); return; }
+    if (!r || !r.ok) { jwSayErr((r && r.msg) || (isScores ? "成绩没存进去" : "课表没存进去")); return; }
     jwParsed = null;
-    scheduleData = r.schedule || scheduleData;
-    renderSchedule();
+    if (!isScores) {
+      scheduleData = r.schedule || scheduleData;
+      renderSchedule();
+    }
     $("jwOverlay").classList.remove("show");
-    toast((r.msg || "课表已导入").slice(0, 120));
+    toast((r.msg || (isScores ? "成绩已导入" : "课表已导入")).slice(0, 120));
   }).catch(e => { jwBusyOff(); jwSayErr("学长这边出错了:" + e); });
 }
 
 function jwClearLogin() {
-  const api = jwApi(); if (!api || !api.schedule_import_clear) return;
+  const api = jwApi(); if (!api) return;
+  const call = (jwMode === "scores" && api.scores_import_clear)
+    ? api.scores_import_clear() : api.schedule_import_clear();
   jwBusyOn("正在关窗口并清登录态…");
-  api.schedule_import_clear().then(r => {
+  call.then(r => {
     jwBusyOff(); jwStepOn(1);
     jwSay(`<div class="msg">${esc((r && r.msg) || "已清理")}</div>`);
   }).catch(e => { jwBusyOff(); jwSayErr("清理失败:" + e); });
@@ -5931,9 +5980,16 @@ $("jwOverlay").addEventListener("click", (e) => {
 });
 
 // 退路(也留给网页版):把课表文字/截图发给学长,由对话里那条 schedule 工具存
-function scheduleManualImport() {
+function scheduleManualImport(kind) {
   $("scheduleOverlay").classList.remove("show");
   $("jwOverlay").classList.remove("show");
+  if (kind === "scores") {
+    $("input").value = "这是我的成绩(课程名 / 成绩 / 学分),帮我存下来或者算一下绩点:\n";
+    $("input").focus();
+    $("input").style.height = "auto";
+    toast("把成绩文字接在后面发给我;导入教务成绩还是要回面板走三步向导");
+    return;
+  }
   const has = scheduleData && scheduleData.registered;
   $("input").value = has
     ? "我的课表有变动,这是最新课表(下面贴给你),帮我更新一下:\n"

@@ -49,6 +49,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "schedule_import_model", "schedule_import_confirm",
                             "schedule_import_clear", "schedule_import_status",
                             "_jw_flow", "get_onboarding", "dismiss_onboarding",
+                            # v0.9.59:成绩导入三步向导(漏收 = 面板按钮点了没反应,
+                            # 或读到了成绩却永远写不进 scores.json)
+                            "scores_import_open", "scores_import_read",
+                            "scores_import_model", "scores_import_confirm",
+                            "scores_import_clear", "scores_import_status",
+                            "_scores_flow",
                             # v0.9.24:计划面板数据源(只读 + 派发文案)
                             "get_plan",
                             # v0.9.30:「我的数据」面板 + 迁移包(漏收一条 = 装好的包里
@@ -233,6 +239,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     #      做不到,而对话里什么错都不报——工具压根没注册) ----
     "minicode.ics_export": ("collect", "render", "export", "export_ics_tool",
                             "ICS_FILE_NAME", "_week_runs"),
+    # ---- v0.9.59:成绩单存档与导入(漏收 = 「导入成绩」按钮走了个寂寞,
+    #      或 scores 工具在包里不存在,绩点永远要手贴) ----
+    "minicode.scores": ("load", "save", "clear", "view", "courses_for_gpa",
+                        "parse_score_table", "parse_scores_with_model",
+                        "scores_tool", "SCORES_FILE"),
+    "minicode.scores_import": ("ScoresFlow",),
     # ---- v0.9.18:注入防御(provenance 是函数内 import,必须核它真进包了) ----
     "minicode.provenance": ("wrap", "strip_marks", "is_external",
                             "contains_external", "log_escalation"),

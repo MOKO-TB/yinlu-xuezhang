@@ -104,6 +104,8 @@ TABLE: tuple[Entry, ...] = (
           note="导入教务或手填的课表"),
     Entry("schedule.prev.json", "上一版课表", PERSONAL, False,
           note="只为「换回上一版」存在,换机器用不上"),
+    Entry("scores.json", "成绩存档", PERSONAL, True,
+          note="从教务导入的正式成绩,绩点从这里算"),
     Entry("period-times.json", "本机作息表", PERSONAL, True, restart=True,
           note="每节上下课钟点,空档看板按它算"),
     Entry("reminders.json", "待办与截止日期", PERSONAL, True, restart=True,

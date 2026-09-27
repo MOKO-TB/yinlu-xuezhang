@@ -150,6 +150,30 @@ class PublicApi:
         """有没有刚读到、还没确认的课表。"""
         return self._b.schedule_import_status()
 
+    def scores_import_open(self) -> dict:
+        """成绩导入第 1 步:打开看得见的登录页(登录由人做)。"""
+        return self._b.scores_import_open()
+
+    def scores_import_read(self) -> dict:
+        """成绩导入第 2 步:读成绩表并解析(不写文件)。"""
+        return self._b.scores_import_read()
+
+    def scores_import_model(self) -> dict:
+        """成绩导入第 2 步的退路:页面文字交给模型整理。"""
+        return self._b.scores_import_model()
+
+    def scores_import_confirm(self) -> dict:
+        """成绩导入第 3 步:用户点头后才落盘 scores.json。"""
+        return self._b.scores_import_confirm()
+
+    def scores_import_clear(self) -> dict:
+        """成绩导入收尾:关窗口并清掉那份独立 profile 的登录态。"""
+        return self._b.scores_import_clear()
+
+    def scores_import_status(self) -> dict:
+        """有没有刚读到、还没确认的成绩。"""
+        return self._b.scores_import_status()
+
     def schedule_undo(self) -> dict:
         """课表面板「换回上一版」(名字避开输入框那个已有的 undo)。"""
         return self._b.schedule_undo()
@@ -1861,6 +1885,86 @@ class Bridge:
     def schedule_import_status(self) -> dict:
         """面板开关时问一次:学长手上有没有刚读到、还没确认的课表。"""
         return {"ok": True, "pending": bool(getattr(self, "_jw_result", None))}
+
+    # ------------------------------------------- 教务成绩导入(v0.9.59 H 件)
+    # 三步与课表导入同构,差别只在:读的是成绩表(表头认列)、确认不需要补填
+    # 学期起点、落盘的是 scores.json。同一个浏览器窗口可以两用 ——
+    # 登录态在同一个 profile 里,登录一次课表和成绩都能读。
+
+    def _scores_flow(self):
+        """整程共用一个 ScoresFlow(同 _jw_flow 的道理:标签页属于开它的那条线程)。"""
+        from minicode import scores_import
+        flow = getattr(self, "_scores_import_flow", None)
+        if flow is None:
+            flow = scores_import.ScoresFlow()
+            self._scores_import_flow = flow
+        return flow
+
+    def scores_import_open(self) -> dict:
+        """成绩导入第 1 步:打开看得见的登录页(登录由人做,学长不碰)。"""
+        self._scores_result = None
+        try:
+            return self._scores_flow().open_login()
+        except Exception as exc:
+            return {"ok": False, "stage": "failed",
+                    "msg": f"学长这边出错了:{type(exc).__name__}: {exc}"}
+
+    def scores_import_read(self) -> dict:
+        """成绩导入第 2 步:读当前那张教务页的成绩表(表头认列)。**不落盘**。"""
+        self._scores_result = None
+        try:
+            r = self._scores_flow().read()
+        except Exception as exc:
+            return {"ok": False, "stage": "failed",
+                    "msg": f"读成绩时出错:{type(exc).__name__}: {exc}"}
+        if r.get("ok"):
+            self._scores_result = [dict(x) for x in r.get("rows") or []]
+        return r
+
+    def scores_import_model(self) -> dict:
+        """成绩导入第 2 步的退路:页面文字交给当前模型整理(会真的发出)。"""
+        self._scores_result = None
+        llm = self._session_llm() or self._shared_llm
+        if llm is None:
+            return {"ok": False, "stage": "failed",
+                    "msg": "还没有可用的模型配置:先在设置里填好模型和密钥再试。"}
+        try:
+            r = self._scores_flow().read_with_model(llm.complete)
+        except Exception as exc:
+            return {"ok": False, "stage": "failed",
+                    "msg": f"模型整理成绩时出错:{type(exc).__name__}: {exc}"}
+        if r.get("ok"):
+            self._scores_result = [dict(x) for x in r.get("rows") or []]
+        return r
+
+    def scores_import_confirm(self) -> dict:
+        """成绩导入第 3 步:用户点头之后才真的写 scores.json(整表覆盖)。"""
+        from minicode import scores as _scores
+        rows = getattr(self, "_scores_result", None) or []
+        if not rows:
+            return {"ok": False,
+                    "msg": "手上还没有读到成绩:先点「读取成绩」,读到了再确认导入。"}
+        ok, msg = _scores.save(rows)
+        if ok:
+            self._scores_result = None
+        try:
+            view = _scores.view()
+        except Exception:
+            view = None
+        return {"ok": ok, "msg": msg, "scores": view}
+
+    def scores_import_clear(self) -> dict:
+        """收尾:关掉导入用的浏览器窗口并清掉那份独立 profile 的登录态。"""
+        from minicode import schedule_import
+        self._scores_result = None
+        try:
+            return schedule_import.clear_login_state()
+        except Exception as exc:
+            return {"ok": False, "msg": f"清理登录态失败:{type(exc).__name__}: {exc}"}
+
+    def scores_import_status(self) -> dict:
+        """面板开关时问一次:学长手上有没有刚读到、还没确认的成绩。"""
+        return {"ok": True, "pending": bool(getattr(self, "_scores_result", None))}
 
     def schedule_undo(self) -> dict:
         """课表换回上一版(save/clear 时留的那份备份)。

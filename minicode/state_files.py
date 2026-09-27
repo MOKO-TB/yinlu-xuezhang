@@ -62,6 +62,7 @@ SHIP_NEVER: tuple[StateFile, ...] = (
     StateFile("message-feedback.jsonl", FILE, "回答的 👍/👎 反馈:含对话摘要"),
     StateFile("schedule.json", FILE, "我的课表:属使用者本人"),
     StateFile("schedule.prev.json", FILE, "换回上一版用的课表备份,同样是本人课表"),
+    StateFile("scores.json", FILE, "成绩单存档:带学分与分数的正式成绩,比课表更私密"),
     StateFile("period-times.json", FILE, "本机作息表:发给别人他会按你的钟点算空档"),
     StateFile("reminders.json", FILE, "待办与截止日期:「提醒我 X 号交材料」记在这里"),
     StateFile("notice-watch.json", FILE, "官网通知看门狗:含已通知过的标题"),

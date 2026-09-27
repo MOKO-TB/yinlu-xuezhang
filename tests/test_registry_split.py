@@ -34,6 +34,8 @@ ORDER = [
     "use_skill", "plan", "search_knowledge", "search_history",
     "ocr_image", "render_chart", "generate_image",
     "campus_calendar", "gpa_calc",
+    # v0.9.59:成绩存档(看/算/清),挨着它配套的 gpa_calc
+    "scores",
     "kb_suggest",
     "library_search", "library_guide",
     "memory",
@@ -79,8 +81,8 @@ def test_registry_returns_the_same_forty_one_tools_in_the_same_order():
 
 
 def test_order_pin_is_not_stale():
-    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 44 个不重名。"""
-    assert len(ORDER) == len(set(ORDER)) == 44
+    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 45 个不重名。"""
+    assert len(ORDER) == len(set(ORDER)) == 45
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

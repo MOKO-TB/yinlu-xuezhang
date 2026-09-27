@@ -69,6 +69,7 @@ _build_*.log
 # v0.9.18+ 本机运行时状态(课表/天气缓存/公告轮询),跟着使用者走,不进仓库
 /schedule.json
 /schedule.prev.json
+scores.json
 /weather-cache.json
 /notice-watch.json
 
