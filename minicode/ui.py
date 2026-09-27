@@ -129,18 +129,23 @@ class TerminalUI:
     # ------------------------------------------------------------ 权限确认
 
     def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
-                     note: str = "") -> str:
+                     note: str = "", label: str = "") -> str:
         """返回 'yes' | 'no' | 'always'。reason=模型说明的"这一步为什么做"。
 
+        `label` 是并发子代理路的标签(v0.9.60,如「第2路[implement] 修复登录」):
+        CLI 里拼进面板标题,让用户分得清是哪一路在等确认。
         非交互场景(stdin 关闭、管道输入、Ctrl+C)一律按"拒绝"处理并说明原因,
         不能让确认框把整个进程带崩。
         """
         from minicode.explain import permission_why
         why = permission_why(tool.name, args, reason)
         self.console.print()
+        title = f"[yellow]⚠ 权限确认 · {tool.name}[/yellow]"
+        if label:
+            title = f"[yellow]⚠ 权限确认 · {tool.name} · {label}[/yellow]"
         self.console.print(Panel(
             self._permission_detail(tool, args, why),
-            title=f"[yellow]⚠ 权限确认 · {tool.name}[/yellow]",
+            title=title,
             border_style="red" if note else "yellow",
         ))
         if note:

@@ -988,3 +988,35 @@ def test_monitor_activity_carries_real_times_after_a_real_turn(config, tmp_path)
     assert row["action"]["type"] == "reveal"        # 点一下真去开所在文件夹
     assert act["now"] is None and act["summary"]["running"] == 0
     assert act["updated_at"]
+
+
+class _StreamOkLLM:
+    """只回一个字的模型:确认框细节测试不需要真跑回合。"""
+
+    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
+                    on_retry=None):
+        return AssistantTurn(text="ok")
+
+
+def test_write_file_overwrite_confirm_shows_real_diff(config, tmp_path):
+    """覆盖已有文件的确认框给真 diff(改了哪几行一眼看清),新建文件维持预览。"""
+    from minicode.tools.base import Tool
+    (tmp_path / "cfg.ini").write_text("mode = fast\nretries = 1\n", encoding="utf-8")
+    bridge, _window, _session = make(config, tmp_path, _StreamOkLLM())
+    tool = Tool(name="write_file", description="", parameters={},
+                handler=lambda ctx, **k: "ok")
+    detail = bridge._permission_detail_text(tool, {
+        "path": "cfg.ini", "content": "mode = slow\nretries = 1\n"})
+    assert "覆盖已有文件: cfg.ini" in detail
+    assert "-mode = fast" in detail and "+mode = slow" in detail
+    assert "retries = 1" in detail                    # 没改的行只作为上下文出现
+
+
+def test_write_file_new_confirm_keeps_preview(config, tmp_path):
+    from minicode.tools.base import Tool
+    bridge, _window, _session = make(config, tmp_path, _StreamOkLLM())
+    tool = Tool(name="write_file", description="", parameters={},
+                handler=lambda ctx, **k: "ok")
+    detail = bridge._permission_detail_text(tool, {
+        "path": "new.txt", "content": "第一行\n第二行\n"})
+    assert "新建文件: new.txt" in detail and "第一行" in detail

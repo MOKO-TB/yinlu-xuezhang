@@ -114,7 +114,8 @@ TARGETS: dict[str, tuple[str, ...]] = {
                          "DEFAULTS", "PREF_FILE", "_clean_folded"),
     # v0.9.37:实时耗时表(漏 live_rows = 时间线一行时刻都没有;漏 live_abandon =
     # 按了停止还在转圈,那一行永远装作在跑)
-    "minicode.gui_ui": ("live_rows", "live_now", "live_abandon", "_live_begin",
+    "minicode.gui_ui": ("confirm_tool",  # v0.9.60:label 参数要能传到 handler
+                        "live_rows", "live_now", "live_abandon", "_live_begin",
                         "_live_end", "LIVE_CAP",
                         # v0.9.39:一轮总时限到点要说得出声(漏收 = 停下时界面一个字也不显示,
                         # 用户只看到"它不动了",以为卡死)
@@ -341,7 +342,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # v0.9.40 D0/D2:跨天重建 + 撞上限后的收尾调用
                        "_refresh_clock", "_wrap_up"),
     "minicode.subagents": ("type_spec", "_await", "_timeout_note", "TYPE_KEYS",
-                           "DOMAIN_KEYS"),
+                           "DOMAIN_KEYS",
+                           # v0.9.60:批量放开写类型的两根支柱(漏收 = 混合批次
+                           # 静默退回"只读才并行",而工具描述还在许诺能并行写)
+                           "MAX_PARALLEL_TASKS", "_TaggedUI"),
     # v0.9.39:确认框要能讲清新工具的代价(漏收 = 弹了框但没说图会被发出去/文件落在哪)
     "minicode.explain": ("risk_notes", "permission_why", "action_reason"),
     # ---- v0.9.16/17/20:主动推荐 + 新版本检查 + 今日简报(合并成一个键,

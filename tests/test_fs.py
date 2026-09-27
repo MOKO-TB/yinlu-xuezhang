@@ -83,3 +83,24 @@ def test_repo_outline_reports_unparsable_py(ctx, tmp_path):
     (tmp_path / "broken.py").write_text("def oops(:\n", encoding="utf-8")
     out = repo_outline(ctx, "")
     assert "解析不了" in out                          # 照实说,不硬猜
+
+
+def test_edit_miss_reports_nearest_lines(ctx):
+    """锚点打不中时给"最接近的行"(行号+相似度),模型一回合自我修正 —— 只报告不猜着改。"""
+    fs.write_file(ctx, "app.py", 'def hello():\n    print("hi")\n    return None\n')
+    out = fs.edit_file(ctx, "app.py",
+                       'def hello():      \n    print("hi")', "x")
+    assert "未在文件中找到" in out
+    assert "最接近的几行" in out and "第 1 行" in out
+    # 完全不沾边的锚点:如实说找不到相近的行
+    out2 = fs.edit_file(ctx, "app.py", "class TotallyDifferent:\n    pass", "x")
+    assert "找不到相近的行" in out2
+    # 文件内容没被偷偷改掉
+    assert "def hello():" in fs.read_file(ctx, "app.py")
+
+
+def test_edit_ambiguous_lists_line_numbers(ctx):
+    fs.write_file(ctx, "dup.txt", "alpha\nmid\nalpha\ntail\nalpha\n")
+    out = fs.edit_file(ctx, "dup.txt", "alpha", "beta")
+    assert "出现 3 次" in out and "第 1 行" in out and "第 3 行" in out and "第 5 行" in out
+

@@ -2564,7 +2564,7 @@ class Bridge:
 
     # 确认握手:Agent 线程阻塞在此,前端点按钮后返回
     def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
-                     note: str = "") -> str:
+                     note: str = "", label: str = "") -> str:
         from minicode.explain import permission_why
         why = permission_why(tool.name, args, reason)
         risks = list(why.get("risks") or [])
@@ -2576,7 +2576,8 @@ class Bridge:
             self.ui.push("confirm_request", tool=tool.name,
                          detail=self._permission_detail_text(tool, args),
                          why=why.get("why", ""), digest=why.get("digest", ""),
-                         risks=risks, alert=bool(note))
+                         risks=risks, alert=bool(note),
+                         label=str(label or ""))
             self._confirm_event.wait()
             return self._confirm_choice
 
@@ -2588,9 +2589,19 @@ class Bridge:
             path = str(args.get("path", "?"))
             content = str(args.get("content", ""))
             target = self.workspace / path
+            if target.exists():
+                # 覆盖已有文件:给真 diff(改了哪几行一眼看清),不再只给新内容头部
+                current = target.read_text(encoding="utf-8",
+                                           errors="replace").splitlines()
+                after = content.splitlines()
+                diff = list(difflib.unified_diff(
+                    current, after, lineterm="", n=2))[2:]
+                text = f"覆盖已有文件: {path}\n\n" + "\n".join(diff[:DIFF_MAX_LINES])
+                if len(diff) > DIFF_MAX_LINES:
+                    text += f"\n…(diff 共 {len(diff)} 行)"
+                return text
             lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
-            action = "覆盖已有文件" if target.exists() else "新建文件"
-            head = f"{action}: {path}({lines} 行)\n\n"
+            head = f"新建文件: {path}({lines} 行)\n\n"
             body = "\n".join(content.splitlines()[:PREVIEW_LINES])
             if content.count("\n") >= PREVIEW_LINES:
                 body += "\n…"

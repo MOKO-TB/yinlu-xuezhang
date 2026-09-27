@@ -3038,7 +3038,8 @@ window.__gcodeEvent = function (e) {
       break;
     }
     case "confirm_request": {
-      $("confirmTitle").textContent = "⚠ 权限确认 · " + e.tool;
+      $("confirmTitle").textContent = "⚠ 权限确认 · " + e.tool
+        + (e.label ? " · " + e.label : "");   // v0.9.60:并发子代理路的标签
       $("confirmDetail").textContent = e.detail;
       const risks = e.risks || [];
       const whyText = [e.why, e.digest ? "这一步会做什么:" + e.digest : ""]

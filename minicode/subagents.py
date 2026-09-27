@@ -10,11 +10,14 @@
 type 还可以传 "auto":由 router 看任务描述选档,选中的理由会写进返回给主代理
 (也就是用户看得到)的报告抬头 —— 路由不偷偷替用户决定。
 
-并行派发:type/task 同时传数组即为批量模式(上限 MAX_PARALLEL_TASKS),
-只对**只读类型**开放。原因是 PermissionGate 里 read_only 工具直接 ALLOW,
-不会走确认握手;写类型并发会争抢同一条确认通道,把「哪个子代理在等确认」
-搅乱。批量模式用静默 UI 吞掉各子代理的流式输出与工具卡片——否则几路
-text_delta 会在同一个聊天区里互相穿插成乱码——只把合并报告作为工具结果带回。
+并行派发:type/task 同时传数组即为批量模式(上限 MAX_PARALLEL_TASKS)。
+v0.9.60 起**写类型(implement 等)也开放并行**:每一路的确认请求经 _TaggedUI
+带上「第 N 路[类型]任务摘要」的标签,走同一条确认通道排队弹出 —— 用户分得清
+是谁在等,一次答一个;accept_edits/accept_all 档下写操作本来就不弹框,
+各路真正并行跑完。批量模式用静默 UI 吞掉各子代理的流式输出与工具卡片——
+否则几路 text_delta 会在同一个聊天区里互相穿插成乱码——只把合并报告带回。
+并行写的前提是**各路负责不同文件**:两路改同一个文件是内容竞争,task 描述
+必须按文件划好地盘(工具描述里也这么教模型)。
 
 超时:每一路各占一个守护线程,主代理最多等 config.subagent_time_limit_seconds
 秒。到点只是**不再等它的报告**,Python 没有安全的强杀,那一路当前这一步还会
@@ -40,7 +43,7 @@ if TYPE_CHECKING:  # 避免循环导入,运行时才用到这些类型
 
 MAX_SUB_STEPS = 20        # 子代理步数上限(比主 Agent 小)
 REPORT_LIMIT = 6000       # 单个子代理报告回填给主对话的截断长度
-MAX_PARALLEL_TASKS = 4    # 一次 task 最多并发的只读子代理数
+MAX_PARALLEL_TASKS = 6    # 一次 task 最多并发的子代理数(v0.9.60 起含写类型)
 BATCH_REPORT_LIMIT = 16000  # 批量报告合并后的总截断长度
 
 # 子代理报告尾部的固定提醒:子代理读的网页/检索结果在它自己的会话里被围栏
@@ -136,6 +139,28 @@ class _QuietUI:
             raise AttributeError(name)
         if name in _QuietUI._SILENT:
             return lambda *a, **k: None
+        return getattr(self._inner, name)
+
+
+class _TaggedUI:
+    """给一路并发子代理的确认请求贴标签:让用户分得清「哪一路在等」。
+
+    批量放开写类型的前题(v0.9.60):确认通道仍是一条(一次只弹一个框,
+    由 Bridge 的锁排队),但每个框都带「第 N 路[类型]任务摘要」——
+    用户按路作答,不会把 A 路的批准错当成 B 路的。
+    """
+
+    def __init__(self, inner, tag: str):
+        self._inner = inner
+        self._tag = tag
+
+    def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
+                     note: str = "", label: str = "") -> str:
+        merged = self._tag + (f" · {label}" if label else "")
+        return self._inner.confirm_tool(tool, args, reason=reason, note=note,
+                                        label=merged)
+
+    def __getattr__(self, name: str):
         return getattr(self._inner, name)
 
 
@@ -302,29 +327,29 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                 body = body[:REPORT_LIMIT] + f"\n…(报告超过 {REPORT_LIMIT} 字符,已截断)"
             return body + _SUB_REPORT_NOTE
 
-        # ---- 批量:只读才并发(写类型共享一条确认通道,会串味)----
+        # ---- 批量:v0.9.60 起写类型也并发。确认通道仍是一条(锁排队),
+        # 但每路经 _TaggedUI 贴上「第 N 路[类型]任务」标签,用户分得清在等谁;
+        # accept_edits/accept_all 档下写操作不弹框,各路真正并行。----
         writers = [s.type for s, _, _ in specs if not s.read_only]
-        if writers:
-            return (f"错误: 批量并行只支持只读类型"
-                    f"(explore / review / english),"
-                    f"但收到了 {', '.join(writers)}。"
-                    "写操作请逐个派发,或改用单发模式——并发的写子代理会争抢"
-                    "同一条权限确认通道,导致确认框对应不上是谁在等。")
 
         # 批量是静默模式(各路输出互不进聊天区):开始时在聊天区说一声,不然
         # 用户看到的就是发完之后一片安静,直到合并报告突然出现。
         try:
             names = "、".join(f"{s.type}" for s, _, _ in specs)
-            ui.push("info", text=f"已并行派出 {len(specs)} 路只读子代理"
-                                 f"({names}),完成后合并报告回填。")
+            tail = "(含写操作,确认框会标明是哪一路)" if writers else ""
+            ui.push("info", text=f"已并行派出 {len(specs)} 路子代理"
+                                 f"({names}){tail},完成后合并报告回填。")
         except Exception:
             pass                        # CLI/无 push 的界面:没有这条也不碍事
         quiet = _QuietUI(ui)
         reports = _await([
-            (lambda s=spec, x=text: run_subagent(
-                ctx, s, x, llm, quiet, config, registry,
+            (lambda s=spec, x=text, i=idx: run_subagent(
+                ctx, s, x, llm,
+                (_TaggedUI(quiet, f"第{i + 1}路[{s.type}] {x.strip()[:30]}")
+                 if not s.read_only else quiet),
+                config, registry,
                 undo_stack=parent_undo))
-            for spec, text, _note in specs], limit)
+            for idx, (spec, text, _note) in enumerate(specs)], limit)
         pairs = [(spec, text, rep if rep is not None else _timeout_note(limit))
                  for (spec, text, _note), rep in zip(specs, reports)]
         notes = [note for _s, _t, note in specs if note]
@@ -346,8 +371,11 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             "没命中任何领域特征时 auto 会退回 explore,不会硬凑一档。"
             "子代理看不到当前对话——任务描述必须自包含(目标+涉及路径+验收标准)。"
             "适合:探索范围大、子任务独立、主对话上下文紧张时。"
-            "一次要查多件互不相干的事时,type 和 task 都传数组即可并行(最多 4 个),"
-            "但只支持只读类型 explore/review/english;写操作必须逐个单发。"
+            "一次要查/做多件互不相干的事时,type 和 task 都传数组即可并行(最多 6 个),"
+            "v0.9.60 起写类型(implement/code 等)也能并行:确认模式下每个确认框会标明"
+            "「第几路[类型] 在等」,accept_edits/accept_all 档下各路直接并行跑完 —— "
+            "这是减少等待的正确姿势。**并行写的硬规矩:各路负责不同文件**(任务描述里"
+            "把文件划好地盘),两路改同一个文件是内容竞争,必须串行。"
             "每一路最多等 config.subagent_time_limit_seconds 秒,超时会如实标成"
             "「未返回」而不是失败。"
         ),

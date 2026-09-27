@@ -322,27 +322,34 @@ def test_task_batch_keeps_subagent_streaming_out_of_the_chat(config, tmp_path):
     assert [e["name"] for e in window.of_type("tool_start")] == ["task"]
 
 
-def test_task_batch_rejects_write_types(config, tmp_path):
+def test_task_batch_runs_mixed_readers_and_writer(config, tmp_path):
+    """v0.9.60:批量放开写类型 —— 侦察+实现混编一路跑,写的真写了。"""
     _accept_all(config)
-    llm = RoutingLLM(lambda messages: (
+    llm = QueueLLM([
         AssistantTurn(tool_calls=[_call("task", {
             "type": ["explore", "implement"],
-            "task": ["看看代码", "顺手改一下"]}, "b1")])
-        if not any(m.get("role") == "tool" for m in messages)
-        else _final("被拒了")))
+            "task": ["看看代码", "创建 out.txt 内容 done"]}, "b1")]),
+        _final("侦察:工作区有 1 个文件"),
+        AssistantTurn(tool_calls=[_call("implement·write_file",
+                                        {"path": "out.txt", "content": "done"}, "w1")]),
+        _final("已创建 out.txt"),
+        _final("主代理收尾"),
+    ])
     bridge, window, session = make(config, tmp_path, llm)
     bridge.send_task("混合批次")
     assert wait_until(lambda: not bridge._busy, timeout=15)
 
     result = _tool_result(session)
-    assert "只支持只读类型" in result and "implement" in result
+    assert "[并行子代理完成 · 2 个]" in result
+    assert "out.txt" in result                       # 写子代理的报告进了合并
+    assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "done"
 
 
 def test_task_batch_validation(config, tmp_path):
     _accept_all(config)
     cases = [
         ({"type": ["explore", "review"], "task": ["只有一个"]}, "数量必须一致"),
-        ({"type": ["explore"] * 5, "task": ["a"] * 5}, "一次最多并行"),
+        ({"type": ["explore"] * 7, "task": ["a"] * 7}, "一次最多并行"),
         ({"type": ["explore", "fly"], "task": ["a", "b"]}, "未知子代理类型"),
         ({"type": ["explore", ""], "task": ["a", "b"]}, "不能为空"),
         ({"type": 42, "task": "a"}, "必须是字符串或字符串数组"),
@@ -445,20 +452,24 @@ def test_domain_tool_sets_are_prefixed_and_read_only_isolated(config, tmp_path):
     assert "code·write_file" in code and "code·bash" in code
 
 
-def test_batch_parallel_allows_read_only_domain_but_not_writers(config, tmp_path):
+def test_batch_parallel_allows_read_only_and_writer_domains(config, tmp_path):
+    """v0.9.60:writing(写)与 english(只读)领域档混编并行也放行。"""
     _accept_all(config)
     llm = QueueLLM([
         AssistantTurn(tool_calls=[_call("task", {
             "type": ["english", "writing"],
             "task": ["查四级时间", "写论文提纲"]}, "b1")]),
+        _final("英语:四六级时间见校历"),
+        _final("写作:提纲已列"),
         _final("收尾"),
     ])
     bridge, window, session = make(config, tmp_path, llm)
     bridge.send_task("混合并发")
     assert wait_until(lambda: not bridge._busy)
     result = _tool_result(session)
-    assert "批量并行只支持只读类型" in result and "writing" in result
-    assert "english" not in result.split("但收到了")[1]
+    assert "[并行子代理完成 · 2 个]" in result
+    assert "英语" in result and "写作" in result
+    assert "只支持只读类型" not in result
 
 
 def test_subagent_timeout_is_visible_and_not_called_a_failure(config, tmp_path):
@@ -594,3 +605,61 @@ def test_auto_route_lists_alternatives_when_multiple_domains_hit(config):
     key, note = router.resolve_type("auto", "论文查重脚本报错了")
     assert key in ("writing", "code")
     assert "也命中" in note and "计分" in note
+
+
+def test_batch_write_confirms_carry_lane_labels(config, tmp_path):
+    """并行写的关键 UX:confirm 模式下每个确认框标明「第几路[类型]」,
+    用户才能把批准给对路 —— 这正是当年只敢并行只读的原因。"""
+    llm = QueueLLM([
+        AssistantTurn(tool_calls=[_call("task", {
+            "type": ["implement", "implement"],
+            "task": ["创建 a.txt", "创建 b.txt"]}, "b1")]),
+        AssistantTurn(tool_calls=[_call("implement·write_file",
+                                        {"path": "a.txt", "content": "A"}, "w1")]),
+        _final("a 完成"),
+        AssistantTurn(tool_calls=[_call("implement·write_file",
+                                        {"path": "b.txt", "content": "B"}, "w2")]),
+        _final("b 完成"),
+        _final("主代理收尾"),
+    ])
+    bridge, window, _ = make(config, tmp_path, llm)
+    bridge.send_task("两路写")
+    import time as _t
+    deadline = _t.time() + 15
+    labels = []
+    while _t.time() < deadline and len(window.of_type("confirm_request")) < 3:
+        _t.sleep(0.05)
+        got = window.of_type("confirm_request")
+        if len(got) > len(labels):
+            for _ in range(len(got) - len(labels)):
+                bridge.confirm_reply("yes")
+                labels = [e.get("label") or "" for e in
+                          window.of_type("confirm_request")]
+    assert wait_until(lambda: not bridge._busy, timeout=15)
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "A"
+    assert (tmp_path / "b.txt").read_text(encoding="utf-8") == "B"
+    lane_labels = [x for x in labels if x.startswith("第")]
+    assert any("第1路[implement]" in x for x in lane_labels), labels
+    assert any("第2路[implement]" in x for x in lane_labels), labels
+    # 主代理自己的 task 确认没有路标签
+    assert not labels[0].startswith("第")
+
+
+def test_tagged_ui_merges_labels_and_passes_through():
+    from minicode.subagents import _TaggedUI
+
+    seen = {}
+
+    class Inner:
+        def confirm_tool(self, tool, args, reason="", note="", label=""):
+            seen["label"] = label
+            return "yes"
+
+        def other(self):
+            return "透传"
+
+    ui = _TaggedUI(Inner(), "第2路[implement] 修复登录")
+    assert ui.other() == "透传"
+    assert ui.confirm_tool(None, {}, label="写文件") == "yes"
+    assert "第2路[implement] 修复登录" in seen["label"]
+    assert "写文件" in seen["label"]

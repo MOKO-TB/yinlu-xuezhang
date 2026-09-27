@@ -126,8 +126,12 @@ class GuiUI:
         self.push("error", text=text)
 
     def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
-                     note: str = "") -> str:
-        """弹确认框并等待用户选择;由 Bridge 注入实现。reason=为什么要做这一步。"""
+                     note: str = "", label: str = "") -> str:
+        """弹确认框并等待用户选择;由 Bridge 注入实现。reason=为什么要做这一步。
+
+        `label` 是并发子代理路的标签(v0.9.60):原样传给 handler,确认框标题
+        带上「第几路[类型]」,用户才分得清是谁在等。
+        """
         if self.confirm_handler is None:
             self.push("error", text="确认通道未就绪,已自动拒绝")
             return "no"
@@ -138,6 +142,9 @@ class GuiUI:
             arity = len(inspect.signature(self.confirm_handler).parameters)
         except (TypeError, ValueError):
             arity = 3
+        if arity >= 5:
+            # 绑定方法的 signature 不含 self:5 参 = (tool, args, reason, note, label)
+            return self.confirm_handler(tool, args, reason, note, label)
         if arity >= 4:
             return self.confirm_handler(tool, args, reason, note)
         return self.confirm_handler(tool, args, reason)

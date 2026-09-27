@@ -75,6 +75,41 @@ def write_file(ctx: ToolContext, path: str, content: str) -> str:
     return f"已{action}文件 {path}({n_lines} 行,{len(content)} 字符)。"
 
 
+def _nearest_lines(text: str, old_string: str, keep: int = 2,
+                   cutoff: float = 0.55) -> "list[tuple[int, float, str]]":
+    """与 old_string 首行最接近的几行(行号 1 起、相似度、截断展示)。
+
+    借 difflib 的序列相似度做"指路",不做模糊替换 —— 改错了比不改更糟。
+    """
+    from difflib import SequenceMatcher
+    lines = text.splitlines()
+    first = (old_string.splitlines() or [""])[0].strip()
+    if not first or not lines:
+        return []
+    scored = []
+    for i, ln in enumerate(lines, start=1):
+        s = ln.strip()
+        if not s:
+            continue
+        ratio = SequenceMatcher(None, first, s).ratio()
+        if ratio >= cutoff:
+            scored.append((i, ratio, s[:60]))
+    scored.sort(key=lambda x: -x[1])
+    return [(n, r, s) for n, r, s in scored[:keep]]
+
+
+def _match_lines(text: str, old_string: str, cap: int = 20) -> "list[int]":
+    """old_string 每次出现的所在行号(1 起),给"出现 N 次不唯一"的反馈用。"""
+    out, start = [], 0
+    while len(out) < cap:
+        idx = text.find(old_string, start)
+        if idx < 0:
+            break
+        out.append(text.count("\n", 0, idx) + 1)
+        start = idx + 1
+    return out
+
+
 def edit_file(ctx: ToolContext, path: str, old_string: str, new_string: str,
               replace_all: bool = False) -> str:
     """精确字符串替换编辑。old_string 必须在文件中唯一,除非 replace_all。"""
@@ -90,10 +125,19 @@ def edit_file(ctx: ToolContext, path: str, old_string: str, new_string: str,
     text = _read_text(p)
     count = text.count(old_string)
     if count == 0:
-        return ("错误: old_string 未在文件中找到。请先用 read_file 核对内容,"
-                "注意空格、缩进与换行必须完全一致。")
+        # 反馈"最接近的行"而不是只说没找到:模型拿着行号与相似度一回合就能
+        # 自我修正,省掉"再 read_file 一遍"的整轮等待。只报告,绝不替它猜着改。
+        hints = _nearest_lines(text, old_string)
+        extra = "".join(f"\n  第 {n} 行(相似度 {ratio:.0%}):{line}"
+                        for n, ratio, line in hints)
+        return ("错误: old_string 未在文件中找到(空格、缩进与换行必须完全一致)。"
+                + ("文件里最接近的几行:" + extra if hints else
+                   "文件里找不到相近的行 —— 可能要改的是别的文件,先 read_file 核对。"))
     if count > 1 and not replace_all:
-        return (f"错误: old_string 在文件中出现 {count} 次,不唯一。"
+        starts = _match_lines(text, old_string)
+        shown = ", ".join(f"第 {n} 行" for n in starts[:6])
+        more = f"(共 {len(starts)} 处)" if len(starts) > 6 else ""
+        return (f"错误: old_string 在文件中出现 {count} 次,不唯一({shown}{more})。"
                 "请补充更多上下文使其唯一,或设置 replace_all=true 全部替换。")
 
     new_text = text.replace(old_string, new_string) if replace_all \
