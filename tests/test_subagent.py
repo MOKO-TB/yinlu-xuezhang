@@ -13,7 +13,14 @@ pytestmark = pytest.mark.slow
 
 
 class QueueLLM:
-    """父代理与子代理共用同一个脚本队列(单线程按序消费)。"""
+    """父代理与子代理共用同一个脚本队列(单线程按序消费)。
+
+    ⚠ 只适用于「主代理与子代理严格交替」的**单路**场景:并行批次跑的是
+    真线程,启动顺序不由测试控制,共享队列会把两路的脚本串台(§4 批量
+    竞态案:v0.9.70 轮在负载下实锤,explore 路抢到 implement 路的收尾
+    文本、写调用没有任何一路执行)。并行批次的测试一律用 RoutingLLM
+    按会话身份路由 —— 它的 docstring 从 v0.9.01 就写着这条规矩。
+    """
 
     def __init__(self, turns):
         self.turns = list(turns)
@@ -323,18 +330,33 @@ def test_task_batch_keeps_subagent_streaming_out_of_the_chat(config, tmp_path):
 
 
 def test_task_batch_runs_mixed_readers_and_writer(config, tmp_path):
-    """v0.9.60:批量放开写类型 —— 侦察+实现混编一路跑,写的真写了。"""
+    """v0.9.60:批量放开写类型 —— 侦察+实现混编一路跑,写的真写了。
+
+    路由按会话身份分派:并发批次跑的是真线程,启动顺序不由测试控制,
+    共享 QueueLLM 会把两路的脚本串台(§4 批量竞态案:负载下 explore 路
+    抢到 implement 路的收尾文本,写调用没有任何一路执行,out.txt 根本
+    不在磁盘上)。产品侧查证无此竞态(每路独立会话、LLMClient 状态全在
+    调用局部),修的是夹具 —— 这正是 RoutingLLM docstring 那条老规矩。
+    """
     _accept_all(config)
-    llm = QueueLLM([
-        AssistantTurn(tool_calls=[_call("task", {
+
+    def route(messages):
+        head = _sys_of(messages)
+        if _is_subagent(messages) and "只读侦察子代理" in head:
+            return _final("侦察:工作区有 1 个文件")
+        if _is_subagent(messages) and "实现子代理" in head:
+            if any(m.get("role") == "tool" for m in messages):
+                return _final("已创建 out.txt")
+            return AssistantTurn(tool_calls=[_call(
+                "implement·write_file",
+                {"path": "out.txt", "content": "done"}, "w1")])
+        if any(m.get("role") == "tool" for m in messages):
+            return _final("主代理收尾")
+        return AssistantTurn(tool_calls=[_call("task", {
             "type": ["explore", "implement"],
-            "task": ["看看代码", "创建 out.txt 内容 done"]}, "b1")]),
-        _final("侦察:工作区有 1 个文件"),
-        AssistantTurn(tool_calls=[_call("implement·write_file",
-                                        {"path": "out.txt", "content": "done"}, "w1")]),
-        _final("已创建 out.txt"),
-        _final("主代理收尾"),
-    ])
+            "task": ["看看代码", "创建 out.txt 内容 done"]}, "b1")])
+
+    llm = RoutingLLM(route)
     bridge, window, session = make(config, tmp_path, llm)
     bridge.send_task("混合批次")
     assert wait_until(lambda: not bridge._busy, timeout=15)
@@ -487,16 +509,26 @@ def test_task_campus_dispatch_reports_back(config, tmp_path):
 
 
 def test_batch_parallel_allows_read_only_and_writer_domains(config, tmp_path):
-    """v0.9.60:writing(写)与 english(只读)领域档混编并行也放行。"""
+    """v0.9.60:writing(写)与 english(只读)领域档混编并行也放行。
+
+    断言只看"两类报告都在", swapped 也过得去 —— 但并行批次照 RoutingLLM
+    的老规矩按会话身份路由,不给未来的断言埋共享队列的雷(§4 批量竞态案)。
+    """
     _accept_all(config)
-    llm = QueueLLM([
-        AssistantTurn(tool_calls=[_call("task", {
+
+    def route(messages):
+        head = _sys_of(messages)
+        if _is_subagent(messages) and "英语领域子代理" in head:
+            return _final("英语:四六级时间见校历")
+        if _is_subagent(messages) and "写作领域子代理" in head:
+            return _final("写作:提纲已列")
+        if any(m.get("role") == "tool" for m in messages):
+            return _final("收尾")
+        return AssistantTurn(tool_calls=[_call("task", {
             "type": ["english", "writing"],
-            "task": ["查四级时间", "写论文提纲"]}, "b1")]),
-        _final("英语:四六级时间见校历"),
-        _final("写作:提纲已列"),
-        _final("收尾"),
-    ])
+            "task": ["查四级时间", "写论文提纲"]}, "b1")])
+
+    llm = RoutingLLM(route)
     bridge, window, session = make(config, tmp_path, llm)
     bridge.send_task("混合并发")
     assert wait_until(lambda: not bridge._busy)
@@ -643,19 +675,13 @@ def test_auto_route_lists_alternatives_when_multiple_domains_hit(config):
 
 def test_batch_write_confirms_carry_lane_labels(config, tmp_path):
     """并行写的关键 UX:confirm 模式下每个确认框标明「第几路[类型]」,
-    用户才能把批准给对路 —— 这正是当年只敢并行只读的原因。"""
-    llm = QueueLLM([
-        AssistantTurn(tool_calls=[_call("task", {
-            "type": ["implement", "implement"],
-            "task": ["创建 a.txt", "创建 b.txt"]}, "b1")]),
-        AssistantTurn(tool_calls=[_call("implement·write_file",
-                                        {"path": "a.txt", "content": "A"}, "w1")]),
-        _final("a 完成"),
-        AssistantTurn(tool_calls=[_call("implement·write_file",
-                                        {"path": "b.txt", "content": "B"}, "w2")]),
-        _final("b 完成"),
-        _final("主代理收尾"),
-    ])
+    用户才能把批准给对路 —— 这正是当年只敢并行只读的原因。
+
+    两路同为 implement,系统提示词相同,按各自第一条 user 消息(任务文本)
+    分派:共享 QueueLLM 在负载下会把两路的脚本串台,表现成「第一路的标签
+    从没出现、第二路的出现两次」(§4 批量竞态案)。
+    """
+    llm = RoutingLLM(lambda messages: _route_two_writers(messages))
     bridge, window, _ = make(config, tmp_path, llm)
     bridge.send_task("两路写")
     import time as _t
@@ -677,6 +703,29 @@ def test_batch_write_confirms_carry_lane_labels(config, tmp_path):
     assert any("第2路[implement]" in x for x in lane_labels), labels
     # 主代理自己的 task 确认没有路标签
     assert not labels[0].startswith("第")
+
+
+def _route_two_writers(messages):
+    """两路 implement 的脚本路由:身份 = 子代理系统提示词 + 各自的任务文本。"""
+    head = _sys_of(messages)
+    if _is_subagent(messages) and "实现子代理" in head:
+        has_tool = any(m.get("role") == "tool" for m in messages)
+        blob = json.dumps(messages, ensure_ascii=False)
+        if "a.txt" in blob:
+            if has_tool:
+                return _final("a 完成")
+            return AssistantTurn(tool_calls=[_call(
+                "implement·write_file", {"path": "a.txt", "content": "A"}, "w1")])
+        if "b.txt" in blob:
+            if has_tool:
+                return _final("b 完成")
+            return AssistantTurn(tool_calls=[_call(
+                "implement·write_file", {"path": "b.txt", "content": "B"}, "w2")])
+    if any(m.get("role") == "tool" for m in messages):
+        return _final("主代理收尾")
+    return AssistantTurn(tool_calls=[_call("task", {
+        "type": ["implement", "implement"],
+        "task": ["创建 a.txt", "创建 b.txt"]}, "b1")])
 
 
 def test_tagged_ui_merges_labels_and_passes_through():
