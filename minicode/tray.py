@@ -254,6 +254,12 @@ if ($env:YX_ICON) {
     [void]$xml.GetElementsByTagName('visual').Item(0).AppendChild($img)
   } catch { }
 }
+if ($env:YX_ACT) {
+  # 点通知直达(v0.9.72):协议激活 —— 点了由系统拉起 yinlu: URI,
+  # 已在跑的实例接住并弹回窗口;没注册协议时这个属性不设置,行为不变。
+  [void]$xml.DocumentElement.SetAttribute('activationType', 'protocol')
+  [void]$xml.DocumentElement.SetAttribute('activation', $env:YX_ACT)
+}
 $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
 if ($env:YX_TAG) { $toast.Tag = $env:YX_TAG }
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(
@@ -281,6 +287,30 @@ def _file_uri(path) -> str:
     """
     import os
     return "file:///" + os.path.abspath(str(path)).replace("\\", "/")
+
+
+_protocol_ready = False            # 协议注册一次就够(与 AUMID 同一条纪律)
+
+
+def _protocol_uri_for(kind: str) -> str:
+    """这一类通知的激活 URI(通知点击直达,v0.9.72)。
+
+    协议没注册成功(源码运行/注册表拒)就给空串 —— toast 行为退回原样,
+    **绝不发一个点了没反应的空激活**。注册指向 GUI exe(launch_target 给
+    什么就用什么;CLI 进程发起时 activate 层会改指同目录的 GUI exe)。
+    """
+    global _protocol_ready
+    from minicode import activate as _act
+    if not _protocol_ready:
+        try:
+            exe, _args, _cwd = launch_target()
+            r = _act.register_protocol(exe)
+            _protocol_ready = bool(r.get("ok"))
+            if not _protocol_ready and not r.get("skipped") and r.get("msg"):
+                log(f"激活协议没注册上: {r['msg']}")
+        except Exception as e:
+            log(f"激活协议注册出错: {type(e).__name__}: {e}")
+    return _act.panel_uri(kind) if _protocol_ready else ""
 
 
 def register_notify_identity(force: bool = False) -> dict:
@@ -369,13 +399,19 @@ def _run_ps(script: str, env_extra: dict, timeout: int = _TOAST_TIMEOUT,
     return {"ok": True, "out": out}
 
 
-def _toast(title: str, body: str, tag: str = "") -> dict:
-    """走 WinRT Toast 发一条;返回 ok 只代表 PowerShell 认了这条 Show()。"""
+def _toast(title: str, body: str, tag: str = "", act: str = "") -> dict:
+    """走 WinRT Toast 发一条;返回 ok 只代表 PowerShell 认了这条 Show()。
+
+    act 是激活 URI(通知点击直达,v0.9.72):非空时 toast 带上
+    activationType=protocol —— 点了由系统拉起 yinlu: URI 交给在跑的实例。
+    协议没注册成功时不传(点击行为退回"无动作"),绝不发一个点了没反应的空激活。
+    """
     import os
     icon = resource_path(*AUMID_ICON)
     r = _run_ps(_TOAST_PS, dict(
         YX_AUMID=AUMID, YX_TITLE=str(title or AUMID_NAME),
         YX_BODY=str(body), YX_TAG=str(tag or ""),
+        YX_ACT=str(act or ""),
         # 必须是 file:/// 形式:裸路径会让 <image src> 静默失效(通知没图标)
         YX_ICON=_file_uri(icon) if os.path.isfile(icon) else ""))
     if r.get("ok"):
@@ -480,7 +516,7 @@ def notify(title: str, body: str, kind: str = "", force: bool = False) -> dict:
     text = body if len(body) <= 160 else body[:159] + "…"
     head = str(title or AUMID_NAME)
     register_notify_identity()        # 只为显示名/图标,失败也照发
-    t = _toast(head, text, kind)
+    t = _toast(head, text, kind, act=_protocol_uri_for(kind))
     if t.get("ok"):
         _LAST.update({"ok": True, "channel": "toast", "verified": True,
                       "kind": kind, "msg": ""})

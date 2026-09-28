@@ -152,9 +152,35 @@ def post_startup(ui) -> None:
     # 开机自启带 --background:窗口建的时候就是 hidden,这里只验托盘在不在。
     if tray.starts_hidden() and not tray.start_in_tray():
         _reveal_window()
+    _start_activate_listener(ui)
+
+
+def _start_activate_listener(ui) -> None:
+    """激活监听(v0.9.72):点通知拉起的第二个进程 POST 过来 → 窗口弹回 +
+    落到对应面板。push 从监听线程走 —— 与看门狗线程同一条路(GuiUI.push
+    本来就被后台线程用);没有面板落点的激活只弹回窗口,不硬开面板。"""
+    def _on_activate(parsed: dict) -> None:
+        _reveal_window()
+        panel = parsed.get("panel")
+        if panel:
+            ui.push("open_panel", panel=panel)
+
+    from minicode import activate
+    r = activate.start_listener(_on_activate, log=lambda m: tray.log(m))
+    if not r.get("ok") and r.get("msg"):
+        tray.log(r["msg"])
 
 
 def main() -> None:
+    # 通知点击直达(v0.9.72):--activate 由协议命令拉起 —— 先试着交给在跑的
+    # 实例(送达即退,绝不双开);没人在跑才自己启动,并把落点带进首屏
+    # (get_info 一次性取走,前端 boot 完成后落面板)。
+    from minicode import activate
+    act_uri = activate.pending_uri_arg()
+    if act_uri is not None:
+        if activate.handoff(act_uri):
+            return
+        activate.set_pending_panel(activate.parse_uri(act_uri).get("panel"))
     config = ensure_config()  # 未配置也照常开窗,界面内给出警示
     # 工作区:上次选的那个(workspaces.json 里的 current)优先,没有/失效才用
     # 默认工作区(= exe 目录,也就是改造前的写死值)

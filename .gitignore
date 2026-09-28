@@ -130,3 +130,7 @@ skill-usage.jsonl
 # 以前它连 .gitignore 都没盖住,谁 `git add -A` 就会把同学的原件一起提上去;
 # 看得见与删得掉的入口在 GUI「📁 工作区」弹窗里(桥 uploads_list / uploads_delete)。
 /uploads/
+
+# v0.9.72 通知激活监听端口(点通知直达):第二个实例靠它找到在跑的这一个,
+# 只在本机有意义,不进仓库也不随包外发。
+/activate-port.json

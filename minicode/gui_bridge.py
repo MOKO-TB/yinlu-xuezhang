@@ -16,6 +16,7 @@ from pathlib import Path
 from minicode import APP_NAME, __version__
 from minicode import model_probe
 from minicode import workspace as ws
+from minicode.activate import take_pending_panel as _take_pending_panel
 from minicode.app_setup import build_runner_agent, mcp_log
 from minicode.attachments import (
     UPLOAD_DIR, Attachment, build_content, display_text, is_image, mime_for,
@@ -703,6 +704,9 @@ class Bridge:
             "memory_count": len(mem_load_file(mem_path(self.workspace))),
             "memory_user_count": len(mem_load_file(global_memory_path())),
             "mcp_servers": self._mcp_summary(),
+            # 通知点击直达(v0.9.72):--activate 拉起且没交接出去时,自己
+            # 启动的这个实例在首屏把落点面板打开(一次性取走,取完即清)。
+            "activate_panel": _take_pending_panel(),
             "sandbox": self._sandbox_info(),
             "vision": self._vision_on(fallback_model=self.config.model),
             "vision_forced": bool(self.config.vision),

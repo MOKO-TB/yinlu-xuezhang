@@ -3161,6 +3161,9 @@ window.__gcodeEvent = function (e) {
     case "mcp_summary":           // 侧栏 MCP 健康行:热重载后立即刷新(v0.9.70)
       renderMcpLine(e.items || []);
       break;
+    case "open_panel":            // 通知点击直达:激活 URI 交接进来 → 落面板(v0.9.72)
+      openPanel(e.panel);
+      break;
     case "turn_usage":            // 任务面板:每回合刷新消耗/上下文占用
       renderTaskMetrics({ ...taskMetrics, consumed: e.consumed,
                           context_tokens: e.context_tokens,
@@ -6800,6 +6803,12 @@ $("btnWsPick").addEventListener("click", () => {
 });
 
 /* ---------------- 初始化 ---------------- */
+// 通知点击直达(v0.9.72):落点白名单在后端(parse_uri 已把不认识的名字
+// 降级成 focus),这里只认真存在的两个面板;没落点的激活只弹回窗口。
+function openPanel(name) {
+  if (name === "schedule") { openScheduleDlg(); return; }
+  if (name === "mood") { openMood(); return; }
+}
 // MCP 健康行(v0.9.70):配置了的都在、连没连上说清楚;数据来自 get_info 的
 // mcp_servers 与热重载后推的 mcp_summary 事件(同一份 _mcp_summary)。
 function renderMcpLine(items) {
@@ -6845,6 +6854,7 @@ window.addEventListener("DOMContentLoaded", () => {
       loadReasoning();     // 思考档位按钮
       loadPlan();          // 计划角标:工作区里已有计划时开窗就看得见进度
       renderMcpLine(info.mcp_servers);   // 侧栏 MCP 健康行(v0.9.70)
+      if (info.activate_panel) openPanel(info.activate_panel);   // 点通知直达(首屏落点)
       actPrefPull();       // 任务监控栏:上次收起还是展开、哪几段折着(v0.9.37)
     }).catch(e => {
       $("hint").textContent = "界面初始化失败:" + String(e).slice(0, 80);

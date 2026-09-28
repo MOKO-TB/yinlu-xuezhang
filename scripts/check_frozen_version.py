@@ -160,6 +160,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                       # v0.9.28:action=log 读看门狗运行日志(漏收 = 「提醒为什么
                       # 没发」在装好的包里永远只能靠猜)
                       "wd_log_tail", "watchdog_log_path"),
+    # v0.9.72:通知点击直达整模块(漏收 = 装好的包里点通知没反应、协议注册
+    # 不发生、激活监听不起来 —— 用户看到的还是"通知只有字,点了等于没点")
+    "minicode.activate": ("KIND_PANELS", "panel_uri", "parse_uri",
+                          "register_protocol", "handoff", "start_listener",
+                          "pending_uri_arg", "take_pending_panel"),
     "minicode.reasoning": ("reasoning_snapshot", "get_capability",
                            "apply_reasoning_choice"),
     "minicode.session": ("to_markdown", "search_logs", "export_filename",

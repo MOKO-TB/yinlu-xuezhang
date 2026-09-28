@@ -77,6 +77,8 @@ SHIP_NEVER: tuple[StateFile, ...] = (
               "今天弹过哪几条的去重账本:带去别人机器会把他的第一条补发误判成已弹"),
     StateFile("jobs-state.json", FILE,
               "定时任务账本(每个任务上次何时跑):带去别人机器会把新使用者的第一条周报误判成已跑"),
+    StateFile("activate-port.json", FILE,
+              "通知激活监听端口:第二个实例靠它找到在跑的这一个,只对本机有意义"),
     StateFile("watchdog.log", FILE, "看门狗日志:本机弹过哪些提醒、为什么没弹"),
     StateFile("weather.json", FILE, "常驻城市:含位置"),
     StateFile("weather-cache.json", FILE, "天气缓存:构建机坐标的结果"),

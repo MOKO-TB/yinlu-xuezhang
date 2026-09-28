@@ -30,8 +30,9 @@ _REAL_STARTUP_PATH = tray.startup_path    # 默认被下面的夹具清空,少�
 
 @pytest.fixture(autouse=True)
 def _no_real_notify(monkeypatch):
-    def fake_toast(title, body, tag=""):
-        _TOAST_CALLS.append({"title": title, "body": body, "tag": tag})
+    def fake_toast(title, body, tag="", act=""):
+        _TOAST_CALLS.append({"title": title, "body": body, "tag": tag,
+                             "act": act})
         return {"ok": False, "skipped": "no_powershell",
                 "msg": "测试环境没有 PowerShell"}
 
@@ -60,8 +61,9 @@ def _real_identity(monkeypatch):
 
 def _toast_works(monkeypatch, result=None):
     """把 toast 通道打通(默认成功),用于验"优先走 toast、不碰气球"。"""
-    def ok_toast(title, body, tag=""):
-        _TOAST_CALLS.append({"title": title, "body": body, "tag": tag})
+    def ok_toast(title, body, tag="", act=""):
+        _TOAST_CALLS.append({"title": title, "body": body, "tag": tag,
+                             "act": act})
         return result or {"ok": True, "channel": "toast"}
 
     monkeypatch.setattr(tray, "_toast", ok_toast)
@@ -580,7 +582,8 @@ def test_notify_prefers_toast_and_never_touches_the_balloon(tray_icon, monkeypat
     assert r["ok"] is True and r["channel"] == "toast" and r["verified"] is True
     assert icon.calls == []
     assert _TOAST_CALLS == [{"title": "快上课了", "body": "高等数学 08:00",
-                             "tag": "class"}]
+                             "tag": "class", "act": ""}]
+    # 测试环境协议没注册上(source 跳过),激活属性必须为空 —— 不发点了没反应的空激活
 
 
 def test_toast_channel_needs_no_tray(monkeypatch):

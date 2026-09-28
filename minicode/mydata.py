@@ -154,6 +154,8 @@ TABLE: tuple[Entry, ...] = (
           note="带去新机器会把它的第一条补发误判成「已弹过」"),
     Entry("jobs-state.json", "定时任务上次何时跑", CACHE, False,
           note="周期任务的账本(周复盘/缺口周报那类);带去新机器会误判成「这周已跑过」"),
+    Entry("activate-port.json", "通知激活监听端口", CACHE, False,
+          note="点通知直达用的端口;换机器/重启后由新实例重写"),
     # ---- 日志与留档
     Entry("tray.log", "托盘与通知日志", LOG, False),
     Entry("watchdog.log", "提醒看门狗日志", LOG, False,
