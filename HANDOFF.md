@@ -660,6 +660,15 @@ cd /d/game/mini-code
     - **没做/没动**:附件缩略图(§5 后半)、MCP 预设模板库、--live 评测(打包轮前)、
       校历删除/修订入口;没出包;冻结针 v0.9.56~67 三十五根待出包验。
 
+41. **v0.9.69 出分享包(2026-09-28,用户对「先打包再谈功能」的候选池说「开工」;本轮零代码改动、版本号不递增)**:
+    - **前置逐项核过**(§27 那份清单):无运行实例、`config.local.json`(290 B)与 `crawled/mfindgzyykj.libsp.cn/library.db`(1,309,589,504 B)在位、Inno Setup 6 在位、`check_docs.py --collect` 基线 2205 对上。
+    - **三件产物**(`dist/`,顶掉 0.9.48 那批,手上拷过旧的请作废):`引路学长-0.9.69-setup.exe` **900,499,286 B**(sha256 `5da2f45a406d22bc…`)、`引路学长-0.9.69-win64.zip` **1,182,118,545 B**(`0515e931fdefbb2b…`)、`引路学长-单文件版.exe` **139,514,976 B**(`c42fcf2954494397…`,免解压、不带馆藏库)。体积比 0.9.40(616 MB)大是因为 0.9.48 起的打包铁律:**crawl4ai + chromium-1234/headless_shell-1234 内置**,包内馆藏库 1.31 GB 凭证 `library.db.stamp.json`(1,331,774 条)已写。
+    - **⚠ Inno 编译 3088 s**(历史 324~653 s)—— D 盘 97% 满,大 I/O 变慢,不是脚本问题;下次出包前先给 D 盘腾地方,否则又是近一小时。
+    - **冻结验证(本轮的主题)**:`check_frozen_version.py` **PASS** —— **v0.9.56~69 欠下的 38 根针**(jobs 底座/循环待办/周报两件/.ics/成绩导入/并行子代理/MCP 重连与管理/校历补录/技能使用账/附件复原与使用账合并)第一次真对着 dist 验掉,§29~§40 每轮挂的"待出包验"就此清账。`e2e_frozen.py` **PASS**(假 SSE 服务器上 exe 走完流式 → write_file 真写出 → 留档 + GUI 起窗);`e2e_frozen_mcp.py` **PASS**(连服务器 → 调工具 → 回填模型,0.9.61 之后 MCP 是最大的未验域);`e2e_frozen_library.py` **4/4 命中**(包内真库:《C程序设计》/带版次/《高等数学(上)》/《三体》)。
+    - **数据边界**:e2e 生成的 `sessions/`、`token-usage.db`、`tray.log`、`weather-cache.json` 已按 §7(h) 清掉;`dist/引路学长/` 顶层 7 项(`ms-playwright/` 是 0.9.48 起的常态);包内无 `config.json`、无 `.jsonl`;包内《使用说明.txt》**51 条编号连续**(第 51 条 = v0.9.69 的附件缩略图与使用账)。**dist/ 根下另有更早 e2e 的散落残留**(`browser-profile/`、`crawled/`、`kb/`、`schedule.json` 等,不在包内、未动)—— `browser-profile` 是教务登录态,下轮顺手清或手动删。
+    - **备份与推送**:git bundle 备份 `C:\Users\Blossom\yinlu-backups\yinlu-2026-09-28.bundle`(24,793,743 B,`git bundle verify` 完整历史,头 c1be5b7)—— §26 起挂着的"零备份"清账;推送 origin(GitHub 私仓)**8e67f50..c1be5b7** 并 ls-remote 核对远端头 = c1be5b7(v0.9.68/69 连 changelog 共 4 笔上去);gitee 未动。
+    - **没做**:没发 Release(发版要用户单独点头,资产按 §7 (c) 英文名 + 原始字节流传);`--live` 评测仍等有效 Key。
+
 
 ## 7. 新会话上手指南
 
