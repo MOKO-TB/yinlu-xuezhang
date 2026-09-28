@@ -1891,6 +1891,8 @@ try {
       <button class="b-no" id="btnScheduleTimes"
               title="填一次每节课的起止时刻,存本机 period-times.json —— 之后问空档才会带钟点">
         填作息表</button>
+      <button class="b-no" id="btnIcsExport"
+              title="把课表 + 待办截止 + 校历生成一份 .ics 到工作区,双击导入 Windows 日历/手机日历 —— 到点响的是系统,学长没在跑也一样提醒">导出到日历</button>
       <button class="b-no" id="btnScheduleUndo" style="display:none">换回上一版</button>
       <button class="b-no" id="btnScheduleClose">关闭</button>
     </div>
@@ -3206,8 +3208,10 @@ window.__gcodeEvent = function (e) {
         const name = String(e.name || "重要日程");
         const days = Number(e.days_left) || 0;
         const when = days === 0 ? "就是今天" : `还有 ${days} 天`;
+        // 考试类(exam)后端多带一句「排复习计划」的可复制追问(v0.9.63):
+        // 后端有就用后端的,没有才落回通用文案 —— 追问只说不做,发不发由用户
         showProactive(`${name}${when}(${e.start || ""})`,
-          `「${name}」${when}了,帮我做一份准备计划/注意事项清单`, false);
+          String(e.ask || `「${name}」${when}了,帮我做一份准备计划/注意事项清单`), false);
       } else if (e.kind === "reminders") {
         const items = e.items || [];
         if (!items.length) break;
@@ -4819,6 +4823,22 @@ $("btnScheduleTimes").addEventListener("click", () => {
 });
 $("btnScheduleImport").addEventListener("click", () => openJwDlg("schedule"));
 $("btnScoresImport").addEventListener("click", () => openJwDlg("scores"));
+// 导出到日历(v0.9.75):对话框按钮 = v0.9.58 那个工具的同一条 export 路
+$("btnIcsExport").addEventListener("click", () => {
+  const api = window.pywebview && window.pywebview.api;
+  if (!api || !api.export_ics) { toast("这个功能只在桌面版有"); return; }
+  api.export_ics().then(r => {
+    if (!r || r.ok === false) { toast((r && r.msg) || "导出失败", true); return; }
+    const counts = r.counts || {};
+    const parts = [];
+    if (counts.course) parts.push(`课表 ${counts.course}`);
+    if (counts.reminder) parts.push(`待办截止 ${counts.reminder}`);
+    if (counts.calendar) parts.push(`校历 ${counts.calendar}`);
+    toast(`已生成「${(r.path || "").split(/[\\/]/).pop()}」`
+      + (parts.length ? `:${parts.join("、")}` : "(本机还没有日程)")
+      + " —— 双击导入 Windows 日历,重复导出不堆重");
+  }).catch(e => toast("导出失败:" + String(e).slice(0, 60), true));
+});
 $("btnScheduleUndo").addEventListener("click", () => {
   const api = window.pywebview && window.pywebview.api;
   if (!api || !api.schedule_undo) { toast("这个功能只在桌面版有"); return; }

@@ -196,3 +196,15 @@ def test_tool_handler_speaks_human(tmp_path):
     out = export_ics_tool(Ctx())
     assert "已导出" in out and "导入方法" in out
     assert "没有任何日程" in out                            # 空数据不冒充有内容
+
+
+# ---------------------------------------------------------------- GUI 按钮(v0.9.75)
+
+def test_bridge_export_ics_writes_to_workspace(config, tmp_path):
+    """课表面板「导出到日历」= 工具同一条 export 路:真落到工作区。"""
+    from tests.test_skill_panel import _app as _skills_app
+    bridge, _w = _skills_app(config, tmp_path)
+    r = bridge.export_ics()
+    assert r["ok"] is True
+    assert r["path"] == str(tmp_path / ics_export.ICS_FILE_NAME)
+    assert (tmp_path / ics_export.ICS_FILE_NAME).exists()

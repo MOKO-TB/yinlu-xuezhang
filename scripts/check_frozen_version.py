@@ -69,6 +69,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # v0.9.34:右侧「本次会话」面板两根线(漏 get_activity =
                             # 点开一栏空白;漏 reveal_file = 产出行点不动,只能看)
                             "get_activity", "reveal_file",
+                            # v0.9.75:课表面板「导出到日历」(漏 export_ics =
+                            # 按钮点了没反应,GUI 没有导出入口的老缺口回来了)
+                            "export_ics",
                             # v0.9.37:任务监控栏的开合与折叠偏好(漏 get_monitor_pref =
                             # 每次开机都回到默认收起,「记住我的选择」这句成了空话;
                             # 漏 set_monitor_pref = 点段头有反应但下次全忘)

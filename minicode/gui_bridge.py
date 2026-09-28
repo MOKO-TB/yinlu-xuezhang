@@ -382,6 +382,10 @@ class PublicApi:
         """对话型 slash 命令表(/ 面板混排用)。"""
         return self._b.get_slash_commands()
 
+    def export_ics(self) -> dict:
+        """课表面板「导出到日历」。"""
+        return self._b.export_ics()
+
     def add_skill(self, name: str, description: str = "", body: str = "",
                   channel: str = "app") -> dict:
         """技能面板「添加技能」:写一个 skills/<name>/SKILL.md。"""
@@ -953,6 +957,11 @@ class Bridge:
             {"cmd": c["cmd"], "label": c["label"], "desc": c["desc"],
              "prompt": c["prompt"], "has_arg": "$text" in c["prompt"]}
             for c in PROMPT_COMMANDS]}
+
+    def export_ics(self) -> dict:
+        """课表面板「导出到日历」:生成工作区里的 .ics(课表+待办+校历)。"""
+        from minicode.ics_export import export
+        return export(self.workspace)
 
     def add_skill(self, name: str, description: str = "", body: str = "",
                   channel: str = "app") -> dict:
