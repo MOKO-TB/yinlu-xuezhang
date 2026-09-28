@@ -1636,6 +1636,10 @@ try {
 .at-item.on, .at-item:hover { background: rgba(127, 127, 127, .18); }
 .at-item .at-hint { opacity: .55; font-size: 11px; margin-left: 6px; }
 .at-empty { padding: 7px 12px; font-size: 12.5px; color: var(--text-3); }
+/* 对话命令徽标(v0.9.74):与"开面板"的动作项区分开 */
+.at-item .cmd-tag { flex: none; font-size: 9.5px; font-weight: 700; padding: 1px 5px;
+                    margin-right: 6px; border-radius: var(--r-full);
+                    color: var(--primary); border: 1px solid var(--primary); opacity: .8; }
 </style>
 </head>
 <body>
@@ -6403,6 +6407,16 @@ function atMenuQuery() {
    执行 = 原样 .click() 那颗按钮,行为零分叉;不新增任何后端。
    菜单开着时 Enter/Tab 执行并吃掉输入框里的 /token,不会把半句话发出去。 */
 const slashState = { active: false, items: [], sel: 0, query: "" };
+// 对话型 slash 命令(v0.9.74):表在 minicode.slash_commands(唯一真相),
+// 开机拉一次;桥没有该方法(网页版)时安静退化成只有动作面板。
+let slashCmds = [];
+function loadSlashCmds() {
+  const api = window.pywebview && pywebview.api;
+  if (!api || !api.get_slash_commands) return;
+  api.get_slash_commands().then(r => {
+    if (r && r.ok) slashCmds = r.commands || [];
+  }).catch(() => {});
+}
 
 const SLASH_ACTIONS = [
   { label: "导出会话", desc: "存成 Markdown", pick: () => $("btnExport").click() },
@@ -6431,6 +6445,27 @@ function slashMenuExec(i) {
   const it = slashState.items[i];
   if (!it) return;
   const ta = $("input");
+  if (it.isCmd) {
+    // 对话命令(v0.9.74):菜单开着时输入框必然是 "/"+token,整段替换安全。
+    // 无参数的直接发(走与手打完全同一条 send() 链);带参数的展开后
+    // 光标停末尾等用户补内容。正在跑回合时不发,把话留在输入框并说明。
+    slashMenuClose();
+    ta.value = String(it.prompt || "").replace("$text", "");
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
+    if (it.has_arg) {
+      ta.focus();
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+      return;
+    }
+    if (busy) {
+      ta.focus();
+      toast("当前回合还在跑,命令已填进输入框 —— 完事按回车就发", true);
+      return;
+    }
+    send();
+    return;
+  }
   // 吃掉输入框里的 /token(从开头到 token 结束),剩下的话留着
   const tokenEnd = Math.min(ta.value.length, slashState.query.length + 1);
   ta.value = ta.value.slice(tokenEnd);
@@ -6453,7 +6488,14 @@ function slashMenuRender() {
   slashState.items.forEach((it, i) => {
     const el = document.createElement("div");
     el.className = "at-item" + (i === slashState.sel ? " on" : "");
-    el.textContent = it.label;
+    if (it.isCmd) {
+      // 对话命令项:与"打开面板"的动作区分开(一个是发请求,一个是开面板)
+      const tag = document.createElement("span");
+      tag.className = "cmd-tag";
+      tag.textContent = "命令";
+      el.appendChild(tag);
+    }
+    el.appendChild(document.createTextNode(it.label));
     const hint = document.createElement("span");
     hint.className = "at-hint";
     hint.textContent = it.desc + (i === slashState.sel ? " · ↵ 执行" : "");
@@ -6479,8 +6521,18 @@ function slashMenuQuery() {
   slashState.query = token;
   slashState.sel = 0;
   const q = token.toLowerCase();
-  slashState.items = SLASH_ACTIONS.filter(a =>
+  // 动作(开面板/界面动作)与对话命令混排:命令在下面,打 / 一眼都能看到
+  const acts = SLASH_ACTIONS.filter(a =>
     a.label.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q));
+  const cmds = slashCmds.filter(c =>
+    String(c.cmd || "").toLowerCase().includes(q)
+    || c.label.toLowerCase().includes(q)
+    || String(c.desc || "").toLowerCase().includes(q)).map(c => {
+      c = Object.assign({}, c);
+      c.isCmd = true;
+      return c;
+    });
+  slashState.items = acts.concat(cmds);
   slashMenuRender();
 }
 
@@ -6852,6 +6904,7 @@ window.addEventListener("DOMContentLoaded", () => {
       refreshHomeSuggestions();
       loadProjects();      // 侧栏项目面板(最近工作区)
       loadReasoning();     // 思考档位按钮
+      loadSlashCmds();     // 对话型 slash 命令表(v0.9.74)
       loadPlan();          // 计划角标:工作区里已有计划时开窗就看得见进度
       renderMcpLine(info.mcp_servers);   // 侧栏 MCP 健康行(v0.9.70)
       if (info.activate_panel) openPanel(info.activate_panel);   // 点通知直达(首屏落点)

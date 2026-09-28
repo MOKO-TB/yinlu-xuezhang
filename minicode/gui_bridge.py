@@ -378,6 +378,10 @@ class PublicApi:
         """技能面板「渠道」tab:技能目录的存在状态与各自技能数。"""
         return self._b.get_skill_channels()
 
+    def get_slash_commands(self) -> dict:
+        """对话型 slash 命令表(/ 面板混排用)。"""
+        return self._b.get_slash_commands()
+
     def add_skill(self, name: str, description: str = "", body: str = "",
                   channel: str = "app") -> dict:
         """技能面板「添加技能」:写一个 skills/<name>/SKILL.md。"""
@@ -941,6 +945,14 @@ class Bridge:
         from minicode.skills import describe_channels
         return {"ok": True,
                 "channels": describe_channels(self.workspace, app_dir=self.app_dir)}
+
+    def get_slash_commands(self) -> dict:
+        """对话型 slash 命令表(唯一真相在 minicode.slash_commands,改字不动前端)。"""
+        from minicode.slash_commands import PROMPT_COMMANDS
+        return {"ok": True, "commands": [
+            {"cmd": c["cmd"], "label": c["label"], "desc": c["desc"],
+             "prompt": c["prompt"], "has_arg": "$text" in c["prompt"]}
+            for c in PROMPT_COMMANDS]}
 
     def add_skill(self, name: str, description: str = "", body: str = "",
                   channel: str = "app") -> dict:

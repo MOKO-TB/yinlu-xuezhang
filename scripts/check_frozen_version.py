@@ -309,6 +309,8 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.weather": ("weather_card", "umbrella_tip", "refresh_async",
                          "get_weather"),
     # ---- v0.9.19:拖拽上传(字节落盘,绕开 WebView2 拿不到本地路径) ----
+    # v0.9.74:对话型 slash 命令表(漏收 = 装好的包里 / 面板只有动作没有命令)
+    "minicode.slash_commands": ("PROMPT_COMMANDS", "expand", "has_arg"),
     "minicode.attachments": ("save_dropped_bytes", "unique_target",
                              # v0.9.69:恢复会话的附件标签(漏收 = 旧会话恢复后
                              # 附件又只剩被剥掉的字面,缩略图永远不出现)
