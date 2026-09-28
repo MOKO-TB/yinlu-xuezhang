@@ -81,7 +81,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # v0.9.39 p2:标题栏染色 + 改字(漏 set_chrome = 深色界面顶上
                             # 仍顶着一条白标题栏,用户点名的就是那一条;开关都不通,
                             # 前端只会静默什么也不做)
-                            "set_chrome"),
+                            "set_chrome",
+                            # v0.9.69:恢复会话的附件标签(漏收 = 切回旧会话时
+                            # resumed 载荷永远不带 atts,缩略图一个都不出现)
+                            "restore_user_atts"),
     # v0.9.39 p2:标题栏整模块。漏收 = 桥里那句 `from minicode import window_chrome`
     # 在装好的包里 ImportError,而它被前端那个 try/catch 吞掉 → 表现为"改了个寂寞"。
     "minicode.window_chrome": ("apply", "chrome_for", "blend", "colorref",
@@ -174,7 +177,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill",
                         # v0.9.63:技能使用账(漏收 = 装好的包里用了技能不记账,
                         # 「哪些技能真有人用」永远没有答案)
-                        "log_skill_use", "usage_summary", "USAGE_FILE"),
+                        "log_skill_use", "usage_summary", "USAGE_FILE",
+                        # v0.9.69:使用账并进技能面板(漏收 = get_skills 永远
+                        # 不带 uses/last,面板上「用过 N 次」一行都不出现)
+                        "merge_usage"),
     "minicode.web_profile": ("网页版不开放会话导出", "search_sessions",
                              # v0.9.23:教务导入需要本机浏览器窗口,网页版必须挡掉
                              "教务课表导入",
@@ -298,7 +304,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.weather": ("weather_card", "umbrella_tip", "refresh_async",
                          "get_weather"),
     # ---- v0.9.19:拖拽上传(字节落盘,绕开 WebView2 拿不到本地路径) ----
-    "minicode.attachments": ("save_dropped_bytes", "unique_target"),
+    "minicode.attachments": ("save_dropped_bytes", "unique_target",
+                             # v0.9.69:恢复会话的附件标签(漏收 = 旧会话恢复后
+                             # 附件又只剩被剥掉的字面,缩略图永远不出现)
+                             "parse_attachment_note"),
     # ---- v0.9.35:走堂换楼预警整模块(漏收 = 装好的包里"要不要早点出发"
     #      全退回模型心算,分钟数/no_gap 口径全丢)----
     "minicode.walk": ("day_risks", "week_risks", "format_risks", "format_week_risks",

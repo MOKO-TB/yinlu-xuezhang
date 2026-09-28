@@ -6,8 +6,8 @@ import pytest
 from minicode import attachments as att
 from minicode.attachments import (
     Attachment, attachment_note, build_content, display_text, human_size,
-    image_data_url, preview_data_url, save_attachment, save_attachments,
-    strip_attachment_note,
+    image_data_url, parse_attachment_note, preview_data_url, save_attachment,
+    save_attachments, strip_attachment_note,
 )
 
 PIL = pytest.importorskip("PIL.Image", reason="图片压缩测试需要 Pillow")
@@ -213,3 +213,34 @@ def test_display_text_strips_note():
     assert display_text([{"type": "text", "text": "纯文本段"}]) == "纯文本段"
     assert strip_attachment_note("没有附件前缀") == "没有附件前缀"
     assert display_text(None) == ""
+
+
+# ---------------------------------------------------- [附件] 清单读回(v0.9.69)
+
+def test_parse_attachment_note_roundtrip():
+    """写出去的清单要能原样读回来:生成器与解析器是同一条格式的一进一出。"""
+    atts = [_att("uploads/拍题.png"), _att("uploads/notes.pdf", "file")]
+    parsed = parse_attachment_note(attachment_note(atts, vision=False))
+    assert [p["path"] for p in parsed] == ["uploads/拍题.png", "uploads/notes.pdf"]
+    assert all(p["size_text"] == "1 KB" for p in parsed)
+
+
+def test_parse_attachment_note_filename_with_parens():
+    """文件名里的括号不能把路径切错:锚点是 human_size 的大小,不是第一个左括号。"""
+    note = ("[附件] 用户上传了以下文件,已保存到工作区:\n"
+            "- uploads/报告(1).png(12 KB)(图片已随消息提供给模型查看)\n\n正文")
+    parsed = parse_attachment_note(note)
+    assert len(parsed) == 1
+    assert parsed[0]["path"] == "uploads/报告(1).png"
+    assert parsed[0]["size_text"] == "12 KB"
+
+
+def test_parse_attachment_note_rejects_non_note_and_noise_lines():
+    assert parse_attachment_note("普通一句话") == []
+    assert parse_attachment_note(None) == []
+    assert parse_attachment_note("") == []
+    note = ("[附件] 用户上传了以下文件,已保存到工作区:\n"
+            "- uploads/a.png(1 KB)\n"
+            "需要文件内容时,请用 read_file / bash 等工具处理上述路径;\n"
+            "不要臆测文件内容。\n\n正文")
+    assert [p["path"] for p in parse_attachment_note(note)] == ["uploads/a.png"]

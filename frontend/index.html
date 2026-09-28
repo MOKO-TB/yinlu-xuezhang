@@ -721,6 +721,8 @@ try {
   .att .rm{ border:none; background:transparent; cursor:pointer; color:var(--text-3);
             font-size:12px; padding:2px 4px; }
   .att .rm:hover{ color:var(--danger); }
+  /* 恢复会话时文件已不在工作区的附件:灰一点,但名字照摆(不装它还能打开) */
+  .att.missing{ opacity:.55; }
   .box .attach{ background:transparent; border:none; cursor:pointer; font-size:19px;
                 padding:2px 6px; line-height:1; color:var(--text-2); transition:.15s; }
   .box .attach:hover{ transform:scale(1.12) rotate(-6deg); }
@@ -1246,6 +1248,8 @@ try {
                      -webkit-line-clamp:2; -webkit-box-orient:vertical;
                      overflow:hidden; }
   .skillcard .snodesc{ margin-top:5px; font-size:11.5px; color:var(--text-3); }
+  /* 使用账(v0.9.69):只给真用过的技能摆一笔,没用过的保持安静 */
+  .skillcard .suse{ margin-top:5px; font-size:11px; color:var(--text-3); }
   /* 渠道行:图标 + 名称/说明 + 徽标(技能数/只读) */
   .skch{ display:flex; align-items:center; gap:12px; padding:11px 13px;
          border:1px solid var(--line-soft); border-radius:var(--r-m);
@@ -2646,13 +2650,17 @@ function addUserMsg(text, atts) {
   const attBox = wrap.querySelector(".atts");
   (atts || []).forEach(a => {
     const el = document.createElement("div");
-    el.className = "att";
+    el.className = "att" + (a.missing ? " missing" : "");
     el.innerHTML = `${a.preview ? '<img alt="">' : '<span class="ph">📄</span>'}
       <span class="meta"><span class="nm"></span><span class="sz"></span></span>`;
     if (a.preview) el.querySelector("img").src = a.preview;
     el.querySelector(".nm").textContent = a.name;
+    // 恢复的会话:文件还在用真实大小;不在了的标题写实话,大小用留档里记下的那个
+    const sz = a.size != null ? humanSize(a.size)
+      : (a.missing ? "已不在工作区" : (a.size_text || ""));
     el.querySelector(".sz").textContent =
-      `${humanSize(a.size)}${a.kind === "image" ? " · 图片" : ""}`;
+      `${sz}${a.kind === "image" ? " · 图片" : ""}`;
+    if (a.missing) el.title = "附件文件已不在工作区";
     attBox.appendChild(el);
   });
   bindCopy(wrap.querySelector(".cp"), () => text);
@@ -3247,7 +3255,7 @@ function renderHistory(messages) {
   lastUserQ = "";
   cancelEdit(false);
   for (const m of messages) {
-    if (m.role === "user") addUserMsg(m.text);
+    if (m.role === "user") addUserMsg(m.text, m.atts);
     else if (m.role === "assistant") {
       const c = ensureAssistant();
       c.text = m.text;
@@ -4310,6 +4318,8 @@ function renderSkillCards(skills) {
         ${s.channel ? `<span class="chtag">${esc(s.channel)}</span>` : ""}</div>
       ${s.description ? `<div class="sdesc">${esc(s.description)}</div>`
                       : '<div class="snodesc">(没有简介)</div>'}
+      ${s.uses ? `<div class="suse">用过 ${s.uses} 次${s.last
+        ? ` · 最近 ${esc(String(s.last).slice(0, 10))}` : ""}</div>` : ""}
     </button>`).join("")}</div>`;
   $("skillsBody").querySelectorAll(".skillcard").forEach(el =>
     el.addEventListener("click", () => openSkillDetail(el.dataset.name)));

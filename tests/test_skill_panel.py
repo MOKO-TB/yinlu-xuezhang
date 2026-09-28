@@ -194,3 +194,40 @@ def test_create_skill_clamps_description(tmp_path, monkeypatch):
         encoding="utf-8")
     desc_line = next(l for l in text.splitlines() if l.startswith("description:"))
     assert len(desc_line) <= len("description: ") + 200
+
+
+# ------------------------------------------------------------ 技能使用账上卡(v0.9.69)
+
+def test_merge_usage_attaches_only_used_skills(tmp_path, monkeypatch):
+    """用过的带 uses/last;没用过的保持安静;账本里的陌生名字不会凭空长出条目。"""
+    usage = tmp_path / "skill-usage.jsonl"
+    usage.write_text(
+        '{"ts": "2026-09-28 10:00:00", "skill": "demo"}\n'
+        '{"ts": "2026-09-29 11:30:00", "skill": "demo"}\n'
+        '{"ts": "2026-09-28 09:00:00", "skill": "ghost"}\n', encoding="utf-8")
+    monkeypatch.setattr(sk, "usage_path", lambda: usage)
+    merged = sk.merge_usage([{"name": "demo"}, {"name": "quiet"}])
+    assert merged[0]["uses"] == 2
+    assert merged[0]["last"] == "2026-09-29 11:30:00"
+    assert "uses" not in merged[1] and "last" not in merged[1]
+    assert [s["name"] for s in merged] == ["demo", "quiet"]
+
+
+def test_merge_usage_empty_ledger_changes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(sk, "usage_path", lambda: tmp_path / "nope.jsonl")
+    skills = [{"name": "demo", "description": "d"}]
+    assert sk.merge_usage(skills) == skills
+
+
+def test_bridge_get_skills_carries_usage(config, tmp_path, monkeypatch):
+    sk_dir = tmp_path / "skills" / "demo"
+    sk_dir.mkdir(parents=True)
+    (sk_dir / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: 演示\n---\n正文", encoding="utf-8")
+    usage = tmp_path / "skill-usage.jsonl"
+    usage.write_text('{"ts": "2026-09-28 10:00:00", "skill": "demo"}\n',
+                     encoding="utf-8")
+    monkeypatch.setattr(sk, "usage_path", lambda: usage)
+    bridge, _w = _app(config, tmp_path)
+    demo = [s for s in bridge.get_skills()["skills"] if s["name"] == "demo"][0]
+    assert demo["uses"] == 1 and demo["last"] == "2026-09-28 10:00:00"

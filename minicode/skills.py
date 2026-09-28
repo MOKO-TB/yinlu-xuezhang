@@ -201,6 +201,20 @@ def usage_summary() -> "list[dict]":
     return sorted(agg.values(), key=lambda r: -r["uses"])
 
 
+def merge_usage(skills: list[dict]) -> list[dict]:
+    """把使用账并进 get_skills 的技能清单:用过几次、最近一次何时。
+
+    没用过的技能不加这两个键 —— 几十张卡片全都写「还没用过」是噪音不是信息;
+    界面只给真用过的摆一笔,从没动过的保持安静。
+    """
+    usage = {r["skill"]: r for r in usage_summary()}
+    out: list[dict] = []
+    for s in skills:
+        u = usage.get(str(s.get("name") or ""))
+        out.append({**s, "uses": u["uses"], "last": u["last"]} if u else s)
+    return out
+
+
 def use_skill(ctx, name: str) -> str:
     """工具处理器:按名字返回技能全文(截断)。每次成功调用记一笔使用账。"""
     skills = load_skills(skill_dirs(ctx.workspace))

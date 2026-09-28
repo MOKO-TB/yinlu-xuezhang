@@ -19,7 +19,8 @@ from minicode import workspace as ws
 from minicode.app_setup import build_runner_agent, mcp_log
 from minicode.attachments import (
     UPLOAD_DIR, Attachment, build_content, display_text, is_image, mime_for,
-    preview_data_url, save_attachments, save_dropped_bytes,
+    parse_attachment_note, preview_data_url, save_attachments,
+    save_dropped_bytes,
 )
 from minicode.campus import frontend_payload as campus_map_data
 from minicode.compaction import estimate_tokens
@@ -437,6 +438,42 @@ def _within(path: Path, root: Path) -> bool:
         return False
 
 
+def restore_user_atts(workspace, content) -> list[dict]:
+    """从留档的用户消息复原附件标签(v0.9.69,§6 #5 挂账的"历史会话附件可视化")。
+
+    发送时前端在本地摆标签,而留档里只有 [附件] 清单 —— 恢复时把清单读回来、
+    对工作区核一遍:文件还在的图片给缩略图与真实大小;不在了的只剩文件名、
+    当时记下的大小和一个 missing 标记,绝不补一张编出来的缩略图。
+    路径必须仍落在工作区内才读文件(留档可能来自别人导进来的会话)。
+    """
+    if isinstance(content, list):
+        text = "".join(str(p.get("text") or "") for p in content
+                       if isinstance(p, dict) and p.get("type") == "text")
+    else:
+        text = str(content or "")
+    out: list[dict] = []
+    for entry in parse_attachment_note(text):
+        rel = entry["path"]
+        p = Path(rel)
+        item: dict = {"name": p.name, "path": rel,
+                      "kind": "image" if is_image(p) else "file",
+                      "size_text": entry["size_text"]}
+        kind, real = classify_path(Path(workspace), rel)
+        if kind == "inside" and real.is_file():
+            try:
+                item["size"] = real.stat().st_size
+            except OSError:
+                pass
+            if item["kind"] == "image":
+                url = preview_data_url(real)
+                if url:
+                    item["preview"] = url
+        else:
+            item["missing"] = True
+        out.append(item)
+    return out
+
+
 class SessionGuiUI(GuiUI):
     """把某个会话的事件打上 session 标记,再转发给真正的窗口 UI。
 
@@ -832,7 +869,7 @@ class Bridge:
         load_skills 是先到先得(应用目录压过工作区同名),所以渠道归属按
         skill_dirs 的顺序反推;正文不回传(点开详情时按路径读,保持轻量)。
         """
-        from minicode.skills import describe_channels
+        from minicode.skills import describe_channels, merge_usage
         dirs = skill_dirs(self.workspace)
         labels = {c["key"]: c["label"] for c in describe_channels(self.workspace)}
         skills: list[dict] = []
@@ -848,7 +885,7 @@ class Bridge:
             skills.append({"name": s.name, "description": s.description,
                            "channel": channel, "path": str(s.path),
                            "is_builtin": channel == labels.get("builtin", "内置技能")})
-        return {"ok": True, "skills": skills}
+        return {"ok": True, "skills": merge_usage(skills)}
 
     def get_skill_body(self, name: str) -> dict:
         """技能详情:读单个技能的 SKILL.md 全文(前端点开时才取,默认截断)。"""
@@ -2668,7 +2705,12 @@ class Bridge:
                 out.append({"role": "assistant", "text": str(content or ""),
                             "tools": names})
             else:
-                out.append({"role": role, "text": display_text(content)})
+                item = {"role": role, "text": display_text(content)}
+                if role == "user":
+                    atts = restore_user_atts(self.workspace, content)
+                    if atts:
+                        item["atts"] = atts
+                out.append(item)
         return out
 
     # 确认握手:Agent 线程阻塞在此,前端点按钮后返回

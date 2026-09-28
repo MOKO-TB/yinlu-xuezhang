@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import io
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -261,6 +262,31 @@ def strip_attachment_note(text: str) -> str:
         return text
     parts = text.split("\n\n", 1)
     return parts[1] if len(parts) == 2 else ""
+
+
+# [附件] 清单的行格式:"- {路径}({大小})" 或后面再跟一段"(说明)"。
+# 大小必然是 human_size 的产物("178 B"/"1 KB"/"1.5 MB"),拿它当锚点,
+# 文件名里带括号也不会切错。
+_NOTE_LINE = re.compile(
+    r"^-\s+(.+?)\((\d+(?:\.\d+)?\s*[KMB]?B)\)(?:\s*\((.*)\))?$")
+
+
+def parse_attachment_note(text: str) -> list[dict]:
+    """从留档消息开头的 [附件] 清单解析出附件条目(恢复会话时复原标签用)。
+
+    留档里没有结构化的附件字段 —— 消息开头那段清单就是唯一事实(文件即状态),
+    这里只做"读回来",不改任何格式;不是清单、或行长得不像,就当没有,绝不猜。
+    """
+    if not isinstance(text, str) or not text.startswith("[附件]"):
+        return []
+    head = text.split("\n\n", 1)[0]
+    out: list[dict] = []
+    for line in head.splitlines():
+        m = _NOTE_LINE.match(line.strip())
+        if m:
+            out.append({"path": m.group(1).strip(),
+                        "size_text": m.group(2).strip()})
+    return out
 
 
 def build_content(text: str, atts: list[Attachment] | None,
