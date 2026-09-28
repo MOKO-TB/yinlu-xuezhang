@@ -33,11 +33,81 @@ def test_english_domain_does_not_invent_a_skill():
     assert "search_knowledge" in router.DOMAINS["english"].tools
 
 
+def test_every_repo_skill_is_claimed_by_a_domain():
+    """新增一份 SKILL.md 却没被任何一档认领时这里红。
+
+    没人认领的技能任何子代理档位都不会先加载它 —— 等于写了一份没人执行的规定。
+    要么归进已有档,要么新开一档,要么在这里显式说明它为什么不需要档(比如全局话术)。
+    """
+    have = _real_skill_names()
+    claimed = {s for spec in router.DOMAINS.values() for s in spec.skills}
+    orphan = sorted(have - claimed)
+    assert not orphan, f"这些技能没有档位认领:{orphan}"
+    ghost = sorted(claimed - have)
+    assert not ghost, f"档位指向不存在的技能:{ghost}"
+
+
 def test_referenced_tools_exist():
     names = {t.name for t in build_default_registry()}
     for key, spec in router.DOMAINS.items():
         unknown = [t for t in spec.tools if t not in names]
         assert not unknown, f"{key} 档指向不存在的工具:{unknown}"
+
+
+def test_readonly_domains_only_list_readonly_tools():
+    """只读档登记的常用工具必须真的 read_only。
+
+    `subagents.sub_tool_registry` 会把非只读工具整条剪掉,登记里留着它,
+    `router.extra_prompt` 就会对该档许诺一个它拿不到的工具(english 曾登记过
+    render_chart,提示词写着"常用工具:render_chart"而工具表里根本没有)。
+    """
+    ro = {t.name for t in build_default_registry() if t.read_only}
+    for key, spec in router.DOMAINS.items():
+        if not spec.read_only:
+            continue
+        ghost = [t for t in spec.tools if t not in ro]
+        assert not ghost, f"只读档 {key} 登记了非只读工具:{ghost}"
+
+
+# ------------------------------------------------------------ 新增领域档与关键词归属
+
+def test_searching_books_belongs_to_campus_not_english():
+    """搜书词归 campus:english 只留四六级类词,工具表里不再带 library_search。"""
+    assert "library_search" not in router.DOMAINS["english"].tools
+    assert "library_search" in router.DOMAINS["campus"].tools
+    assert router.best("图书馆可以借几本书/索书号在几楼").spec.key == "campus"
+
+
+def test_new_domain_buckets():
+    campus, material = router.DOMAINS["campus"], router.DOMAINS["material"]
+    assert campus.skills == ("school-qa", "library-guide", "kb-fallback",
+                             "bike-parking-guide")
+    assert material.skills == ("pdf", "photo-print", "koubei-extract")
+    # 两档都要联网/落盘,做成可写:v0.9.60 起写类型也能并行,只读换不来并发
+    assert campus.read_only is False and material.read_only is False
+    # 只读档现在只剩 english 一个(通用档另算),这条变了要同步看上面的不变量
+    assert [k for k, s in router.DOMAINS.items() if s.read_only] == ["english"]
+
+
+def test_material_beats_writing_on_document_work():
+    """冲突一:PDF/合并/证件照 归 material,写作档不该抢走排版动作。"""
+    assert router.best("帮我把这份 PDF 合并成一个文件").spec.key == "material"
+    assert router.best("证件照换蓝底排版打印").spec.key == "material"
+    assert router.best("奖助学金申请材料合并成一份 pdf").spec.key == "material"
+    # 反过来,纯排版动作文档材料档不该赢
+    assert router.best("帮我把这份简历改写成投递版").spec.key == "writing"
+
+
+def test_campus_beats_writing_on_errands():
+    """冲突二:证明/盖章 归 campus;申请书仍是 writing。"""
+    assert router.best("综测加分的证明去哪里盖章").spec.key == "campus"
+    assert router.best("我要写一份入党申请书和活动策划").spec.key == "writing"
+
+
+def test_campus_wins_on_school_questions():
+    for text in ("明年几号放假", "自行车被拖走了怎么领回",
+                 "图书馆可以借几本书/索书号在几楼"):
+        assert router.best(text).spec.key == "campus", text
 
 
 # ------------------------------------------------------------ 命中口径
@@ -52,7 +122,9 @@ def test_classify_picks_each_domain():
     for text, key in (("这段代码报错帮我看看", "code"),
                       ("把这个班的成绩统计成表格导出来", "data"),
                       ("英语四级还有多久考", "english"),
-                      ("我要写一份入党申请书和活动策划", "writing")):
+                      ("我要写一份入党申请书和活动策划", "writing"),
+                      ("图书馆期末自习室开到几点", "campus"),
+                      ("把课件 pdf 拆成单页", "material")):
         assert router.best(text).spec.key == key, text
 
 
@@ -142,8 +214,10 @@ def test_domain_types_derive_specs_and_read_only_flags():
     english = type_spec("english")
     assert english is not None and english.read_only is True
     assert english.label == "英语"
-    for key in ("code", "writing", "data"):
+    for key in ("code", "writing", "data", "campus", "material"):
         assert type_spec(key).read_only is False, key
+    assert type_spec("campus").label == "校园办事"
+    assert type_spec("material").label == "文档材料"
     assert type_spec("nonsense") is None
 
 

@@ -2,8 +2,9 @@
 
 按分工方式分两组:
   通用档  explore(只读侦察) / implement(动手实现) / review(只读审查)
-  领域档  code / writing / data / english —— 由 minicode.router 登记派生,
-          提示词只说"先加载哪几个已有技能",领域规矩本体仍在 skills/*.md 里。
+  领域档  code / writing / data / english / campus / material
+          —— 由 minicode.router 登记派生,提示词只说"先加载哪几个已有技能",
+          领域规矩本体仍在 skills/*.md 里。
 子代理:独立会话(看不到主对话)、受限工具集(不能递归派 task)、步数上限、
 复用主 Agent 的 LLM 与 UI(工具卡片带类型前缀,变更操作照常弹确认)。
 
@@ -365,7 +366,9 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             "implement(动手实现独立小功能)、review(只读审查)。"
             "领域档(会先加载该领域已有的 SKILL 再动手):"
             "code(写代码/改 bug/跑测试)、writing(论文/申请书/PPT/简历)、"
-            "data(表格统计/名单批量/题库导出)、english(四六级与考研英语的经验查询,只读)。"
+            "data(表格统计/名单批量/题库导出)、english(四六级与考研英语的经验查询,只读)、"
+            "campus(校园办事:学校问题/馆藏借阅/校历通知/停车领车)、"
+            "material(文档材料:PDF 合并拆分/证件照排版/经验帖链接归集)。"
             "拿不准派哪一档时传 type=\"auto\":由路由按任务描述里的领域特征选,"
             "选中的理由会写在报告抬头给你和用户看(命中哪些词、加载哪些技能);"
             "没命中任何领域特征时 auto 会退回 explore,不会硬凑一档。"

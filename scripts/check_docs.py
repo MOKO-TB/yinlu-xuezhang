@@ -289,7 +289,18 @@ def _run(args: list[str]) -> tuple[int, str]:
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
+def _utf8_console() -> None:
+    """这道闸自己打印 ✓/✗。Windows 默认控制台是 GBK,print 直接 UnicodeEncodeError ——
+    照 CONTRIBUTING「不带 PYTHONIOENCODING 跑」的写法执行就是 traceback,等于没有这道闸。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass          # 被重定向/没有 reconfigure 的输出流:原样让它去
+
+
 def main() -> int:
+    _utf8_console()
     checks = [("版本号一致", check_version),
               ("个人数据三处同步", check_state_targets),
               ("不外发清单自洽", check_ship_never_manifest),

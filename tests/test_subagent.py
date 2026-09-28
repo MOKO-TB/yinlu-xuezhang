@@ -437,7 +437,7 @@ def test_task_explicit_type_gets_no_routing_note(config, tmp_path):
 
 
 def test_domain_tool_sets_are_prefixed_and_read_only_isolated(config, tmp_path):
-    """english 是只读档:拿不到写工具;code 档能拿到,前缀按档位来。"""
+    """english 是只读档:拿不到写工具;code/campus/material 能拿到,前缀按档位来。"""
     from minicode.subagents import sub_tool_registry, type_spec
     from minicode.tools.registry import build_default_registry
     reg = build_default_registry()
@@ -447,9 +447,43 @@ def test_domain_tool_sets_are_prefixed_and_read_only_isolated(config, tmp_path):
     assert "english·write_file" not in english
     assert "english·search_knowledge" in english
     assert "english·task" not in english          # 任何档都不能递归派活
+    # 只读档连登记里的工具都拿不到就该是测试红,而不是提示词空许诺
+    assert "english·render_chart" not in english
 
     code = [t.name for t in sub_tool_registry(reg, type_spec("code", tmp_path))]
     assert "code·write_file" in code and "code·bash" in code
+
+    campus = [t.name for t in sub_tool_registry(reg, type_spec("campus", tmp_path))]
+    assert "campus·task" not in campus
+    assert "campus·search_knowledge" in campus
+    # 校园办事档要能现查官网并征同意入库(v0.9.68 拍板:可写,并行照旧)
+    assert "campus·web_search" in campus and "campus·kb_suggest" in campus
+
+    material = [t.name for t in sub_tool_registry(reg, type_spec("material", tmp_path))]
+    assert "material·py_script" in material and "material·write_file" in material
+
+
+def test_task_campus_dispatch_reports_back(config, tmp_path):
+    """新档真能派出去:campus 子代理调用 campus·search_knowledge,报告带回主对话。"""
+    _accept_all(config)
+    llm = QueueLLM([
+        _task_turn("campus", "查一下图书馆自习室开到几点"),
+        AssistantTurn(tool_calls=[_call("campus·search_knowledge",
+                                        {"query": "图书馆 自习室 开放时间"}, "k1")]),
+        _final("自习室开放时间:知识库未命中,建议查校历"),
+        _final("主代理收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("校园办事")
+    assert wait_until(lambda: not bridge._busy, timeout=15)
+
+    result = _tool_result(session)
+    assert "校园办事子代理完成" in result
+    assert "知识库未命中" in result
+    # 工具卡片带档位前缀,用户看得出是哪一路在跑
+    assert "campus·search_knowledge" in [e["name"] for e in window.of_type("tool_start")]
+    # 显式指定档位时不多塞路由理由
+    assert "派「" not in result
 
 
 def test_batch_parallel_allows_read_only_and_writer_domains(config, tmp_path):
