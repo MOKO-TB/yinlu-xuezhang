@@ -15,14 +15,27 @@
 人工核对在对话里发生:`preview` 生成核对单(模型必须完整念给用户、得到明确同意),
 `commit` 再校验一遍才写 `kb/school-calendar.json`(应用数据目录那份;安装版没有就
 新建 —— 它会遮蔽包内那份,与 calendar.load_events 的回退顺序一致)。
+
+删除与修订(v0.9.73):录错一条再也「没法改」就是逼同学手编 JSON —— `remove_*`
+与 `revise_*` 两组 action 把写法补全,安全口径不变:
+- **人工核对仍是唯一闸门**:remove/revise 同样两步走,核对单列出**条目全文**
+  (含来源与原文引用),用户明确同意才动文件;
+- **备份是回滚的唯一路,备份写不进去就不动数据**(删除是不可逆动作,宁可不改);
+  备份落在 `kb/history/`(与 memory/history 同一思路,留最近 3 份);
+  `load_kb` 只扫顶层 `*.json` 且只收 list 结构,历史目录不会被当知识库扫进去;
+- **修订轨迹写进条目本身**(note 里记「字段: 旧→新;原因」),文件当前内容
+  永远反映现实;revise 一次只改一条 —— 同一个 patch 打到多条上是事故形状;
+- revise 的校验**报错不静默**(kind 写错、end 早于 start、改后撞名都直接拒绝):
+  新增条目可以把不认识的 kind 落回 event,修订把好数据改坏才是真事故。
 """
 from __future__ import annotations
 
 import json
 import re
+import time
+from pathlib import Path
 
 from minicode.paths import app_path
-
 KINDS = ("holiday", "exam", "term", "deadline", "event")
 DEFAULT_CREDIBILITY = "B-待核实"
 
@@ -176,8 +189,264 @@ def commit(clean: list[dict]) -> dict:
                     + "。来源与原文引用随条目存档,随时可手工修订。")}
 
 
-def calendar_edit_tool(ctx, action: str = "preview", entries=None) -> str:
-    """calendar_edit 工具处理器:preview 生成核对单,commit 才写文件。"""
+# ---------------------------------------------------- 删除与修订(v0.9.73)
+
+BACKUP_DIR = "kb/history"          # 与 memory/history 同一思路:备份留在数据旁边
+BACKUP_KEEP = 3
+_REVISE_FIELDS = ("name", "start", "end", "kind", "note", "quote",
+                  "source", "credibility")
+
+
+def _resolve_targets(targets, events: list) -> "tuple[list[tuple[int, dict]], list[str]]":
+    """把选择器解析成 (下标, 条目);解析不了的如实列出,绝不猜。
+
+    选择器:{"id": ...} 或 {"name": ..., "start": ...}(两者都给以 id 为准)。
+    同一条目被重复选中只算一次。
+    """
+    resolved: list[tuple[int, dict]] = []
+    missing: list[str] = []
+    for i, t in enumerate(targets or [], start=1):
+        if not isinstance(t, dict):
+            missing.append(f"第 {i} 个选择器不是对象")
+            continue
+        tid = str(t.get("id") or "").strip()
+        name = str(t.get("name") or "").strip()
+        start = str(t.get("start") or "").strip()
+        hit = None
+        if tid:
+            hit = next(((j, e) for j, e in enumerate(events)
+                        if isinstance(e, dict)
+                        and str(e.get("id") or "") == tid), None)
+            what = f"id={tid}"
+        elif name and start:
+            hit = next(((j, e) for j, e in enumerate(events)
+                        if isinstance(e, dict)
+                        and str(e.get("name") or "") == name
+                        and str(e.get("start") or "") == start), None)
+            what = f"「{name} {start}」"
+        else:
+            missing.append(f"第 {i} 个选择器缺 id 或 name+start")
+            continue
+        if hit is None:
+            missing.append(f"没有找到 {what} 的条目 —— 不猜,核对名字与日期再试")
+        else:
+            resolved.append(hit)
+    seen: set[int] = set()
+    uniq: list[tuple[int, dict]] = []
+    for j, e in resolved:
+        if j not in seen:
+            seen.add(j)
+            uniq.append((j, e))
+    return uniq, missing
+
+
+def _entry_lines(e: dict) -> list[str]:
+    """核对单里的一条:全文摆开 —— 删错/改错一条真日历,代价远大于多念两行。"""
+    span = str(e.get("start") or "") + (" ~ " + str(e.get("end")) if e.get("end") else "")
+    lines = [f"- {e.get('name')} [{e.get('kind')}] {span}(id: {e.get('id')})"]
+    if e.get("quote"):
+        lines.append(f"  依据:{e['quote']}")
+    lines.append(f"  来源:{e.get('source')}(可信度 {e.get('credibility')})")
+    if e.get("note"):
+        lines.append(f"  备注:{e['note']}")
+    return lines
+
+
+def _write_events(path, data: dict) -> "str | None":
+    """写回校历文件;失败返回错误说明(文件保持原样)。"""
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n",
+                              encoding="utf-8")
+    except OSError as e:
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
+def _backup(path) -> "str | None":
+    """改写前备份到 kb/history/,只留最近 BACKUP_KEEP 份。
+
+    备份是删除/修订**唯一的回滚路** —— 备份写不进去就返回 None,调用方
+    必须拒绝改写(宁可不改,不做不可回滚的删除)。文件名带秒级时刻,
+    同一秒内两次改写会撞名 —— 撞了加序号(与 unique_target 同一思路):
+    每个核对点的"改写前状态"都是独立的回滚点,不许互相覆盖。
+    """
+    import shutil
+    bdir = Path(path).parent / "history"
+    try:
+        bdir.mkdir(parents=True, exist_ok=True)
+        base = Path(path).stem + "-" + time.strftime("%Y%m%d-%H%M%S")
+        target = bdir / (base + ".json")
+        n = 2
+        while target.exists():
+            target = bdir / f"{base}-{n}.json"
+            n += 1
+        shutil.copy2(path, target)
+        olds = sorted(bdir.glob(Path(path).stem + "-*.json"))
+        for old in olds[:-BACKUP_KEEP]:
+            try:
+                old.unlink()
+            except OSError:
+                pass                       # 清不掉的旧备份不挡正事
+        return str(target)
+    except OSError:
+        return None
+
+
+def remove_preview_text(targets) -> str:
+    """删除核对单:列出**条目全文**与没找到的选择器,用户同意才能 remove_commit。"""
+    data, _path = load_events_file()
+    events = (data or {}).get("events") or []
+    hits, missing = _resolve_targets(targets, events)
+    lines: list[str] = []
+    if hits:
+        lines.append(f"共 {len(hits)} 条将从校历删除,请逐条核对(删了就没了,"
+                     "靠备份回滚):")
+        for _j, e in hits:
+            lines += _entry_lines(e)
+        lines.append("确认无误请明确说「确认删除」;")
+    else:
+        lines.append("没有匹配的条目。")
+    lines += [f"⚠ {m}" for m in missing]
+    return "\n".join(lines)
+
+
+def remove_commit(targets) -> dict:
+    """把**已核对**的条目从校历删除;备份写不进去就拒绝。再解析一遍(文件即状态)。"""
+    data, path = load_events_file()
+    if data is None:
+        return {"ok": False, "msg": "还没有可修改的校历文件 —— 先录入过才有得删。"}
+    events = data.get("events") or []
+    hits, missing = _resolve_targets(targets, events)
+    if not hits:
+        return {"ok": False, "msg": "没有匹配的条目:"
+                + (";".join(missing) if missing else "选择器为空")}
+    bak = _backup(path)
+    if bak is None:
+        return {"ok": False, "msg": "错误: 备份写不进去,数据没动 —— "
+                                    "删除必须可回溯,先解决 kb/history 的写权限。"}
+    drop = {j for j, _e in hits}
+    data["events"] = [e for j, e in enumerate(events) if j not in drop]
+    err = _write_events(path, data)
+    if err:
+        return {"ok": False, "msg": f"错误: 写不进去({err}) —— 文件保持原样。"}
+    return {"ok": True, "removed": [str(e.get("name")) for _j, e in hits],
+            "backup": bak, "missing": missing,
+            "msg": f"已删除 {len(hits)} 条,备份在 {bak}。"}
+
+
+def revise_preview_text(targets, patch) -> str:
+    """修订核对单:当前条目全文 + 拟改字段(旧 → 新)+ 校验问题。"""
+    data, _path = load_events_file()
+    events = (data or {}).get("events") or []
+    hits, missing = _resolve_targets(targets, events)
+    lines: list[str] = []
+    if len(hits) > 1:
+        lines.append("匹配到多条,一次只改一条 —— 请用 id 明确指定哪一条:")
+        for _j, e in hits:
+            lines += _entry_lines(e)
+    elif hits:
+        merged, problems = _revise_merge(hits[0][1], patch, events, hits[0][0])
+        lines.append("当前这一条(改前):")
+        lines += _entry_lines(hits[0][1])
+        if merged is not None:
+            lines.append("修订后:")
+            lines += _entry_lines(merged)
+        lines += [f"⚠ {p}" for p in problems]
+        if merged is not None and not problems:
+            lines.append("确认无误请明确说「确认修订」。")
+    else:
+        lines.append("没有匹配的条目。")
+    lines += [f"⚠ {m}" for m in missing]
+    return "\n".join(lines)
+
+
+def _revise_merge(entry: dict, patch, events: list, self_idx: int) -> "tuple[dict | None, list[str]]":
+    """把 patch 合并进条目,返回 (合并结果, 问题清单)。**报错不静默**:修订把
+    好数据改坏是真事故,kind 不认识、日期不合法、改后撞名都直接拒绝。"""
+    problems: list[str] = []
+    if not isinstance(patch, dict) or not patch:
+        return None, ["patch 必须是对象且至少给一个要改的字段"]
+    reason = str(patch.get("reason") or "").strip()
+    if not reason:
+        return None, ["必须给 reason(一句为什么改)—— 无来由的修订没法核对"]
+    unknown = [k for k in patch if k not in _REVISE_FIELDS and k != "reason"]
+    if unknown:
+        return None, [f"patch 里有改不了的字段:{'、'.join(unknown)}"
+                      f"(可改:{'/'.join(_REVISE_FIELDS)})"]
+    merged = dict(entry)
+    for f in _REVISE_FIELDS:
+        if f in patch:
+            merged[f] = str(patch[f]).strip()
+    for f in ("start", "end"):
+        if f in merged and merged[f]:
+            try:
+                from datetime import date
+                date.fromisoformat(str(merged[f]))
+            except ValueError:
+                problems.append(f"{f} 不是 ISO 日期:{merged[f]}")
+    if not problems and merged.get("end") and merged.get("start"):
+        from datetime import date
+        if date.fromisoformat(str(merged["end"])) < date.fromisoformat(str(merged["start"])):
+            problems.append(f"end({merged['end']})早于 start({merged['start']})")
+    if merged.get("kind") not in KINDS:
+        problems.append(f"kind「{merged.get('kind')}」不认识(可用:{'/'.join(KINDS)})")
+    if not merged.get("name") or not merged.get("start"):
+        problems.append("name 与 start 不能改空")
+    if not problems:
+        key = (str(merged.get("name")), str(merged.get("start")))
+        for j, e in enumerate(events):
+            if j == self_idx or not isinstance(e, dict):
+                continue
+            if (str(e.get("name") or ""), str(e.get("start") or "")) == key:
+                problems.append(f"改后与已有条目撞名同日:{key[0]} {key[1]} —— "
+                                "要么换日期/名字,要么先删掉那条")
+                break
+    if "source" in patch and "credibility" not in patch:
+        merged["credibility"] = _credibility_of(str(patch["source"]), "")
+    if problems:
+        return None, problems
+    changed = ";".join(f"{f}: {entry.get(f) or '(空)'}→{merged[f]}"
+                       for f in _REVISE_FIELDS
+                       if f in patch and str(entry.get(f) or "") != str(merged.get(f) or ""))
+    trail = f"{time.strftime('%Y-%m-%d')} 修订:{changed};原因:{reason[:80]}"
+    merged["note"] = (trail + (";" + str(entry.get("note")) if entry.get("note") else ""))[:300]
+    return merged, []
+
+
+def revise_commit(targets, patch) -> dict:
+    """把**已核对**的修订写回;一次一条,备份写不进去就拒绝。再解析再校验(文件即状态)。"""
+    data, path = load_events_file()
+    if data is None:
+        return {"ok": False, "msg": "还没有可修改的校历文件 —— 先录入过才有得改。"}
+    events = data.get("events") or []
+    hits, missing = _resolve_targets(targets, events)
+    if len(hits) != 1:
+        return {"ok": False, "msg": "一次只改一条 —— 匹配到 "
+                + (f"{len(hits)} 条" if hits else "0 条")
+                + (";" + ";".join(missing) if missing else "")
+                + "。请用 id 明确指定。"}
+    merged, problems = _revise_merge(hits[0][1], patch, events, hits[0][0])
+    if merged is None or problems:
+        return {"ok": False, "msg": "修订没通过校验:" + ";".join(problems or ["未知"])}
+    bak = _backup(path)
+    if bak is None:
+        return {"ok": False, "msg": "错误: 备份写不进去,数据没动 —— "
+                                    "修订必须可回溯,先解决 kb/history 的写权限。"}
+    events[hits[0][0]] = merged
+    data["events"] = events
+    err = _write_events(path, data)
+    if err:
+        return {"ok": False, "msg": f"错误: 写不进去({err}) —— 文件保持原样。"}
+    return {"ok": True, "backup": bak,
+            "msg": (f"已修订「{merged.get('name')}」(备份在 {bak});"
+                    "修订轨迹记在条目备注里,倒计时与提醒按新日期走。")}
+
+
+def calendar_edit_tool(ctx, action: str = "preview", entries=None,
+                       targets=None, patch=None) -> str:
+    """calendar_edit 工具处理器:preview/remove_preview/revise_preview 生成核对单,
+    *_commit 在用户明确同意后才写文件。"""
     action = (action or "preview").strip().lower()
     if action == "preview":
         from minicode.calendar import load_events
@@ -196,5 +465,25 @@ def calendar_edit_tool(ctx, action: str = "preview", entries=None) -> str:
             tail = "\n被拦下的条目:\n" + "\n".join(f"- {p}" for p in result["problems"])
         return (f"{result['msg']}\n入库明细:\n"
                 + "\n".join(f"- {n}" for n in result.get("names") or []) + tail)
-    return ("错误: 未知 action。可用: preview(校验并生成核对单,先念给用户听)/"
-            "commit(用户明确同意后才调,追加入库)。")
+    if action == "remove_preview":
+        return remove_preview_text(targets)
+    if action == "remove_commit":
+        result = remove_commit(targets)
+        if not result.get("ok"):
+            return f"错误: {result.get('msg')}"
+        tail = ("\n没找到的选择器:\n" + "\n".join(f"- {m}" for m in result["missing"])
+                if result.get("missing") else "")
+        return (f"{result['msg']}\n已删除:\n"
+                + "\n".join(f"- {n}" for n in result.get("removed") or [])
+                + f"\n(改写前的完整文件备份在 {result.get('backup')},可整份回滚)"
+                + tail)
+    if action == "revise_preview":
+        return revise_preview_text(targets, patch)
+    if action == "revise_commit":
+        result = revise_commit(targets, patch)
+        if not result.get("ok"):
+            return f"错误: {result.get('msg')}"
+        return result["msg"]
+    return ("错误: 未知 action。可用: preview / commit(新增,先念核对单)/ "
+            "remove_preview / remove_commit(删除,核对单列条目全文)/ "
+            "revise_preview / revise_commit(修订,一次一条,必须给 reason)。")

@@ -413,7 +413,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.62:校历补录助手(漏收 = 「贴通知录考试周」在包里做不到,
     # 考试周数据继续空置,A5 考试闭环继续卡着)
     "minicode.calendar_edit": ("validate", "preview_text", "commit",
-                               "calendar_edit_tool"),
+                               "calendar_edit_tool",
+                               # v0.9.73:删除与修订(漏收 = 装好的包里录错一条
+                               # 校历永远改不了,退回手编 JSON)
+                               "remove_preview_text", "remove_commit",
+                               "revise_preview_text", "revise_commit",
+                               "_resolve_targets", "_backup"),
     "minicode.mcp": ("Transport", "StdioTransport", "HttpTransport", "SseTransport",
                      "make_transport", "_iter_sse", "_safe_url", "_usable_url",
                      "_norm_transport",

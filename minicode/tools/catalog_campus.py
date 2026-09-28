@@ -39,26 +39,43 @@ def calendar_gpa() -> list[Tool]:
         Tool(
             name="calendar_edit",
             description=(
-                "校历补录助手:把用户贴来的教务处通知/校历文字里抽出的**日期候选**"
-                "校验后入库 kb/school-calendar.json。两步走:**action=preview 先生成核对单**"
-                "(每条带通知原文引用与可信度),完整念给用户、得到明确同意;"
-                "**action=commit 才入库**(追加,绝不改写已有条目)。"
-                "硬规矩:每条候选必须带 quote(通知原文里支撑这个日期的那一句)——"
-                "没有引用的日期就是编的,preview 会点名列出不收;kind 用"
-                "holiday/exam/term/deadline/event;可信度按来源定,拿不准就 B-待核实。"
-                "入库后考试倒计时/考前提醒等既有机制自动生效。"
+                "校历维护助手(补录 + 删除 + 修订):把用户贴来的教务处通知/校历文字里"
+                "抽出的**日期候选**校验后入库 kb/school-calendar.json。全部两步走,"
+                "**先 preview 生成核对单**(每条带通知原文引用与可信度,删除/修订列"
+                "条目全文),完整念给用户、得到明确同意;**再 commit 才写文件**。"
+                "新增:action=preview → commit,entries 给候选(每条必须带 quote ——"
+                "通知原文里支撑这个日期的那一句,没有引用的日期就是编的);"
+                "删除:action=remove_preview → remove_commit,targets 给选择器"
+                "({id} 或 {name+start},核对单里能看到),改写前自动备份到 kb/history"
+                "(备份写不进去就不动数据);修订:action=revise_preview → revise_commit,"
+                "targets 选**一条** + patch 给要改的字段(必须带 reason 一句为什么改;"
+                "kind 写错、end 早于 start、改后撞名都直接拒绝不静默;修订轨迹记进"
+                "条目备注)。kind 用 holiday/exam/term/deadline/event;可信度按来源定,"
+                "拿不准就 B-待核实。入库后考试倒计时/考前提醒等既有机制自动生效。"
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["preview", "commit"],
-                               "description": "preview=校验并生成核对单(先做这个);"
-                                              "commit=用户明确同意后才入库"},
+                    "action": {"type": "string",
+                               "enum": ["preview", "commit", "remove_preview",
+                                        "remove_commit", "revise_preview",
+                                        "revise_commit"],
+                               "description": "preview/commit=新增(先核对单后入库);"
+                                              "remove_preview/remove_commit=删除(核对单列条目全文);"
+                                              "revise_preview/revise_commit=修订(一次一条,必须给 reason)"},
                     "entries": {"type": "array",
-                                "description": "候选条目数组,每条:{name(必填), start(ISO 日期,必填),"
+                                "description": "新增用:候选条目数组,每条:{name(必填), start(ISO 日期,必填),"
                                                "quote(通知原文引用,必填), end(可选), kind(可选),"
                                                "source(通知网址或「用户提供」), note(可选),"
                                                "credibility(可选,默认按来源定)}"},
+                    "targets": {"type": "array",
+                                "description": "删除/修订用:选择器数组,每条:{id: 条目 id}(核对单里能看到)"
+                                               "或 {name, start}(名字+开始日期);删错一条真日历代价很大,"
+                                               "选择器必须来自核对单,不要凭记忆拼"},
+                    "patch": {"type": "object",
+                              "description": "修订用:要改的字段(start/end/kind/name/note/quote/"
+                                             "source/credibility 任选若干)+ reason(必填,一句为什么改;"
+                                             "日期来自新通知时把那句话放进 quote)"},
                     "reason": {"type": "string",
                                "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
                 },
