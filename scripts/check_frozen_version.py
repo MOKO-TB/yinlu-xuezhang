@@ -415,7 +415,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                      # v0.9.61:断线重连与自助管理(漏收 = 服务器重启后工具全哑
                      # 到重启应用;「对话里加个 MCP 服务器」在包里做不到)
                      "McpTransportError", "restart", "probe_server",
-                     "admin", "admin_tool", "set_admin_hook"),
+                     "admin", "admin_tool", "set_admin_hook",
+                     # v0.9.70:预设模板库(漏收 = 包里说「没有叫 xx 的预设」,
+                     # 对话里加服务器退回手编 JSON)
+                     "MCP_PRESETS", "find_preset", "build_preset_config"),
     # ---- v0.9.24:计划面板(漏收 = 顶栏「🗂 计划」点开永远说没计划) ----
     # v0.9.33:对话流里的计划卡片靠 in_progress/running 画出"正在做哪一步"
     # (漏收 = 卡片只剩一堆待办和勾,转圈的那一行永远不出现)

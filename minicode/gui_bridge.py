@@ -731,8 +731,36 @@ class Bridge:
         }
 
     def _mcp_summary(self) -> list[dict]:
-        mcp = getattr(self.agent, "mcp", None)
-        return mcp.tools_summary() if mcp is not None else []
+        """侧栏 MCP 健康行 + get_info 的数据:**配置是唯一事实,活状态补上去**。
+
+        README 一直承诺「侧栏底部会显示 MCP 服务器名(工具数)」,但 v0.9.70
+        核实前端其实一处都没消费这个字段 —— 这里把形状补成「配置了的都在,
+        连没连上说清楚」:连上的带工具数,没连上的写状态,由前端照着画。
+        """
+        cfg_servers = [s for s in (self.config.mcp_servers or [])
+                       if isinstance(s, dict)]
+        if not cfg_servers:
+            return []
+        mcp = self._mcp or getattr(self.agent, "mcp", None)
+        live: dict = {}
+        if mcp is not None:
+            for c in mcp.clients:
+                live[str(c.cfg.sid)] = c
+        out: list[dict] = []
+        for s in cfg_servers:
+            sid = str((s.get("id") or s.get("name") or "")).strip()
+            c = live.get(sid)
+            out.append({
+                "id": sid,
+                "label": str((c.cfg.label if c else "")
+                             or s.get("description") or sid) or sid,
+                "enabled": bool(s.get("enabled", True)),
+                "transport": str(s.get("transport") or "stdio"),
+                "connected": bool(c),
+                "server": str((c.server_info or {}).get("name") or "") if c else "",
+                "n_tools": len(c.list_tools()) if c else 0,
+            })
+        return out
 
     # ------------------------------------- 对话里自助管理 MCP(v0.9.61)
 
@@ -772,6 +800,9 @@ class Bridge:
                 reg[:] = ([t for t in reg if not t.name.startswith("mcp_")]
                           + self._mcp_tools)
             n = len(self._mcp_tools)
+            # 侧栏 MCP 健康行跟着刷新:配置与活状态只有这里有(同一份 _mcp_summary)
+            self.ui.push("mcp_summary", session=self._current.key,
+                         items=self._mcp_summary())
             return (extra + f"(已热重载:当前 {len(servers)} 个服务器 / {n} 个工具,"
                     "现有会话下一轮即可用,不用重启)")
 

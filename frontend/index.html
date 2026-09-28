@@ -181,6 +181,9 @@ try {
   .side-title{ padding:10px 16px 4px; color:var(--text-3); font-size:12px;
                letter-spacing:1px; font-weight:700; }
   .sessions{ flex:1; min-height:0; overflow-y:auto; padding:0 8px; }
+  /* MCP 健康行(v0.9.70):配置了的都在、连没连上说清楚 —— 纯状态行,不可点 */
+  .side-mcp{ padding:6px 12px 10px; font-size:11px; color:var(--text-3);
+             line-height:1.7; word-break:break-all; border-top:1px solid var(--line-soft); }
   .sess{ padding:9px 12px; border-radius:var(--r-m); cursor:pointer; margin-bottom:4px;
          border:1.5px solid transparent; transition:.15s; }
   .sess:hover{ background:var(--glass-lite); box-shadow:var(--shadow-sm); }
@@ -1671,6 +1674,7 @@ try {
       <button id="btnSessSearch" title="搜索">🔍</button>
     </div>
     <div class="sessions" id="sessions"><div style="color:var(--text-3);padding:8px 10px">暂无</div></div>
+    <div class="side-mcp" id="mcpLine" hidden></div>
   </aside>
 
   <section class="main">
@@ -3153,6 +3157,9 @@ window.__gcodeEvent = function (e) {
     case "sessions":
       // 搜索态下不覆盖结果列表:否则后台推一次会话清单,用户搜到的东西就没了
       if (!sessQuery) renderSessions(e.items || []);
+      break;
+    case "mcp_summary":           // 侧栏 MCP 健康行:热重载后立即刷新(v0.9.70)
+      renderMcpLine(e.items || []);
       break;
     case "turn_usage":            // 任务面板:每回合刷新消耗/上下文占用
       renderTaskMetrics({ ...taskMetrics, consumed: e.consumed,
@@ -6793,6 +6800,17 @@ $("btnWsPick").addEventListener("click", () => {
 });
 
 /* ---------------- 初始化 ---------------- */
+// MCP 健康行(v0.9.70):配置了的都在、连没连上说清楚;数据来自 get_info 的
+// mcp_servers 与热重载后推的 mcp_summary 事件(同一份 _mcp_summary)。
+function renderMcpLine(items) {
+  const el = $("mcpLine");
+  const list = items || [];
+  if (!list.length) { el.hidden = true; return; }
+  el.hidden = false;
+  el.textContent = "🔌 MCP:" + list.map(i =>
+    `${i.label}(${i.enabled === false ? "停用" : i.connected ? `${i.n_tools} 工具` : "未连上"})`
+  ).join(" · ");
+}
 window.addEventListener("DOMContentLoaded", () => {
   applyTheme(document.documentElement.classList.contains("dark"), false);
 
@@ -6826,6 +6844,7 @@ window.addEventListener("DOMContentLoaded", () => {
       loadProjects();      // 侧栏项目面板(最近工作区)
       loadReasoning();     // 思考档位按钮
       loadPlan();          // 计划角标:工作区里已有计划时开窗就看得见进度
+      renderMcpLine(info.mcp_servers);   // 侧栏 MCP 健康行(v0.9.70)
       actPrefPull();       // 任务监控栏:上次收起还是展开、哪几段折着(v0.9.37)
     }).catch(e => {
       $("hint").textContent = "界面初始化失败:" + String(e).slice(0, 80);

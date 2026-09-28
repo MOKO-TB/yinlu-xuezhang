@@ -941,6 +941,122 @@ def set_admin_hook(fn) -> None:
     _ADMIN_HOOK = fn
 
 
+# ------------------------------------------------------------ 预设模板库(v0.9.70)
+#
+# 路线图 #3 的最后半条:v0.9.61 让同学能在对话里自助加服务器,但「从零填
+# JSON」仍是门槛。这张表是**预设的引用**,不是第二套传输实现 —— add 仍走
+# 同一条探测闸(probe_server 真连一次),连不上照样不落盘。三条硬规矩:
+# ①只放公开、免费、官方/通用的服务器,绝不内置任何密钥;
+# ②needs 写清本机缺什么(npx 要 Node.js,uvx 要 uv),加不上时原话说给用户;
+# ③占位符用 __名字__ 形式,raw 只许提供占位符的值与可选 name,**其余字段
+# (command/args/env/headers/read_only/trusted)一律以模板为准** —— raw 能改
+# command,预设就成了任意命令执行口子。
+
+MCP_PRESETS: list[dict] = [
+    {
+        "id": "everything",
+        "label": "试水演示(everything)",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-everything"],
+        "needs": "本机已装 Node.js(npx 命令可用)",
+        "read_only": False,
+        "trusted": False,
+        "description": "官方演示服务器:回显、打印、采样等一堆无害小工具,第一次玩 MCP 拿它试手",
+    },
+    {
+        "id": "sequential-thinking",
+        "label": "分步思考(sequential-thinking)",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        "needs": "本机已装 Node.js(npx 命令可用)",
+        "read_only": True,
+        "trusted": False,
+        "description": "给模型一块「把复杂问题拆成小步」的草稿板,纯思考、无副作用",
+    },
+    {
+        "id": "filesystem",
+        "label": "本地文件夹(filesystem)",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "__PATH__"],
+        "placeholder": {"name": "path", "hint": "要开放的文件夹路径(必须是已存在的目录)",
+                        "must_be_dir": True},
+        "needs": "本机已装 Node.js(npx);加的时候要给一个已存在的文件夹路径",
+        "read_only": False,
+        "trusted": False,
+        "description": "让学长读写工作区之外的某个文件夹(比如课件盘)—— 路径由你定,随时 remove",
+    },
+    {
+        "id": "time",
+        "label": "时间与时区(time)",
+        "command": "uvx",
+        "args": ["mcp-server-time"],
+        "needs": "本机已装 uv(uvx 命令可用;Python 官方工具链)",
+        "read_only": True,
+        "trusted": False,
+        "description": "查任意时区的当前时间与互相换算 —— 跨时区约时间/选课时有用",
+    },
+    {
+        "id": "fetch",
+        "label": "网页抓取(fetch)",
+        "command": "uvx",
+        "args": ["mcp-server-fetch"],
+        "needs": "本机已装 uv(uvx 命令可用)",
+        "read_only": True,
+        "trusted": False,
+        "description": "把网页拉成 Markdown 给模型读;学长自带 web_crawl,这个是备用抓手",
+    },
+]
+
+
+def find_preset(preset_id: str) -> dict | None:
+    text = str(preset_id or "").strip().lower()
+    for p in MCP_PRESETS:
+        if p["id"].lower() == text:
+            return p
+    return None
+
+
+def build_preset_config(preset_id: str,
+                        raw: dict | None) -> tuple[dict | None, str]:
+    """preset + 用户参数 → 一份完整服务器配置;不合法时返回 (None, 说明)。
+
+    raw 里只有两个键有资格进来:name(覆盖服务器标识)与占位符的值
+    (如 filesystem 的 path);其余字段一律以模板为准。占位符要求的路径
+    必须真实存在(目录类必须 is_dir)—— 不猜、不替用户建目录。
+    """
+    p = find_preset(preset_id)
+    if p is None:
+        known = ", ".join(x["id"] for x in MCP_PRESETS)
+        return None, (f"错误: 没有叫「{preset_id}」的预设。可用的:{known}"
+                      "(action=list_presets 看每条的说明与本机要求)。")
+    raw = raw if isinstance(raw, dict) else {}
+    cfg: dict = {
+        "id": str(raw.get("name") or p["id"]).strip() or p["id"],
+        "command": p["command"],
+        "args": list(p["args"]),
+        "transport": "stdio",
+        "enabled": True,
+        "read_only": bool(p.get("read_only")),
+        "trusted": bool(p.get("trusted")),
+        "description": str(p.get("description") or ""),
+    }
+    ph = p.get("placeholder")
+    if ph:
+        val = str(raw.get(ph["name"]) or "").strip().strip('"').strip("'")
+        if not val:
+            return None, (f"错误: 预设「{p['id']}」需要 {ph['name']} 参数 —— "
+                          f"{ph['hint']}。加之前先问用户要。")
+        from pathlib import Path as _Path
+        if ph.get("must_be_dir") and not _Path(val).is_dir():
+            return None, (f"错误: {ph['name']} 指的不是已存在的文件夹:{val}"
+                          " —— 不猜、不替你建,确认路径后再加一次。")
+        token = f"__{(ph['name'] or '').upper()}__"
+        if token not in cfg["args"]:
+            return None, f"错误: 预设「{p['id']}」的模板里没有占位符 {token}(模板写错了)。"
+        cfg["args"] = [val if a == token else a for a in cfg["args"]]
+    return cfg, ""
+
+
 def probe_server(raw: dict, log=None) -> dict:
     """把一份**候选**服务器配置真连一次:握手 + 拉工具清单,立刻关掉。
 
@@ -977,27 +1093,46 @@ def admin(action: str, name: str = "", raw: dict | None = None) -> str:
 
 
 def admin_tool(ctx, action: str = "list", name: str = "", raw=None) -> str:
-    """mcp 工具处理器:list 本地读配置(到处都能用);增删改委托 admin(钩子)。"""
+    """mcp 工具处理器:list/list_presets 本地读(到处都能用);增删改委托 admin(钩子)。"""
     action = (action or "list").strip().lower()
     if action == "list":
         servers = getattr(ctx.config, "mcp_servers", None) or []
         servers = [s for s in servers if isinstance(s, dict)]
         if not servers:
-            return ("还没有配置任何 MCP 服务器。用 action=add 加一个:"
-                    "本地进程给 name+command(+args),远程给 name+transport"
-                    "(http/sse)+url;鉴权 headers 里写「Authorization: "
-                    "${MY_TOKEN}」—— 密钥走环境变量,不落 config.json。")
+            return ("还没有配置任何 MCP 服务器。用 action=list_presets 看预设,"
+                    "然后 action=add 加一个(preset=<id>,如 filesystem 还要给"
+                    " path);或者手写配置:本地进程给 name+command(+args),"
+                    "远程给 name+transport(http/sse)+url;鉴权 headers 里写"
+                    "「Authorization: ${MY_TOKEN}」—— 密钥走环境变量,不落 "
+                    "config.json。")
         lines = [f"- {s.get('id') or s.get('name')}"
                  f"({'启用' if s.get('enabled', True) else '停用'},"
                  f"{s.get('transport') or 'stdio'})" for s in servers]
         return ("已配置的 MCP 服务器:\n" + "\n".join(lines)
                 + "\n(当前挂着的工具与增删改,见 GUI;CLI 改 config.json 后重启生效)")
+    if action == "list_presets":
+        lines = []
+        for p in MCP_PRESETS:
+            ph = p.get("placeholder")
+            extra = (f";加的时候要给 {ph['name']}({ph['hint']})" if ph else "")
+            lines.append(f"- {p['id']} —— {p['description']}"
+                         f"(需要:{p['needs']}{extra})")
+        return ("可用的 MCP 预设模板(用 action=add 加,preset=<id>;命令与参数"
+                "以模板为准,加之前照样真连一次探测,连不上不写入):\n"
+                + "\n".join(lines))
     if action == "add":
         if isinstance(raw, str):
             try:
                 raw = json.loads(raw)
             except json.JSONDecodeError:
                 return "错误: raw 必须是 JSON 对象(服务器配置)。"
+        raw = raw if isinstance(raw, dict) else None
+        preset_id = str((raw or {}).get("preset") or "").strip()
+        if preset_id:
+            cfg, err = build_preset_config(preset_id, raw)
+            if cfg is None:
+                return err
+            raw = cfg
         return admin("add", name=str((raw or {}).get("name")
                                      or (raw or {}).get("id") or ""),
                      raw=raw if isinstance(raw, dict) else None)

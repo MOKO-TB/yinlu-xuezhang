@@ -270,34 +270,42 @@ def tools() -> list[Tool]:
 
 
 def mcp_admin_tool() -> list[Tool]:
-    """MCP 服务器自助管理(v0.9.61):list/add/remove/enable/disable。"""
+    """MCP 服务器自助管理(v0.9.61;v0.9.70 加预设模板库):list/list_presets/add/remove/enable/disable。"""
     return [
         Tool(
             name="mcp",
             description=(
                 "管理 MCP 外接服务器(对话里自助,不用手编 config.json):"
+                "action=list_presets 看预设模板(everything 试水 / 分步思考 / "
+                "filesystem 本地文件夹 / time / fetch,每条写清本机需要什么);"
                 "action=list 看已配置的与当前挂着的工具;action=add 加一个 —— "
-                "raw 给配置(name 必填;本地进程给 command+args,远程给 "
-                "transport=http/sse 与 url,鉴权 headers 写 ${环境变量} 占位),"
-                "**加之前会真连一次探测,连不上就不写入**;remove/enable/disable "
-                "按 name 操作。改动立即热重载(现有会话下一轮可用)。"
-                "注意:这是管理动作,不是调用 MCP 工具本身 —— 外接工具以 "
-                "mcp_开头,直接调它们即可。"
+                "**推荐用预设**:raw 写 {\"preset\": \"<id>\"},要参数的预设"
+                "(filesystem)再加 path,如 {\"preset\": \"filesystem\", "
+                "\"path\": \"D:/课件\"};也可以手写 raw 配置(name 必填;本地进程"
+                "给 command+args,远程给 transport=http/sse 与 url,鉴权 headers "
+                "写 ${环境变量} 占位)。**加之前会真连一次探测,连不上就不写入**;"
+                "本机没装 npx/uvx 时探测会失败并如实说缺什么,不会假装加上了。"
+                "remove/enable/disable 按 name 操作。改动立即热重载(现有会话"
+                "下一轮可用)。注意:这是管理动作,不是调用 MCP 工具本身 —— "
+                "外接工具以 mcp_ 开头,直接调它们即可。"
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "action": {"type": "string",
-                               "enum": ["list", "add", "remove", "enable", "disable"],
-                               "description": "list=看清单(默认);add=加(先探测后写入);"
-                                              "remove/enable/disable 按 name 操作"},
+                               "enum": ["list", "list_presets", "add",
+                                        "remove", "enable", "disable"],
+                               "description": "list=看清单(默认);list_presets=看预设模板;"
+                                              "add=加(先探测后写入);remove/enable/disable 按 name 操作"},
                     "name": {"type": "string",
                              "description": "remove/enable/disable 用:服务器标识(清单里能看到)"},
                     "raw": {"type": "object",
-                            "description": "add 用:服务器配置对象。字段:name(必填)、"
-                                           "command/args(stdio 本地进程)或 transport+url"
-                                           "(http/sse 远程)、env/headers(值写 ${环境变量} 占位)、"
-                                           "read_only/trusted(可信的自建服务器才写 true)"},
+                            "description": "add 用:{\"preset\": \"<id>\", \"path\": \"占位符参数"
+                                           "(filesystem 要的文件夹)\", \"name\": \"可选的自定义标识\"};"
+                                           "或完整手写配置:name(必填)、command/args(stdio 本地进程)"
+                                           "或 transport+url(http/sse 远程)、env/headers(值写 "
+                                           "${环境变量} 占位)、read_only/trusted(可信的自建服务器才写 "
+                                           "true)。**用预设时命令与安全开关一律以模板为准,raw 改不动**"},
                     "reason": {"type": "string",
                                "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
                 },
