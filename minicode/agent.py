@@ -41,6 +41,10 @@ FAIL_STREAK_NOTE = ("同一个工具调用已经连续失败 3 次,结果都一�
                     "(以上面的工具回话为准,不要凭印象编)、以及可选的下一步"
                     "(换一种做法 / 改参数重试 / 放弃这一步先做别的),让用户来决定。")
 
+TOKEN_LIMIT_NOTE = ("本会话累计 token 消耗已到 session_token_limit 上限,这一次不许再调用工具。"
+                    "请向用户如实说明:这一轮做到哪了、还剩什么没做;想继续可以提高 "
+                    "config.json 里的 session_token_limit,或新开一个会话再接着做。")
+
 
 class Agent:
     def __init__(self, llm: LLMClient, registry: list[Tool], session: Session,
@@ -93,11 +97,22 @@ class Agent:
         # 到点只在两步之间收手 —— 正在执行的那一步不会被强杀。
         limit = max(0, int(getattr(self.ctx.config, "turn_time_limit_seconds", 0) or 0))
         deadline = time.monotonic() + limit if limit else None
+        # 成本闸门(v0.9.78):本会话累计真实消耗(只认服务端 usage)的上限。
+        # 与 deadline 一样在循环顶部查 —— 用的是"上一回合结束"时的数,正在跑的
+        # 那一步不受影响,天然满足"不强杀"的口径。
+        token_limit = max(0, int(getattr(self.ctx.config, "session_token_limit", 0) or 0))
         steps = 0
         # 失败连击只在本回合内计数:跨回合的旧失败不该约束新回合的新决定
         # (B0 同款口径:一次任务里换关键词补搜不算)。
         self._fail_streak_key, self._fail_streak_count = None, 0
         for _ in range(self.max_steps):
+            if token_limit and int(getattr(self, "turn_tokens", 0) or 0) > token_limit:
+                used = int(getattr(self, "turn_tokens", 0) or 0)
+                self.ui.token_limit_reached(token_limit, used)
+                # 同两条时限/止损的口径:此刻不再开新的工具轮,但正在跑的
+                # 步骤照常收尾 —— 收尾那一次调用本身也会耗一点,如实告诉模型。
+                self._wrap_up(TOKEN_LIMIT_NOTE)
+                return
             if deadline is not None and time.monotonic() > deadline:
                 self.ui.turn_time_limited(limit, steps)
                 # 与撞步数上限同一口径:此刻工具结果已经躺在上下文里,模型还没

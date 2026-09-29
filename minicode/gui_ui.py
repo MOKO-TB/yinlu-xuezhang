@@ -123,6 +123,13 @@ class GuiUI:
                                f"本轮先停在这里,不再原样重试。"
                                f"让它换个做法,或直接说「继续」。")
 
+    def token_limit_reached(self, limit: int, used: int) -> None:
+        # 与两条时限同一口径:停的是这一轮的循环,不是错误。
+        self.push("info", text=f"本会话累计消耗约 {used} token,已到 "
+                               f"session_token_limit({limit})上限,本轮先停在这里"
+                               f"(正在执行的那一步不会被强杀)。"
+                               f"可提高上限或新开会话再继续。")
+
     def compacted(self, before: int, after: int) -> None:
         self.push("compacted", before=before, after=after)
 

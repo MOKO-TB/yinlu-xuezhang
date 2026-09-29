@@ -75,6 +75,10 @@ class FakeUI:
         self.fail_streaks = getattr(self, "fail_streaks", [])
         self.fail_streaks.append((tool, limit))
 
+    def token_limit_reached(self, limit, used):
+        self.token_limits = getattr(self, "token_limits", [])
+        self.token_limits.append((limit, used))
+
 
 class Clock:
     """假时钟:每读一次走 step 秒,让"一轮总时限到点"可测而不用真等。"""
@@ -721,3 +725,73 @@ def test_fail_streak_counts_across_tool_calls_in_one_turn(config, ctx):
     agent.max_steps = 20
     agent.run_turn("做个事")
     assert getattr(ui, "fail_streaks", []) == [("nope", 3)]
+
+
+# ---------------------------------------------------------------- 成本闸门(v0.9.78)
+
+def _turn_with_usage(calls, pt=40, ct=10):
+    from minicode.llm import AssistantTurn, ToolCall
+    return AssistantTurn(
+        tool_calls=[ToolCall(id=c["id"], name=c["name"],
+                             arguments=json.dumps(c["args"]))
+                    for c in calls],
+        usage={"prompt_tokens": pt, "completion_tokens": ct})
+
+
+def test_session_token_limit_stops_between_turns(config, ctx):
+    """会话累计消耗(只认服务端 usage)超过上限:两步之间收手,收一次尾。
+
+    口径与两条时限一致 —— 检查在循环顶部,用的是上一回合结束时的数,
+    正在跑的那一步不受影响(不承诺"强杀")。
+    """
+    config.session_token_limit = 100        # 每回合 +50:第 4 轮顶部 150 > 100
+    ui = FakeUI()
+    turns = [
+        _turn_with_usage([{"id": "c1", "name": "nope", "args": {"x": 1}}]),
+        _turn_with_usage([{"id": "c2", "name": "nope", "args": {"x": 2}}]),
+        _turn_with_usage([{"id": "c3", "name": "nope", "args": {"x": 3}}]),
+        AssistantTurn(text="收尾:做到一半,剩下的等继续"),
+    ]
+    llm = FakeLLM(turns)
+    agent = make_agent(config, ctx, llm, ui)
+    agent.max_steps = 20
+    agent.run_turn("做个事")
+    assert getattr(ui, "token_limits", []) == [(100, 150)]
+    assert agent.turn_tokens == 150
+    # 收尾那次请求带的是成本版文案;第 4 轮的工具没被发出去
+    last_request = llm.calls[-1]
+    assert "session_token_limit" in last_request[-1]["content"]
+    assert any(m.get("tool_call_id") == "c3" for m in agent.session.messages)
+    assert not any(m.get("tool_call_id") == "c4" for m in agent.session.messages)
+
+
+def test_session_token_limit_zero_means_unlimited(config, ctx):
+    """默认 0 = 不限:消耗再大也不触发(config 未登记时老 config 行为不变)。"""
+    ui = FakeUI()
+    turns = [_turn_with_usage([{"id": f"c{i}", "name": "nope",
+                                "args": {"x": i}}], pt=500, ct=100)
+             for i in range(3)] + [AssistantTurn(text="完")]
+    llm = FakeLLM(turns)
+    agent = make_agent(config, ctx, llm, ui)
+    agent.max_steps = 20
+    agent.run_turn("做个事")
+    assert getattr(ui, "token_limits", None) is None
+    assert agent.turn_tokens == 1800
+
+
+def test_session_token_limit_counts_across_turns_of_same_session(config, ctx):
+    """闸门数的是**会话累计**(agent 实例生命周期),不是单回合:跨 run_turn 累计。"""
+    config.session_token_limit = 120
+    ui = FakeUI()
+    llm = FakeLLM([
+        _turn_with_usage([{"id": "c1", "name": "nope", "args": {"x": 1}}], pt=60, ct=10),
+        AssistantTurn(text="第一轮完"),
+        _turn_with_usage([{"id": "c2", "name": "nope", "args": {"x": 2}}], pt=60, ct=10),
+        AssistantTurn(text="收尾"),
+    ])
+    agent = make_agent(config, ctx, llm, ui)
+    agent.max_steps = 20
+    agent.run_turn("第一问")            # 70 < 120,不触发
+    assert getattr(ui, "token_limits", None) is None
+    agent.run_turn("第二问")            # 累计 140 > 120,这轮顶部触发
+    assert getattr(ui, "token_limits", []) == [(120, 140)]

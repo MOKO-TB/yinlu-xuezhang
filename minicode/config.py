@@ -210,6 +210,10 @@ class Config:
     # 到点后只在"上一步做完、下一步还没开始"的间隙停下,不强杀正在执行的那一步
     # ——bash/py_script 自己有单条命令超时,两层各管各的,别指望这里能打断一条卡住的命令。
     turn_time_limit_seconds: int = 1800
+    # 本会话累计 token 消耗上限(0 = 不限,v0.9.78 成本闸门):只认服务端返回的
+    # 真实用量(prompt+completion,不给 usage 的端点这道闸不起作用,文档写明)。
+    # 到点与两条时限同一口径:两步之间收手,不强杀在跑的那一步。
+    session_token_limit: int = 0
     # 会话留档保留个数(0=全部保留,默认):启动时按 mtime 删旧的。
     # 刻意只给这一个数 —— 年龄/体积的花样讲不清,一个数用户写得对。
     session_keep_last: int = 0
@@ -397,6 +401,7 @@ def _config_from_raw(raw: dict) -> Config:
         max_steps=max(1, int(raw.get("max_steps", 40) or 40)),
         request_timeout_seconds=int(raw.get("request_timeout_seconds", 300)),
         turn_time_limit_seconds=max(0, int(raw.get("turn_time_limit_seconds", 1800) or 0)),
+        session_token_limit=max(0, int(raw.get("session_token_limit", 0) or 0)),
         session_keep_last=max(0, int(raw.get("session_keep_last", 0) or 0)),
         subagent_time_limit_seconds=max(0, int(
             raw.get("subagent_time_limit_seconds", 600) or 0)),
@@ -497,6 +502,7 @@ def save_config(path: Path, cfg: Config) -> None:
         "request_timeout_seconds": cfg.request_timeout_seconds,
         # 两条时限跟着落盘:用户在设置里改过、下次启动还在(0=不限也照样存下来)
         "turn_time_limit_seconds": cfg.turn_time_limit_seconds,
+        "session_token_limit": cfg.session_token_limit,
         "session_keep_last": cfg.session_keep_last,
         "subagent_time_limit_seconds": cfg.subagent_time_limit_seconds,
         "feedback_recall": cfg.feedback_recall,

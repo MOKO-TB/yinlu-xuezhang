@@ -127,7 +127,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # 用户只看到"它不动了",以为卡死)
                         "turn_time_limited",
                         # v0.9.77:失败连击止损要说得出声(同上)
-                        "fail_streak_limit"),
+                        "fail_streak_limit",
+                        # v0.9.78:成本闸门到点要说得出声(同上)
+                        "token_limit_reached"),
     # v0.9.30:迁移包整模块是新文件,漏收 = 装好的包连面板都打不开
     "minicode.mydata": ("inventory", "pack_plan", "export_package", "read_package",
                         "import_pick", "import_apply", "forget_preview",
@@ -367,7 +369,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        "_refresh_clock", "_wrap_up",
                        # v0.9.77:失败连击止损(漏收 = 装好的包里同一个调用
                        # 连挂 N 次只会烧 token 到 max_steps/整轮时限)
-                       "FAIL_STREAK_LIMIT", "FAIL_STREAK_NOTE", "_fail_streak_hit"),
+                       "FAIL_STREAK_LIMIT", "FAIL_STREAK_NOTE", "_fail_streak_hit",
+                       # v0.9.78:成本闸门(漏收 = config 里的上限在包里没人读,
+                       # 跑飞了还是只能等时间限)
+                       "TOKEN_LIMIT_NOTE", "session_token_limit"),
     "minicode.subagents": ("type_spec", "_await", "_timeout_note", "TYPE_KEYS",
                            "DOMAIN_KEYS",
                            # v0.9.60:批量放开写类型的两根支柱(漏收 = 混合批次

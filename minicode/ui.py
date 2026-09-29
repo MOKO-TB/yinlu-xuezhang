@@ -335,3 +335,10 @@ class TerminalUI:
             f"[yellow]⚠ 「{tool}」已连续 {limit} 次以同样方式失败,"
             f"本轮先停在这里,不再原样重试。换个做法或说「继续」。[/yellow]"
         )
+
+    def token_limit_reached(self, limit: int, used: int) -> None:
+        self.console.print(
+            f"[yellow]💰 本会话累计消耗约 {used} token,已到 "
+            f"session_token_limit({limit})上限,本轮先停在这里"
+            f"(正在执行的那一步不会被强杀)。可提高上限或新开会话再继续。[/yellow]"
+        )
