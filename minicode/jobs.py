@@ -163,3 +163,62 @@ def log_outcome(spec: JobSpec, ran: bool, why: str = "") -> None:
     from minicode import proactive
     proactive.wd_log(f"job {spec.id}: {'跑了' if ran else '未跑'}"
                      + (f"[{why}]" if why else ""))
+
+
+# ---------------------------------------------------------------- 可观测(v0.9.79)
+
+_WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+
+def rhythm_text(spec: JobSpec) -> str:
+    """节奏的人话:"每周日 20 点后" / "每 3 天" / "每天"。"""
+    if spec.cadence == "weekly":
+        base = f"每周{_WEEKDAYS[spec.weekday]}"
+        return base + (f" {spec.hour} 点后" if spec.hour is not None else "")
+    if spec.cadence == "daily":
+        return "每天" + (f" {spec.hour} 点后" if spec.hour is not None else "")
+    if spec.cadence == "every_days":
+        return f"每 {spec.every} 天"
+    if spec.cadence == "interval":
+        return f"每 {spec.every} 分钟"
+    return "按需触发"
+
+
+def snapshot(specs: list[JobSpec], state: dict | None = None,
+             now: datetime | None = None) -> str:
+    """回答「这周的任务跑没跑、为什么没跑」:每个任务一段人话,纯函数。
+
+    数据源是 jobs-state.json 那本账(mark_run 写的 last_run/result/runs)+
+    此刻的 due() 判定;**结论原文随行摆出**("已推"/"没记就不打扰"/"异常 X")
+    —— handler 异常算跑过这一班是 A2 的拍板(宁缺不刷屏),但"跑失败了"
+    必须能被问出来,不能只躺在日志里。
+    """
+    moment = now or datetime.now()
+    book = load_state() if state is None else state
+    lines = [f"定时任务 {len(specs)} 个:"]
+    for spec in specs:
+        row = book.get(spec.id) if isinstance(book.get(spec.id), dict) else {}
+        last = _parse(row.get("last_run"))
+        result = str(row.get("result") or "")
+        runs = runs_of(spec.id, book)
+        if last is None:
+            ran_line = "从未跑过"
+        else:
+            failed = result.startswith("异常")
+            ran_line = (f"上次 {last.strftime('%m-%d %H:%M')} 跑过"
+                        + (f",{'上次跑失败:' if failed else '结论:'}{result}"
+                           if result else "")
+                        + f",共 {runs} 次")
+        if due(spec, moment, last):
+            state_line = "现在已到期,下一次心跳(≤5 分钟)就会跑"
+        elif spec.cadence == "weekly":
+            day = _WEEKDAYS[spec.weekday]
+            if last and last >= _week_start(moment):
+                state_line = f"本周{day}那一班已跑过"
+            else:
+                state_line = f"本周还没到{day}那一班"
+        else:
+            state_line = "还没到点"
+        lines.append(f"- {spec.id}({rhythm_text(spec)}):{ran_line};{state_line}")
+    lines.append("机器没开机的那一班会跳过,下一班自然再来;上面的结论不含任务正文。")
+    return "\n".join(lines)

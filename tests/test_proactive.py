@@ -1073,3 +1073,29 @@ def test_push_calendar_exam_adds_plan_ask(monkeypatch):
     by_name = {e.get("name"): e for e in ui.events}
     assert "复习计划" in by_name["期末考试周"]["ask"]     # 考试类带追问
     assert "ask" not in by_name["中秋节"]                   # 非考试类不带
+
+# ------------------------------------------- weekly 到期端到端(v0.9.79)
+
+def test_weekly_review_job_runs_for_real_when_due(monkeypatch, tmp_path):
+    """调研单 §6 #43 ⑤:两个 weekly 从未端到端验过到期真跑 —— 这条用
+    **真 JOB_SPECS + 真 _job_weekly_review** 钉:到期的心跳会真跑 handler、
+    真推送(review 事件)、真落账;同一时刻再跑一遍不重复(本周已跑)。"""
+    from datetime import datetime
+    from minicode import jobs as _jobs
+    from minicode import mood as _mood
+    bridge, _ui = _push_bridge()
+    monkeypatch.setattr(_mood, "weekly_review",
+                        lambda days=7: {"count": 3, "text": "本周记了 3 天,平均 3 分"})
+    monkeypatch.setattr(_jobs, "state_path", lambda: tmp_path / "jobs-state.json")
+    now = datetime(2026, 10, 4, 20, 1)      # 周日 20:01:周复盘已到点
+
+    ran = proactive._run_due_jobs(bridge, now=now)
+
+    assert "mood_weekly_review" in ran
+    row = _jobs.load_state().get("mood_weekly_review")
+    assert row["result"] == "已推" and row["runs"] == 1
+    pushed = [e for e in _ui.events if e["type"] == "proactive"]
+    assert any("平均 3 分" in str(e.get("text")) for e in pushed)
+    # 同一时刻再过一遍心跳:本周已跑,不再到期
+    assert proactive._run_due_jobs(bridge, now=now) == []
+    assert _jobs.load_state()["mood_weekly_review"]["runs"] == 1

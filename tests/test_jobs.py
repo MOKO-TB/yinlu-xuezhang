@@ -166,3 +166,37 @@ def test_log_outcome_goes_to_the_watchdog_log_with_no_content(ledger, monkeypatc
     jobs.log_outcome(JobSpec("review", cadence="weekly", weekday=0), True, "两句")
     jobs.log_outcome(JobSpec("digest", cadence="daily"), False, "未到点")
     assert lines == ["job review: 跑了[两句]", "job digest: 未跑[未到点]"]
+
+
+# ---------------------------------------------------------------- 可观测(v0.9.79)
+
+def test_snapshot_never_run_and_rhythm(ledger):
+    """没人动过账本:如实说「从未跑过」,节奏翻译成人话。"""
+    specs = [JobSpec("mood_weekly_review", cadence="weekly", weekday=6, hour=20),
+             JobSpec("digest", cadence="daily", hour=8)]
+    text = jobs.snapshot(specs, state={}, now=TUESDAY)
+    assert "定时任务 2 个" in text
+    assert "mood_weekly_review(每周周日 20 点后):从未跑过" in text
+    assert "digest(每天 8 点后):从未跑过" in text
+    assert "现在已到期" in text          # 每日 8 点任务在 09:00 已到期
+
+
+def test_snapshot_reports_last_result_and_failure(ledger):
+    """上次的结论随行摆出;handler 异常要能被问出来("跑失败了"≠"没跑")。"""
+    specs = [JobSpec("mood_weekly_review", cadence="weekly", weekday=6, hour=20)]
+    jobs.mark_run("mood_weekly_review", when=SUNDAY, result="已推")
+    ok_text = jobs.snapshot(specs, now=TUESDAY)
+    assert "上次 10-04 23:30 跑过" in ok_text and "结论:已推" in ok_text
+    assert "本周周日那一班已跑过" in ok_text
+    jobs.mark_run("mood_weekly_review", when=SUNDAY, result="异常 RuntimeError")
+    bad_text = jobs.snapshot(specs, now=TUESDAY)
+    assert "上次跑失败:异常 RuntimeError" in bad_text
+
+
+def test_snapshot_weekly_not_yet_and_due(ledger):
+    """周日 20 点前:还没到那一班;到了且没跑:说"下一次心跳就会跑"。"""
+    specs = [JobSpec("mood_weekly_review", cadence="weekly", weekday=6, hour=20)]
+    before = jobs.snapshot(specs, now=TUESDAY)
+    assert "本周还没到周日那一班" in before
+    at_deadline = jobs.snapshot(specs, now=dt("2026-10-04 20:05"))
+    assert "现在已到期,下一次心跳(≤5 分钟)就会跑" in at_deadline

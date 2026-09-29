@@ -256,7 +256,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # ---- v0.9.42:定时任务底座(纯函数 + 账本);v0.9.56 A2 起被 proactive 引用,
     #      必须进包 —— 漏收 = import proactive 直接炸,整个看门狗起不来 ----
     "minicode.jobs": ("JobSpec", "due", "due_jobs", "load_state", "last_run",
-                      "runs_of", "mark_run", "log_outcome", "STATE_FILE"),
+                      "runs_of", "mark_run", "log_outcome", "STATE_FILE",
+                      # v0.9.79:定时任务可观测(漏收 = 装好的包里「这周任务
+                      # 跑没跑、为什么没跑」永远答不上来)
+                      "snapshot", "rhythm_text"),
     # ---- v0.9.58:.ics 兜底导出(漏收 = 「把课表导进系统日历」在装好的包里
     #      做不到,而对话里什么错都不报——工具压根没注册) ----
     "minicode.ics_export": ("collect", "render", "export", "export_ics_tool",

@@ -1261,3 +1261,32 @@ def test_tray_log_rolls_at_cap(tmp_path, monkeypatch):
     lines = log.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 10
     assert "line 14" in lines[-1] and "line 0" not in "".join(lines)
+
+
+# ------------------------------------------- 工具描述对账 + 任务查询(v0.9.79)
+
+def test_desktop_notify_kind_enum_matches_notify_kinds():
+    """v0.9.79 审计实锤:工具描述里的 kind 枚举曾只列 8 类(实际 11 类)——
+    模型照描述列不出 review/gaps/recovery,教不会用户关周报。这条闸钉住:
+    描述与参数里出现过的类别集合必须逐类等于 NOTIFY_KINDS。"""
+    import re
+    from pathlib import Path
+    from minicode.tools import catalog_campus
+    src = Path(catalog_campus.__file__).read_text(encoding="utf-8")
+    block = src[src.index('name="desktop_notify"'):]
+    block = block[:block.index("handler=tray.desktop_notify")]
+    mentioned = set()
+    for m in re.finditer(r"(briefing|class|schedule|reminders|calendar|notices|"
+                         r"update|weather|review|gaps|recovery)", block):
+        mentioned.add(m.group(1))
+    assert mentioned == set(tray.NOTIFY_KINDS), (
+        f"desktop_notify 描述的类别集与 NOTIFY_KINDS 漂了:少 {set(tray.NOTIFY_KINDS) - mentioned},"
+        f"多 {mentioned - set(tray.NOTIFY_KINDS)} —— 加类别时两处要一起改")
+
+
+def test_desktop_notify_jobs_answers_did_it_run():
+    """「这周的任务跑没跑」的查询口:报出注册的任务与节奏。"""
+    out = tray.desktop_notify(None, action="jobs")
+    assert "定时任务 2 个" in out
+    assert "mood_weekly_review" in out and "kb_gap_digest" in out
+    assert "每周周日" in out and "每周周六" in out

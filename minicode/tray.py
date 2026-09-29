@@ -1077,6 +1077,11 @@ def desktop_notify(ctx, action: str = "status", kind: str = "",
         return ("这条测试通知没能发出:" + r.get("msg", r.get("skipped", ""))
                 + "\n原因也写在数据目录里的 tray.log;"
                   "主动提醒仍会显示在聊天窗口顶部那条提示栏里。")
+    if action == "jobs":
+        # 定时任务可观测(v0.9.79):「这周的任务跑没跑、为什么没跑」的查询口。
+        from minicode import jobs as _jobs
+        from minicode import proactive          # 函数内引:proactive 也会引 tray
+        return _jobs.snapshot(proactive.JOB_SPECS)
     if action == "log":
         from minicode import proactive          # 函数内引:proactive 也会引 tray
         rows = proactive.wd_log_tail(30)

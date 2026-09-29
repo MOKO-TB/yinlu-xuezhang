@@ -290,7 +290,8 @@ def remind_tools() -> list[Tool]:
                 "就等于没提醒;开了之后同时弹到桌面。用户说「提醒直接弹桌面」「别弹通知」"
                 "「提醒做成两种:栏里一条 + 桌面一条」「看不到通知」时用:action=status 看"
                 "现状(哪些类别会弹、托盘在不在),action=on/off 开或关(kind 可只动一类:"
-                "briefing/class/schedule/reminders/calendar/notices/update/weather),action=test "
+                "briefing/class/schedule/reminders/calendar/notices/update/weather/review/"
+                "gaps/recovery),action=test "
                 "当场发一条测试通知(**排查「看不到通知」先走这条**:回了「已发出」"
                 "就说明是系统挡的,要用户去 设置→系统→通知 里放行本应用)。"
                 "另外管开机自启:action=startup_on / startup_off 开或关「开机自动启动学长」"
@@ -298,6 +299,9 @@ def remind_tools() -> list[Tool]:
                 "实现是在当前用户的「启动」文件夹放一个快捷方式,不写注册表,用户能自己"
                 "看见并删掉;建完会读回指向核对,没核对上不会说已开启)。"
                 "**用户报「提醒没发」「同一条弹了好几遍」时用 action=log**:读看门狗的运行"
+                "日志。**action=jobs 回答「定时任务跑没跑」**:心情周复盘/缺口周报这些"
+                "周期任务各自的节奏、上次何时跑、结论是什么、现在到没到点 —— "
+                "用户问「周报怎么没来」「这周任务跑没跑」时用它。",
                 "日志(数据目录 watchdog.log),里面每一行是「哪一类、推了还是被哪道闸门拦下"
                 "了、拦下或失败的原因」,只有类别与去重键、不含通知正文;拿着它就能说清"
                 "是「今天已推过」「今日简报已覆盖」「没内容」还是「两路都没送到」。"
@@ -310,14 +314,17 @@ def remind_tools() -> list[Tool]:
                 "properties": {
                     "action": {"type": "string",
                                "enum": ["status", "on", "off", "test",
-                                        "startup_on", "startup_off", "log"],
+                                        "startup_on", "startup_off", "log", "jobs"],
                                "description": "status=看状态(默认);on/off=开关;test=发一条测试;"
                                               "startup_on/startup_off=开机自启开/关;"
-                                              "log=读看门狗运行日志(查「没提醒」或「重复弹」)"},
+                                              "log=读看门狗运行日志(查「没提醒」或「重复弹」);"
+                                              "jobs=定时任务跑没跑(查周报/缺口周报这些周期任务)"},
                     "kind": {"type": "string",
                              "description": "可选:只开关这一类提醒(briefing 今日简报 / class 课前 / "
                                             "schedule 课程 / reminders 待办 / calendar 校历 / "
-                                            "notices 校园通知 / update 新版本 / weather 天气提醒)"},
+                                            "notices 校园通知 / update 新版本 / weather 天气提醒 / "
+                                            "review 心情周复盘 / gaps 知识库缺口周报 / "
+                                            "recovery 模型恢复提醒)"},
                     "reason": {"type": "string",
                                "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
                 },
