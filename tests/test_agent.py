@@ -71,6 +71,10 @@ class FakeUI:
     def turn_time_limited(self, seconds, steps):
         self.time_limited.append((seconds, steps))
 
+    def fail_streak_limit(self, tool, limit):
+        self.fail_streaks = getattr(self, "fail_streaks", [])
+        self.fail_streaks.append((tool, limit))
+
 
 class Clock:
     """假时钟:每读一次走 step 秒,让"一轮总时限到点"可测而不用真等。"""
@@ -644,3 +648,76 @@ def test_write_good_python_has_no_syntax_noise(config, ctx, tmp_path):
     agent2 = make_agent(config, ctx, llm2, FakeUI())
     agent2.run_turn("写个笔记")
     assert "语法自检" not in agent2.session.messages[-2]["content"]
+
+
+# ---------------------------------------------------------------- 失败连击止损(v0.9.77)
+
+def _fail_calls(name, args, n, start=0):
+    """n 个回合,每回合调一次同一个(可能失败的)工具;结果由 registry 真跑决定。"""
+    from minicode.llm import AssistantTurn, ToolCall
+    return [AssistantTurn(tool_calls=[
+        ToolCall(id=f"c{start + i}", name=name, arguments=json.dumps(args))])
+        for i in range(n)]
+
+
+def test_fail_streak_stops_after_three_identical_failures(config, ctx):
+    """同一个调用连挂 3 次:第 3 次后停止工具循环,收一次尾并把文案换成
+    「说明卡点、交给用户」—— 不再原样重试烧 token 到 max_steps。"""
+    ui = FakeUI()
+    turns = (_fail_calls("nope", {"x": 1}, 3)
+             + [AssistantTurn(text="收尾:卡在了一个不存在的工具上")])
+    llm = FakeLLM(turns)
+    agent = make_agent(config, ctx, llm, ui)
+    agent.max_steps = 20
+    agent.run_turn("做个事")
+    assert getattr(ui, "fail_streaks", []) == [("nope", 3)]
+    assert llm.turns == []                          # 收尾那次真的发出了
+    # 收尾 note 只进那一次请求、不入留档(_wrap_up 的既有口径),从发出的请求里断
+    last_request = llm.calls[-1]
+    assert "连续失败 3 次" in last_request[-1]["content"]   # 收尾文案是失败版的
+    assert "轮数已经用完" not in last_request[-1]["content"]  # 不是步数那条
+
+
+def test_fail_streak_resets_on_arg_change(config, ctx):
+    """换参数重试是健康的思路调整:键变了计数重置,不触发止损。"""
+    ui = FakeUI()
+    turns = (_fail_calls("nope", {"x": 1}, 2)
+             + _fail_calls("nope", {"x": 2}, 1, start=2)
+             + _fail_calls("nope", {"x": 1}, 1, start=3)
+             + [AssistantTurn(text="还在试")])
+    agent = make_agent(config, ctx, FakeLLM(turns), ui)
+    agent.max_steps = 20
+    agent.run_turn("做个事")
+    assert getattr(ui, "fail_streaks", []) == []    # 没触发
+    assert agent._fail_streak_count == 1            # 新键下只累计到 1
+
+
+def test_fail_streak_resets_on_success(config, ctx):
+    """中间成功一次就重置:失败的连击必须**连续**才算数。"""
+    ui = FakeUI()
+    ok = [AssistantTurn(tool_calls=[ToolCall(id="ok1", name="nope2",
+                                             arguments=json.dumps({"y": 0}))])]
+    # nope2 不存在?换一个真成功的:用 read_file 读一个真文件
+    (ctx.workspace / "ok.txt").write_text("hi", encoding="utf-8")
+    ok = [AssistantTurn(tool_calls=[ToolCall(id="ok1", name="read_file",
+                                             arguments=json.dumps({"path": "ok.txt"}))])]
+    turns = (_fail_calls("nope", {"x": 1}, 2) + ok
+             + _fail_calls("nope", {"x": 1}, 2, start=5)
+             + [AssistantTurn(text="继续")])
+    agent = make_agent(config, ctx, FakeLLM(turns), ui)
+    agent.max_steps = 20
+    agent.run_turn("做个事")
+    assert getattr(ui, "fail_streaks", []) == []    # 成功打断了连击
+
+
+def test_fail_streak_counts_across_tool_calls_in_one_turn(config, ctx):
+    """同一回合里并行发三次同样的失败调用:也算连击(键相同)。"""
+    ui = FakeUI()
+    from minicode.llm import AssistantTurn, ToolCall
+    turns = [AssistantTurn(tool_calls=[
+        ToolCall(id=f"p{i}", name="nope", arguments=json.dumps({"x": 1}))
+        for i in range(3)])]
+    agent = make_agent(config, ctx, FakeLLM(turns), ui)
+    agent.max_steps = 20
+    agent.run_turn("做个事")
+    assert getattr(ui, "fail_streaks", []) == [("nope", 3)]

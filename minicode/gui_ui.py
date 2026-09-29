@@ -116,6 +116,13 @@ class GuiUI:
                                f"已停下(正在执行的那一步不会被强杀)。"
                                f"想接着做直接说「继续」。")
 
+    def fail_streak_limit(self, tool: str, limit: int) -> None:
+        # 同两条时限的口径:停的是这一轮的循环,不承诺"已停止了它"。
+        # 走 info 不走 error —— 止损是护栏起效,不是一次故障。
+        self.push("info", text=f"「{tool}」已连续 {limit} 次以同样方式失败,"
+                               f"本轮先停在这里,不再原样重试。"
+                               f"让它换个做法,或直接说「继续」。")
+
     def compacted(self, before: int, after: int) -> None:
         self.push("compacted", before=before, after=after)
 

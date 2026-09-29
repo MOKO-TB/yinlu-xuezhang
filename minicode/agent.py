@@ -17,6 +17,7 @@ from minicode.compaction import compact, estimate_tokens, schema_tokens
 from minicode.llm import LLMClient, ToolCall
 from minicode.model_catalog import context_window_for
 from minicode.permission import ASK, REJECT, PermissionGate
+from minicode import toolsum
 from minicode.session import Session, outbound as session_outbound, repair_tool_pairs
 from minicode.tools.base import (
     PathBlocked, PathOutsideWorkspace, Tool, ToolContext, resolve_path,
@@ -33,6 +34,12 @@ SYNTAX_SCAN_LIMIT = 512 * 1024                     # 只自检 512 KB 以内:再
 WRAP_UP_NOTE = ("工具调用轮数已经用完,这一次不许再调用工具。"
                 "就上面已经跑完的那些结果,用几句话讲清:已经完成什么、还没完成什么、"
                 "下一步建议做什么。不要重复已经说过的内容。")
+
+FAIL_STREAK_LIMIT = 3      # 同一个调用连续失败几次就止损(与 B0「第 3 次搜空才催」同节奏)
+FAIL_STREAK_NOTE = ("同一个工具调用已经连续失败 3 次,结果都一样,继续原样重试没有意义。"
+                    "这一次不许再调用工具。请向用户如实说明:卡在哪一步、每次失败的具体原因"
+                    "(以上面的工具回话为准,不要凭印象编)、以及可选的下一步"
+                    "(换一种做法 / 改参数重试 / 放弃这一步先做别的),让用户来决定。")
 
 
 class Agent:
@@ -87,6 +94,9 @@ class Agent:
         limit = max(0, int(getattr(self.ctx.config, "turn_time_limit_seconds", 0) or 0))
         deadline = time.monotonic() + limit if limit else None
         steps = 0
+        # 失败连击只在本回合内计数:跨回合的旧失败不该约束新回合的新决定
+        # (B0 同款口径:一次任务里换关键词补搜不算)。
+        self._fail_streak_key, self._fail_streak_count = None, 0
         for _ in range(self.max_steps):
             if deadline is not None and time.monotonic() > deadline:
                 self.ui.turn_time_limited(limit, steps)
@@ -132,23 +142,32 @@ class Agent:
                     result = (f"错误: 工具 {call.name} 执行时抛了 "
                               f"{type(e).__name__}: {str(e)[:200]}")
                 self.session.add_tool_result(call.id, call.name, result)
+                if self._fail_streak_hit(call):
+                    # 连续 N 次一模一样的失败:再原样重试只是烧 token(撞上
+                    # max_steps/时间限才停)。收一次尾,把"接下来怎么办"交给
+                    # 用户 —— 文案不许说"我已停止了它",停的是这一轮的循环,
+                    # 与两条时限同一口径。
+                    self.ui.fail_streak_limit(call.name, FAIL_STREAK_LIMIT)
+                    self._wrap_up(FAIL_STREAK_NOTE)
+                    return
         else:
             self.ui.max_steps_reached(self.max_steps)
             self._wrap_up()
 
-    def _wrap_up(self) -> None:
-        """步数耗尽后补一次**不带工具**的调用,把悬着的工具结果收成一段话。
+    def _wrap_up(self, note: str = WRAP_UP_NOTE) -> None:
+        """步数耗尽(或失败连击触顶)后补一次**不带工具**的调用,收成一段话。
 
         撞上限那一刻,会话尾部正挂着执行完但模型还没读过一眼的工具结果;直接结束
         就是戛然而止,长任务(论文、题库)恰恰最容易撞在这里。这一次不给工具、
         不重进步数循环,文本照常在 `on_text_delta` 流出并入留档。
-        末尾那句 `WRAP_UP_NOTE` 只加在这次请求里 —— 模型不然不知道自己已经不能再
-        调工具,会照着"下一步我去查一下"的口吻继续说。
+        末尾那句 note 只加在这次请求里 —— 模型不然不知道自己已经不能再
+        调工具,会照着"下一步我去查一下"的口吻继续说(失败连击走
+        FAIL_STREAK_NOTE:说明卡点、列出下一步选项,把决定交给用户)。
         它自己失败就静默退回原样 —— 最坏情况等于本轮改动之前的行为,不新增故障面。
         """
         try:
             turn = self.llm.stream_chat(
-                self.session.messages + [{"role": "user", "content": WRAP_UP_NOTE}], [],
+                self.session.messages + [{"role": "user", "content": note}], [],
                 on_text=self.ui.on_text_delta,
                 on_reasoning=self.ui.on_reasoning_delta,
                 on_retry=self.ui.on_retry)
@@ -428,6 +447,30 @@ class Agent:
                 self._pending_prior = feedback_recall.avoidance_hint(matched)
         except Exception:
             self._pending_prior = ""       # 读不到差评就当没有,绝不因此中断这一步
+
+    def _fail_streak_hit(self, call: ToolCall) -> bool:
+        """同一个工具 + 同一组参数连续失败 FAIL_STREAK_LIMIT 次(v0.9.77)。
+
+        失败判定问 `toolsum.is_failure`(唯一口径);"同样"= 工具名与参数
+        逐字相同(sort_keys 规范化)—— 换参数重试是健康的思路调整,不累计
+        (与 B0「换关键词补搜不算」同一条口径);成功或换键都会重置。
+        """
+        try:
+            args = json.loads(call.arguments) if call.arguments.strip() else {}
+        except json.JSONDecodeError:
+            args = {}
+        key = call.name + "|" + json.dumps(args, sort_keys=True, ensure_ascii=False)
+        result = next((m.get("content") for m in reversed(self.session.messages)
+                       if m.get("role") == "tool"
+                       and m.get("tool_call_id") == call.id), "")
+        if not toolsum.is_failure(str(result)):
+            self._fail_streak_key, self._fail_streak_count = None, 0
+            return False
+        if key == self._fail_streak_key:
+            self._fail_streak_count += 1
+        else:
+            self._fail_streak_key, self._fail_streak_count = key, 1
+        return self._fail_streak_count >= FAIL_STREAK_LIMIT
 
     def _mark_repeat_empty(self, tool: Tool, args: dict, result: str) -> str:
         """B0:同一个词第 3 次(含)还是搜空,就在结果末尾附一行事实 + 下一步。

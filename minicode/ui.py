@@ -329,3 +329,9 @@ class TerminalUI:
             f"[yellow]⏱ 本回合已跑 {steps} 步、超过一轮总时限 {seconds} 秒,"
             f"已停下(正在执行的那一步不会被强杀)。可继续对话让它接着做。[/yellow]"
         )
+
+    def fail_streak_limit(self, tool: str, limit: int) -> None:
+        self.console.print(
+            f"[yellow]⚠ 「{tool}」已连续 {limit} 次以同样方式失败,"
+            f"本轮先停在这里,不再原样重试。换个做法或说「继续」。[/yellow]"
+        )
