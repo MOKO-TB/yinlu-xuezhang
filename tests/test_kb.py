@@ -128,3 +128,19 @@ def test_snippet_chars_returns_more_detail(ctx, tmp_path, monkeypatch):
     assert len(long) > len(short)
     assert long.count("家庭经济困难") > short.count("家庭经济困难")
     assert "https://x.edu.cn/n1" in long          # 长摘要同样带来源网址
+
+
+def test_hit_logs_entry_ids_for_appraisal(ctx, tmp_path, monkeypatch):
+    """命中后把条目 id 记进 kb-hits.jsonl(v0.9.80):评价绑条目的唯一来源。"""
+    _make_kb(tmp_path)
+    monkeypatch.setattr(kbmod, "kb_dirs", lambda ws: [tmp_path / "kb"])
+    seen = []
+    from minicode import growth
+    monkeypatch.setattr(growth, "log_kb_hits",
+                        lambda q, ids: seen.append((q, list(ids))) or True)
+    kbmod.search_knowledge(ctx, "蓝桥杯报名")
+    assert seen and seen[0][0] == "蓝桥杯报名"
+    assert all(i for i in seen[0][1]), "id 不允许是空串"
+    seen.clear()
+    kbmod.search_knowledge(ctx, "这个词库里绝对没有XYZ")
+    assert seen == []                      # 未命中走缺口账,不记命中账

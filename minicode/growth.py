@@ -23,6 +23,9 @@ from minicode.paths import app_path
 GAPS_FILE = "kb-gaps.jsonl"
 CANDIDATES_FILE = "kb-candidates.jsonl"
 FEEDBACK_FILE = "message-feedback.jsonl"
+# v0.9.80:检索**命中**账(与 kb-gaps 对称)—— 评价绑条目 id 的唯一来源:
+# 结果文本里没有 id,会话留档里也没有,只有检索发生的那一刻知道。
+HITS_FILE = "kb-hits.jsonl"
 
 QUERY_EXCERPT = 200       # gap 登记里查询词的截断长度
 FEEDBACK_EXCERPT = 400    # 反馈里答案摘要的截断长度
@@ -207,22 +210,122 @@ def save_candidate(question: str, answer: str = "", source_url: str = "",
 
 
 def log_feedback(rating: int, question: str = "", answer: str = "",
-                 session: str = "") -> bool:
-    """记录一条消息级 👍/👎 反馈(rating: 1 / -1)。"""
+                 session: str = "", kb_ids: "list[str] | None" = None) -> bool:
+    """记录一条消息级 👍/👎 反馈(rating: 1 / -1)。
+
+    kb_ids(v0.9.80):这条回答**引用过的知识库条目 id**(调用方按"最后一条用户
+    消息之后"的检索窗口绑定)。有就随记录存档 —— 逐条命中率账本
+    (`kb_appraisal`)靠它把评价落到条目上;没有就不写这个字段,
+    老记录格式一字不变。
+    """
     rating = 1 if int(rating) > 0 else (-1 if int(rating) < 0 else 0)
     if rating == 0:
         return False
-    return _append(app_path(FEEDBACK_FILE), {
+    record = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "rating": rating,
         "question": str(question or "").strip()[:QUERY_EXCERPT],
         "answer": str(answer or "").strip()[:FEEDBACK_EXCERPT],
         "session": str(session or "")[:80],
+    }
+    ids = [str(i)[:80] for i in (kb_ids or []) if str(i).strip()][:12]
+    if ids:
+        record["kb_ids"] = ids
+    return _append(app_path(FEEDBACK_FILE), record)
+
+
+def log_kb_hits(query: str, ids: "list[str]") -> bool:
+    """search_knowledge **命中**时登记一条(v0.9.80,与 kb-gaps 对称的账)。
+
+    为什么要有这本账:评价落到条目上,前提是知道"这次回答引用了哪些条目" ——
+    而检索结果文本里没有 id(format_results 只打标题),会话留档里也没有;
+    所以在检索发生的那一刻把 id 记在账上(精确),评价时按"最后一条用户消息
+    之后"的窗口取回(同轮归因)。登记失败静默,绝不影响回答。
+    """
+    query = str(query or "").strip()
+    clean = [str(i)[:80] for i in (ids or []) if str(i).strip()][:12]
+    if not query or not clean:
+        return False
+    return _append(app_path(HITS_FILE), {
+        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "query": query[:QUERY_EXCERPT],
+        "ids": clean,
+        "n": len(clean),
     })
 
 
-def kb_suggest(ctx, question: str, answer: str = "", source_url: str = "",
-               source_title: str = "", note: str = "") -> str:
+def last_hits_since(when: str) -> "list[str]":
+    """取"时刻 when 之后"所有检索命中的条目 id(去重、保持先后)。
+
+    when 用会话消息的 ts(YYYY-MM-DD HH:MM:SS,字符串字典序即时间序)。
+    when 为空(老留档没 ts)时**返回空** —— 宁可这次评价不绑条目,
+    也不拿全库的命中硬凑一个归因。
+    """
+    start = str(when or "").strip()
+    if not start:
+        return []
+    out: list[str] = []
+    try:
+        with open(app_path(HITS_FILE), "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(rec, dict) or str(rec.get("ts") or "") <= start:
+                    continue
+                for i in rec.get("ids") or []:
+                    if str(i) and str(i) not in out:
+                        out.append(str(i))
+    except OSError:
+        return []
+    return out[:24]
+
+
+def kb_appraisal(days: int = 30, now: "float | None" = None) -> list[dict]:
+    """逐条命中率账本(v0.9.80):每条知识库条目被哪几次回答引用过、评价如何。
+
+    **口径要说不含糊**:`down` 是"引用过这条的那次回答被点了 👎"的次数,
+    不是"这条知识是错的" —— 一次回答可能引用多条,差评也可能因为别的原因
+    (问法没接住、答得不全)。它是线索,不是判决;补不补语料仍由人决定。
+
+    只读 message-feedback.jsonl 里带 kb_ids 的记录(老记录没有这个字段,
+    不参与统计);days 按 ts 截断,now 可注入(测试喂文本)。
+    """
+    cutoff = (now if now is not None else time.time()) - days * 86400
+    agg: dict[str, dict] = {}
+    try:
+        raw = app_path(FEEDBACK_FILE).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in raw:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        ids = [str(i) for i in (rec.get("kb_ids") or []) if str(i).strip()]
+        if not ids:
+            continue
+        stamp = str(rec.get("ts") or "")
+        if not within_days(stamp, cutoff):
+            continue
+        rating = 1 if int(rec.get("rating") or 0) > 0 else -1
+        for i in ids:
+            row = agg.setdefault(i, {"id": i, "uses": 0, "up": 0, "down": 0})
+            row["uses"] += 1
+            row["up" if rating > 0 else "down"] += 1
+    return sorted(agg.values(), key=lambda r: (-r["uses"], r["id"]))
+
+
+def kb_suggest(ctx, question: str, answer: str = "", source_url: str = "",               source_title: str = "", note: str = "") -> str:
     """kb_suggest 工具处理器:经权限确认后落一条知识库候选。
 
     本工具不标 read_only —— 确认框本身就是"用户同意存入"的那一步:

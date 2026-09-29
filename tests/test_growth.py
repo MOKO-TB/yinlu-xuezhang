@@ -254,3 +254,58 @@ def test_gap_digest_ignores_stale_and_broken_lines():
 def test_gap_digest_returns_none_without_a_file():
     assert growth.gap_digest(days=7) is None
 
+
+
+# ---------------------------------------------------------------- 命中账与逐条命中率(v0.9.80)
+
+def test_log_kb_hits_and_window():
+    """命中账落盘;窗口取数按 ts 严格向后取,空 when 回空(不硬凑归因)。"""
+    assert growth.log_kb_hits("奖学金怎么申请", ["scholar-1", "scholar-2"])
+    assert not growth.log_kb_hits("", ["x"])
+    assert not growth.log_kb_hits("有词", [])
+    rows = _read_lines(growth.HITS_FILE)
+    assert rows[0]["ids"] == ["scholar-1", "scholar-2"] and rows[0]["n"] == 2
+    assert growth.last_hits_since("") == []
+    assert growth.last_hits_since("2000-01-01 00:00:00") == ["scholar-1", "scholar-2"]
+    assert growth.last_hits_since("2999-01-01 00:00:00") == []
+
+
+def test_kb_appraisal_aggregates_by_entry(monkeypatch):
+    """逐条聚合:👎 所在那次的引用记 down —— 口径是"引用过它的回答被差评",
+    不是"这条知识错了";老记录没有 kb_ids 就不参与。"""
+    import time as _time
+    now = _time.time()
+    stamp = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(now - 3600))
+    path = app_path(growth.FEEDBACK_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join([
+        json.dumps({"ts": stamp, "rating": -1, "question": "q1",
+                    "kb_ids": ["a", "b"]}, ensure_ascii=False),
+        json.dumps({"ts": stamp, "rating": 1, "question": "q2",
+                    "kb_ids": ["a"]}, ensure_ascii=False),
+        json.dumps({"ts": stamp, "rating": -1, "question": "老记录没归因"}),
+    ]) + "\n", encoding="utf-8")
+    rows = {r["id"]: r for r in growth.kb_appraisal(days=30, now=now)}
+    assert rows["a"] == {"id": "a", "uses": 2, "up": 1, "down": 1}
+    assert rows["b"] == {"id": "b", "uses": 1, "up": 0, "down": 1}
+    assert len(rows) == 2                       # 无 kb_ids 的老记录不参与
+
+
+def test_kb_appraisal_window_excludes_old(monkeypatch):
+    import time as _time
+    now = _time.time()
+    old = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(now - 40 * 86400))
+    path = app_path(growth.FEEDBACK_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"ts": old, "rating": -1, "kb_ids": ["old-1"]}) + "\n",
+                    encoding="utf-8")
+    assert growth.kb_appraisal(days=30, now=now) == []
+    assert [r["id"] for r in growth.kb_appraisal(days=60, now=now)] == ["old-1"]
+
+
+def test_log_feedback_carries_kb_ids_only_when_present():
+    assert growth.log_feedback(1, question="q", kb_ids=["x-1"])
+    assert growth.log_feedback(-1, question="q2")          # 不传就不写字段
+    rows = _read_lines(growth.FEEDBACK_FILE)
+    assert rows[0]["kb_ids"] == ["x-1"]
+    assert "kb_ids" not in rows[1]

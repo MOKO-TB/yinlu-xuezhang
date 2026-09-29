@@ -1953,10 +1953,21 @@ class Bridge:
             pass
         if not log and self._current is not None:
             log = self._current.key
+        # 把这次回答引用过的知识库条目绑上(v0.9.80):取"最后一条用户消息
+        # 之后"的检索命中窗口(检索发生在回答之前,ts 是消息级真实时刻)。
+        # 取不到(老留档没 ts / 当轮没检索)就不绑 —— 宁可不记,不硬凑归因。
+        kb_ids: list[str] = []
+        try:
+            last_user_ts = next(
+                (str(m.get("ts") or "") for m in reversed(self.session.messages)
+                 if isinstance(m, dict) and m.get("role") == "user"), "")
+            kb_ids = growth.last_hits_since(last_user_ts)
+        except Exception:
+            kb_ids = []
         if not growth.log_feedback(int(rating), question=question,
-                                   answer=answer, session=log):
+                                   answer=answer, session=log, kb_ids=kb_ids):
             return {"ok": False, "msg": "反馈没有记录成功(不影响使用)"}
-        return {"ok": True}
+        return {"ok": True, "kb_ids": kb_ids}
 
     def get_countdowns(self) -> dict:
         """首页倒计时 chips:校历里最近的几条安排(没有就不显示)。"""

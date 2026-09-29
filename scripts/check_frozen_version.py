@@ -209,7 +209,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "normalize_query", "within_days", "FEEDBACK_FILE",
                         # v0.9.57 A4:缺口周报的聚合器(漏收 = 周五那条永远
                         # "这周没有缺口",而界面一切正常)
-                        "gap_digest"),
+                        "gap_digest",
+                        # v0.9.80:检索命中账与逐条命中率(漏收 = 装好的包里
+                        # 评价永远绑不到条目,命中率账本永远是空的)
+                        "HITS_FILE", "log_kb_hits", "last_hits_since",
+                        "kb_appraisal"),
     # v0.9.39 B0/B1:把已经记下来的信号回头用起来(反复搜空 / 差评避让)。
     # 漏收的表现是"装了包之后,连着搜空不再提示、历史差评不再影响答法",而界面一切正常。
     "minicode.feedback_recall": ("empty_hits", "empty_hits_by_call",

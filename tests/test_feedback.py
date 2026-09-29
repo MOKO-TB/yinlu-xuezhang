@@ -62,3 +62,25 @@ def test_get_countdowns_ok_even_if_calendar_broken(config, tmp_path, monkeypatch
     monkeypatch.setattr(cal, "load_events", lambda: ([], "broken"))
     payload = bridge.get_countdowns()
     assert payload["ok"] is True and payload["countdowns"] == []
+
+
+def test_rate_message_binds_kb_ids_from_last_user_window(config, tmp_path, monkeypatch):
+    """评价绑条目(v0.9.80):取"最后一条用户消息之后"的检索命中,写进反馈记录;
+    取不到(老留档没 ts)就不绑 —— 宁可不记,不硬凑归因。"""
+    bridge = make(config, tmp_path)
+    monkeypatch.setattr(growth, "last_hits_since", lambda ts: ["scholar-1", "guide-2"])
+    bridge.session.add_user("奖学金怎么申请")          # 真实消息带 ts 才会取窗口
+    result = bridge.rate_message(1, "奖学金怎么申请", "先看看条件…")
+    assert result["ok"] and result["kb_ids"] == ["scholar-1", "guide-2"]
+    rows = [json.loads(x) for x in
+            (tmp_path / "app" / growth.FEEDBACK_FILE).read_text(
+                encoding="utf-8").splitlines() if x.strip()]
+    assert rows[0]["kb_ids"] == ["scholar-1", "guide-2"]
+
+    # 会话里没有带 ts 的用户消息:窗口取不到,记录不带 kb_ids 字段
+    monkeypatch.setattr(growth, "last_hits_since", lambda ts: [])
+    bridge.rate_message(-1, "另一个问题", "答得不好")
+    rows = [json.loads(x) for x in
+            (tmp_path / "app" / growth.FEEDBACK_FILE).read_text(
+                encoding="utf-8").splitlines() if x.strip()]
+    assert "kb_ids" not in rows[1]

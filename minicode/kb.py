@@ -457,6 +457,13 @@ def search_knowledge(ctx, query: str, top_k: int = 3,
         # 这就是要补的语料缺口。登记失败静默,绝不影响回答。
         from minicode import growth
         growth.log_kb_gap(query)
+    else:
+        # 命中登记(v0.9.80):评价绑条目 id 的唯一来源 —— 结果文本里没有 id,
+        # 只有这一刻知道。同样静默,绝不影响回答。
+        from minicode import growth
+        growth.log_kb_hits(query, [
+            str(getattr(h.entry if hasattr(h, "entry") else h, "id", ""))
+            for h in hits])
     out = format_results(hits, snippet_chars=snippet_chars, meta=meta)
     # 每条命中多了「为什么命中」一行,上限跟着放宽,否则口径行会把最后一条挤掉
     return out[:max(MAX_CONTENT_LIMIT, snippet_chars * len(hits) + 800 + 80 * max(1, len(hits)))]

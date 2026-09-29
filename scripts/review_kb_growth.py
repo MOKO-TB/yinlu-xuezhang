@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from minicode.growth import (CANDIDATES_FILE, FEEDBACK_FILE, GAPS_FILE,  # noqa: E402
-                             app_path, within_days)
+                             app_path, kb_appraisal, within_days)
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -100,6 +100,20 @@ def main() -> int:
         print(f"       答: {a}…")
     if down == 0:
         print("  (最近没有差评样本)")
+
+    # 4. 逐条命中率(v0.9.80):评价落到条目上之后才有的一节
+    rows = kb_appraisal(args.days)
+    print(f"\n四、逐条命中率(最近 {args.days} 天,引用过该条目的回答数):")
+    if not rows:
+        print("  (还没有带条目归因的评价 —— 需要回答引用过知识库条目、"
+              "且被点过 👍/👎 才会出现在这里)")
+    for r in rows[:15]:
+        flag = " ⚠ 差评" if r["down"] else ""
+        print(f"  {r['uses']:>3} 次被引用(👍 {r['up']} / 👎 {r['down']})"
+              f"{flag}  {r['id']}")
+    if rows:
+        print("  (口径:down 是「引用过这条的那次回答被点 👎」,不是「这条知识是错的」"
+              "—— 同一回答可能引用多条,差评也可能是别的原因;它只是线索)")
     return 0
 
 
