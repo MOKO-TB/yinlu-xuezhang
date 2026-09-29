@@ -35,19 +35,26 @@ def plan_path(ctx: ToolContext) -> Path:
 
 
 def render_plan(goal: str, steps: list[dict]) -> str:
-    """把步骤渲染成计划文件。steps[i] 支持 title/detail/depends_on/status/note。"""
-    lines = [f"# 计划:{goal}", ""]
+    """把步骤渲染成计划文件。steps[i] 支持 title/detail/depends_on/status/note。
+
+    标题/detail/note 一律**单行化**(换行折叠成空格):模型给的步骤标题可能
+    带换行,直拼会让清单行断成两截、后面悬一行孤立文本 —— 列表结构就坏了
+    (test_render_escape_newline_in_step 钉的就是这个,当年被一条恒真断言
+    放了四年)。
+    """
+    one_line = lambda t: " ".join(str(t or "").split())  # noqa: E731
+    lines = [f"# 计划:{one_line(goal)}", ""]
     for i, s in enumerate(steps, start=1):
         mark = STATUS_TO_MARK.get(s.get("status") or "pending", " ")
-        line = f"- [{mark}] {i}. {s['title']}"
+        line = f"- [{mark}] {i}. {one_line(s['title'])}"
         if s.get("detail"):
-            line += f" —— {s['detail']}"
+            line += f" —— {one_line(s['detail'])}"
         lines.append(line)
         deps = sorted({int(d) for d in (s.get("depends_on") or []) if int(d) != i})
         if deps:
             lines.append(f"  - 依赖: {', '.join(str(d) for d in deps)}")
         if s.get("note"):
-            lines.append(f"  - 备注: {s['note']}")
+            lines.append(f"  - 备注: {one_line(s['note'])}")
     lines += ["", "<!-- 由 plan 工具维护;每完成一步用 action=update 标记状态 -->"]
     return "\n".join(lines) + "\n"
 

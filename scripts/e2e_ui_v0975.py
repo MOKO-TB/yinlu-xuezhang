@@ -135,8 +135,10 @@ def main() -> int:
                 "name": "期末考试周", "days_left": 12, "start": "2027-01-18",
                 "ask": "帮我给期末考试周排一份复习计划,按剩余天数分配到每天"})
             page.wait_for_selector("#proactiveBar", state="visible")
-            check("排复习计划" in page.locator("#proactiveText").inner_text() or True,
-                  "提示条弹出(正文是简报句,追问在按钮背后)")
+            bar_text = page.locator("#proactiveText").inner_text()
+            # 正文是简报句(名字+倒计时);追问在「去看看」背后,不该整句摆在正文里
+            check("期末考试周" in bar_text and "排复习计划" not in bar_text,
+                  f"提示条正文是简报句(实测 {bar_text!r})")
             page.click("#proactiveGo")
             page.wait_for_timeout(100)
             val = page.locator("#input").input_value()

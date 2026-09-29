@@ -534,3 +534,68 @@ def test_every_timeline_row_that_can_do_something_does(tmp_path):
     assert rows[1]["action"]["url"] == "https://jwc.example.edu.cn/a"
     assert rows[2]["action"]["type"] == "detail" and "文件内容" in rows[2]["action"]["text"]
     assert rows[3]["action"] is None          # 还没回话:什么也点不动
+
+
+# ---------------------------------------------- 子代理产出尾注(v0.9.76)
+
+def test_task_files_note_becomes_file_rows(tmp_path):
+    """[files|档位] 尾注 → 产出行:在盘的带磁盘信息,没写成的翻「已不在磁盘」。
+
+    这是 v0.9.60 盲区的修复:并行写三个文件,监控栏产出行不再一片空 ——
+    子代理的 tool_calls 留在它自己的 session,主会话只有 task 报告文本,
+    不解析尾注的话「产出」永远看不到子代理写的东西。
+    """
+    ws = Path(tmp_path)
+    (ws / "docs").mkdir()
+    (ws / "docs" / "ok.md").write_text("x", encoding="utf-8")   # 真写成的
+    s = _session(tmp_path, [[
+        {"id": "t1", "name": "task",
+         "args": {"type": "campus", "task": "整理材料"},
+         "result": ("[并行子代理完成 · 1 个]\n\n## 1. campus · 整理材料\n"
+                    "[files|campus] docs/ok.md | 丢了的.md\n"
+                    "已把两份材料整理好了。")},
+    ]])
+    rows = {r["title"]: r for r in _by_key(activity.session_activity(
+        s.messages, workspace=ws), "files")["items"]}
+    assert set(rows) == {"docs/ok.md", "丢了的.md"}
+    ok = rows["docs/ok.md"]
+    assert ok["badge"] == "产出完成" and "campus 子代理" in ok["sub"]
+    assert "改于" in ok["sub"]                       # 磁盘真核过
+    gone = rows["丢了的.md"]
+    assert gone["status"] == "missing" and gone["badge"] == "已不在磁盘"
+    assert gone["action"] is None                    # 失去可点的样子
+
+
+def test_failed_task_files_note_is_ignored(tmp_path):
+    """失败的 task 不算产出 —— 报告本身就是错误信息,尾注不存在也不可信。"""
+    s = _session(tmp_path, [[
+        {"id": "t1", "name": "task",
+         "args": {"type": "implement", "task": "写文件"},
+         "result": "错误: 子代理执行出错: RuntimeError: boom\n[files|implement] x.md"},
+    ]])
+    assert _by_key(activity.session_activity(s.messages), "files")["items"] == []
+
+
+def test_plain_task_without_note_yields_no_file_rows(tmp_path):
+    """只读子代理(无尾注行)照旧不产生产出行 —— 没做过就不许出现。"""
+    s = _session(tmp_path, [[
+        {"id": "t1", "name": "task", "args": {"type": "explore", "task": "看看"},
+         "result": "[并行子代理完成 · 1 个]\n\n## 1. explore · 看看\n报告正文"},
+    ]])
+    assert _by_key(activity.session_activity(s.messages), "files")["items"] == []
+
+
+def test_direct_and_subagent_writes_merge_into_one_row(tmp_path):
+    """同一路径主会话直调 + 子代理尾注:合成一行,次数累加、档位并列。"""
+    ws = Path(tmp_path)
+    (ws / "a.md").write_text("x", encoding="utf-8")
+    s = _session(tmp_path, [
+        [{"id": "w1", "name": "write_file", "args": {"path": "a.md", "content": "1"},
+          "result": "已写入"}],
+        [{"id": "t1", "name": "task", "args": {"type": "implement", "task": "再改"},
+          "result": "[files|implement] a.md\n改好了"}],
+    ])
+    rows = _by_key(activity.session_activity(s.messages, workspace=ws), "files")["items"]
+    assert len(rows) == 1
+    # 展示行没有内部计数键,次数与档位都读 sub 文本
+    assert "写入 2 次" in rows[0]["sub"] and "implement 子代理" in rows[0]["sub"]

@@ -32,7 +32,10 @@ def test_parse_weeks_range_and_multi():
     assert schedule.parse_weeks("1-4") == {1, 2, 3, 4}
     assert schedule.parse_weeks("1-2,5-6") == {1, 2, 5, 6}
     assert schedule.parse_weeks("3") == {3}
-    assert schedule.parse_weeks("") is None or True     # 空串按默认全学期(见 save 兜底)
+    assert schedule.parse_weeks(schedule.DEFAULT_WEEKS) == set(range(1, 26))
+    # 空串按默认全学期(见 save 兜底)——当年这条被 or True 掩成恒真,
+    # 实际行为是"空串 → DEFAULT_WEEKS 全集",不是注释里写的 None
+    assert schedule.parse_weeks("") == set(range(1, 26))
 
 
 def test_parse_weeks_parity():

@@ -215,7 +215,47 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
     report = next((m.get("content") for m in reversed(sub_session.messages)
                    if m.get("role") == "assistant" and m.get("content")),
                   None)
-    return report or "(子代理已结束,但未返回文本报告)"
+    report = report or "(子代理已结束,但未返回文本报告)"
+    return _files_note(spec, sub_session) + report
+
+
+def _files_note(spec: SubAgentSpec, sub_session) -> str:
+    """本路**动过文件**的清单,以 `[files|档位]` 尾注带回主会话(v0.9.76)。
+
+    为什么必须有这一行:子代理的 tool_calls 留在它自己的 session 里,主会话
+    消息里只有 task 的报告文本 —— 监控栏「产出」扫的是主会话,于是并行写
+    三个文件、产出行一片空(v0.9.60 把并行写当主推卖点的盲区)。子代理工具
+    名带 `档位·` 前缀,在这里**前缀切分**出真名与档位;成败不用管,activity
+    那头会拿路径回磁盘核(没写成 = 「已不在磁盘」)。报告正文仍是人话,
+    这一行只供 activity 解析,对模型无害。
+    """
+    from minicode.activity import FILE_TOOLS
+    paths: list[str] = []
+    for m in sub_session.messages:
+        if not isinstance(m, dict):
+            continue
+        for call in m.get("tool_calls") or []:
+            name = str((call.get("function") or {}).get("name") or "")
+            if "·" in name:
+                _domain, bare = name.rsplit("·", 1)
+            else:
+                bare = name
+            if bare not in FILE_TOOLS:
+                continue
+            raw = str(((call.get("function") or {}).get("arguments") or "") or "")
+            try:
+                import json as _json
+                args = _json.loads(raw) if isinstance(raw, str) else {}
+            except ValueError:
+                args = {}
+            path = str((args or {}).get("path") or "").strip()
+            if path and path not in paths:
+                paths.append(path)
+    if not paths:
+        return ""
+    shown = paths[:12]
+    more = "" if len(paths) <= 12 else f" |…另有 {len(paths) - 12} 个"
+    return f"[files|{spec.type}] " + " | ".join(shown) + more + "\n"
 
 
 def _as_list(value, field: str) -> list[str] | str:

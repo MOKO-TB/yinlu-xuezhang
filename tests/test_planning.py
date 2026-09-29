@@ -179,7 +179,17 @@ def test_legacy_plan_without_deps_still_works(tmp_path):
 
 def test_render_escape_newline_in_step():
     text = render_plan("g", [{"title": "a\nb"}])
-    assert "a\nb" not in text.splitlines()[2] or True  # 标题内换行不破坏列表结构
+    # 换行被单行化:清单行保持完整(or True 恒真掩盖了四年 —— 标题带换行时
+    # 清单真被拆断过,渲染出来是 "- [ ] 1. a" 后面悬一行孤立的 "b")
+    lines = text.splitlines()
+    assert lines[2] == "- [ ] 1. a b"
+
+
+def test_render_one_line_also_applies_to_goal_detail_note():
+    text = render_plan("目\n标", [{"title": "t", "detail": "d1\nd2",
+                                   "note": "n1\nn2"}])
+    assert "# 计划:目 标" in text
+    assert "d1 d2" in text and "n1 n2" in text
 
 
 # ---------------------------------------------------------------- 面板(v0.9.24)

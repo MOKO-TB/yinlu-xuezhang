@@ -232,7 +232,9 @@ def test_cache_kept_per_place(monkeypatch):
             {"name": "家", "lat": 23.0, "lon": 113.0, "label": "广州"},
         ]}), encoding="utf-8")
     monkeypatch.setattr(weather, "_fetch", lambda city: _data())
-    assert "肇庆·鼎湖" in weather.get_weather(None, days=0, place="学校") or True
+    # 这行只负责触发缓存(输出文本里并没有地名 label —— 当年的断言从写下
+    # 第一天就不成立,被 or True 垫平;按 place 分缓存的真断言在下面两行)
+    weather.get_weather(None, days=0, place="学校")
     weather.get_weather(None, days=0, place="学校")
     weather.get_weather(None, days=0, place="家")
     assert weather._cache_entry("学校")[0] and weather._cache_entry("家")[0]

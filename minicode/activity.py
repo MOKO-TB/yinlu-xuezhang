@@ -214,8 +214,19 @@ def _extract_subagents(calls, results) -> list[dict]:
     return items
 
 
+_FILE_TOOLS_LINE = re.compile(r"^\[files\|([^\]]+)\]\s*(.+)$", re.MULTILINE)
+
+
 def _extract_files(calls, results, workspace) -> list[dict]:
-    """产出:同一路径多次改动**合成一行**(次数累加),状态取最新一次。"""
+    """产出:同一路径多次改动**合成一行**(次数累加),状态取最新一次。
+
+    两个来源:**主会话直调**的 write_file/edit_file/browser_screenshot,与
+    **子代理**带回来的 `[files|档位]` 尾注(v0.9.76 —— 子代理的 tool_calls
+    留在它自己的 session 里,主会话只有 task 报告文本,不解析尾注的话
+    并行写三个文件、产出行一片空)。尾注里的路径同样回磁盘核一遍:没写成
+    就是「已不在磁盘」,与直调同一条诚实口径;档位写在行首(如 campus),
+    摆进副标题让用户知道这文件是谁写的。
+    """
     merged: dict[str, dict] = {}
     for cid, call in calls.items():
         name = call["name"]
@@ -243,11 +254,39 @@ def _extract_files(calls, results, workspace) -> list[dict]:
         else:
             merged[disp] = {"path": raw, "title": disp, "n": 1, "ops": [op],
                             "status": status, "badge": badge,
-                            "note": note, "state": state}
+                            "note": note, "state": state, "agents": []}
+    # 子代理的产出:解析 task 结果里的 [files|档位] 尾注(报告是人话,这一行
+    # 是机器可读的账 —— subagents._files_note 写的)。失败的 task 不算产出。
+    for cid, call in calls.items():
+        if call["name"] != "task":
+            continue
+        result = results.get(cid)
+        if not isinstance(result, str) or _failed(result):
+            continue
+        for m in _FILE_TOOLS_LINE.finditer(result):
+            domain = _clip(m.group(1).strip(), 20) or "子代理"
+            for raw in [p.strip() for p in m.group(2).split("|") if p.strip()]:
+                disp = _rel(raw, workspace) or raw
+                state, note = _disk_state(raw, workspace)
+                row = merged.get(disp)
+                if row:
+                    row["n"] += 1
+                    if domain not in row["agents"]:
+                        row["agents"].append(domain)
+                    if row["status"] == "running":
+                        row["status"], row["badge"] = "ok", "产出完成"
+                    if not row["state"]:
+                        row["state"], row["note"] = state, note
+                else:
+                    merged[disp] = {"path": raw, "title": disp, "n": 1,
+                                    "ops": [], "status": "ok", "badge": "产出完成",
+                                    "note": note, "state": state, "agents": [domain]}
     items = []
     for disp, row in merged.items():
         ops = " / ".join(dict.fromkeys(row["ops"]))
-        sub = f"{ops} {row['n']} 次"
+        sub = f"{ops} {row['n']} 次" if ops else f"产出 {row['n']} 处"
+        if row.get("agents"):
+            sub += f" · {'、'.join(row['agents'])} 子代理"
         if row["note"]:
             sub += f" · {row['note']}"
         status = row["status"]

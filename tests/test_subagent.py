@@ -92,6 +92,25 @@ def test_task_implement_writes_file(config, tmp_path):
     assert (tmp_path / "s.txt").read_text(encoding="utf-8") == "hello"
 
 
+def test_task_report_carries_files_note(config, tmp_path):
+    """子代理写过的文件以 [files|档位] 尾注带回主会话(v0.9.76):监控栏
+    「产出」就靠这一行看到子代理写的东西 —— 否则并行写三路、产出行一片空。"""
+    _accept_all(config)
+    llm = QueueLLM([
+        _task_turn("implement", "创建 s.txt 内容 hello"),
+        AssistantTurn(tool_calls=[_call("implement·write_file",
+                                        {"path": "s.txt", "content": "hello"}, "s1")]),
+        _final("已创建 s.txt"),
+        _final("子任务完成"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("创建 s.txt")
+    assert wait_until(lambda: not bridge._busy)
+    result = _tool_result(session)
+    assert "[files|implement] s.txt" in result
+    assert "已创建 s.txt" in result          # 报告正文照旧是人话
+
+
 def test_task_implement_confirm_flow(config, tmp_path):
     """confirm 模式:task 派发与子代理内部的写文件各确认一次。"""
     llm = QueueLLM([

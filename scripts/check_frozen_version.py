@@ -367,7 +367,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "DOMAIN_KEYS",
                            # v0.9.60:批量放开写类型的两根支柱(漏收 = 混合批次
                            # 静默退回"只读才并行",而工具描述还在许诺能并行写)
-                           "MAX_PARALLEL_TASKS", "_TaggedUI"),
+                           "MAX_PARALLEL_TASKS", "_TaggedUI",
+                           # v0.9.76:产出尾注(漏收 = 子代理写过的文件在监控栏
+                           # 「产出」永远隐形 —— 并行写是卖点,产出却看不见)
+                           "_files_note"),
     # v0.9.39:确认框要能讲清新工具的代价(漏收 = 弹了框但没说图会被发出去/文件落在哪)
     "minicode.explain": ("risk_notes", "permission_why", "action_reason"),
     # ---- v0.9.16/17/20:主动推荐 + 新版本检查 + 今日简报(合并成一个键,
