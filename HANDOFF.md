@@ -670,6 +670,15 @@ cd /d/game/mini-code
     - **备份与推送**:git bundle 备份 `C:\Users\Blossom\yinlu-backups\yinlu-2026-09-28.bundle`(24,793,743 B,`git bundle verify` 完整历史,头 c1be5b7)—— §26 起挂着的"零备份"清账;推送 origin(GitHub 私仓)**8e67f50..c1be5b7** 并 ls-remote 核对远端头 = c1be5b7(v0.9.68/69 连 changelog 共 4 笔上去);gitee 未动。
     - **没做**:没发 Release(发版要用户单独点头,资产按 §7 (c) 英文名 + 原始字节流传);`--live` 评测仍等有效 Key。
 
+42. **v0.9.75 出分享包(2026-09-29,用户「继续完善我的agent」;本轮零代码改动、版本号不递增)**:
+    - **前置逐项核过**:无运行实例、密钥与馆藏库在位、Inno 在位、`check_docs.py --collect` 基线 2251 对上。**dist/ 根的大扫除**在出包后一并做了:历史 e2e 的散落残留(`browser-profile/` 教务登录态、`sessions/`、`_wt39/`、各 json 日志共 19 项)与**已作废的 0.9.69 两件包**全删,`dist/` 回到 5 项顶层(包目录 + 0.9.75 三件);D 盘回到 24G free。
+    - **三件产物**(`dist/`,顶掉 0.9.69 那批):`引路学长-0.9.75-setup.exe` **900,542,233 B**(sha256 `60152d3a4d5c43b5…`)、`引路学长-0.9.75-win64.zip` **783,792,613 B**(`ec86f6df81c559a6…`)、`引路学长-单文件版.exe` **139,545,631 B**(`3df9e699fb2b4732…`,不带馆藏库)。包内馆藏库 1.31 GB 凭证已写、crawl4ai 双内核已拷。**Inno 445 s** —— 上一轮 3088 s 的慢是环境(D 盘满 + 机器忙)不是脚本,这轮正常速度。
+    - **这一批包里进了什么**(v0.9.70~75 六个版本,上一次出包是 0.9.69):MCP 预设模板库 + 侧栏 MCP 健康行、批量竞态销案(测试层)、通知点击直达(`yinlu:` 协议激活)、校历删除与修订、对话型 slash 命令、课表「导出到日历」按钮 + 考试追问接上后端。包内《使用说明.txt》**56 条编号连续**(第 56 条 = 导出按钮与考试追问)。
+    - **冻结验证(本轮的主题)**:`check_frozen_version.py` **PASS** —— **v0.9.70~75 欠下的 21 根针**(mcp 预设×3 / activate×8 / calendar_edit 删修×6 / slash_commands×3 / gui_bridge export_ics×1)第一次真对着 dist 验掉。`e2e_frozen.py` **PASS**(CLI 全链 + GUI 起窗)、`e2e_frozen_mcp.py` **PASS**(连服务器→调工具→回填)、`e2e_frozen_library.py` **4/4 命中**(包内真库)。
+    - **数据边界**:e2e 生成的 `sessions/`、`config.json`、`token-usage.db`、`tray.log`、`weather-cache.json`、`activate-port.json` 已按 §7(h) 清掉;包目录 7 项顶层;包内无 `.jsonl`。
+    - **备份**:git bundle `C:\Users\Blossom\yinlu-backups\yinlu-2026-09-29.bundle`(24,996,596 B,verify 过,头 88aa1f0)——0.9.70~75 六个版本进了备份;旧 09-28 bundle 保留。
+    - **没做**:没发 Release(要用户单独点头);`--live` 评测仍等有效 Key。**注意:通知点击直达的最后一步(真机点一条 toast 看窗口弹回+落面板)仍未验** —— 包已就位,同学装上点一下即闭环。
+
 
 ## 7. 新会话上手指南
 
