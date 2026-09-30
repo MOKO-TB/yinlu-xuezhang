@@ -250,3 +250,30 @@ def test_career_is_writable_and_claims_its_skills():
     spec = router.DOMAINS["career"]
     assert spec.read_only is False
     assert "career-timeline" in spec.skills and "resume" in spec.skills
+
+
+# ---------------------------------------------------------------- study 备考档(v0.9.92)
+
+def test_study_keywords_route_to_study():
+    """复习计划/错题本这类备考过程归 study 档。"""
+    for text in ("帮我按期末考试日期倒排一个复习计划",
+                 "高数错题本整理一下",
+                 "下周期中考试,帮我排背诵节奏"):
+        top = router.classify(text)[0]
+        assert top.spec.key == "study", (text, top.spec.key, top.score)
+
+
+def test_study_boundaries_with_data_english_campus():
+    """三个相邻档的边界:题库导出归 data、背单词归 english、学校考试安排归 campus
+    —— study 只管备考的"过程",不抢既有档的地盘。"""
+    for text, expect in (("错题导出成 anki 卡片", "data"),
+                         ("背单词计划", "english"),
+                         ("考试周学校有什么安排", "campus")):
+        top = router.classify(text)[0]
+        assert top.spec.key == expect, (text, top.spec.key, top.score)
+
+
+def test_study_is_writable_and_claims_its_skills():
+    spec = router.DOMAINS["study"]
+    assert spec.read_only is False
+    assert "study-prep" in spec.skills and "question-bank" in spec.skills

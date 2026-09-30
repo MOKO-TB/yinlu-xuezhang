@@ -128,6 +128,18 @@ DOMAINS: dict[str, DomainSpec] = {
         "简历只重排换重点不加经历(resume 的红线);offer/三方逐字引用原文,"
         "接不接由同学决定,学长不替他做人生决定。",
     ),
+    "study": DomainSpec(
+        "study", "备考复习", "按考试日期倒排复习计划、错题归集、背诵与预习节奏", False,
+        ("复习", "备考", "期末复习", "期中复习", "复习计划", "复习资料",
+         "错题本", "错题整理", "背诵", "预习", "刷题计划", "冲刺计划",
+         "考试周复习", "复习重点", "复习安排"),
+        ("study-prep", "question-bank"),
+        ("search_knowledge", "campus_calendar", "read_file", "write_file",
+         "edit_file", "py_script", "use_skill"),
+        "考试日期只认校历与官方,查不到就不倒排,绝不按猜测的日期排;"
+        "错题只整理同学自己给的(question-bank 的红线);计划是建议不是任务指派,"
+        "刻意不做复习打卡压力。",
+    ),
 }
 
 

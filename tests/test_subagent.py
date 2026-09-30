@@ -923,6 +923,49 @@ def test_task_batch_step_records_every_path(config, tmp_path):
     assert "[并行子代理完成 · 2 个]" in _tool_result(session)
 
 
+def test_task_batch_records_every_paths_steps_under_the_task_row(config, tmp_path):
+    """v0.9.92:批量静默吞掉的是**聊天区的穿插输出**,不是"这一路在干什么"。
+
+    断言两头:①聊天区仍然只有一条 `task` 卡片(那条老规矩不能被这轮弄松);
+    ②监控栏的实时表把每一路的工具调用挂在 `task` 父行下面,带着路标签,
+      并且**不掺进「执行工具 N 次」**——那个数的定义是会话消息里的调用数。
+    """
+    _accept_all(config)
+    (tmp_path / "a.py").write_text("上限 4 个\n", encoding="utf-8")
+
+    def route(messages):
+        head = _sys_of(messages)
+        done = any(m.get("role") == "tool" for m in messages)
+        if "只读侦察子代理" in head:
+            if not done:
+                return AssistantTurn(tool_calls=[
+                    _call("explore·grep", {"pattern": "上限", "path": "."}, "e1")])
+            return _final("侦察报告:在 a.py")
+        if "审查子代理" in head:
+            return _final("审查报告:无问题")
+        if done:
+            return _final("两路都回来了")
+        return _BATCH_TURN
+
+    llm = RoutingLLM(route)
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("并行调查")
+    assert wait_until(lambda: not bridge._busy, timeout=25)
+
+    assert [e["name"] for e in window.of_type("tool_start")] == ["task"], \
+        "子代理的卡片不许漏进聊天区(几路会穿插成乱码)"
+    data = bridge.get_activity()
+    rows = [r for t in data["timeline"]["turns"] for r in t["items"]]
+    task_row = next((r for r in rows if r["tool"] == "task"), None)
+    assert task_row, f"时间线里没有 task 那一行:{[r['tool'] for r in rows]}"
+    kids = task_row["children"]
+    assert [k["route"] for k in kids] == ["第1路[explore]"], kids
+    assert kids[0]["tool"] == "explore·grep" and kids[0]["status"] == "ok"
+    assert kids[0]["time"], "挂在父行下面的子步也要有真实时刻(同那张实时表)"
+    turn = data["timeline"]["turns"][0]
+    assert turn["calls"] == len(rows) == 1, "子步骤不该把「执行工具 N 次」撑大"
+
+
 # ------------------------------------------------- 两个只读角色档(audit / testaudit)
 
 def test_role_buckets_are_read_only_and_prefixed(config, tmp_path):
@@ -1006,3 +1049,25 @@ def test_task_career_dispatch_reports_back(config, tmp_path):
     assert "知识库未命中" in result
     assert "career·search_knowledge" in [e["name"] for e in window.of_type("tool_start")]
     assert "派「" not in result          # 显式指定档位时不多塞路由理由
+
+
+def test_task_study_dispatch_reports_back(config, tmp_path):
+    """study 备考档(v0.9.92)真能派出去:调 study·campus_calendar,报告抬头
+    写「备考复习子代理完成」—— 与 career/campus 那两条同一套验证。"""
+    _accept_all(config)
+    llm = QueueLLM([
+        _task_turn("study", "按期末考试日期倒排高数的复习计划"),
+        AssistantTurn(tool_calls=[_call("study·campus_calendar",
+                                        {"action": "view"}, "s1")]),
+        _final("校历里期末周是 1 月 18 日,按天倒排了复习块"),
+        _final("主代理收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("备考复习")
+    assert wait_until(lambda: not bridge._busy, timeout=15)
+
+    result = _tool_result(session)
+    assert "备考复习子代理完成" in result
+    assert "期末周" in result
+    assert "study·campus_calendar" in [e["name"] for e in window.of_type("tool_start")]
+    assert "派「" not in result

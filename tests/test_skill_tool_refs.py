@@ -29,6 +29,9 @@ PIN = {
     # v0.9.90:career-timeline 让同学查校历/就业通知、记到点提醒(工具都真实存在,
     # 确认过加进清单)
     "campus_calendar", "campus_notices", "reminder",
+    # v0.9.92:study-prep 让多科复习配合 plan 工具的依赖图与「🗂 计划」面板
+    # (工具真实存在,确认过加进清单)
+    "plan",
 }
 
 _SNAKE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")

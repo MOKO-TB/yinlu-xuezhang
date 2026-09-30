@@ -35,13 +35,14 @@ v0.9.60 起**写类型(implement 等)也开放并行**:每一路的确认请求�
 """
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from dataclasses import dataclass, replace as dc_replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from minicode import planning, router
+from minicode import planning, router, toolsum
 from minicode.agent import Agent
 from minicode.config import Config
 from minicode.permission import PermissionGate
@@ -153,6 +154,11 @@ class _QuietUI:
     只读子代理串行跑时,文本会流进主聊天区(用户能看到侦察过程);
     一旦并发,几路 text_delta 会在同一处互相穿插,所以批量模式改走
     「只回填最终报告」这一条出口。错误类回调照常透传,避免把问题也吞掉。
+
+    **吞掉不等于不记**(v0.9.92):`route` + `account` 给了就把每一步挂到
+    监控栏那张实时表的父行下面(`GuiUI.live_child_begin`),于是"这一路先查了
+    什么、哪一步挂了、现在跑到哪"看得见,而聊天区一行都不多。没给 account
+    (终端形态、没有实时表的界面)就退回纯静默 —— 不硬造一份看不见的账。
     """
 
     _SILENT = frozenset({
@@ -161,8 +167,33 @@ class _QuietUI:
         "info", "on_retry", "banner", "max_steps_reached",
     })
 
-    def __init__(self, inner):
+    def __init__(self, inner, route: str = "", account=None):
         self._inner = inner
+        self._route = str(route or "")
+        # 只认"有没有这条通道",不认具体类型:终端的 TerminalUI 没有实时表,
+        # 给它记账就是给一个不存在的界面记账。
+        self._account = account if hasattr(account, "live_child_begin") else None
+
+    # 这三个名字在 _SILENT 里,但定义了真方法就不会再走 __getattr__ 的吞掉分支:
+    # 对聊天区依旧一个字不写,只是顺手把账记了。
+    def tool_start(self, tool: Tool, args: dict) -> None:
+        if self._account is None:
+            return
+        with contextlib.suppress(Exception):        # 记不到账绝不能影响这一路跑任务
+            self._account.live_child_begin(
+                self._route, tool.name, toolsum.summarize(tool.name, args))
+
+    def tool_done(self, tool: Tool, result: str) -> None:
+        if self._account is None:
+            return
+        with contextlib.suppress(Exception):
+            self._account.live_child_end(self._route, not toolsum.is_failure(result))
+
+    def tool_progress(self, text: str) -> None:
+        if self._account is None:
+            return
+        with contextlib.suppress(Exception):
+            self._account.live_child_progress(self._route, text)
 
     def __getattr__(self, name: str):
         if name.startswith("_"):
@@ -489,12 +520,18 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                                  f"({names}){where}{tail},完成后合并报告回填。")
         except Exception:
             pass                        # CLI/无 push 的界面:没有这条也不碍事
-        quiet = _QuietUI(ui)
+        # 每一路一份静默 UI,各自带自己的路标签:聊天区一个字都不写,但每一步都
+        # 挂到监控栏那张实时表的 `task` 父行下面(v0.9.92)。终端没有实时表,
+        # account 传过去也不会生效(`_QuietUI` 认的是"有没有这条通道")。
+        def route_ui(idx: int, spec: SubAgentSpec, text: str):
+            route = f"第{idx + 1}路[{spec.type}]"
+            quiet = _QuietUI(ui, route=route, account=ui)
+            return quiet if spec.read_only else _TaggedUI(
+                quiet, f"{route} {text.strip()[:30]}")
+
         reports = _await([
             (lambda s=spec, x=text, i=idx: run_subagent(
-                ctx, s, x, llm,
-                (_TaggedUI(quiet, f"第{i + 1}路[{s.type}] {x.strip()[:30]}")
-                 if not s.read_only else quiet),
+                ctx, s, x, llm, route_ui(i, s, x),
                 config, registry,
                 undo_stack=parent_undo))
             for idx, (spec, text, _note) in enumerate(specs)], limit)
@@ -525,7 +562,8 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             "data(表格统计/名单批量/题库导出)、english(四六级与考研英语的经验查询,只读)、"
             "campus(校园办事:学校问题/馆藏借阅/校历通知/停车领车)、"
             "material(文档材料:PDF 合并拆分/证件照排版/经验帖链接归集)、"
-            "career(就业求职:实习/校招/考公考编的时间线/投递记录/岗位对照与面试准备)。"
+            "career(就业求职:实习/校招/考公考编的时间线/投递记录/岗位对照与面试准备)、"
+            "study(备考复习:按考试日期倒排复习计划/错题归集/背诵与预习节奏)。"
             "拿不准派哪一档时传 type=\"auto\":由路由按任务描述里的领域特征选,"
             "选中的理由会写在报告抬头给你和用户看(命中哪些词、加载哪些技能);"
             "没命中任何领域特征时 auto 会退回 explore,不会硬凑一档。"
