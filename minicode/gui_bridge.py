@@ -1405,14 +1405,10 @@ class Bridge:
                           and picked_name == self.config.model)
         runner.llm_override = None if follows_global else \
             {"provider_id": target.id, "model": picked_name}
-        # 具体到"哪个模型":把该供应商的 model 换成用户选的那个,再交给
-        # LLMClient —— LLMClient 只认 config.model,不认"供应商 + 模型"二元组。
-        scoped = replace(self.config,
-                         providers=[replace(target, model=picked_name)
-                                    if p.id == target.id else p
-                                    for p in self.config.providers],
-                         active_provider_id=target.id)
-        runner.agent.llm = LLMClient(scoped)
+        # 具体到"哪个模型"的构造规则在 `LLMClient.scoped` 一处(子代理按档位分模型
+        # 走同一条),这里不再手抄一遍 providers 的替换。
+        runner.agent.llm = LLMClient.scoped(self.config, provider_id=target.id,
+                                            model=picked_name)
         # 模型换了,思考能力表也换了:档位归回 default,并把新能力推给界面
         runner.agent.llm.reasoning_choice = "default"
         self._push_reasoning(runner)
@@ -1556,11 +1552,10 @@ class Bridge:
             return {"ok": False, "msg": f"模型 {model} 固定开启思考,不可调节"}
         choice = normalize_choice(model, choice)
         keep = getattr(runner.agent.llm, "reasoning_choice", "default")
-        runner.agent.llm = LLMClient(replace(
-            self.config, active_provider_id=self.config.provider.id
-            if self.config.provider else "")) if runner.llm_override is None \
-            else LLMClient(replace(self.config,
-                                   active_provider_id=runner.llm_override["provider_id"]))
+        # 换回哪个供应商的凭据由 `LLMClient.scoped` 一处管(会话切模型同一套路)
+        pid = (runner.llm_override["provider_id"] if runner.llm_override
+               else (self.config.provider.id if self.config.provider else ""))
+        runner.agent.llm = LLMClient.scoped(self.config, provider_id=pid)
         runner.agent.llm.reasoning_choice = choice
         if choice != keep:
             labels = {"default": "默认", "off": "关闭", "low": "低",

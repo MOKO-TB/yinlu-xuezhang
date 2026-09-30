@@ -33,6 +33,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "_dedupe_models", "_models_from_raw", "PROVIDER_PRESETS",
                         # v0.9.39:两条时限是真的在拦东西(漏收 = 配置文件里的数字没人读)
                         "turn_time_limit_seconds", "subagent_time_limit_seconds",
+                        # v0.9.94:按档位分模型(漏收 = config.json 里写了 subagent_models 没人读,
+                        # 而报告还在说「本档模型 X」—— 那就是当着面编一句没依据的话)
+                        "subagent_models",
                         # v0.9.39 B0/B1:回灌开关(漏收 = config.json 里写了没人读)
                         "feedback_recall",
                         # v0.9.40 D2:回合步数上限(漏收 = 配置文件里的数字没人读)
@@ -427,7 +430,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "_files_note",
                            # v0.9.81:联网尾注(同一个盲区还剩「网页查阅」那一栏 ——
                            # 漏收 = 子代理爬的页面/查的库在面板上永远不出现)
-                           "_web_note"),
+                           "_web_note",
+                           # v0.9.94:按档位分模型的判定(漏收 = 配置读了、报告却仍说主模型,
+                           # 或反过来在报告里编一句「本档模型 X」而代码里根本没这回事)
+                           "model_choice"),
+    # v0.9.94:换模型重建客户端的那条构造(漏收 = 档位分模型整块没了)
+    "minicode.llm": ("scoped",),
+    # v0.9.94:馆藏连接的"整条语句在同一次持锁里跑完"(漏收 = 装好的包里并行派活
+    # 随机一路"子代理执行出错",而这种只在并发下复现的毛病最难从用户话里倒推)
+    "minicode.library": ("_read",),
     # v0.9.39:确认框要能讲清新工具的代价(漏收 = 弹了框但没说图会被发出去/文件落在哪)
     "minicode.explain": ("risk_notes", "permission_why", "action_reason"),
     # ---- v0.9.16/17/20:主动推荐 + 新版本检查 + 今日简报(合并成一个键,

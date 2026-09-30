@@ -221,6 +221,12 @@ class Config:
     # 超时是"主代理不再等它",后台线程仍会跑完当前那一步(Python 没有安全的强杀),
     # 结果不再回填 —— 报告里会照这个口径写明是哪一路超时。
     subagent_time_limit_seconds: int = 600
+    # 按档位分模型(v0.9.94):{"explore": "deepseek-v4-flash", "code": "..."}。
+    # **只换模型名,不换供应商** —— 跨供应商要另一份 Key,那一层不在这里做
+    # (会话级切供应商已有界面路径,这里要解决的是"侦察用便宜的、实现用硬的")。
+    # 没配、或配的名字不在当前供应商的启用模型里 ⇒ 该档退回主模型,并在报告抬头
+    # 里说清退回了、为什么 —— 静默换个模型跑,比不换更难查。
+    subagent_models: dict = field(default_factory=dict)
     # 信号回灌(v0.9.39 B0/B1,见 minicode/feedback_recall.py):把已经记下来的东西
     # 回头用起来 —— 同一个词连着搜空就在结果里点一句、命中历史 👎 就给本轮一条
     # 系统侧先验。**关掉它,主循环的请求字节与结果文本都与开之前逐字一致**。
@@ -405,6 +411,13 @@ def _config_from_raw(raw: dict) -> Config:
         session_keep_last=max(0, int(raw.get("session_keep_last", 0) or 0)),
         subagent_time_limit_seconds=max(0, int(
             raw.get("subagent_time_limit_seconds", 600) or 0)),
+        # 按档位分模型的原始配置:一律转成"字符串→字符串",空值丢掉。
+        # 写成列表/嵌套/数字都不崩(这份要拿去查表),但不认的条目就是不生效 ——
+        # 具体能不能用交给 subagents.model_choice 去对着供应商的启用模型核,那才是真相。
+        subagent_models={str(k): str(v).strip() for k, v in
+                         (raw.get("subagent_models") if isinstance(
+                             raw.get("subagent_models"), dict) else {}).items()
+                         if str(v or "").strip()},
         feedback_recall=bool(raw.get("feedback_recall", True)),
         context_window=int(raw.get("context_window", 131072)),
         compact_at_ratio=float(raw.get("compact_at_ratio", 0.7)),
@@ -505,6 +518,8 @@ def save_config(path: Path, cfg: Config) -> None:
         "session_token_limit": cfg.session_token_limit,
         "session_keep_last": cfg.session_keep_last,
         "subagent_time_limit_seconds": cfg.subagent_time_limit_seconds,
+        # 空 dict 也照样存:用户写过就该在 config.json 里看得见(看不见就会被当成没生效)
+        "subagent_models": cfg.subagent_models,
         "feedback_recall": cfg.feedback_recall,
         "context_window": cfg.context_window,
         "compact_at_ratio": cfg.compact_at_ratio,

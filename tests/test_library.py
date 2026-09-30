@@ -1,6 +1,8 @@
 """library_search 工具:本地馆藏库检索的单元测试(用临时库,不依赖线上数据)。"""
 import json
 import sqlite3
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -515,3 +517,99 @@ def test_search_miss_not_logged_when_db_unreadable(tmp_path, monkeypatch):
     out = library.library_search(_ctx(tmp_path), "活着")
     assert "检索数据" in out
     assert not (tmp_path / "app" / growth.GAPS_FILE).exists()
+
+
+# ------------------------------------------------ 跨线程共用连接(v0.9.94 的并行子代理实测撞过)
+
+
+def _stats_of(tmp_path):
+    """这份夹具库的真实统计(数字全部来自 _make_db 里那 5 本书,不是估的)。"""
+    return {"total": 5, "paper": 4, "ebook": 1, "classes": 3}
+
+
+def test_read_holds_the_lock_across_execute_and_fetch():
+    """`_read` 的规矩是「execute 与 fetch 之间不松锁」,这条要能量出来。
+
+    手法:第二条线程等 `_read` 进到 execute 之后来抢锁 —— **在 fetch 还没做完之前**
+    就抢到,说明锁松了(那才是出事的样子)。只在 conn() 里上锁防不住:两条线程各自
+    execute 完再各自 fetch,拿回来的是别人那条语句的结果(v0.9.94 的并行子代理实测
+    过 fetchone() 直接给 None,而上面一层只捕 sqlite3.Error,于是整路"子代理执行出错")。
+    """
+    entered = threading.Event()
+    state = {"fetch_done": False, "抢到了没取结果": False}
+
+    def other():
+        entered.wait(5)                       # 等 _read 已经拿着锁进了 execute
+        got = library._LIB_LOCK.acquire(timeout=5)
+        if got and not state["fetch_done"]:
+            state["抢到了没取结果"] = True
+        if got:
+            library._LIB_LOCK.release()
+
+    class Cur:
+        def fetchone(self):
+            time.sleep(0.3)                   # "执行完了、结果还没取"的那段窗口
+            state["fetch_done"] = True
+            return (7,)
+
+    class Conn:
+        def execute(self, sql, params=()):
+            entered.set()
+            return Cur()
+
+    th = threading.Thread(target=other)
+    th.start()
+    try:
+        assert library._read(Conn(), "SELECT 1", (), one=True) == (7,)
+    finally:
+        th.join(timeout=10)
+
+    assert state["fetch_done"] is True, "探针没跑到 fetch,这条测了个空"
+    assert state["抢到了没取结果"] is False, "_read 在 execute 与 fetch 之间松了锁"
+    assert library._LIB_LOCK.acquire(blocking=False) is True   # 用完必须放回去
+    library._LIB_LOCK.release()
+
+
+def test_catalog_stats_none_row_degrades_to_no_statistics(tmp_path, monkeypatch):
+    """一条 COUNT 没有结果行 = 这条连接被人动过:按「读不出来」走,不报猜出来的数。"""
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    monkeypatch.setattr(library, "_read", lambda c, sql, params=(), one=False: None)
+    assert library.catalog_stats(tmp_path) is None
+
+
+def test_parallel_catalog_reads_all_get_their_own_result(tmp_path, monkeypatch):
+    """八条线程一起读馆藏(就是并行子代理各建一次系统提示词那个形状)。
+
+    修之前的实测症状:某一路 `TypeError: cannot unpack non-iterable NoneType object`,
+    而 run_subagent 只捕 sqlite3.Error,于是那一路整条报"子代理执行出错"。
+    """
+    import threading
+
+    _isolate(monkeypatch, tmp_path)
+    _make_db(tmp_path)
+    want = _stats_of(tmp_path)
+    errors: list[str] = []
+    start = threading.Barrier(8)
+
+    def worker(i: int):
+        start.wait()                      # 尽量让八条线程真撞在一起
+        try:
+            for _ in range(60):
+                st = library.catalog_stats(tmp_path)
+                if st != want:
+                    errors.append(f"第{i}路统计不对:{st}")
+                    return
+                rows = library.search(tmp_path, "活着" if i % 2 else "三")
+                if not rows:
+                    errors.append(f"第{i}路检索空手(库里明明有)")
+                    return
+        except Exception as e:            # noqa: BLE001 —— 这里要抓的就是"任何异常"
+            errors.append(f"第{i}路抛了 {type(e).__name__}: {e}")
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=120)
+    assert not errors, errors

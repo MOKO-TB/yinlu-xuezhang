@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable
 from urllib.parse import urlparse
 
@@ -82,6 +82,23 @@ class LLMClient:
         # (跟着 LLMClient 走 —— 每个会话切模型时会重建,所以新会话回到
         # "默认";Bridge 切档位时只重建共享客户端,不影响别的会话)。
         self.reasoning_choice = "default"
+
+    @classmethod
+    def scoped(cls, config: Config, provider_id: str = "",
+               model: str = "") -> "LLMClient":
+        """换一个供应商/换一个模型重建客户端 —— **这条构造只此一处**。
+
+        `LLMClient` 只认 `config.model` 与活动供应商,不认"供应商 + 模型"二元组,
+        所以换模型必须把 providers 里那条的 `model` 改掉再重建。两处各写一遍
+        (会话切模型 / 子代理按档位分模型)总有一天一处漏带 `active_provider_id` ——
+        表现是"模型换了、Key 还是旧供应商的",报 401 看着像 Key 坏了。
+        """
+        target_id = provider_id or config.active_provider_id
+        providers = config.providers
+        if model:
+            providers = [replace(p, model=model) if p.id == target_id else p
+                         for p in providers]
+        return cls(replace(config, providers=providers, active_provider_id=target_id))
 
     def stream_chat(self, messages: list[dict], tools: list,
                     on_text: TextCallback | None = None,

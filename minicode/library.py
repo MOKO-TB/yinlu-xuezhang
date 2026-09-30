@@ -35,7 +35,9 @@ DEFAULT_TOP_K = 8
 MAX_TOP_K = 30
 
 _CACHE: dict[str, tuple[float, sqlite3.Connection]] = {}
-_LIB_LOCK = threading.Lock()   # 缓存连接跨线程共用(GUI 主线程自检 + Agent 线程检索)
+# 缓存连接跨线程共用(GUI 主线程自检 + Agent 线程检索),而且是 RLock:
+# 调用方现在**整条语句**(execute + fetch)都在这把锁里,进去还要再调 conn()。
+_LIB_LOCK = threading.RLock()
 
 
 class CatalogUnavailable(RuntimeError):
@@ -87,7 +89,10 @@ def conn(path: Path) -> sqlite3.Connection:
     Agent 后台线程,缓存里的连接会被两边先后使用——SQLite 默认只允许
     创建它的线程用,不然直接 ProgrammingError(用户看到的“图书馆数据读
     不出来”报错就是它)。缓存命中时连接可能已是别的线程建过的,所以
-    读写都在 _LIB_LOCK 保护下串行化,游标不跨锁使用。
+    **读一律走 `_read`**(execute + fetch 在同一次持锁里做完,游标不跨锁使用);
+    只在 conn() 里上锁是不够的 —— 两条线程各自 execute 完再各自 fetch,
+    取到的是别人那条语句的结果(v0.9.94 的并行子代理实测撞过:fetchone()
+    回来 None,上层只捕 sqlite3.Error,于是整路子代理报"执行出错")。
     """
     key = str(path)
     try:
@@ -107,6 +112,22 @@ def conn(path: Path) -> sqlite3.Connection:
         c.row_factory = sqlite3.Row
         _CACHE[key] = (mtime, c)
         return c
+
+
+def _read(c: sqlite3.Connection, sql: str, params: tuple = (),
+          one: bool = False):
+    """在锁里把一条语句跑完并取完结果。
+
+    **execute 与 fetch 之间不许松锁**:缓存里那是一条跨线程共用的连接
+    (`check_same_thread=False`),两条线程各自 execute 完再去 fetch,取到的是
+    "最后压上来的那条语句"的结果。实测过的形状:并行子代理各建一次系统提示词
+    (都读馆藏统计),`fetchone()` 回来一个 None,`total, paper, ebook, cls = …`
+    当场 `TypeError: cannot unpack non-iterable NoneType object` —— 而这条路的
+    上层只捕 `sqlite3.Error`,于是整路子代理报"执行出错"。
+    """
+    with _LIB_LOCK:
+        cur = c.execute(sql, params)
+        return cur.fetchone() if one else cur.fetchall()
 
 
 SEL = (
@@ -228,9 +249,9 @@ def _fts_rows(c: sqlite3.Connection, variant: str, top_k: int,
     rows: list[sqlite3.Row] = []
     # 1) 精确书名(含「书名.」这类带后缀的写法)
     try:
-        rows += c.execute(
-            SEL + "WHERE (b.title=? OR b.title=?)" + kc + " LIMIT 5",
-            (variant, variant + ".")).fetchall()
+        rows += _read(c,
+                      SEL + "WHERE (b.title=? OR b.title=?)" + kc + " LIMIT 5",
+                      (variant, variant + "."))
     except sqlite3.Error as exc:
         _note_error(errors, exc)
     # 2) FTS5;?1=MATCH ?2..?4=排序 ?5=limit
@@ -238,10 +259,10 @@ def _fts_rows(c: sqlite3.Connection, variant: str, top_k: int,
         expr = _fts_expr(variant)
         if expr:
             try:
-                rows += c.execute(
-                    SEL + "JOIN books_fts f ON f.rowid=b.record_id "
-                    "WHERE (books_fts MATCH ?1)" + kc + _rank_sql(2),
-                    tuple([expr] + _rank_vals(variant) + [top_k])).fetchall()
+                rows += _read(c,
+                              SEL + "JOIN books_fts f ON f.rowid=b.record_id "
+                              "WHERE (books_fts MATCH ?1)" + kc + _rank_sql(2),
+                              tuple([expr] + _rank_vals(variant) + [top_k]))
             except sqlite3.Error as exc:
                 _note_error(errors, exc)
     return rows
@@ -258,11 +279,11 @@ def _like_rows(c: sqlite3.Connection, variant: str, top_k: int,
     if not like:
         return []
     try:
-        return c.execute(
-            SEL + "WHERE (b.title LIKE ?1 ESCAPE '\\' OR b.author LIKE ?1 ESCAPE '\\' "
-            "OR b.publisher LIKE ?1 ESCAPE '\\' OR b.class_no LIKE ?1 ESCAPE '\\' "
-            "OR b.call_no LIKE ?1 ESCAPE '\\')" + _kind_clause(kind) + _rank_sql(2),
-            tuple([like] + _rank_vals(variant) + [top_k])).fetchall()
+        return _read(c,
+                     SEL + "WHERE (b.title LIKE ?1 ESCAPE '\\' OR b.author LIKE ?1 ESCAPE '\\' "
+                     "OR b.publisher LIKE ?1 ESCAPE '\\' OR b.class_no LIKE ?1 ESCAPE '\\' "
+                     "OR b.call_no LIKE ?1 ESCAPE '\\')" + _kind_clause(kind) + _rank_sql(2),
+                     tuple([like] + _rank_vals(variant) + [top_k]))
     except sqlite3.Error as exc:
         _note_error(errors, exc)
         return []
@@ -318,10 +339,10 @@ def search(workspace: Path | None, query: str, top_k: int = DEFAULT_TOP_K,
         seen.add(rid)
         d = dict(r)
         try:
-            locs = c.execute(LOC_SQL, (rid,)).fetchone()[0]
+            row = _read(c, LOC_SQL, (rid,), one=True)
         except sqlite3.Error:
-            locs = None
-        d["locs"] = locs or ""
+            row = None
+        d["locs"] = (row[0] if row else "") or ""
         out.append(d)
         if len(out) >= top_k:
             break
@@ -481,7 +502,7 @@ def catalog_count_or_error(workspace: Path | None = None) -> tuple[int | None, s
     if path is None:
         return None, None
     try:
-        row = conn(path).execute("SELECT COUNT(*) FROM books").fetchone()
+        row = _read(conn(path), "SELECT COUNT(*) FROM books", one=True)
     except (sqlite3.Error, OSError) as exc:
         return None, f"{type(exc).__name__}: {exc}"
     return (int(row[0]) if row else 0), None
@@ -607,13 +628,16 @@ def catalog_stats(workspace: Path | None = None) -> dict | None:
         return None
     try:
         c = conn(path)
-        total, paper, ebook, cls = c.execute(
-            "SELECT COUNT(*), SUM(p_count>0), SUM(p_count=0), COUNT(DISTINCT class_no) "
-            "FROM books").fetchone()
-        return {"total": total or 0, "paper": paper or 0,
-                "ebook": ebook or 0, "classes": cls or 0}
+        row = _read(c,
+                    "SELECT COUNT(*), SUM(p_count>0), SUM(p_count=0), COUNT(DISTINCT class_no) "
+                    "FROM books", one=True)
     except sqlite3.Error:
         return None
+    if row is None:          # 一条 COUNT 不可能没有结果行:出现了就是这条连接被人动过,
+        return None          # 按"读不出来"走 —— 宁可少一句馆藏统计,不报一个猜出来的数
+    total, paper, ebook, cls = row
+    return {"total": total or 0, "paper": paper or 0,
+            "ebook": ebook or 0, "classes": cls or 0}
 
 
 def library_prompt_section(workspace: Path | None = None) -> str:

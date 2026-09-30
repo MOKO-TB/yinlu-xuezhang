@@ -423,11 +423,39 @@ def _await(runs: list, seconds: int) -> list:
     return out
 
 
-def _merge_reports(pairs: list[tuple[SubAgentSpec, str, str]]) -> str:
-    """按请求顺序合并多份报告:序号 + 类型 + 任务摘要 + 正文。"""
+def model_choice(spec_type: str, config: Config) -> tuple[str, str]:
+    """这一档该用哪个模型 + 一句要给用户看的话(没覆盖时两个都空)。
+
+    **只认当前供应商的启用模型**:`LLMClient` 拿的是 `config.model` + 活动供应商的 Key,
+    把别的供应商的名字填进来,表现是 401,而人会以为是 Key 坏了。所以名字对不上就
+    退回主模型,并把"为什么退回"写进报告抬头 —— **静默换个模型跑,比不换更难查**。
+    """
+    table = getattr(config, "subagent_models", None) or {}
+    want = str(table.get(spec_type) or "").strip()
+    base = str(getattr(config, "model", "") or "").strip()
+    if not want or want == base:
+        return "", ""
+    provider = config.provider
+    usable = provider.enabled_models() if provider is not None else []
+    if want not in usable:
+        return "", (f"想让 {spec_type} 用「{want}」,但它不在当前供应商的启用模型里"
+                    f"(能用的:{'、'.join(usable) or '只有当前这一个'}),"
+                    f"这一档仍用 {base or '当前模型'}")
+    return want, f"本档模型 {want}"
+
+
+def _merge_reports(pairs: list[tuple[SubAgentSpec, str, str]],
+                   models: list[str] | None = None) -> str:
+    """按请求顺序合并多份报告:序号 + 类型 + 任务摘要 + 正文。
+
+    `models` 与 `pairs` 同序,只有真覆盖了模型的档位才有值 —— 写在小标题里,
+    因为"这一路的结论为什么明显比另一路粗"通常就是模型换了。
+    """
     chunks = []
     for i, (spec, task_text, report) in enumerate(pairs, start=1):
-        head = f"## {i}. {spec.type} · {task_text.strip()[:60]}"
+        tag = (models[i - 1] if models and i <= len(models) else "") or ""
+        head = (f"## {i}. {spec.type}" + (f" · {tag}" if tag else "")
+                + f" · {task_text.strip()[:60]}")
         chunks.append(f"{head}\n{report}")
     body = "\n\n".join(chunks)
     if len(body) > BATCH_REPORT_LIMIT:
@@ -443,6 +471,29 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
     `parent_undo` 是主代理回滚栈的**引用**(同一个列表对象,v0.9.53):
     implement 子代理的写快照进这个栈,主代理 /undo 才撤得掉子代理的改动。
     """
+    # 按档位分模型(v0.9.94):一个模型名一份客户端,同一个档位反复派活不该每次
+    # 都新建一条 httpx 连接。客户端的构造规则在 `LLMClient.scoped` 一处。
+    clients: dict[str, object] = {}
+
+    def route_llm(spec_type: str) -> tuple[object, str, str]:
+        """返回(这一档用的客户端, 真用了哪个模型, 要写进报告的那句话)。
+
+        换出去的客户端**不继承**主模型的思考档位:档位能力是按模型算的
+        (`reasoning.get_capability`),把主模型的 high/low 搬到一个能力不同的模型上,
+        报出来的就是"这个模型根本没这个档"。新客户端从 default 起步。
+        """
+        model, note = model_choice(spec_type, config)
+        if not model:
+            return llm, "", note
+        got = clients.get(model)
+        if got is None:
+            from minicode.llm import LLMClient      # 延迟导入,避免与 agent 绕成环
+            try:
+                got = clients[model] = LLMClient.scoped(config, model=model)
+            except Exception as e:                  # 建不起来就照旧用主模型,但要说
+                return llm, "", (f"想让 {spec_type} 用「{model}」,客户端建不起来"
+                                 f"({type(e).__name__}: {e}),这一档仍用当前模型")
+        return got, model, note
 
     def task(ctx: ToolContext, type, task, step=None) -> str:
         types = _as_list(type, "type")
@@ -492,33 +543,43 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
         # ---- 单发:保持 v0.9 行为(流式输出进聊天区,报告带回工具结果)----
         if len(specs) == 1:
             spec, text, note = specs[0]
+            sub_llm, used_model, mnote = route_llm(spec.type)
             report = _await([lambda: run_subagent(
-                ctx, spec, text, llm, ui, config, registry,
+                ctx, spec, text, sub_llm, ui, config, registry,
                 undo_stack=parent_undo)], limit)[0]
             timed_out = report is None
             if timed_out:
                 report = _timeout_note(limit)
-            head = f"[{spec.label}子代理完成]" + (f"\n{note}" if note else "")
+            head = (f"[{spec.label}子代理完成]" + (f" · {mnote}" if mnote else "")
+                    + (f"\n{note}" if note else ""))
             body = head + "\n" + report
             # 单发也要有截断标注(批量合并一直有):硬切掉的报告末尾不说明,
             # 模型拿到的是半句话,回答就会顺着半句话编。
             if len(body) > REPORT_LIMIT:
                 body = body[:REPORT_LIMIT] + f"\n…(报告超过 {REPORT_LIMIT} 字符,已截断)"
             facts = [f"{spec.type} 报告 {len(report)} 字"
-                     + ("(超时未回)" if timed_out else "")]
+                     + ("(超时未回)" if timed_out else "")
+                     + (f"(模型 {used_model})" if used_model else "")]
             return _plan_head(facts) + body + _SUB_REPORT_NOTE
 
         # ---- 批量:v0.9.60 起写类型也并发。确认通道仍是一条(锁排队),
         # 但每路经 _TaggedUI 贴上「第 N 路[类型]任务」标签,用户分得清在等谁;
         # accept_edits/accept_all 档下写操作不弹框,各路真正并行。----
         writers = [s.type for s, _, _ in specs if not s.read_only]
+        # 每路一个客户端:派活之前就把模型定下来,开始提示与合并报告说的才是同一件事
+        # (先建后用的顺序也保证这里不会中途抛错)。
+        routes = [route_llm(s.type) for s, _, _ in specs]
 
         # 批量是静默模式(各路输出互不进聊天区):开始时在聊天区说一声,不然
         # 用户看到的就是发完之后一片安静,直到合并报告突然出现。
+        # 这段字符串算在 try 之外:v0.9.94 把它写在 try 里,一次 `s.type` 写错
+        # (specs 是三元组)就被那个「CLI 没有 push 也不碍事」的 except 吞掉,
+        # 于是所有并行批次的开始提示一起静默消失 —— 界面上什么都没发生。
+        names = "、".join(f"{spec.type}" + (f"→{r[1]}" if r[1] else "")
+                          for (spec, _t, _n), r in zip(specs, routes))
+        tail = "(含写操作,确认框会标明是哪一路)" if writers else ""
+        where = f",计划第 {step} 步" if use_step else ""
         try:
-            names = "、".join(f"{s.type}" for s, _, _ in specs)
-            tail = "(含写操作,确认框会标明是哪一路)" if writers else ""
-            where = f",计划第 {step} 步" if use_step else ""
             ui.push("info", text=f"已并行派出 {len(specs)} 路子代理"
                                  f"({names}){where}{tail},完成后合并报告回填。")
         except Exception:
@@ -533,20 +594,28 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                 quiet, f"{route} {text.strip()[:30]}")
 
         reports = _await([
-            (lambda s=spec, x=text, i=idx: run_subagent(
-                ctx, s, x, llm, route_ui(i, s, x),
+            (lambda s=spec, x=text, i=idx, sub=routes[idx][0]: run_subagent(
+                ctx, s, x, sub, route_ui(i, s, x),
                 config, registry,
                 undo_stack=parent_undo))
             for idx, (spec, text, _note) in enumerate(specs)], limit)
         pairs = [(spec, text, rep if rep is not None else _timeout_note(limit))
                  for (spec, text, _note), rep in zip(specs, reports)]
         notes = [note for _s, _t, note in specs if note]
-        merged = _merge_reports(pairs)
-        out = ("\n".join(notes) + "\n\n" + merged) if notes else merged
+        # 换成功的那路在小标题里写「模型 X」;换失败的那路一句都不吞 ——
+        # 「为什么这一路的结论明显比另一路粗」通常就是这里,静默退回最难查。
+        models = [f"模型 {r[1]}" if r[1] else "" for r in routes]
+        warns = [f"第{i + 1}路[{spec.type}]仍用当前模型:{r[2]}"
+                 for i, ((spec, _t, _n), r) in enumerate(zip(specs, routes))
+                 if r[2] and not r[1]]
+        merged = _merge_reports(pairs, models)
+        head = "\n".join(notes + warns)
+        out = (head + "\n\n" + merged) if head else merged
         # 备注里只写跑出来的事实:每路档名 + 报告字数,超时那路单独标出来
-        facts = [f"{s.type} 报告 {len(r)} 字" if r is not None
-                 else f"{s.type} 超时未回"
-                 for (s, _t, _n), r in zip(specs, reports)]
+        facts = [(f"{s.type} 报告 {len(r)} 字" if r is not None
+                  else f"{s.type} 超时未回")
+                 + (f"(模型 {routes[i][1]})" if routes[i][1] else "")
+                 for i, ((s, _t, _n), r) in enumerate(zip(specs, reports))]
         return _plan_head(facts) + out + _SUB_REPORT_NOTE
 
     return Tool(
