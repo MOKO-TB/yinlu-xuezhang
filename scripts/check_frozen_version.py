@@ -535,6 +535,22 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "dispatch_start", "dispatch_end", "_as_step_no"),
 }
 
+# ---- 包内前端(v0.9.94 起):界面那半边不在 PYZ 里,它由 packaging/gcode.spec 的
+# datas 整目录收进 `_internal/frontend/`。上面那套针表对它是瞎的 —— 于是「装好的
+# 包里少了这一屏」只能靠这条补上。漏收的表现全是不报错的那种:控件不在,点了没反应,
+# 或者干脆还是旧的那副样子。
+FRONTEND_TARGETS: tuple[str, ...] = (
+    # v0.9.94 p3/p5:权限档位改成界面自己画的浮层菜单(原生 select 的白字在深色
+    # 模式下看不见)。漏 permPill = 顶栏那个按钮整个没了;漏 permMenu = 点了没菜单
+    "permPill", "permMenu", "PERM_META",
+    # v0.9.94 p6:会话轮次导航条(右侧细刻度 + hover 预览)
+    "chat-rail", "rebuildChatRail", "showRailPop",
+    # v0.9.94 p7/p8:附件图片点开看 + 左右切换(以前放进去的照片根本没法查看)
+    "imgLightbox", "openLightbox",
+    # v0.9.94 p1/p2:主题切换时让系统标题栏跟着换色(后端那半另有针)
+    "set_chrome",
+)
+
 
 def _code_names(code) -> str:
     """把一个 code 对象(含嵌套)里所有标识符/常量拼成一个大字符串。"""
@@ -585,11 +601,26 @@ def main() -> int:
             print(("  ✓ " if ok else "  ✗ ") + f"{mod}: {needle}")
             if not ok:
                 failures.append(f"{mod}:{needle}")
+
+    # 包内前端:界面那半边不在 PYZ 里(由 spec 的 datas 整目录收进去),对着文件核。
+    html = next((c for c in (exe.parent / "_internal" / "frontend" / "index.html",
+                             exe.parent / "frontend" / "index.html") if c.exists()), None)
+    if html is None:
+        print("  ✗ 包里没有 frontend/index.html")
+        failures.append("frontend:缺失")
+    else:
+        fsrc = html.read_text(encoding="utf-8")
+        for needle in FRONTEND_TARGETS:
+            ok = needle in fsrc
+            print(("  ✓ " if ok else "  ✗ ") + f"frontend: {needle}")
+            if not ok:
+                failures.append(f"frontend:{needle}")
     print()
     if failures:
         print("FAIL: 包内不是最新版代码 →", failures)
         return 1
-    print(f"PASS: 包内后端代码包含 最新版(v{_src_version()})全部新增符号")
+    print(f"PASS: 包内后端 {sum(len(v) for v in TARGETS.values())} 根针 + 前端 "
+          f"{len(FRONTEND_TARGETS)} 根针,全部命中最新版(v{_src_version()})")
     return 0
 
 
