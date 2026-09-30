@@ -6,7 +6,14 @@
 
 想看某一轮**为什么**长成这样、踩了什么坑:读 `HANDOFF.md` §2 与 `docs/handoff/milestones.md`(那里是按轮写的流水账,这里是索引)。
 
+## v0.9.91
+- v0.9.91: 长命令跑到一半要看得见 —— 前台 bash 改成自己起进程 + 两条管道各一个读线程,每 15 秒向界面报一行「已跑多久 · 已输出多少字 · 最后一行」,写在「任务监控 → 此刻」那一行上;模型看到的回话一个字没变(进度只走 UI 通道,不进会话消息),两路输出仍各自成段(有一条两路各写 300 KB 的防死锁用例钉着)。顺带补三条真口子:超时改走后台那同一份进程树杀法(不留第二份杀法,没有 taskkill 时照实说子进程可能还活着)并带回已产出的那截;stdin 从继承控制台改成 DEVNULL(GUI 那边等于永远没人输入),工具描述里跟着写清「命令不会等你输入」;run_subagent 继续沿用父 ctx 会让几路子代理的 bash 进度盖到父会话「此刻」那一行上(串味的进度=假进度),改成每一路 dc_replace(ctx, ui=ui)。做的时候才发现进度只能读到子进程已经吐出来的那些字(它攒着不 flush 或拿 \r 刷进度条就看不见中间),这句同时写进 _drain 的 docstring 与包内《使用说明》第 66 条,不当"逐字符转播"吹。测试 +16(新 tests/test_bash_progress.py),界面侧新 scripts/e2e_ui_v0991.py 7 项真 Chromium(载荷出自真 GuiUI.tool_start/tool_progress/tool_done,断的是后端原文、事件驱动刷新、步结束后整行消失、没进度不出现、收起就不再敲桥),冻结针 +5,collect 实测 2429,八道闸全绿;桩里 subprocess.run/Popen 两种起法都要换,否则测的是真起进程  · 2026-09-30
+
+## v0.9.90
+- v0.9.90: career 就业档收尾 —— 子代理第七个领域档(README/HANDOFF/版本号;第八道闸全绿)  · 2026-09-30
+
 ## v0.9.89
+- docs(changelog): 重新生成 —— 把 v0.9.89 收进清单  · 2026-09-30
 - v0.9.89: 一键体检面板 + 推送必跑的四道闸 —— minicode/health.py 只把各功能现成的自检收进一张表(馆藏库 / 浏览器 / MCP / 项目白名单 / 数据目录 / 开机自启),四道 check_* 用 subprocess 调脚本自己,同一条判定不出现第二份真相;查不成一律写「没查成」,白名单没递进来也不自己再装载一次;修复动作只有「去配置模型」与「把话填进输入框」两条真路,批准 permissions.json 仍然只在确认框里点一次头。CI(.github/workflows/ci.yml)跑的是 CONTRIBUTING 那四条命令,选 windows-latest 且刻意不设 PYTHONIOENCODING 才能复现 GBK 那一类崩,checkout 要 fetch-depth:0 否则 CHANGELOG 那条闸拿到假红。干净工作树彩排抓到两件事:test_model_manage 与 test_workspace 各有一条用例其实依赖本机 gitignore 的 config.local.json(于是 CI 给一个明摆着是假的占位 Key,而不是 skip 掉),我自己那条四道闸的针原本依赖真仓库 dist/ 在不在(改钉在假仓库上)。测试 +46(test_health 35 / test_ci_workflow 6 / 入口栏第 15 颗带来的参数化 4 / 门面闸 +1),collect 实测 2408,八道闸全绿  · 2026-09-30
 
 ## v0.9.88
@@ -344,4 +351,4 @@
 ## v0.3.0
 - 初始提交:引路学长 v0.3.0 —— Windows 桌面编程引路智能体(GUI+CLI 同核引擎)  · 2026-09-12
 
-<!-- 生成自 git 提交 0a89412;此后的提交还没收进来 -->
+<!-- 生成自 git 提交 9afb378;此后的提交还没收进来 -->
