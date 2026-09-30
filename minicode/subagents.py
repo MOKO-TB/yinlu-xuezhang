@@ -5,7 +5,7 @@
           / audit(只读口径对账) / testaudit(只读测试假闸自检)
           —— 后两档是**角色**不是领域:不靠 SKILL.md,也不在 router 的领域关键词里,
           所以 `auto` 永远不会选中它们,要用就显式传 type。
-  领域档  code / writing / data / english / campus / material
+  领域档  code / writing / data / english / campus / material / career / study
           —— 由 minicode.router 登记派生,提示词只说"先加载哪几个已有技能",
           领域规矩本体仍在 skills/*.md 里。
 子代理:独立会话(看不到主对话)、受限工具集(不能递归派 task)、步数上限、
@@ -20,6 +20,9 @@ v0.9.60 起**写类型(implement 等)也开放并行**:每一路的确认请求�
 是谁在等,一次答一个;accept_edits/accept_all 档下写操作本来就不弹框,
 各路真正并行跑完。批量模式用静默 UI 吞掉各子代理的流式输出与工具卡片——
 否则几路 text_delta 会在同一个聊天区里互相穿插成乱码——只把合并报告带回。
+但"吞掉输出"不等于"什么都不留"(v0.9.92):每一路的每一步仍挂进监控栏那张实时表的
+父行下面(`GuiUI.live_child_begin/end/progress`,带「第 N 路[档位]」标签与真实时刻)——
+聊天区照旧安静,过程不再是黑箱。
 并行写的前提是**各路负责不同文件**:两路改同一个文件是内容竞争,task 描述
 必须按文件划好地盘(工具描述里也这么教模型)。
 

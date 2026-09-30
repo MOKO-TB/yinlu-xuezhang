@@ -503,6 +503,38 @@ def _content_text(content) -> str:
     return ""
 
 
+def _children(kids) -> list[dict]:
+    """挂在父行下面的子步骤(并行子代理内部每一步)转成时间线要的形状。
+
+    这些行**不来自会话消息** —— 子代理的 tool_calls 留在它自己的 session 里,
+    主会话只有一条 `task`。所以它们:①不计进轮次抬头那句「执行工具 N 次」
+    (那个数永远等于消息里的调用数,掺进子步骤就成了两个真相);②时刻只能
+    来自实时表,重启后旧留档里没有,就不显示时间。
+    """
+    out: list[dict] = []
+    for k in kids or []:
+        if not isinstance(k, dict):
+            continue
+        name = str(k.get("name") or "")
+        if k.get("end") is None:
+            status = "running"
+        elif k.get("ok"):
+            status = "ok"
+        elif k.get("abandoned"):
+            status = "stale"
+        else:
+            status = "failed"
+        summary = str(k.get("summary") or "")
+        out.append({"tool": name, "verb": toolsum.verb(name),
+                    "route": str(k.get("route") or ""),
+                    "title": _clip(summary) or toolsum.verb(name),
+                    "status": status, "badge": _badge(status),
+                    "time": _clock(k.get("start")), "dur": _dur(k),
+                    "dur_text": _dur_text(k),
+                    "progress": str(k.get("progress") or "")})
+    return out
+
+
 def _pair_times(rows: list[dict], live: list[dict] | None) -> int:
     """把实时表里的真实时刻配到时间线行上。**配不上就不配**(返回配对数)。
 
@@ -522,6 +554,9 @@ def _pair_times(rows: list[dict], live: list[dict] | None) -> int:
                 continue
             row["start"], row["end"], row["dur"] = (
                 cand.get("start"), cand.get("end"), _dur(cand))
+            # 这一步下面挂着的子步骤(并行批次里子代理内部的每一步)跟着时刻一起搬过来
+            row["children"] = _children(cand.get("children"))
+            row["children_dropped"] = int(cand.get("children_dropped") or 0)
             j = k + 1
             matched += 1
             break
@@ -533,6 +568,12 @@ def _dur(entry: dict):
     if start is None or end is None:
         return None
     return max(0, int(round(float(end) - float(start))))
+
+
+def _dur_text(entry: dict) -> str:
+    """「用时 Ns」里那个字符串:格式化只这一处(时间线的行与子行同一份)。"""
+    d = _dur(entry)
+    return "" if d is None else f"{d}s"
 
 
 def _ts_epoch(ts: str) -> "float | None":
@@ -630,6 +671,9 @@ def timeline(messages, workspace=None, live=None, busy=True) -> dict:
                          "args": args,
                          "status": status, "badge": _badge(status),
                          "start": None, "end": None, "dur": None,
+                         # 并行子代理内部的每一步挂在下面(v0.9.92);形状先给齐,
+                         # 前端就不用为"这一行到底有没有 children"再判一次
+                         "children": [], "children_dropped": 0,
                          "result": result if isinstance(result, str) else ""})
     _pair_times(rows, live)
     _restore_from_ts(rows, calls, result_ts)
@@ -663,7 +707,7 @@ def timeline(messages, workspace=None, live=None, busy=True) -> dict:
             # 时刻只可能是空串:实时表没记到的行(并行子代理内部、上一版程序跑的)
             # 就不显示时间。宁可少一列,不许拿"现在"凑一个。
             r["time"] = _clock(r.get("start"))
-            r["dur_text"] = f"{r['dur']}s" if r.get("dur") is not None else ""
+            r["dur_text"] = _dur_text(r)
             hits = empty_marks.get(r.get("cid"))
             if hits and hits >= mark_from:
                 r["repeat_text"] = f"×{hits} 未命中"
@@ -692,6 +736,9 @@ def now_line(now: dict | None) -> dict | None:
     return {"tool": name, "verb": toolsum.verb(name),
             "title": _clip(summary) or toolsum.verb(name),
             "agent_type": toolsum.agent_type(name),
+            # 并行批次里这一步属于哪一路(live_now 会往下钻一层,所以这里可能是子步骤)
+            "route": str(now.get("route") or ""),
+            "parent_tool": str(now.get("parent_tool") or ""),
             "start": _clock(now.get("start")),
             # 长命令的实时那一行(shell 报的"已跑多久/多少字/最后一行")。没有就是空串,
             # 前端那一行整条不出现 —— 拿"没有进度"装作"刚开始"是最容易看漏的谎。

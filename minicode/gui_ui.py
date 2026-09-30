@@ -13,6 +13,7 @@ from minicode import toolsum
 from minicode.tools.base import Tool
 
 LIVE_CAP = 200            # 实时表最多记多少条(只丢已完成的最老行,在跑的永不丢)
+CHILD_CAP = 40            # 一路子代理最多往父行下挂几步(超了丢最老的,并如实报丢了几个)
 
 
 class GuiUI:
@@ -28,6 +29,9 @@ class GuiUI:
         # 上一版程序记的)一律不给时间 —— 面板宁可少说,不许编。
         self._live: list[dict] = []
         self._live_open: list[dict] = []   # 栈:子代理的工具套在外面那层里面
+        # 每一路子代理当前开着的那一步(键=路标签)。一路同一时刻只跑一个工具,
+        # 所以这一个键就够 —— 不需要每路一个栈,那会把"嵌套"演成真的复杂。
+        self._child_open: dict[str, dict] = {}
         self._live_lock = threading.Lock()
 
     def attach(self, window) -> None:
@@ -223,25 +227,84 @@ class GuiUI:
             return [dict(r) for r in self._live]
 
     def live_now(self) -> dict | None:
-        """此刻真正在跑的最深一层 + **真实**已耗时;没有在跑给 None。"""
+        """此刻真正在跑的**最深一层** + 真实已耗时;没有在跑给 None。
+
+        v0.9.92:并行批次里子代理内部的每一步也会挂进实时表(挂在父行下面的
+        `children` 里),所以"最深一层"要往下钻一层拿 —— 否则「此刻」写着
+        「task: 派 6 路」而真正在跑的是第 3 路的 `grep`,那既是假的也帮不上忙。
+        """
         with self._live_lock:
             if not self._live_open:
                 return None
             row = dict(self._live_open[-1])
+            open_kids = [c for c in row.get("children") or [] if c.get("end") is None]
+            if open_kids:
+                kid = dict(open_kids[-1])
+                kid["parent_tool"] = row.get("name")
+                row = kid
         row["elapsed"] = max(0, int(time.time() - float(row["start"])))
         return row
+
+    # ------------------------------------------------ 子代理内部步骤的记账通道
+
+    def live_child_begin(self, route: str, name: str, summary: str) -> None:
+        """把并行子代理内部的每一步挂在**当时开着的那一行**下面 —— 只记账,不进聊天区。
+
+        为什么要有这条:`_QuietUI` 吞掉每路的 `tool_start`/`tool_done` 是对的
+        (几路 `text_delta`/卡片会在全屏一处互相穿插成乱码),但连"它先做了什么、
+        哪一路挂了"也一起吞掉,用户拿到的就只有一份合并报告 —— "分别处理"变成了
+        看不见过程的黑箱(v0.9.37 就在 §6 #20 ② 记着这笔欠账)。挂成父行的子行,
+        既不刷屏,又保住了真实先后与真实时刻。
+        """
+        with self._live_lock:
+            if not self._live_open:
+                return                      # 父行都没开着就没处挂:不硬造一行
+            parent = self._live_open[-1]
+            kids = parent.setdefault("children", [])
+            row = {"name": str(name or ""), "summary": str(summary or ""),
+                   "route": str(route or ""), "start": time.time(),
+                   "end": None, "ok": None, "progress": ""}
+            kids.append(row)
+            while len(kids) > CHILD_CAP:
+                kids.pop(0)
+                parent["children_dropped"] = int(parent.get("children_dropped") or 0) + 1
+            self._child_open[str(route or "")] = row
+        self.push("child_step", state="start", route=row["route"], name=row["name"])
+
+    def live_child_progress(self, route: str, text: str) -> None:
+        """长命令的进度落到**它那一路的那一行**上,不再盖住父会话那一行。"""
+        with self._live_lock:
+            row = self._child_open.get(str(route or ""))
+            if row is None:
+                return
+            row["progress"] = str(text or "")
+        self.push("child_step", state="progress", route=str(route or ""),
+                  name=row.get("name", ""))
+
+    def live_child_end(self, route: str, ok: bool) -> None:
+        """收掉这一路当前开着的那一步。找不到就什么都不做(不拿别的行凑数)。"""
+        with self._live_lock:
+            row = self._child_open.pop(str(route or ""), None)
+            if row is None:
+                return
+            row["end"] = time.time()
+            row["ok"] = bool(ok)
+        self.push("child_step", state="end", route=str(route or ""),
+                  name=row["name"], ok=bool(ok))
 
     def live_reset(self) -> None:
         """清空实时表:清空会话/换会话时调,别让上一段任务的"在跑"挂在这一栏。"""
         with self._live_lock:
             self._live = []
             self._live_open = []
+            self._child_open = {}
 
     def live_abandon(self) -> int:
         """回合结束时收掉还开着的行(停止键 / 中断会让 `tool_done` 不被调用)。
 
         不这么做的话「此刻在跑」会永远挂着那一步:用户明明按了停止,监控栏还在
         转圈 —— 这比没有时间更糟,因为它说的是一件正在发生而其实没发生的事。
+        子代理挂在下面的那几步一起收:它们同样不会有 `tool_done`。
         """
         now = time.time()
         with self._live_lock:
@@ -250,5 +313,12 @@ class GuiUI:
                 row["end"] = now
                 row["ok"] = False
                 row["abandoned"] = True
+                for kid in row.get("children") or []:
+                    if kid.get("end") is None:
+                        kid["end"] = now
+                        kid["ok"] = False
+                        kid["abandoned"] = True
+                        n += 1
             self._live_open = []
+            self._child_open = {}
         return n

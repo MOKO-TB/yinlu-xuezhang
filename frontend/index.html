@@ -1448,6 +1448,12 @@ try {
   .act-row:hover{ background:var(--primary-light); border-color:var(--line-soft); }
   .act-row.plain{ cursor:default; }               /* 没有可点动作的行不装得能点 */
   .act-row.plain:hover{ background:transparent; border-color:transparent; }
+  /* 并行子代理内部的每一步挂在父行下面(v0.9.92):缩进 + 一条竖线表示"属于上面那一步",
+     字号小一档 —— 它是过程证据,不是与父调用并列的又一件事。 */
+  .act-kids{ margin:0 0 6px 16px; padding-left:9px; border-left:1px solid var(--line-soft); }
+  .act-kids .act-row{ padding:4px 6px; }
+  .act-kids .act-t{ font-size:11.5px; color:var(--text-2); }
+  .act-kids .act-badge{ font-size:9.5px; }
   .act-dot{ width:9px; height:9px; margin-top:4px; border-radius:99px;
             background:var(--text-3); }
   .act-row.ok .act-dot{ background:var(--success); }
@@ -3059,7 +3065,7 @@ window.__gcodeEvent = function (e) {
   // tool_progress(v0.9.91):长命令每 15 秒一行进度。桥那边改的是实时表里那一行的字段,
   // 面板不重画就看不见 —— 所以这里只借 activityRefresh 那一条现成的路,不新增渲染。
   if (actOpen && (e.type === "tool_start" || e.type === "tool_done"
-                  || e.type === "tool_progress"
+                  || e.type === "tool_progress" || e.type === "child_step"
                   || e.type === "busy" || e.type === "cleared"
                   || e.type === "resumed" || e.type === "workspace")) {
     activitySchedule(e.type === "tool_start" ? 900 : 300);
@@ -5687,6 +5693,8 @@ function buildNow(parent, data) {
     mid.appendChild(actEl("act-t", (now.verb || now.tool) + ": " + (now.title || "")));
     const bits = [];
     if (now.agent_type) bits.push("子代理 " + now.agent_type);
+    // 并行批次里这一步属于哪一路(v0.9.92):6 路同时在跑,只写工具名就分不清是谁
+    if (now.route) bits.push(now.route + (now.parent_tool ? " · 在 " + now.parent_tool + " 这一步里" : ""));
     bits.push(now.start ? "开始于 " + now.start : "开始时刻没记到(并行子代理或上一版程序跑的)");
     mid.appendChild(actEl("act-s", bits.join(" · ")));
     // 长命令的实时那一行(shell 每 15 秒报一次:v0.9.91)。没有进度就整条不出现,
@@ -5756,6 +5764,38 @@ function buildPlan(parent) {
 
 // ---------------- 「时间线」段:按轮次折叠,轮内保持先后顺序
 
+// 并行批次里每一路子代理内部的每一步,挂在父行(`task` 那一行)下面(v0.9.92)。
+// 这些数据出自实时表而不是会话消息 —— 子代理的调用留在它自己的会话里,主会话只有
+// 一条 task 报告。这些行**刻意不可点**:那一步的原文我们根本没拿到,给一个点不开、
+// 点开是空的行比不给更坏(与「产出」行文件没了就变灰字同一口径)。
+function actKidsEl(item) {
+  const kids = item.children || [];
+  if (!kids.length && !item.children_dropped) return null;
+  const box = actEl({ cls: "act-kids" });
+  for (const k of kids) {
+    const row = actEl({ cls: "act-row act-kid " + (k.status || "ok") });
+    row.classList.add("plain");
+    const mid = actEl({ cls: "act-m" });
+    mid.appendChild(actEl("act-t", (k.route ? k.route + " " : "") + (k.title || k.tool)));
+    const bits = [];
+    if (k.time) bits.push(k.time);
+    if (k.dur_text) bits.push("用时 " + k.dur_text);
+    if (k.progress) bits.push("↳ " + k.progress);
+    if (bits.length) mid.appendChild(actEl("act-s", bits.join(" · ")));
+    row.appendChild(actEl({ cls: "act-dot" }));
+    row.appendChild(mid);
+    const abnormal = k.status && k.status !== "ok" && k.badge;
+    row.appendChild(actEl("act-badge",
+      (k.verb || "") + (abnormal ? ((k.verb ? " · " : "") + k.badge) : "")));
+    box.appendChild(row);
+  }
+  if (item.children_dropped) {
+    box.appendChild(actEl("act-more",
+      `另有 ${item.children_dropped} 步没列出(每一路只留最近若干步)`));
+  }
+  return box;
+}
+
 function actTlRowEl(item) {
   const row = actEl({ cls: "act-row " + (item.status || "ok") });
   if (!item.action || !item.action.type) row.classList.add("plain");
@@ -5807,6 +5847,8 @@ function buildTimeline(parent, tl) {
     for (const item of t.items || []) {
       actRows[String(item.key || "")] = item;
       rows.appendChild(actTlRowEl(item));
+      const kids = actKidsEl(item);          // 子代理内部的每一步挂在父行下面
+      if (kids) rows.appendChild(kids);
     }
     if (t.more) rows.appendChild(actEl("act-more", `另有 ${t.more} 次没列出(这一轮共 ${t.calls} 次)`));
     turn.appendChild(rows);

@@ -113,7 +113,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "TURN_LIMIT", "TURNS_LIMIT",
                           # v0.9.81:子代理的联网动作进「网页查阅」栏(与 v0.9.76
                           # 的产出尾注同一套机制;漏收 = 那一栏对子代理永远空)
-                          "_web_row", "_WEB_NOTE_LINE", "_WEB_VERBS"),
+                          "_web_row", "_WEB_NOTE_LINE", "_WEB_VERBS",
+                          # v0.9.92:父行下面挂的子步骤(漏 _children = 时间线里那一层
+                          # 整块消失而面板不报错;漏 _dur_text = 时长出现第二份格式化)
+                          "_children", "_dur_text"),
     # v0.9.37:工具口径只有一份真相 —— 聊天里的工具卡片、右侧时间线、实时表三处
     # 都调它。漏收 = 三处措辞各自漂移(时间线里写「读取」,卡片里写「读文件」),
     # 而配对靠的是同一个 summarize 结果,漂了就再也对不上,行行都显示不了耗时。
@@ -133,6 +136,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # v0.9.90:长命令的实时那一行(漏收 = bash 那边 getattr 拿不到方法,
                         # 进度静默没有 —— 而这一轮的卖点恰恰是"中间那段不再是黑的")
                         "tool_progress",
+                        # v0.9.92:并行子代理内部每一步的记账通道(漏收 = 批量模式又变回
+                        # 黑箱:聊天区安静是设计,但监控栏连"哪一路在跑什么、哪一步挂了"
+                        # 都没了,而这种静默失灵一句报错都不会有)
+                        "live_child_begin", "live_child_end", "live_child_progress",
+                        "CHILD_CAP",
                         # v0.9.39:一轮总时限到点要说得出声(漏收 = 停下时界面一个字也不显示,
                         # 用户只看到"它不动了",以为卡死)
                         "turn_time_limited",
