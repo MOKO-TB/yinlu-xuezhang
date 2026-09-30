@@ -313,15 +313,13 @@ def remind_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "action": {"type": "string",
-                               # enum 从 tray.NOTIFY_ACTIONS 取,不在这里手抄第二份
-                               "enum": list(tray.NOTIFY_ACTIONS),
+                               "enum": list(tray.NOTIFY_ACTIONS),   # 一处真相,不手抄第二份
                                "description": "status=看状态(默认);on/off=开关;test=发一条测试;"
                                               "startup_on/startup_off=开机自启开/关;"
                                               "log=读看门狗运行日志(查「没提醒」或「重复弹」);"
-                                              "jobs=定时任务跑没跑(查周报/缺口周报这些周期任务);"
-                                              "tray_log=读托盘与通知的诊断日志(查「通知没弹」"
-                                              "「点 X 直接退了」「开机自启没生效」;"
-                                              "里面没有通知正文,但有本机绝对路径)"},
+                                              "jobs=定时任务跑没跑(查周报/缺口周报);"
+                                              "tray_log=读托盘与通知诊断日志(查「通知没弹」「点 X 直接退」"
+                                              "「开机自启没生效」;无正文,有本机路径)"},
                     "kind": {"type": "string",
                              "description": "可选:只开关这一类提醒(briefing 今日简报 / class 课前 / "
                                             "schedule 课程 / reminders 待办 / calendar 校历 / "

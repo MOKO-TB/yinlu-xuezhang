@@ -1129,6 +1129,41 @@ try {
                        border:1px solid var(--line-soft); border-radius:var(--r-full);
                        padding:1px 9px; margin:2px 6px 0 0; }
 
+  /* ---------------- 动手前问一句:提问卡(v0.9.96) ---------------- */
+  /* 版式照用户给的那张截图:抬头一句规矩、问题加粗、推荐那段是灰字、
+     选项是「标题 + 一行说明」的两行块 —— 说明那行才是用户能选的依据。
+     颜色全部走 CSS 变量(深浅主题同一套),不写死任何一个色值。 */
+  .ask-dlg{ width:560px; max-width:94vw; }
+  .ask-head{ display:flex; align-items:baseline; gap:9px; margin-bottom:8px; }
+  .ask-tag{ font-size:12px; font-weight:900; color:var(--primary-text); flex:none;
+            border:1px solid var(--primary); border-radius:var(--r-full);
+            padding:2px 10px; background:var(--primary-light); }
+  .ask-rule{ font-size:11.5px; color:var(--text-2); line-height:1.5; }
+  .ask-note{ font-size:12.5px; color:var(--text-2); margin:2px 0 9px; }
+  .ask-note:empty{ display:none; }
+  .ask-q{ font-size:14.5px; font-weight:800; color:var(--text-1); line-height:1.5; }
+  .ask-why{ font-size:12.5px; color:var(--text-2); line-height:1.7; margin:6px 0 10px; }
+  .ask-why:empty{ display:none; }
+  .ask-opt{ display:flex; gap:9px; align-items:flex-start; padding:9px 11px; cursor:pointer;
+            border:1px solid var(--line-soft); border-radius:var(--r-m);
+            margin-bottom:7px; background:var(--glass-lite); }
+  .ask-opt:hover{ border-color:var(--primary); }
+  .ask-opt.on{ border-color:var(--primary); background:var(--primary-light); }
+  .ask-dot{ width:13px; height:13px; margin-top:3px; border-radius:var(--r-full);
+            border:2px solid var(--text-3); flex:none; }
+  .ask-opt.on .ask-dot{ border-color:var(--primary); background:var(--primary); }
+  .ask-ol{ font-size:13px; font-weight:700; color:var(--text-1); line-height:1.5; }
+  .ask-on{ font-size:11.5px; color:var(--text-2); line-height:1.6; margin-top:2px; }
+  .ask-free{ width:100%; margin-top:4px; font-size:12.5px; font-family:inherit; line-height:1.6;
+             color:var(--text-1); background:var(--surface); border:1px solid var(--line-soft);
+             border-radius:var(--r-s); padding:6px 9px; }
+  .ask-page{ font-size:12px; color:var(--text-2); margin:0 auto;
+             font-variant-numeric:tabular-nums; white-space:nowrap; }
+  /* 答完卡片会关掉,这一行留在对话里可回看(内容出自后端,前端只负责摆) */
+  .ask-trace{ font-size:12.5px; color:var(--text-2); line-height:1.7; margin:10px 0;
+              border-left:3px solid var(--primary); padding:6px 10px;
+              background:var(--glass-lite); border-radius:0 var(--r-m) var(--r-m) 0; }
+
   /* ---------------- 模型管理:供应商 + 模型清单(v0.9.13) ---------------- */
   /* 旧版是"一行一个供应商、一个供应商只有一个模型";现在改成左栏供应商、
      右栏该供应商的模型清单,可以对着一栏慢慢加模型,不用来回弹窗。 */
@@ -1921,6 +1956,25 @@ try {
       <button class="b-no" id="btnNo">拒绝</button>
       <button class="b-always" id="btnAlways">本轮总是允许</button>
       <button class="b-yes" id="btnYes">允许</button>
+    </div>
+  </div>
+</div>
+<!-- 动手前问一句(v0.9.96):模型给的选择题,答完它才接着规划。
+     抬头那句是规矩不是装饰:必须说清"不答会怎样",否则用户以为被锁在这里。 -->
+<div class="overlay" id="askOverlay">
+  <div class="dialog ask-dlg">
+    <div class="ask-head">
+      <span class="ask-tag">需要输入</span>
+      <span class="ask-rule">选一选就行;不想逐题选就点「按推荐继续」,想自己说就写在下面。</span>
+    </div>
+    <div class="ask-note" id="askNote"></div>
+    <div class="ask-body" id="askBody"></div>
+    <div class="btns ask-btns">
+      <button class="b-no" id="askPrev" title="上一题">‹ 上一个</button>
+      <button class="b-no" id="askNext" title="下一题" style="display:none">下一个 ›</button>
+      <span class="ask-page" id="askPage">1 / 1</span>
+      <button class="b-always" id="askRecommend" title="不逐题选,按学长标在第一项的推荐走">按推荐继续</button>
+      <button class="b-yes" id="askSend">发送回复</button>
     </div>
   </div>
 </div>
@@ -3248,6 +3302,28 @@ window.__gcodeEvent = function (e) {
         $("confirmWhy").style.display = "none";
       }
       $("confirmOverlay").classList.add("show");
+      break;
+    }
+    case "ask_request": {
+      // v0.9.96「动手前问一句」:模型给的选择题。卡片开着时输入框那句提示跟着变,
+      // 但**不锁输入框** —— 他完全可以不理这张卡直接打字,锁住等于替用户做决定。
+      askData = { qs: Array.isArray(e.questions) ? e.questions : [],
+                  idx: 0, picks: {}, free: {} };
+      $("askNote").textContent = [e.label, e.note].filter(Boolean).join(" · ");
+      renderAsk();
+      if (askData.qs.length) {
+        if (!askSavedPh) askSavedPh = $("input").placeholder || "";
+        $("input").placeholder = "上面有问题等你点选(也可以直接在卡片里自己补一句)";
+        $("askOverlay").classList.add("show");
+      }
+      break;
+    }
+    case "ask_trace": {
+      // 答完(或压根没等到答)都收卡 + 在对话里留一行痕。句子由后端组,
+      // 这里只负责摆 —— 前端再拼一份同样的话就是两份真相,而两份都摆在用户眼前。
+      $("askOverlay").classList.remove("show");
+      if (askSavedPh) { $("input").placeholder = askSavedPh; askSavedPh = ""; }
+      if (e.text) askSay(String(e.text));
       break;
     }
     case "map":
@@ -4636,6 +4712,98 @@ $("btnStop").addEventListener("click", () => pywebview.api.stop_task());
 $("btnNo").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("no"); });
 $("btnYes").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("yes"); });
 $("btnAlways").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("always"); });
+
+/* ---------------- 动手前问一句:提问卡(v0.9.96) ----------------
+   状态只有一份:askData.qs 是后端给的原文,选项 label 原样回传(不翻译、不改写、
+   不替用户把他没选的项当成他选的)。渲染一律用 textContent —— 模型写的题目
+   可能带尖括号,当 HTML 解析等于让外部内容进界面。 */
+let askData = { qs: [], idx: 0, picks: {}, free: {} };
+let askSavedPh = "";
+
+function askSay(text) {
+  const box = document.createElement("div");
+  box.className = "ask-trace";
+  box.textContent = text;
+  $("chat").appendChild(box);
+  nearBottom = true; toBottom();
+}
+
+function renderAsk() {
+  const body = $("askBody");
+  body.innerHTML = "";
+  const q = askData.qs[askData.idx];
+  const n = askData.qs.length;
+  $("askPage").textContent = (askData.idx + 1) + " / " + n;
+  $("askPrev").style.display = askData.idx > 0 ? "" : "none";
+  $("askNext").style.display = askData.idx < n - 1 ? "" : "none";
+  if (!q) return;
+  const head = document.createElement("div");
+  head.className = "ask-q";
+  head.textContent = (q.header ? "【" + q.header + "】" : "") + q.q
+    + (q.multi ? "(可多选)" : "");
+  body.appendChild(head);
+  const why = document.createElement("div");
+  why.className = "ask-why";
+  why.textContent = q.why || "";
+  body.appendChild(why);
+  const picked = askData.picks[q.id] || [];
+  (q.options || []).forEach(o => {
+    const row = document.createElement("div");
+    row.className = "ask-opt" + (picked.includes(o.label) ? " on" : "");
+    const dot = document.createElement("span");
+    dot.className = "ask-dot";
+    row.appendChild(dot);
+    const col = document.createElement("div");
+    const lb = document.createElement("div");
+    lb.className = "ask-ol";
+    lb.textContent = o.label;
+    col.appendChild(lb);
+    if (o.note) {
+      const nt = document.createElement("div");
+      nt.className = "ask-on";
+      nt.textContent = o.note;
+      col.appendChild(nt);
+    }
+    row.appendChild(col);
+    row.addEventListener("click", () => {
+      const cur = askData.picks[q.id] || [];
+      if (q.multi) {
+        askData.picks[q.id] = cur.includes(o.label)
+          ? cur.filter(x => x !== o.label) : cur.concat([o.label]);
+      } else {
+        // 再点一次已选中的那一项 = 取消选择:不选是合法答案,不该被界面逼着选一个
+        askData.picks[q.id] = cur[0] === o.label ? [] : [o.label];
+      }
+      renderAsk();
+    });
+    body.appendChild(row);
+  });
+  const free = document.createElement("textarea");
+  free.className = "ask-free";
+  free.rows = 2;
+  free.placeholder = "都不合适?自己说一句(可留空)";
+  free.value = askData.free[q.id] || "";
+  free.addEventListener("input", () => { askData.free[q.id] = free.value; });
+  body.appendChild(free);
+}
+
+$("askPrev").addEventListener("click", () => {
+  if (askData.idx > 0) { askData.idx--; renderAsk(); }
+});
+$("askNext").addEventListener("click", () => {
+  if (askData.idx < askData.qs.length - 1) { askData.idx++; renderAsk(); }
+});
+$("askRecommend").addEventListener("click", () => {
+  $("askOverlay").classList.remove("show");
+  pywebview.api.ask_reply(JSON.stringify({ mode: "recommend" }));
+});
+$("askSend").addEventListener("click", () => {
+  const answers = askData.qs.map(q => ({
+    id: q.id, choice: askData.picks[q.id] || [],
+    free: String(askData.free[q.id] || "").trim() }));
+  $("askOverlay").classList.remove("show");
+  pywebview.api.ask_reply(JSON.stringify({ mode: "answer", answers: answers }));
+});
 // v0.9.12:p2 侧栏独立「＋ 新建任务」回归(项目卡片内那个保留,两处等价)
 $("btnNewTask").addEventListener("click", () => newTaskInProject());
 // v0.9.11:「＋ 新建任务」搬进当前项目卡片(newTaskInProject);不再有全局按钮

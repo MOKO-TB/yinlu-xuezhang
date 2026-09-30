@@ -47,6 +47,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # v0.9.22:按模型能力判定看图 + 写盘失败要说清 + 关窗答复
                             "_vision_on", "_persist_config", "set_vision",
                             "close_choice",
+                            # v0.9.96:提问卡三件套 + 叫醒等待的那条路
+                            # (漏收 = 前端点了没处回,或停止键叫不醒正在等的那条线程)
+                            "ask_user", "ask_reply", "_ask_trace_text",
+                            "abandon_pending", "_wait_event",
                             # v0.9.23:教务课表导入 + 首次运行向导
                             "schedule_import_open", "schedule_import_read",
                             "schedule_import_model", "schedule_import_confirm",
@@ -145,6 +149,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # v0.9.90:长命令的实时那一行(漏收 = bash 那边 getattr 拿不到方法,
                         # 进度静默没有 —— 而这一轮的卖点恰恰是"中间那段不再是黑的")
                         "tool_progress",
+                        # v0.9.96:提问卡(漏收 = 工具在、界面没这条方法,ask_user 只能
+                        # 回一句"这个界面没接提问通道" —— 功能像坏了,其实是包缺一层)
+                        "ask_user",
                         # v0.9.92:并行子代理内部每一步的记账通道(漏收 = 批量模式又变回
                         # 黑箱:聊天区安静是设计,但监控栏连"哪一路在跑什么、哪一步挂了"
                         # 都没了,而这种静默失灵一句报错都不会有)
@@ -285,7 +292,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.tools.fs": ("repo_outline", "write_file", "edit_file"),
     "minicode.tools.catalog_web": ("tools",),
     "minicode.tools.catalog_knowledge": ("skills_plan_search", "kb_suggest_tool",
-                                         "memory_tool"),
+                                         "memory_tool",
+                                         # v0.9.96:动手前问一句(漏收 = 模型根本看不到这只工具)
+                                         "ask_user"),
     "minicode.tools.catalog_media": ("tools",),
     "minicode.tools.catalog_campus": ("calendar_gpa", "remind_tools"),
     "minicode.tools.catalog_places": ("library_tools", "map_tools"),
@@ -446,6 +455,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "model_choice"),
     # v0.9.95:换模型重建客户端的那条构造(漏收 = 档位分模型整块没了)
     "minicode.llm": ("scoped",),
+    # v0.9.96:提问的"形状与说法"一份真相(漏收 = 工具、桥、界面三层各判各的,
+    # 最坏的那种是"没等到回答"被写成"用户同意了")
+    "minicode.asking": ("normalize", "format_answers", "ask_user",
+                        "MODE_UNANSWERED", "MAX_QUESTIONS"),
     # v0.9.95:馆藏连接的"整条语句在同一次持锁里跑完"(漏收 = 装好的包里并行派活
     # 随机一路"子代理执行出错",而这种只在并发下复现的毛病最难从用户话里倒推)
     "minicode.library": ("_read",),
@@ -549,6 +562,9 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     "imgLightbox", "openLightbox",
     # v0.9.94 p1/p2:主题切换时让系统标题栏跟着换色(后端那半另有针)
     "set_chrome",
+    # v0.9.96:提问卡(漏收 = 后端推 ask_request 而界面没人接,用户看到的是
+    # "学长卡住了" —— 这一层在包里,前端是整份文件拷进去的,漏的是改旧版没覆盖)
+    "askOverlay", "renderAsk", "ask_reply", "ask-trace",
 )
 
 

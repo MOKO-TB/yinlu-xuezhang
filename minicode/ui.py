@@ -175,11 +175,89 @@ class TerminalUI:
                 return "no"
             self.console.print("[dim]请输入 y、n 或 a[/dim]")
 
+    # ------------------------------------------------------------ 提问卡(终端形态)
+
+    def ask_user(self, questions: list[dict], note: str = "",
+                 label: str = "") -> dict:
+        """终端版的提问卡:一题一题问,回传与 GUI 同一个形状(`asking` 判的)。
+
+        三条与 GUI 同口径的规矩:①`EOFError`/`KeyboardInterrupt`(管道输入、Ctrl+C、
+        非交互桌面站)一律按**未回答**收口,绝不猜一个选项;②「按推荐」是用户自己按的
+        (`r`),不是没人按就自动替他选;③他打的其它文字原样进 `free`,不改写成选项。
+        """
+        from minicode import asking
+        head = "[cyan]学长想问一句[/cyan]"
+        if label:
+            head = f"[cyan]学长想问一句 · {label}[/cyan]"
+        self.console.print()
+        self.console.print(Panel(Text.from_markup(head + (f"\n{note}" if note else "")),
+                                 border_style="cyan"))
+        answers: list[dict] = []
+        for q in questions:
+            body = Text()
+            body.append(f"{q['q']}\n", style="bold")
+            if q.get("why"):
+                body.append(f"{q['why']}\n", style="dim")
+            for i, opt in enumerate(q["options"], start=1):
+                body.append(f"  ({i}) {opt['label']}", style="bold")
+                if opt.get("note"):
+                    body.append(f" —— {opt['note']}", style="dim")
+                body.append("\n")
+            body.append("  (r) 按推荐继续   (回车/其它文字) 我自己说一句\n", style="cyan")
+            self.console.print(Panel(body, border_style="cyan"))
+            multi = bool(q.get("multi"))
+            hint = (f"[cyan]第 {q['id'] + 1} 题[/cyan]"
+                    + ("(多选用逗号分隔,如 1,3): " if multi else ": "))
+            try:
+                raw = self.console.input(hint).strip()
+            except (EOFError, KeyboardInterrupt):
+                self.console.print("[dim]没有可用的交互输入,这一题按未回答处理。[/dim]")
+                return {"mode": asking.MODE_UNANSWERED,
+                        "reason": "终端没拿到交互输入",
+                        "answers": answers}
+            low = raw.lower()
+            if low in ("r", "recommend"):
+                return {"mode": asking.MODE_RECOMMEND, "answers": answers}
+            if not raw:
+                answers.append({"id": q["id"], "choice": [], "free": ""})
+                continue
+            if multi:
+                picks = [self._pick_option(q, p) for p in raw.split(",")]
+                picks = [p for p in picks if p]
+                if picks:
+                    answers.append({"id": q["id"], "choice": picks, "free": ""})
+                    continue
+            else:
+                one = self._pick_option(q, raw)
+                if one:
+                    answers.append({"id": q["id"], "choice": [one], "free": ""})
+                    continue
+            # 认不出编号 = 他在自己说一句话,原样带回去,不替他归到某个选项上
+            answers.append({"id": q["id"], "choice": [], "free": raw})
+        return {"mode": asking.MODE_ANSWER, "answers": answers}
+
+    @staticmethod
+    def _pick_option(q: dict, token: str) -> str:
+        """把 "2" / "2. 模板" / 完整 label 认成选项 label;认不出回空串。"""
+        token = str(token or "").strip()
+        if not token:
+            return ""
+        head = token.split(".", 1)[0].strip()
+        if head.isdigit():
+            opts = q["options"]
+            idx = int(head) - 1
+            if 0 <= idx < len(opts):
+                return opts[idx]["label"]
+            return ""
+        for opt in q["options"]:
+            if token == opt["label"]:
+                return opt["label"]
+        return ""
+
     def _permission_detail(self, tool: Tool, args: dict,
                            why: dict | None = None) -> Text:
         header = self._why_header(why)
         return header + self._tool_detail(tool, args)
-
     @staticmethod
     def _why_header(why: dict | None) -> Text:
         """确认框顶部的"为什么要做 / 会影响什么":先给判断依据,再给原始命令。"""

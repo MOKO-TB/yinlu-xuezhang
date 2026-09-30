@@ -21,6 +21,8 @@ class GuiUI:
         self.window = None                # webview.Window,启动后注入
         self.stop_requested = False       # 停止按钮:在下一个输出增量处抛中断
         self.confirm_handler = None       # Bridge.confirm_tool,由 create_app 注入
+        self.ask_handler = None           # Bridge.ask_user,同一条注入形状(v0.9.96)
+        self.abandon_pending = None       # 停止/关窗时叫醒正在等回答的那两条线程
         self.on_llm_failure = None        # 模型的看门狗,由桥注入(见 GuiUI.llm_error)
         self._send_lock = threading.Lock()
         # ---- 实时表(v0.9.37):每个工具调用的**真实**开始/结束时刻。
@@ -51,6 +53,27 @@ class GuiUI:
 
     def request_stop(self) -> None:
         self.stop_requested = True
+        # 光立旗子叫醒不了正在等人点按钮的那两条线程 —— 它们卡在 `event.wait()`,
+        # 而旗子只有 `_check_stop` 会看。用户按了停止却还挂着确认框/提问卡,
+        # 表现是"停了,但学长再也不问东西了"(锁在后面那条线程手里)。
+        wake = self.abandon_pending
+        if callable(wake):
+            try:
+                wake("你按了停止")
+            except Exception:
+                pass        # 叫醒失败绝不能把停止本身弄坏
+
+    def ask_user(self, questions: list[dict], note: str = "",
+                 label: str = "") -> dict:
+        """弹一张提问卡并等用户回答(v0.9.96);由 Bridge 注入实现。
+
+        没接上通道时回 `unanswered` 而不是抛异常:调用方(工具)拿到的是
+        "没问到"这个事实,它会把这句原样带回模型上下文 —— 比在子代理里
+        AttributeError 好,也比凭空造一个"用户同意了"诚实。
+        """
+        if self.ask_handler is None:
+            return {"mode": "unanswered", "reason": "这个界面没接提问通道"}
+        return self.ask_handler(questions, note, label)
 
     def _check_stop(self) -> None:
         if self.stop_requested:

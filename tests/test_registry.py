@@ -12,7 +12,7 @@ def test_registry_contents():
                      "browser_click", "browser_fill", "browser_screenshot",
                      "browser_close", "browser_status", "page_parse",
                      "mcp",
-                     "use_skill", "plan",
+                     "use_skill", "plan", "ask_user",
                      "search_knowledge", "search_history",
                      "ocr_image", "render_chart", "generate_image",
                      "campus_calendar", "calendar_edit", "gpa_calc",
@@ -70,6 +70,7 @@ def test_read_only_flags():
         "library_search": True,      # 离线书目库查询,只读
         "library_guide": True,       # 图书馆导览(楼层/空间/流程),只读
         "plan": False,
+        "ask_user": True,            # 只是问一句,什么都不改:给它弹确认框等于"要确认一次确认"
         "memory": False,
         "reminder": False,           # 待办提醒写本机清单文件,要确认
         "mood": False,               # 情绪记录写本机 mood.json:全 app 最私密的一份,

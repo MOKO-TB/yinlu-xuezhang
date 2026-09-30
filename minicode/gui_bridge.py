@@ -14,7 +14,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from minicode import APP_NAME, __version__
-from minicode import model_probe
+from minicode import asking, model_probe
 from minicode import workspace as ws
 from minicode.activate import take_pending_panel as _take_pending_panel
 from minicode.app_setup import build_runner_agent, mcp_log
@@ -224,6 +224,10 @@ class PublicApi:
 
     def confirm_reply(self, choice: str) -> dict:
         return self._b.confirm_reply(choice)
+
+    def ask_reply(self, payload) -> dict:
+        """提问卡的回答(「发送回复」/「按推荐继续」)。只转发,判定与记账都在桥里。"""
+        return self._b.ask_reply(payload)
 
     def undo(self) -> dict:
         return self._b.undo()
@@ -573,9 +577,19 @@ class Bridge:
         # 确认握手是一次一条的(前端只有一个弹窗):并行子代理同时要确认时
         # 靠这把锁排队,否则两个线程会互抢 event/choice,确认框对不上是谁在等。
         self._confirm_lock = threading.Lock()
+        # 提问卡(v0.9.96):与确认框**各一条锁各一个事件**,不共用 ——
+        # 共用的话"用户点了提问的选项"会被当成对上一个确认的答复,那是串了答案。
+        self._ask_lock = threading.Lock()
+        self._ask_event = threading.Event()
+        self._ask_answer: dict = {}
+        self._ask_questions: list = []      # 当前这张卡问了什么(留痕那一行要用)
+        self._closing = False             # 关窗中:等前端回答的线程据此收口
         # 标题栏(p2):前端报过一次主题之后就记着,切工作区时只改字不重染
         self._chrome_dark: bool | None = None
         ui.confirm_handler = self.confirm_tool
+        ui.ask_handler = self.ask_user
+        # 停止键与关窗都要能叫醒"正在等用户点"的那两条线程(见 _wait_event)。
+        ui.abandon_pending = self.abandon_pending
         self.open_session()                  # 第一个会话
 
     # ------------------------------------------------------------ 会话运行器
@@ -675,6 +689,10 @@ class Bridge:
 
     def close(self) -> None:
         """关停所有会话的 MCP 子进程(退出时调用)。"""
+        # 先立旗再叫醒:正在等确认框/提问卡回答的那两条线程要的是"不会再有人答了"
+        # 这个事实,晚一步设 `_closing` 它们就会在 `request_stop` 之后又循环回去。
+        self._closing = True
+        self.abandon_pending("窗口正在关闭")
         for r in list(self._runners.values()):
             try:
                 r.ui.request_stop()
@@ -2834,8 +2852,111 @@ class Bridge:
                          why=why.get("why", ""), digest=why.get("digest", ""),
                          risks=risks, alert=bool(note),
                          label=str(label or ""))
-            self._confirm_event.wait()
+            if not self._wait_event(self._confirm_event):
+                # 没人回答:按"拒绝"收口。这方向是安全的 —— 不执行任何东西,
+                # 也不会把"没点"说成"同意了"。
+                self.ui.push("info", text="这次没等到你的确认,已按**不执行**处理。")
             return self._confirm_choice
+
+    def _wait_event(self, event: threading.Event, slice_s: float = 1.0) -> bool:
+        """等一个"用户点了什么"的事件,每秒醒一次看还有没有人会来回答它。
+
+        为什么不能 `event.wait()` 一把梭:确认框与提问卡都是**后台线程阻塞等前端**,
+        而叫醒它的只有 `confirm_reply` / `reply_ask` 两处。用户按停止、直接关窗、
+        或者界面脚本半路死了,那次等待就永远没人回答 —— 线程带着那把锁一起挂住,
+        之后所有确认框都弹不出来(症状是"学长再也不问我了,也什么都不做")。
+        每秒探一次"还要不要等",等不到就按**未回答**收口:既不凭空造一个超时把慢的人
+        挡在门外,也绝不无期限地占着一条线程。
+        """
+        while not event.wait(slice_s):
+            if self._closing or self.ui.stop_requested:
+                return False
+        return True
+
+    # 提问握手(v0.9.96):Agent 线程阻塞在此,前端点完按钮后带答案返回
+    def ask_user(self, questions: list[dict], note: str = "",
+                 label: str = "") -> dict:
+        with self._ask_lock:                # 一次只问一张卡(与确认框同一条规矩)
+            self._ask_event.clear()
+            self._ask_answer = {"mode": asking.MODE_UNANSWERED,
+                                "reason": "没等到回答"}
+            self._ask_questions = questions
+            self.ui.push("ask_request", questions=questions,
+                         note=str(note or ""), label=str(label or ""))
+            if not self._wait_event(self._ask_event):
+                reason = ("窗口正在关闭" if self._closing else "你按了停止")
+                self._push_ask_trace("没等到回答,这一题按未回答处理")
+                return {"mode": asking.MODE_UNANSWERED, "reason": reason}
+            return self._ask_answer
+
+    def _push_ask_trace(self, text: str) -> None:
+        """答完在聊天区留一行痕(v0.9.96 拍的 D2:卡片关掉不是消失)。
+
+        这句话由**后端**组:前端自己拼一份同样的话,以后就是两处真相 ——
+        而这两处都会显示给用户看,分家时没人看得出来。
+        """
+        try:
+            self.ui.push("ask_trace", text=str(text or ""))
+        except Exception:
+            pass        # 留痕是展示层,绝不能把回答通道本身弄坏
+
+    def ask_reply(self, payload) -> dict:
+        """前端「发送回复」/「按推荐继续」的落点。payload 是 JSON 字符串或对象。"""
+        try:
+            data = json.loads(payload) if isinstance(payload, str) else (payload or {})
+        except (ValueError, TypeError):
+            return {"ok": False, "msg": "回答的格式不对,没记下来"}
+        if not isinstance(data, dict):
+            return {"ok": False, "msg": "回答的格式不对,没记下来"}
+        mode = str(data.get("mode") or "")
+        if mode not in (asking.MODE_ANSWER, asking.MODE_RECOMMEND):
+            return {"ok": False, "msg": f"未知的回答方式「{mode}」"}
+        answers = data.get("answers")
+        if mode == asking.MODE_ANSWER and not isinstance(answers, list):
+            return {"ok": False, "msg": "answer 方式必须带 answers 数组"}
+        self._ask_answer = {"mode": mode, "answers": answers or []}
+        self._ask_event.set()
+        # 卡片关掉之后聊天区要留下一行"你当时怎么答的"(D2 拍板:可回看)。
+        # 这句话由后端组,前端只负责摆 —— 两处各拼一份就是两份真相,而两份都摆在用户眼前。
+        self._push_ask_trace(self._ask_trace_text(mode, answers or []))
+        return {"ok": True}
+
+    def _ask_trace_text(self, mode: str, answers: list) -> str:
+        qs = self._ask_questions or []
+        if mode == asking.MODE_RECOMMEND:
+            return ("学长问的 " + str(len(qs)) + " 题:你点了「按推荐继续」"
+                    "→ 逐题按他列在第一项的推荐做(没逐题确认)。")
+        by_id: dict[int, dict] = {}
+        for a in answers:
+            if isinstance(a, dict):
+                try:
+                    by_id[int(a.get("id"))] = a
+                except (TypeError, ValueError):
+                    continue
+        parts = []
+        for q in qs:
+            item = by_id.get(int(q.get("id", -1)), {})
+            choice = item.get("choice")
+            got = [str(c) for c in (choice if isinstance(choice, list)
+                                    else [choice] if choice else [])]
+            free = str(item.get("free") or "").strip()
+            head = "「" + str(q.get("q") or "")[:24] + "」→ " + ("、".join(got) or "(没选)")
+            parts.append(head + ("(自己补了一句:" + free[:40] + ")" if free else ""))
+        return ("学长问的 " + str(len(qs)) + " 题,你答了:" + ";".join(parts)
+                if parts else "学长的提问已回答。")
+
+    def abandon_pending(self, reason: str = "") -> None:
+        """停止键 / 关窗时叫醒正在等待的线程(确认框与提问卡各一次)。
+
+        由 `GuiUI.request_stop` 与 `Bridge.close` 调:那两处是"用户已经不打算再答了"
+        的确凿时刻。不叫醒的话挂住的不是这一次,而是**下一切** —— 锁在后面那条
+        线程手里,后来的确认框根本弹不出来。
+        """
+        self._confirm_choice = "no"
+        self._confirm_event.set()
+        self._ask_answer = {"mode": asking.MODE_UNANSWERED,
+                            "reason": str(reason or "没等到回答")}
+        self._ask_event.set()
 
     def _permission_detail_text(self, tool: Tool, args: dict) -> str:
         if tool.name == "bash":

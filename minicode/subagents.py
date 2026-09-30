@@ -229,9 +229,17 @@ class _TaggedUI:
 
 
 def sub_tool_registry(registry: list[Tool], spec: SubAgentSpec) -> list[Tool]:
-    """按类型裁剪并重命名子代理工具集(排除 task 防递归;只读类型只留只读工具)。"""
+    """按类型裁剪并重命名子代理工具集(排除 task 防递归;只读类型只留只读工具)。
+
+    `ask_user` 也一并摘掉(v0.9.96,与 `task` 同一条理由的形状):**子代理没有可以
+    问的人**。它跑在 `_QuietUI` 里,聊天区一个字都不写;真给它一张卡,几路并行就会
+    同时弹好几张,而用户看不到"这是哪一路在问什么"(确认框能贴标签是因为确认框
+    本来就写着要做什么动作,提问卡要的是用户思考)。方向:要问由主代理问,
+    子代理把"这里有个分叉没定"写进报告带回来。
+    """
     tools = [t for t in registry
-             if t.name != "task" and (not spec.read_only or t.read_only)]
+             if t.name not in ("task", "ask_user")
+             and (not spec.read_only or t.read_only)]
     return [dc_replace(t, name=f"{spec.type}·{t.name}") for t in tools]
 
 

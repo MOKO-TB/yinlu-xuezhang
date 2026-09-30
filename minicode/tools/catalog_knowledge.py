@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from minicode import growth, kb, memory, planning, session, skills
+from minicode import asking, growth, kb, memory, planning, session, skills
 from minicode.tools.base import Tool
 
 
@@ -68,6 +68,59 @@ def skills_plan_search() -> list[Tool]:
                 "required": ["action"],
             },
             handler=planning.plan,
+        ),
+        Tool(
+            name="ask_user",
+            description=(
+                "**动手前向用户问一句**:在聊天区弹一张卡,把分叉点摆成几个可点的选项,"
+                "用户点完你再接着做。适合:几条路都走得通但代价差很多(耗时/风格/可逆性)、"
+                "用户没说过偏好而选错要返工、任务描述缺一个只有本人知道的事实"
+                "(要交给谁、哪天之前、走哪个系统)。\n"
+                "**什么时候不该问**(这条比会问更重要,问了就是打扰):"
+                "①这个选择可逆、代价说得清、他上一句已经暗示过答案 —— 直接做并在回复里"
+                "说一句你按什么做的;②你自己能查到的(课表/校历/馆藏/知识库/工作区文件)"
+                "—— 先查再答,不要把查一下的活儿推回给用户;③只是想确认「我理解对了吗」 "
+                "—— 在回复里正常说话就行,不必弹卡。一次最多 3 题,能一题说完就别拆两题。\n"
+                "questions 每项:{q(问题本体,一句人话), header(≤12 字短标), "
+                "why(为什么推荐某项、代价是什么), options(2-4 项,每项 {label, note}),"
+                " multi(可多选才给 true)}。\n"
+                "**推荐不是字段**:把你推荐的那一项排在 options 第一项,并在 label 末尾"
+                "写「(推荐)」,why 里说清为什么 —— 界面不替你把推荐说圆,徽章也不许凭空画。"
+                "note 那一行是用户能不能选的依据,别只写标题。\n"
+                "卡片上永远有两条出口:「按推荐继续」(他没逐题选,等于方向由你定、他不反对,"
+                "不等于逐题确认过)和「我来补充」(他会自己打字)。返回的是**用户原话**,"
+                "不要转述成「用户选了 A」之外的东西;若返回说「没等到回答」,"
+                "**那不算同意** —— 要么照你推荐的先做并在回复里写明没等到确认,要么改天再问。"
+                "子代理与网页版没有这张卡(会照实回你「没问出去」)。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "description": "1-3 题;一题时也可以直接传一个对象",
+                        "items": {"type": "object", "properties": {
+                            "q": {"type": "string", "description": "问题本体,一句人话"},
+                            "header": {"type": "string",
+                                       "description": "卡片角标,≤12 字,如「制作模式」"},
+                            "why": {"type": "string",
+                                    "description": "推荐哪一项、为什么、代价是什么(写人话,"
+                                                   "别写成选项说明的重复)"},
+                            "options": {"type": "array",
+                                        "description": "2-4 项;推荐的排第一并在 label 标「(推荐)」",
+                                        "items": {"type": "object", "properties": {
+                                            "label": {"type": "string"},
+                                            "note": {"type": "string",
+                                                     "description": "这一项意味着什么(一行)"}}}},
+                            "multi": {"type": "boolean",
+                                      "description": "允许多选才给 true(默认单选)"}}}},
+                    "note": {"type": "string",
+                             "description": "卡片抬头那句补充(可选),如「这三件定了我才好排步骤」"},
+                },
+                "required": ["questions"],
+            },
+            handler=asking.ask_user,
+            read_only=True,
         ),
         Tool(
             name="search_knowledge",
