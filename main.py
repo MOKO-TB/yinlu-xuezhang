@@ -210,6 +210,21 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
             for m in PERMISSION_MODES:
                 mark = "●" if m == mode else "○"
                 lines.append(f"  {mark} {m:<13} {MODE_LABELS[m]}")
+            # 项目白名单的现状直接从 gate 读(v0.9.87):PermissionGate 构造时就装载并核对过
+            # 指纹,这里再 load 一次等于第二份真相,还会绕过 tool_names 那套校验口径。
+            proj = agent.gate.project
+            if proj is not None:
+                if proj.effective:
+                    lines.append(f"  项目白名单:{len(proj.rules)} 条**已生效**"
+                                 "(改 permissions.json 一个字就整份失效)")
+                elif proj.rules:
+                    lines.append(f"  项目白名单:{len(proj.rules)} 条**未生效**"
+                                 f"({proj.reason})—— 要批准请在对话里说「批准这个项目的权限」;"
+                                 "命令行不留批准入口,免得绕过确认框")
+                else:
+                    lines.append("  项目白名单:无(想少问几次,可在项目根放 permissions.json)")
+                for p in proj.problems[:3]:
+                    lines.append(f"    装载时拒收:{p}")
             lines.append("切换: /permission <档位>(GUI 在顶栏下拉)")
             ui.info("\n".join(lines))
     elif name == "/think":
