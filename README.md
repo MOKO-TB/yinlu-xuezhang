@@ -482,6 +482,7 @@ python scripts/e2e_frozen_crawl.py --exe dist/引路学长-crawl4ai/引路学长
 
 ```bash
 python -m pytest                        # 单元测试,不依赖网络
+python scripts/e2e_bg_jobs.py               # 后台命令端到端(真进程:杀透整棵树 / 学长退出收口 / 状态只搭请求不进留档)
 python scripts/e2e_fake_server.py       # CLI 端到端冒烟(假服务器,不花 token)
 python scripts/e2e_frozen.py            # 打包后验证:CLI 全链路 + GUI 启动
 python scripts/e2e_frozen_crawl.py      # 打包后验证:联网爬取 → 自动入库 → 下次提问命中
