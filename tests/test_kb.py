@@ -144,3 +144,17 @@ def test_hit_logs_entry_ids_for_appraisal(ctx, tmp_path, monkeypatch):
     seen.clear()
     kbmod.search_knowledge(ctx, "这个词库里绝对没有XYZ")
     assert seen == []                      # 未命中走缺口账,不记命中账
+
+
+def test_no_hit_carries_fallback_hint_and_stays_recognizable():
+    """未命中即给联网入库路径(v0.9.92,第三梯队 ⑦):路径说死在工具回话里,
+    不靠模型自觉;is_no_hit 的子串判据必须仍然成立(B0 计数靠它)。"""
+    out = kbmod.format_results([])
+    assert kbmod.NO_HIT_TEXT in out and kbmod.FALLBACK_HINT in out
+    assert kbmod.is_no_hit(out) is True
+    assert "web_search" in out and "kb_suggest" in out
+    assert "征得用户同意" in out                # 入库闸的口径随行
+    hit = kbmod.format_results([kbmod.KbEntry(
+        id="x", source_file="t.json", title="t", content="c",
+        url="", source="")])
+    assert kbmod.FALLBACK_HINT not in hit       # 命中不给联网指引

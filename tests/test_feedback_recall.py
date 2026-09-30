@@ -216,8 +216,10 @@ def test_the_mark_appears_only_from_the_third_empty_search(tmp_path, config, onl
     results = [m["content"] for m in agent.session.messages if m["role"] == "tool"]
     assert len(results) == 3
     assert "×3 未命中" in results[2], results[2]
-    assert "未命中" not in results[0] and "未命中" not in results[1], \
-        "前两次空手是正常检索,不该被催"
+    # v0.9.92 起第 1 次未命中就带 kb 的联网/入库路径指引(FALLBACK_HINT,不随
+    # 回灌开关),所以这里断的是 B0 催促句本身,不再断"未命中"三个字
+    assert "别再换着说法" not in results[0] and "别再换着说法" not in results[1], \
+        "前两次空手是正常检索,B0 不该被催"
 
 
 def test_switch_off_leaves_results_byte_identical(tmp_path, config, only_tmp_kb):
@@ -227,7 +229,9 @@ def test_switch_off_leaves_results_byte_identical(tmp_path, config, only_tmp_kb)
         _search_turn("社团招新", "c3"), AssistantTurn(text="收工")])
     agent.run_turn("帮我查社团招新")
     results = [m["content"] for m in agent.session.messages if m["role"] == "tool"]
-    assert all("未命中" not in r for r in results), results
+    # v0.9.92:kb 的未命中路径指引(FALLBACK_HINT)是 kb 模块固有出口,不随
+    # 回灌开关变化;这条闸钉的是 B0 的催促句必须消失(开关只管回灌那一层)
+    assert all("别再换着说法" not in r for r in results), results
 
 
 # ------------------------------------------------------------------ B0 监控栏

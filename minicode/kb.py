@@ -27,6 +27,16 @@ KB_RESULT_LIMIT = 5
 # (表现为"连着搜空也不再提示",而且没有任何东西会红)。
 NO_HIT_TEXT = "知识库中没有匹配的内容。"
 
+# 未命中后的下一步(v0.9.92,第三梯队 ⑦):"未命中就联网"原来只写在
+# kb-fallback 技能里靠模型自觉 —— 把路径说死在**工具回话本身**,每次未命中
+# 都在场。三条边界:①只是指引,绝不自动联网(查证要花使用者的额度,且
+# "要不要查"由模型按问题性质判断);②入库必须经 kb_suggest 的确认闸,
+# 这里不提供任何绕过它的路;③与 B0 的分工:B0(第 3 次起)管"别再原样重搜",
+# 这一行管"要去哪找",第一次未命中就在场。
+FALLBACK_HINT = ("(本地知识库未命中:若此问需要事实依据,下一步用 web_search 联网查证"
+                 "并在回答里附来源网址;查到对同学有长期价值的内容,先征得用户同意"
+                 "再用 kb_suggest 入库;纯常识问题直接回答即可,不必联网。)")
+
 
 def is_no_hit(result) -> bool:
     """这段工具结果是不是"知识库里没查到"。非字符串一律 False(宁可少标不乱标)。"""
@@ -353,7 +363,8 @@ def _mode_line(meta: dict | None) -> str:
 def format_results(results: list, snippet_chars: int = SNIPPET_LIMIT,
                    meta: dict | None = None) -> str:
     if not results:
-        return (_mode_line(meta) + NO_HIT_TEXT) if meta else NO_HIT_TEXT
+        return (_mode_line(meta) + NO_HIT_TEXT + FALLBACK_HINT) if meta \
+            else NO_HIT_TEXT + FALLBACK_HINT
     blocks = []
     for i, item in enumerate(results, start=1):
         e = item.entry if isinstance(item, SearchHit) else item
