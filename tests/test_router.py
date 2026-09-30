@@ -227,3 +227,26 @@ def test_domain_spec_prompt_loaded_from_real_skill_library(tmp_path):
     spec = type_spec("data", tmp_path)
     assert "角色:数据领域子代理" in spec.extra_prompt
     assert spec.type == "data"
+
+
+# ---------------------------------------------------------------- career 就业档(v0.9.90)
+
+def test_career_keywords_route_to_career():
+    """秋招/考公这类求职过程问题归 career 档。"""
+    for text in ("帮我排一下秋招的时间线",
+                 "国考报名什么时候截止",
+                 "三方协议里的违约金怎么看"):
+        top = router.classify(text)[0]
+        assert top.spec.key == "career", (text, top.spec.key, top.score)
+
+
+def test_resume_writing_stays_in_writing():
+    """简历文书归 writing(v0.9.68 钉过的老边界);career 管投递过程不管文书。"""
+    top = router.classify("帮我把简历改写成投递版")[0]
+    assert top.spec.key == "writing"
+
+
+def test_career_is_writable_and_claims_its_skills():
+    spec = router.DOMAINS["career"]
+    assert spec.read_only is False
+    assert "career-timeline" in spec.skills and "resume" in spec.skills

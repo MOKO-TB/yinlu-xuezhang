@@ -26,6 +26,9 @@ PIN = {
     "web_search", "write_file",
     # v0.9.58:ics-calendar 技能开头指向内置 export_ics(定制场景才走手写模板)
     "export_ics",
+    # v0.9.90:career-timeline 让同学查校历/就业通知、记到点提醒(工具都真实存在,
+    # 确认过加进清单)
+    "campus_calendar", "campus_notices", "reminder",
 }
 
 _SNAKE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")

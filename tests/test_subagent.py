@@ -984,3 +984,25 @@ def test_task_audit_dispatch_reports_back(config, tmp_path):
     result = _tool_result(session)
     assert "对账子代理完成" in result and "P1" in result
     assert "audit·grep" in [e["name"] for e in window.of_type("tool_start")]
+
+
+def test_task_career_dispatch_reports_back(config, tmp_path):
+    """career 就业档(v0.9.90)真能派出去:调 career·search_knowledge,
+    报告抬头写「就业求职子代理完成」—— 与 campus 那条同一套验证。"""
+    _accept_all(config)
+    llm = QueueLLM([
+        _task_turn("career", "查一下今年秋招的安排"),
+        AssistantTurn(tool_calls=[_call("career·search_knowledge",
+                                        {"query": "秋招 校招 时间"}, "j1")]),
+        _final("知识库未命中,建议查就业指导中心通知,附来源"),
+        _final("主代理收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("就业求职")
+    assert wait_until(lambda: not bridge._busy, timeout=15)
+
+    result = _tool_result(session)
+    assert "就业求职子代理完成" in result
+    assert "知识库未命中" in result
+    assert "career·search_knowledge" in [e["name"] for e in window.of_type("tool_start")]
+    assert "派「" not in result          # 显式指定档位时不多塞路由理由
