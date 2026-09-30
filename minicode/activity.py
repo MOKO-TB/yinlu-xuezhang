@@ -302,42 +302,78 @@ def _extract_files(calls, results, workspace) -> list[dict]:
     return items
 
 
+_WEB_VERBS = {"web_crawl": "抓取", "browser_open": "打开页面",
+              "browser_eval": "页面取数", "page_parse": "解析表格"}
+_WEB_NOTE_LINE = re.compile(r"^\[web\|([^\]]+)\]\s*(\S+)\s+(\S+)\s+(.+)$",
+                            re.MULTILINE)
+
+
+def _web_row(name: str, value: str, status: str, domain: str = "") -> dict | None:
+    """一行「网页查阅」:带网址的开网址,只有关键词的回填输入框。
+
+    主会话直调与子代理尾注**共用这一份算法** —— 动词表、动作类型、key 口径只有
+    一处,不然同一件事在两栏里会各说一套。`domain` 非空表示这一行是某一档子代理
+    读的:写进副标题(用户知道是谁读的)也写进 key(同一个网址主会话读过、子代理
+    也读过时是两行,不合并 —— 合并就把"谁读的"这件事抹掉了)。
+    """
+    if name in URL_TOOLS:
+        u, _host, label = _url_and_host(value)
+        if not u:
+            return None
+        title, sub = _clip(label), _WEB_VERBS.get(name, "联网")
+        action = {"type": "open", "url": u}
+    elif name in QUERY_TOOLS:
+        title = _clip(value)
+        if not title:
+            return None
+        sub = QUERY_TOOLS[name]
+        action = {"type": "fill", "text": f"{sub}:补充查一下 {title}"}
+    else:
+        return None
+    if domain:
+        sub += f" · {domain} 子代理"
+    return {"key": f"w:{domain or 'main'}:{name}:{title}", "title": title,
+            "sub": sub, "status": status, "badge": _badge(status), "action": action}
+
+
 def _extract_web(calls, results) -> list[dict]:
-    """网页查阅:模型**发起**的联网动作(带网址的开网址,只有关键词的回填输入框)。"""
+    """网页查阅:模型**发起**的联网动作(带网址的开网址,只有关键词的回填输入框)。
+
+    两个来源:**主会话直调**,与子代理带回来的 `[web|档位]` 尾注(`subagents._web_note`
+    写的)—— 不解析尾注的话,并行几路查网页这一栏一片空,与「产出」栏 v0.9.76
+    补的是同一个盲区。失败的 task 不算(那一路根本没跑成)。
+    """
     items, seen = [], {}
+
+    def add(row):
+        if row is None:
+            return
+        hit = seen.get(row["key"])
+        if hit:                   # 同一个网址/同一个词查多次:一行,状态跟最新那次
+            hit["n"] += 1
+            hit["item"]["status"] = row["status"]
+            hit["item"]["badge"] = row["badge"]
+            return
+        seen[row["key"]] = {"n": 1, "item": row}
+        items.append(row)
+
     for cid, call in calls.items():
         name = call["name"]
         args = call["args"]
-        url = str(args.get("url") or "").strip()
-        if name in URL_TOOLS and url:
-            u, host, label = _url_and_host(url)
-            verb = {"web_crawl": "抓取", "browser_open": "打开页面",
-                    "browser_eval": "页面取数", "page_parse": "解析表格"}[name]
-            title, action = _clip(label), {"type": "open", "url": u}
-            sub = verb
-        elif name in QUERY_TOOLS:
-            q = _clip(str(args.get("query") or "").strip())
-            if not q:
-                continue
-            verb = QUERY_TOOLS[name]
-            title, sub = q, verb
-            action = {"type": "fill", "text": f"{verb}:补充查一下 {q}"}
-        else:
-            continue
-        key = f"w:{name}:{title}"
         result = results.get(cid)
         status = ("running" if result is None
                   else "failed" if _failed(result) else "ok")
-        row = seen.get(key)
-        if row:                       # 同一个网址/同一个词查多次:一行,状态跟最新那次
-            row["n"] += 1
-            row["item"]["status"] = status
-            row["item"]["badge"] = _badge(status)
-            continue
-        item = {"key": key, "title": title, "sub": sub,
-                "status": status, "badge": _badge(status), "action": action}
-        seen[key] = {"n": 1, "item": item}
-        items.append(item)
+        if name in URL_TOOLS:
+            add(_web_row(name, str(args.get("url") or "").strip(), status))
+        elif name in QUERY_TOOLS:
+            add(_web_row(name, str(args.get("query") or "").strip(), status))
+        elif name == "task" and isinstance(result, str) and not _failed(result):
+            for m in _WEB_NOTE_LINE.finditer(result):
+                domain = _clip(m.group(1).strip(), 20) or "子代理"
+                got = m.group(3)
+                add(_web_row(m.group(2), m.group(4).strip(),
+                             got if got in ("ok", "failed", "running") else "ok",
+                             domain))
     for row in items:
         n = seen[row["key"]]["n"]
         if n > 1:

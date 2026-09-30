@@ -106,7 +106,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.activity": ("session_activity", "GROUPS", "FAILED_PREFIXES",
                           "FILE_TOOLS", "URL_TOOLS", "QUERY_TOOLS",
                           "timeline", "now_line", "_turn_split", "_pair_times",
-                          "TURN_LIMIT", "TURNS_LIMIT"),
+                          "TURN_LIMIT", "TURNS_LIMIT",
+                          # v0.9.81:子代理的联网动作进「网页查阅」栏(与 v0.9.76
+                          # 的产出尾注同一套机制;漏收 = 那一栏对子代理永远空)
+                          "_web_row", "_WEB_NOTE_LINE", "_WEB_VERBS"),
     # v0.9.37:工具口径只有一份真相 —— 聊天里的工具卡片、右侧时间线、实时表三处
     # 都调它。漏收 = 三处措辞各自漂移(时间线里写「读取」,卡片里写「读文件」),
     # 而配对靠的是同一个 summarize 结果,漂了就再也对不上,行行都显示不了耗时。
@@ -387,7 +390,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "MAX_PARALLEL_TASKS", "_TaggedUI",
                            # v0.9.76:产出尾注(漏收 = 子代理写过的文件在监控栏
                            # 「产出」永远隐形 —— 并行写是卖点,产出却看不见)
-                           "_files_note"),
+                           "_files_note",
+                           # v0.9.81:联网尾注(同一个盲区还剩「网页查阅」那一栏 ——
+                           # 漏收 = 子代理爬的页面/查的库在面板上永远不出现)
+                           "_web_note"),
     # v0.9.39:确认框要能讲清新工具的代价(漏收 = 弹了框但没说图会被发出去/文件落在哪)
     "minicode.explain": ("risk_notes", "permission_why", "action_reason"),
     # ---- v0.9.16/17/20:主动推荐 + 新版本检查 + 今日简报(合并成一个键,
@@ -458,7 +464,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.33:对话流里的计划卡片靠 in_progress/running 画出"正在做哪一步"
     # (漏收 = 卡片只剩一堆待办和勾,转圈的那一行永远不出现)
     "minicode.planning": ("plan_state", "dispatch_text", "notify_plan",
-                          "in_progress", "running"),
+                          "in_progress", "running",
+                          # v0.9.81:计划与子代理对上号(漏收 = task 的 step 参数
+                          # 在装好的包里静默失效,计划面板看不出哪一步正由谁在做)
+                          "dispatch_start", "dispatch_end", "_as_step_no"),
 }
 
 
@@ -476,6 +485,14 @@ def _code_names(code) -> str:
 
 
 def main() -> int:
+    # 逐针打印 ✓/✗:Windows 默认控制台是 GBK,print 当场 UnicodeEncodeError ——
+    # 出包后这道验证闸照文档跑就是 traceback(check_docs.py / check_frontend_js.py
+    # 同一个坑,都已修)。
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass          # 被重定向/没有 reconfigure 的输出流:原样让它去
     exe = Path(sys.argv[1] if len(sys.argv) > 1 else
                r"dist\引路学长\引路学长-CLI.exe")
     if not exe.exists():

@@ -179,7 +179,8 @@ def scheduling_view(plan: dict, limit: int = 3) -> str:
                      + ", ".join(f"{s['n']}. {s['title']}" for s in ready[:limit])
                      + ("" if len(ready) <= limit else f" …等 {len(ready)} 步"))
         if len(ready) > 1:
-            lines.append("  这几步互不依赖,可以并行派子代理。")
+            lines.append("  这几步互不依赖,可以并行派子代理(task 带上 step=编号,"
+                         "这一步会标成进行中并在备注里记下派了哪几路)。")
     else:
         lines.append("* 可执行(依赖已满足): 无")
     if blocked:
@@ -247,7 +248,8 @@ def dispatch_text(state: dict) -> str:
     else:
         body = "现在没有依赖已满足的步骤,请先说明卡在哪里,别硬往下做。"
     tail = ("每完成一步就用 plan(action=update, step=编号, status=done) 标记;"
-            "做不成则标 failed 并写清原因。")
+            "做不成则标 failed 并写清原因。派子代理做某一步时给 task 传 step=编号,"
+            "计划里会记下这一步正由哪几路在做(报告回来只写事实,成没成仍由你标)。")
     blocked = state.get("blocked") or []
     extra = (f"另有第 {'、'.join(str(n) for n in blocked)} 步被上游失败卡住,"
              "先别动,告诉我该重做上游还是改计划。" if blocked else "")
@@ -266,6 +268,65 @@ def notify_plan(ctx: ToolContext) -> None:
         push("plan_changed", dispatch_text=dispatch_text(state), **state)
     except Exception:                          # 面板刷新绝不能把工具执行带崩
         pass
+
+
+# ------------------------------------------------------- 与子代理派发对上号(task step=)
+
+def dispatch_start(ctx: ToolContext, step, kinds: list[str]) -> str | None:
+    """把计划第 `step` 步标成进行中、备注记下派了哪几档;返回错误文案或 None。
+
+    为什么不直接把这一步标 done:子代理回来的是**一段转述**,不是这一步做成的证据。
+    这一步只负责"计划里看得出谁在做这件事",成败仍由主代理按报告如实标。
+    已经 failed/done 的步骤拒绝派活:上游失败还往下派,就是在替用户跳过失败。
+    """
+    plan = _load_plan(ctx)
+    if plan is None:
+        return "错误: 当前没有计划,step 参数用不上(先 plan action=write 建计划)。"
+    n = _as_step_no(step)
+    if isinstance(n, str):
+        return n
+    target = next((s for s in plan["steps"] if s["n"] == n), None)
+    if target is None:
+        return (f"错误: 计划中没有第 {n} 步。"
+                f"可用步骤: {', '.join(str(s['n']) for s in plan['steps'])}")
+    if target["status"] in ("failed", "done"):
+        return (f"错误: 第 {n} 步已标 {target['status']},不在它身上派子代理。"
+                "要重做请先 plan action=update 改回 pending,或换一步。")
+    target["status"] = "in_progress"
+    target["done"] = False
+    target["note"] = f"子代理在跑:{'、'.join(kinds)}({len(kinds)} 路)"
+    _write_plan(ctx, plan)
+    return None
+
+
+def dispatch_end(ctx: ToolContext, step, facts: list[str]) -> None:
+    """把这一批子代理的**真实结果摘要**写进该步备注(只说事实,不改状态)。
+
+    `facts` 由 task 侧按跑出来的东西拼(每路档名+报告字数、超时几路),
+    这里不猜、不补:没有的事实就不写,备注宁可短也不要出现没发生过的话。
+    写盘失败只吞掉(面板少刷一次),绝不让它把子代理的结果带崩。
+    """
+    try:
+        plan = _load_plan(ctx)
+        if plan is None or not facts:
+            return
+        n = _as_step_no(step)
+        if isinstance(n, str):
+            return
+        target = next((s for s in plan["steps"] if s["n"] == n), None)
+        if target is None:
+            return
+        target["note"] = "子代理已回:" + ";".join(facts)
+        _write_plan(ctx, plan)
+    except Exception:
+        pass
+
+
+def _as_step_no(step) -> int | str:
+    """步骤编号归一:返回 int,或返回一句错误文案(bool 与小数都不认)。"""
+    if isinstance(step, bool) or not str(step).strip().isdigit():
+        return f"错误: step 只接受计划里的步骤编号(整数),收到 {step!r}。"
+    return int(str(step).strip())
 
 
 def _load_plan(ctx: ToolContext) -> dict | None:

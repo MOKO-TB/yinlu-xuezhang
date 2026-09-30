@@ -1,6 +1,7 @@
 """计划模式测试:写入/读取/更新/解析/校验 + 面板状态与「一键派发」指令。"""
 
-from minicode.planning import (blocked_steps, dispatch_text, notify_plan,
+from minicode.planning import (blocked_steps, dispatch_end, dispatch_start,
+                               dispatch_text, notify_plan,
                                parse_plan, plan, plan_state,
                                ready_steps, render_plan)
 from minicode.tools.base import ToolContext
@@ -395,3 +396,91 @@ def test_in_progress_reaches_the_ui_push(tmp_path):
     payload = ui.events[-1][1]
     assert payload["running"] == [1] and payload["ready"] == []
     assert payload["steps"][0]["status"] == "in_progress"
+
+
+# --------------------------------------------- 与子代理派发对上号(task step=)
+
+def test_dispatch_start_marks_step_in_progress_with_kinds(tmp_path):
+    ctx = _ctx(tmp_path)
+    _write_call(ctx)
+    assert dispatch_start(ctx, 2, ["explore", "review"]) is None
+    text = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    assert "- [/] 2. 实现后端接口" in text
+    assert "备注: 子代理在跑:explore、review(2 路)" in text
+    assert "- [ ] 1. 设计数据结构" in text          # 别的步一动不动
+
+
+def test_dispatch_start_rejects_unknown_or_bad_step(tmp_path):
+    ctx = _ctx(tmp_path)
+    _write_call(ctx)
+    assert "没有第 9 步" in dispatch_start(ctx, 9, ["explore"])
+    assert "只接受计划里的步骤编号" in dispatch_start(ctx, "abc", ["explore"])
+    assert "只接受计划里的步骤编号" in dispatch_start(ctx, True, ["explore"])
+    assert "只接受计划里的步骤编号" in dispatch_start(ctx, 1.5, ["explore"])
+    text = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    assert "[/]" not in text                        # 校验失败就别改计划
+
+
+def test_dispatch_start_without_a_plan_says_so(tmp_path):
+    assert "当前没有计划" in dispatch_start(_ctx(tmp_path), 1, ["explore"])
+
+
+def test_dispatch_start_refuses_failed_and_done_steps(tmp_path):
+    """上游失败还往下派,等于替用户跳过失败;做完的步也不该被翻回进行中。"""
+    ctx = _ctx(tmp_path)
+    _write_call(ctx)
+    plan(ctx, "update", step=1, status="failed", note="上游挂了")
+    assert "已标 failed" in dispatch_start(ctx, 1, ["implement"])
+    plan(ctx, "update", step=2, status="done")
+    assert "已标 done" in dispatch_start(ctx, 2, ["implement"])
+    got = parse_plan((tmp_path / "plans" / "plan.md").read_text(encoding="utf-8"))
+    assert got["steps"][0]["status"] == "failed"
+    assert got["steps"][1]["status"] == "done"
+
+
+def test_dispatch_end_writes_facts_and_never_marks_done(tmp_path):
+    """备注只写跑出来的事实;状态仍停在进行中 —— 成没成由主代理按报告标。"""
+    ctx = _ctx(tmp_path)
+    _write_call(ctx)
+    dispatch_start(ctx, 2, ["explore"])
+    dispatch_end(ctx, 2, ["explore 报告 312 字", "review 超时未回"])
+    text = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    assert "备注: 子代理已回:explore 报告 312 字;review 超时未回" in text
+    assert "- [/] 2. 实现后端接口" in text
+    assert "- [x] 2." not in text
+
+
+def test_dispatch_end_is_a_noop_without_facts_or_plan(tmp_path):
+    ctx = _ctx(tmp_path)
+    dispatch_end(ctx, 1, ["x"])                     # 没计划:不写不炸
+    assert not (tmp_path / "plans" / "plan.md").exists()
+    _write_call(ctx)
+    before = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    dispatch_end(ctx, 1, [])                        # 没事实:一个字不改
+    dispatch_end(ctx, 99, ["explore 1 字"])         # 步号不存在:不写不炸
+    dispatch_end(ctx, "abc", ["explore 1 字"])      # 步号不合法:不写不炸
+    assert (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8") == before
+
+
+def test_dispatch_start_pushes_running_to_the_ui(tmp_path):
+    """派发这一步必须让面板转起来:running 与备注都进 plan_changed 的 payload。"""
+    ui = _UI()
+    ctx = ToolContext(workspace=tmp_path, config=None, ui=ui)
+    plan(ctx, "write", goal="g", steps=_DEP_STEPS)
+    dispatch_start(ctx, 1, ["explore", "review"])
+    payload = ui.events[-1][1]
+    assert payload["running"] == [1]
+    assert payload["steps"][0]["note"].startswith("子代理在跑:")
+    dispatch_end(ctx, 1, ["explore 报告 88 字"])
+    assert "explore 报告 88 字" in ui.events[-1][1]["steps"][0]["note"]
+
+
+def test_scheduling_view_teaches_the_step_param(tmp_path):
+    """调度视图是模型唯一会读到的提示:不教它 step= 参数,这功能等于没有。"""
+    ctx = _ctx(tmp_path)
+    plan(ctx, "write", goal="g", steps=_DEP_STEPS)
+    plan(ctx, "update", step=1, status="done")
+    view = plan(ctx, "read")
+    assert "task 带上 step=编号" in view
+    assert "这一步会标成进行中" in view
+    assert "step=编号" in dispatch_text(plan_state(tmp_path))

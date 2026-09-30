@@ -12,6 +12,16 @@ import tempfile
 from pathlib import Path
 
 HTML = Path(sys.argv[1] if len(sys.argv) > 1 else "frontend/index.html")
+
+# 这道闸自己打印 ✓/✗:Windows 默认控制台是 GBK,print 当场 UnicodeEncodeError ——
+# 照 CONTRIBUTING「全量别带 PYTHONIOENCODING」的写法执行就是 traceback,等于没有
+# 这道闸(check_docs.py 踩过同一个坑,那边已修;这里补上,别让第三道闸独缺)。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass          # 被重定向/没有 reconfigure 的输出流:原样让它去
+
 src = HTML.read_text(encoding="utf-8")
 blocks = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", src, re.S)
 print(f"{HTML}: 找到 {len(blocks)} 个内联 script 块")

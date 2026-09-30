@@ -2,6 +2,9 @@
 
 按分工方式分两组:
   通用档  explore(只读侦察) / implement(动手实现) / review(只读审查)
+          / audit(只读口径对账) / testaudit(只读测试假闸自检)
+          —— 后两档是**角色**不是领域:不靠 SKILL.md,也不在 router 的领域关键词里,
+          所以 `auto` 永远不会选中它们,要用就显式传 type。
   领域档  code / writing / data / english / campus / material
           —— 由 minicode.router 登记派生,提示词只说"先加载哪几个已有技能",
           领域规矩本体仍在 skills/*.md 里。
@@ -20,6 +23,12 @@ v0.9.60 起**写类型(implement 等)也开放并行**:每一路的确认请求�
 并行写的前提是**各路负责不同文件**:两路改同一个文件是内容竞争,task 描述
 必须按文件划好地盘(工具描述里也这么教模型)。
 
+与计划的联动:`task` 可以带 `step=编号`,表示这批子代理是在做 `plans/plan.md` 里的
+那一步。派活**之前**先把该步标成 in_progress、备注写上派了哪几路(计划面板与调度视图
+因此看得见"谁在做这件事"),跑完把每路的报告字数与超时如实写回备注。它**不替主代理
+标 done** —— 子代理回来的是转述,不是这一步做成的证据;step 不合法(没计划/没这一步/
+那步已 failed 或 done)时直接报错,一路都不派,不白花额度。
+
 超时:每一路各占一个守护线程,主代理最多等 config.subagent_time_limit_seconds
 秒。到点只是**不再等它的报告**,Python 没有安全的强杀,那一路当前这一步还会
 跑完(它的工具确认框也照常会弹) —— 报告里按这个口径写,不写成"子代理失败"。
@@ -32,7 +41,7 @@ from dataclasses import dataclass, replace as dc_replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from minicode import router
+from minicode import planning, router
 from minicode.agent import Agent
 from minicode.config import Config
 from minicode.permission import PermissionGate
@@ -85,6 +94,26 @@ SUBAGENT_TYPES: dict[str, SubAgentSpec] = {
         "review", "审查", "只读审查代码质量与正确性", True,
         "\n# 角色:审查子代理\n只读不改。输出:按 [P0-P3] 分级的问题列表(文件:位置 问题 → 建议)"
         ",最后一句总体结论。控制在 300 字内。\n",
+    ),
+    "audit": SubAgentSpec(
+        "audit", "对账", "只读对账:同一件事实在代码与文档/配置里是否各说一套", True,
+        "\n# 角色:口径对账子代理\n你只查一件事:**同一件事实有没有两处各说一套**。做法是先从代码里取真相"
+        "(枚举、常量、上限数字、工具名、配置项默认值),再去 README.md / system_prompt.md / HANDOFF.md / "
+        "config.example.json / 面向用户的《使用说明》里找它的说法,逐条比对。\n"
+        "输出:按 [P0-P3] 分级的漂移清单,每条写「文件:行 —— 文档说的 vs 代码里的」加一句改法,"
+        "最后给总数。控制在 400 字内。\n"
+        "边界:只报**两侧都真读到**的差异,有一侧没找到就写「没找到」而不是猜;措辞不同不算漂移,"
+        "数字/枚举/名字/默认值不同才算;不修改任何文件。\n",
+    ),
+    "testaudit": SubAgentSpec(
+        "testaudit", "测试自检", "只读静态扫测试与 e2e 脚本里的假闸(恒真断言、空壳、被跳过的关键路径)", True,
+        "\n# 角色:测试假闸自检子代理\n你找的是**看着绿、其实什么都没断言**的测试:恒真断言"
+        "(`or True`、`assert True`、`assert x == x`)、只断言「没抛异常」的空壳、被 skip/xfail 掉的关键路径、"
+        "整段写在 if 分支里可能根本不执行的断言、以及把被测对象本身 mock 掉的测试。\n"
+        "输出:按 [P0-P3] 分级的清单,每条「文件:行 —— 现在的断言 → 它实际挡得住什么 → 建议改成什么」,"
+        "最后给总数与一句结论。控制在 400 字内。\n"
+        "边界:**你不跑测试** —— bash / py_script 是写工具,只读档拿不到,要真跑请让主代理改派 code 档;"
+        "只报你在文件里真读到的写法,不凭文件名猜;不修改任何文件。\n",
     ),
 }
 
@@ -216,7 +245,7 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
                    if m.get("role") == "assistant" and m.get("content")),
                   None)
     report = report or "(子代理已结束,但未返回文本报告)"
-    return _files_note(spec, sub_session) + report
+    return _files_note(spec, sub_session) + _web_note(spec, sub_session) + report
 
 
 def _files_note(spec: SubAgentSpec, sub_session) -> str:
@@ -256,6 +285,56 @@ def _files_note(spec: SubAgentSpec, sub_session) -> str:
     shown = paths[:12]
     more = "" if len(paths) <= 12 else f" |…另有 {len(paths) - 12} 个"
     return f"[files|{spec.type}] " + " | ".join(shown) + more + "\n"
+
+
+def _web_note(spec: SubAgentSpec, sub_session) -> str:
+    """本路**联网/查库**动作的清单,以 `[web|档位] 工具名 状态 值` 尾注带回主会话。
+
+    与 `_files_note` 同一个理由:监控栏「网页查阅」扫的是主会话的 tool_calls,
+    子代理爬的页面、查的知识库留在它自己的会话里 —— 不带这一行,并行三路查网页
+    那一栏就是一片空(v0.9.76 给「产出」补过同一个盲区,这里补「网页查阅」)。
+
+    **「来源」栏刻意不收这些网址**:那一栏的口径是"真进过主上下文的外部内容",
+    子代理读到的页面只在它自己会话里,主上下文拿到的是它的转述 —— 混进去就等于
+    告诉用户"这次回答的依据是这些页面",而依据其实是那段转述。要看某档子代理
+    读了哪些页面,看「网页查阅」,每一行都标着是哪一档读的。
+
+    不设条数上限:`MAX_SUB_STEPS` 已经把一路的总步数钉在 20 以内,这一行不可能长。
+    值一律单行化(网址与查询词里的空白折叠掉),否则按行解析的 activity 会读串。
+    """
+    from minicode.activity import QUERY_TOOLS, URL_TOOLS
+    from minicode.toolsum import is_failure
+
+    results: dict[str, str] = {}
+    for m in sub_session.messages:
+        if isinstance(m, dict) and m.get("role") == "tool":
+            results[str(m.get("tool_call_id") or "")] = str(m.get("content") or "")
+
+    lines: list[str] = []
+    for m in sub_session.messages:
+        if not isinstance(m, dict):
+            continue
+        for call in m.get("tool_calls") or []:
+            fn = call.get("function") or {}
+            name = str(fn.get("name") or "")
+            bare = name.rsplit("·", 1)[1] if "·" in name else name
+            if bare not in URL_TOOLS and bare not in QUERY_TOOLS:
+                continue
+            raw = str(fn.get("arguments") or "")
+            try:
+                import json as _json
+                args = _json.loads(raw) if raw else {}
+            except ValueError:
+                args = {}
+            value = " ".join(str((args or {}).get("url")
+                                 or (args or {}).get("query") or "").split())
+            if not value:
+                continue
+            got = results.get(str(call.get("id") or ""))
+            status = ("running" if got is None
+                      else "failed" if is_failure(got) else "ok")
+            lines.append(f"[web|{spec.type}] {bare} {status} {value}")
+    return "".join(line + "\n" for line in lines)
 
 
 def _as_list(value, field: str) -> list[str] | str:
@@ -324,7 +403,7 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
     implement 子代理的写快照进这个栈,主代理 /undo 才撤得掉子代理的改动。
     """
 
-    def task(ctx: ToolContext, type, task) -> str:
+    def task(ctx: ToolContext, type, task, step=None) -> str:
         types = _as_list(type, "type")
         if isinstance(types, str):
             return types
@@ -352,13 +431,31 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                         f"可用: {', '.join(TYPE_KEYS)}")
             specs.append((spec, text.strip(), note))
 
+        # ---- 挂在计划的哪一步(可选):校验在派活之前,不合法就不白花一路 ----
+        use_step = step not in (None, "", 0, "0")
+        if use_step:
+            err = planning.dispatch_start(ctx, step, [s.type for s, _t, _n in specs])
+            if err:
+                return err
+
+        def _plan_head(facts: list[str]) -> str:
+            """把这一批的真实结果写回计划备注,并交代模型下一步该怎么标。"""
+            if not use_step:
+                return ""
+            planning.dispatch_end(ctx, step, facts)
+            return (f"[计划第 {step} 步] 已标进行中,备注记下了:{';'.join(facts)}。"
+                    "成没成要你自己按报告判断 —— 做成了 plan(action=update, "
+                    f"step={step}, status=done),没做成标 failed 并写清原因,"
+                    "别让它一直挂在进行中。\n")
+
         # ---- 单发:保持 v0.9 行为(流式输出进聊天区,报告带回工具结果)----
         if len(specs) == 1:
             spec, text, note = specs[0]
             report = _await([lambda: run_subagent(
                 ctx, spec, text, llm, ui, config, registry,
                 undo_stack=parent_undo)], limit)[0]
-            if report is None:
+            timed_out = report is None
+            if timed_out:
                 report = _timeout_note(limit)
             head = f"[{spec.label}子代理完成]" + (f"\n{note}" if note else "")
             body = head + "\n" + report
@@ -366,7 +463,9 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             # 模型拿到的是半句话,回答就会顺着半句话编。
             if len(body) > REPORT_LIMIT:
                 body = body[:REPORT_LIMIT] + f"\n…(报告超过 {REPORT_LIMIT} 字符,已截断)"
-            return body + _SUB_REPORT_NOTE
+            facts = [f"{spec.type} 报告 {len(report)} 字"
+                     + ("(超时未回)" if timed_out else "")]
+            return _plan_head(facts) + body + _SUB_REPORT_NOTE
 
         # ---- 批量:v0.9.60 起写类型也并发。确认通道仍是一条(锁排队),
         # 但每路经 _TaggedUI 贴上「第 N 路[类型]任务」标签,用户分得清在等谁;
@@ -378,8 +477,9 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
         try:
             names = "、".join(f"{s.type}" for s, _, _ in specs)
             tail = "(含写操作,确认框会标明是哪一路)" if writers else ""
+            where = f",计划第 {step} 步" if use_step else ""
             ui.push("info", text=f"已并行派出 {len(specs)} 路子代理"
-                                 f"({names}){tail},完成后合并报告回填。")
+                                 f"({names}){where}{tail},完成后合并报告回填。")
         except Exception:
             pass                        # CLI/无 push 的界面:没有这条也不碍事
         quiet = _QuietUI(ui)
@@ -396,14 +496,23 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
         notes = [note for _s, _t, note in specs if note]
         merged = _merge_reports(pairs)
         out = ("\n".join(notes) + "\n\n" + merged) if notes else merged
-        return out + _SUB_REPORT_NOTE
+        # 备注里只写跑出来的事实:每路档名 + 报告字数,超时那路单独标出来
+        facts = [f"{s.type} 报告 {len(r)} 字" if r is not None
+                 else f"{s.type} 超时未回"
+                 for (s, _t, _n), r in zip(specs, reports)]
+        return _plan_head(facts) + out + _SUB_REPORT_NOTE
 
     return Tool(
         name="task",
         description=(
             "派出子代理执行独立子任务,子代理拥有全新上下文,完成后返回文字报告。"
             "通用档:explore(只读侦察,适合大范围找代码/梳理结构)、"
-            "implement(动手实现独立小功能)、review(只读审查)。"
+            "implement(动手实现独立小功能)、review(只读审查)、"
+            "audit(只读口径对账:代码里的枚举/上限数字/工具名/默认值,与 README、"
+            "system_prompt、HANDOFF、config.example.json、《使用说明》是否各说一套)、"
+            "testaudit(只读测试自检:扫恒真断言、只断言没抛异常的空壳、被 skip 的关键路径;"
+            "它**不跑测试** —— 只读档拿不到 bash/py_script,要真跑改派 code 档)。"
+            "audit 与 testaudit 是角色档不是领域档,`auto` 不会选中它们,要用就显式传 type。"
             "领域档(会先加载该领域已有的 SKILL 再动手):"
             "code(写代码/改 bug/跑测试)、writing(论文/申请书/PPT/简历)、"
             "data(表格统计/名单批量/题库导出)、english(四六级与考研英语的经验查询,只读)、"
@@ -421,6 +530,11 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             "把文件划好地盘),两路改同一个文件是内容竞争,必须串行。"
             "每一路最多等 config.subagent_time_limit_seconds 秒,超时会如实标成"
             "「未返回」而不是失败。"
+            "这一批是在做计划里的某一步时,带上 step=编号:那一步会被标成进行中、"
+            "备注记下派了哪几路,跑完把每路的报告字数与超时如实写回计划;"
+            "**它不会替你标 done** —— 子代理回来的是转述不是证据,成没成仍由你"
+            "按报告用 plan action=update 标。step 不合法(没计划/没这一步/那步已 "
+            "failed 或 done)时直接报错、一路都不派。"
         ),
         parameters={
             "type": "object",
@@ -440,6 +554,12 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                         {"type": "string"},
                         {"type": "array", "items": {"type": "string"}},
                     ],
+                },
+                "step": {
+                    "description": "可选:这批子代理在做计划(plans/plan.md)里的第几步。"
+                                   "传了就把那步标 in_progress 并在备注里记下派了哪几路,"
+                                   "跑完写回每路报告字数与超时;不传则计划文件一动不动。",
+                    "anyOf": [{"type": "integer"}, {"type": "string"}],
                 },
             },
             "required": ["type", "task"],

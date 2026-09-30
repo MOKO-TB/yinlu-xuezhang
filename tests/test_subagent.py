@@ -765,3 +765,222 @@ def test_tagged_ui_merges_labels_and_passes_through():
     assert ui.confirm_tool(None, {}, label="写文件") == "yes"
     assert "第2路[implement] 修复登录" in seen["label"]
     assert "写文件" in seen["label"]
+
+
+def test_web_note_lists_only_real_web_calls():
+    """尾注只收真发生的联网/查库动作:值单行化、状态跟结果走、没联网就没这一行。"""
+    from minicode.subagents import _web_note, type_spec
+
+    class Sess:
+        def __init__(self, messages):
+            self.messages = messages
+
+    spec = type_spec("campus")
+    sess = Sess([
+        {"role": "assistant", "tool_calls": [
+            {"id": "a", "function": {"name": "campus·web_crawl",
+                                     "arguments": '{"url": "https://a.example/x"}'}},
+            {"id": "b", "function": {"name": "campus·search_knowledge",
+                                     "arguments": '{"query": "图书馆\\n开放时间"}'}},
+            {"id": "c", "function": {"name": "campus·read_file",
+                                     "arguments": '{"path": "a.txt"}'}}]},
+        {"role": "tool", "tool_call_id": "a", "content": "正文"},
+        {"role": "tool", "tool_call_id": "b", "content": "错误: 没查到"},
+    ])
+    assert _web_note(spec, sess).splitlines() == [
+        "[web|campus] web_crawl ok https://a.example/x",
+        "[web|campus] search_knowledge failed 图书馆 开放时间",   # 换行折叠成单行
+    ]
+    # read_file 不是联网动作,不收;一个联网动作都没有时整段尾注为空
+    assert "read_file" not in _web_note(spec, sess)
+    assert _web_note(spec, Sess([{"role": "assistant", "content": "没联网"}])) == ""
+
+
+def test_web_note_marks_unanswered_calls_as_running():
+    """还没有工具结果的那一路标 running,不猜它成没成。"""
+    from minicode.subagents import _web_note, type_spec
+
+    class Sess:
+        messages = [{"role": "assistant", "tool_calls": [
+            {"id": "z", "function": {"name": "english·web_search",
+                                     "arguments": '{"query": "六级报名时间"}'}}]}]
+
+    assert _web_note(type_spec("english"), Sess()) == \
+        "[web|english] web_search running 六级报名时间\n"
+
+
+# ------------------------------------------------- 与计划对上号(task step=)
+
+def _write_plan(tmp_path):
+    """在工作区里真写一份三步计划,返回 plan.md 的路径(断言要看落盘结果)。"""
+    from minicode import planning
+    from minicode.tools.base import ToolContext
+    planning.plan(ToolContext(workspace=tmp_path, config=None), "write",
+                  goal="把登录做完",
+                  steps=[{"title": "看现有代码"}, {"title": "改后端"},
+                         {"title": "补测试"}])
+    return tmp_path / "plans" / "plan.md"
+
+
+def _task_step_turn(type_, task_text, step, call_id="c1"):
+    return AssistantTurn(tool_calls=[
+        _call("task", {"type": type_, "task": task_text, "step": step}, call_id)])
+
+
+def test_task_step_marks_plan_and_writes_real_facts(config, tmp_path):
+    """派活前把那一步标成进行中,跑完把真报告字数写回备注;不替它标 done。"""
+    _accept_all(config)
+    plan_file = _write_plan(tmp_path)
+    llm = QueueLLM([
+        _task_step_turn("explore", "看看登录相关代码", 2),
+        _final("找到 3 个相关文件"),
+        _final("主代理收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("派活")
+    assert wait_until(lambda: not bridge._busy, timeout=20)
+
+    text = plan_file.read_text(encoding="utf-8")
+    assert "- [/] 2. 改后端" in text
+    assert "子代理已回:explore 报告" in text
+    assert "- [x] 2." not in text                  # 子代理回来的是转述,不替它标 done
+    assert "- [ ] 1. 看现有代码" in text            # 别的步一动不动
+    result = _tool_result(session)
+    assert "[计划第 2 步]" in result and "status=done" in result
+
+
+def test_task_step_invalid_does_not_dispatch(config, tmp_path):
+    """step 校验在派活之前:计划里没这一步就报错,一路子代理都不许跑。"""
+    _accept_all(config)
+    plan_file = _write_plan(tmp_path)
+    llm = QueueLLM([
+        _task_step_turn("explore", "看看代码", 9),
+        _final("主代理收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("派活")
+    assert wait_until(lambda: not bridge._busy, timeout=20)
+
+    assert "计划中没有第 9 步" in _tool_result(session)
+    # 第二个 turn 仍归主代理 = 没有子代理插队消费它
+    assert session.messages[-1]["content"] == "主代理收尾"
+    assert "[/]" not in plan_file.read_text(encoding="utf-8")
+
+
+def test_task_step_refuses_a_failed_step(config, tmp_path):
+    """上游已标 failed 的那一步不许派活:跳过失败继续往下做是本仓库明令禁止的。"""
+    from minicode import planning
+    from minicode.tools.base import ToolContext
+    _accept_all(config)
+    plan_file = _write_plan(tmp_path)
+    planning.plan(ToolContext(workspace=tmp_path, config=None), "update",
+                  step=1, status="failed", note="依赖装不上")
+    llm = QueueLLM([
+        _task_step_turn("implement", "接着改", 1),
+        _final("主代理收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("派活")
+    assert wait_until(lambda: not bridge._busy, timeout=20)
+    assert "已标 failed" in _tool_result(session)
+    assert "- [!] 1. 看现有代码" in plan_file.read_text(encoding="utf-8")
+
+
+def test_task_without_step_leaves_the_plan_alone(config, tmp_path):
+    """不传 step 时零回归:不建计划文件、返回体里不多那句计划交代。"""
+    _accept_all(config)
+    llm = QueueLLM([
+        _task_turn("explore", "看看工作区"),
+        _final("没有发现"),
+        _final("主代理收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("派活")
+    assert wait_until(lambda: not bridge._busy, timeout=20)
+    assert not (tmp_path / "plans" / "plan.md").exists()
+    assert "[计划第" not in _tool_result(session)
+
+
+def test_task_batch_step_records_every_path(config, tmp_path):
+    """并行两路挂同一步:备注里两路各自的字数都要在,不是只记最后一路。"""
+    _accept_all(config)
+    plan_file = _write_plan(tmp_path)
+    llm = QueueLLM([
+        AssistantTurn(tool_calls=[_call("task", {
+            "type": ["explore", "review"],
+            "task": ["看代码", "审代码"], "step": 3}, "b1")]),
+        _final("侦察:3 个文件"),
+        _final("审查:没有问题"),
+        _final("主代理收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("批量派活")
+    assert wait_until(lambda: not bridge._busy, timeout=25)
+
+    text = plan_file.read_text(encoding="utf-8")
+    assert "- [/] 3. 补测试" in text
+    assert "explore 报告" in text and "review 报告" in text
+    assert "[并行子代理完成 · 2 个]" in _tool_result(session)
+
+
+# ------------------------------------------------- 两个只读角色档(audit / testaudit)
+
+def test_role_buckets_are_read_only_and_prefixed(config, tmp_path):
+    """角色档只读:拿得到 grep/read_file,拿不到任何写工具,也不能递归派活。"""
+    from minicode.subagents import TYPE_KEYS, sub_tool_registry, type_spec
+    from minicode.tools.registry import build_default_registry
+    reg = build_default_registry()
+    assert "audit" in TYPE_KEYS and "testaudit" in TYPE_KEYS
+
+    for key in ("audit", "testaudit"):
+        spec = type_spec(key, tmp_path)
+        assert spec.read_only is True, key
+        names = [t.name for t in sub_tool_registry(reg, spec)]
+        assert names and all(n.startswith(f"{key}·") for n in names), key
+        assert f"{key}·grep" in names and f"{key}·read_file" in names
+        for banned in ("write_file", "edit_file", "bash", "py_script", "task"):
+            assert f"{key}·{banned}" not in names, f"{key} 不该拿到 {banned}"
+
+
+def test_testaudit_prompt_admits_it_cannot_run_tests():
+    """只读档拿不到 bash,提示词就必须先说清"不跑测试" —— 否则模型会试了再困惑。"""
+    from minicode.subagents import type_spec
+    prompt = type_spec("testaudit").extra_prompt
+    assert "你不跑测试" in prompt and "code 档" in prompt
+    assert "or True" in prompt                 # 要扫的写法点名给出,不靠模型自己发挥
+
+
+def test_audit_prompt_demands_both_sides_were_read():
+    from minicode.subagents import type_spec
+    prompt = type_spec("audit").extra_prompt
+    assert "两侧都真读到" in prompt and "没找到" in prompt
+    assert "措辞不同不算漂移" in prompt        # 别把风格偏好报成缺陷
+
+
+def test_auto_never_picks_a_role_bucket():
+    """角色档不在领域关键词里:auto 不会替用户选中它们(要显式点名)。"""
+    from minicode import router
+    assert "audit" not in router.DOMAINS and "testaudit" not in router.DOMAINS
+    for text in ("帮我查查文档和代码对不对得上", "这些测试是不是恒真断言"):
+        keys = [m.spec.key for m in router.classify(text)]
+        assert "audit" not in keys and "testaudit" not in keys
+
+
+def test_task_audit_dispatch_reports_back(config, tmp_path):
+    """角色档真能派出去:子代理用 audit·grep 查,报告抬头写「对账子代理完成」。"""
+    _accept_all(config)
+    (tmp_path / "README.md").write_text("上限 4 个", encoding="utf-8")
+    llm = QueueLLM([
+        _task_turn("audit", "对一下 README 里的上限数字与代码是否一致"),
+        AssistantTurn(tool_calls=[_call("audit·grep",
+                                        {"pattern": "上限", "path": "."}, "g1")]),
+        _final("[P1] README.md:1 写上限 4,代码里是 6"),
+        _final("主代理收尾"),
+    ])
+    bridge, window, session = make(config, tmp_path, llm)
+    bridge.send_task("对账")
+    assert wait_until(lambda: not bridge._busy, timeout=20)
+
+    result = _tool_result(session)
+    assert "对账子代理完成" in result and "P1" in result
+    assert "audit·grep" in [e["name"] for e in window.of_type("tool_start")]

@@ -197,13 +197,67 @@ def test_web_rows_open_a_real_url_or_fill_the_box(tmp_path):
     ])
     rows = {r["key"]: r for r in
             _items(activity.session_activity(s.messages, workspace=tmp_path), "web")}
-    page = rows["w:browser_open:jwc.gzasc.edu.cn/x"]
+    page = rows["w:main:browser_open:jwc.gzasc.edu.cn/x"]
     assert page["action"] == {"type": "open",
                                "url": "https://jwc.gzasc.edu.cn/x"}
-    search = rows["w:web_search:国家励志奖学金 条件"]
+    search = rows["w:main:web_search:国家励志奖学金 条件"]
     assert search["action"]["type"] == "fill"
     assert "国家励志奖学金 条件" in search["action"]["text"]
     assert "url" not in search["action"], "搜索结果里的链接不能冒充用户点开过"
+
+
+def test_subagent_web_note_reaches_the_web_panel(tmp_path):
+    """子代理爬的页面、查的库要出现在「网页查阅」里,并标出是哪一档读的。
+
+    与「产出」栏 v0.9.76 补的是同一个盲区:子代理的 tool_calls 留在它自己会话里,
+    主会话只有 task 的报告文本 —— 不解析尾注,并行几路查网页这一栏一片空。
+    """
+    s = _session(tmp_path, [[{
+        "id": "t1", "name": "task",
+        "args": {"type": "campus", "task": "查教务处通知"},
+        "result": ("[web|campus] web_crawl ok https://jwc.gzasc.edu.cn/n\n"
+                   "[web|campus] search_knowledge ok 图书馆开放时间\n"
+                   "[校园办事子代理完成]\n报告正文")}]])
+    rows = {r["key"]: r for r in            _items(activity.session_activity(s.messages, workspace=tmp_path), "web")}
+    page = rows["w:campus:web_crawl:jwc.gzasc.edu.cn/n"]
+    assert page["action"] == {"type": "open", "url": "https://jwc.gzasc.edu.cn/n"}
+    assert "campus 子代理" in page["sub"] and page["badge"] == "完成"
+    kb = rows["w:campus:search_knowledge:图书馆开放时间"]
+    assert kb["action"]["type"] == "fill"        # 只有关键词的行不做假链接
+    assert "url" not in kb["action"]
+
+
+def test_subagent_web_note_keeps_failure_status(tmp_path):
+    """尾注里标了 failed 的那一路,面板上就得是失败,不能一律画成完成。"""
+    s = _session(tmp_path, [[{
+        "id": "t1", "name": "task", "args": {"type": "campus", "task": "查通知"},
+        "result": "[web|campus] web_crawl failed https://a.example/x\n报告"}]])
+    row = _one(activity.session_activity(s.messages, workspace=tmp_path), "web")
+    assert row["status"] == "failed" and row["badge"] == "失败"
+
+
+def test_failed_task_web_note_is_not_counted(tmp_path):
+    """那一路根本没跑成(task 结果是错误前缀),它的尾注不算联网动作。"""
+    s = _session(tmp_path, [[{
+        "id": "t1", "name": "task", "args": {"type": "campus", "task": "查通知"},
+        "result": "错误: 子代理执行出错: Timeout"}]])
+    assert _items(activity.session_activity(s.messages, workspace=tmp_path), "web") == []
+
+
+def test_main_and_subagent_rows_for_the_same_url_stay_apart(tmp_path):
+    """同一个网址主会话读过、子代理也读过 → 两行:合并就把「谁读的」抹掉了。"""
+    s = _session(tmp_path, [
+        [{"id": "u1", "name": "web_crawl", "args": {"url": "https://a.example/x"},
+          "result": "正文"}],
+        [{"id": "t1", "name": "task", "args": {"type": "explore", "task": "也看那页"},
+          "result": "[web|explore] web_crawl ok https://a.example/x\n报告"}],
+    ])
+    rows = {r["key"]: r for r in
+            _items(activity.session_activity(s.messages, workspace=tmp_path), "web")}
+    assert "w:main:web_crawl:a.example/x" in rows
+    assert "w:explore:web_crawl:a.example/x" in rows
+    assert "explore 子代理" in rows["w:explore:web_crawl:a.example/x"]["sub"]
+    assert "子代理" not in rows["w:main:web_crawl:a.example/x"]["sub"]
 
 
 def test_repeated_search_of_the_same_query_counts_up(tmp_path):
