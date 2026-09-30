@@ -278,6 +278,10 @@ def dispatch_start(ctx: ToolContext, step, kinds: list[str]) -> str | None:
     为什么不直接把这一步标 done:子代理回来的是**一段转述**,不是这一步做成的证据。
     这一步只负责"计划里看得出谁在做这件事",成败仍由主代理按报告如实标。
     已经 failed/done 的步骤拒绝派活:上游失败还往下派,就是在替用户跳过失败。
+    依赖没做完的步骤同样拒绝(与 `ready_steps` 一个口径):否则面板上会出现一个
+    上游还空着、自己却「进行中」的步,调度视图那套「可执行/被卡住」就白算了。
+    同一步被派两次时**后一次覆盖备注** —— 计划文件是状态不是历史,要留痕去看
+    监控栏的时间线。
     """
     plan = _load_plan(ctx)
     if plan is None:
@@ -292,6 +296,13 @@ def dispatch_start(ctx: ToolContext, step, kinds: list[str]) -> str | None:
     if target["status"] in ("failed", "done"):
         return (f"错误: 第 {n} 步已标 {target['status']},不在它身上派子代理。"
                 "要重做请先 plan action=update 改回 pending,或换一步。")
+    by_n = {s["n"]: s for s in plan["steps"]}
+    unmet = [d for d in target["depends_on"]
+             if by_n.get(d, {}).get("status") != "done"]
+    if unmet:
+        return (f"错误: 第 {n} 步的依赖还没做完(第 "
+                + "、".join(str(d) for d in unmet)
+                + " 步),不在它身上派子代理 —— 先做上游,或改计划。")
     target["status"] = "in_progress"
     target["done"] = False
     target["note"] = f"子代理在跑:{'、'.join(kinds)}({len(kinds)} 路)"

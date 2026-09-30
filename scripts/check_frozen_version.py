@@ -459,7 +459,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                      "admin", "admin_tool", "set_admin_hook",
                      # v0.9.70:预设模板库(漏收 = 包里说「没有叫 xx 的预设」,
                      # 对话里加服务器退回手编 JSON)
-                     "MCP_PRESETS", "find_preset", "build_preset_config"),
+                     "MCP_PRESETS", "find_preset", "build_preset_config",
+                     # v0.9.82:能力协商照实说(漏收 = 包里添加服务器那句话与
+                     # 侧栏悬停都不再讲「对端声明了什么、学长只接了 tools」,
+                     # 用户又会以为接上就等于全能用)
+                     "CLIENT_PRIMITIVES", "caps_line", "server_caps"),
     # ---- v0.9.24:计划面板(漏收 = 顶栏「🗂 计划」点开永远说没计划) ----
     # v0.9.33:对话流里的计划卡片靠 in_progress/running 画出"正在做哪一步"
     # (漏收 = 卡片只剩一堆待办和勾,转圈的那一行永远不出现)

@@ -771,6 +771,8 @@ class Bridge:
                 "connected": bool(c),
                 "server": str((c.server_info or {}).get("name") or "") if c else "",
                 "n_tools": len(c.list_tools()) if c else 0,
+                # 对端声明的能力与学长实际接了哪几项(没连上就没这句可说)
+                "caps": c.caps_line() if c else "",
             })
         return out
 
@@ -845,9 +847,12 @@ class Bridge:
                 return (f"错误: 探测失败,没有写入配置 —— {probe['error']}。"
                         "服务器可能只是暂时不在线:修好命令/地址后再加一次。")
             servers.append(dict(raw))
+            # 探测时顺便把「对端声明了什么、学长只接了 tools」讲清楚:加服务器这一刻
+            # 正是用户最容易以为"接上就等于全能用"的时候。
+            caps = str(probe.get("caps") or "")
             return _persist_and_reload(
                 f"已添加「{sid}」({probe['server'] or '服务器'}),"
-                f"探到 {probe['n_tools']} 个工具。")
+                f"探到 {probe['n_tools']} 个工具。" + (f"{caps}。" if caps else ""))
         if action in ("remove", "enable", "disable"):
             if not name:
                 return f"错误: action={action} 需要 name。"

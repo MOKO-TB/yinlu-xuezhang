@@ -49,6 +49,10 @@ from minicode.tools.base import Tool
 
 PROTOCOL_VERSION = "2024-11-05"
 CLIENT_NAME = "yinlu-xuezhang"
+# 学长只实现了 tools 这一个原语:resources / prompts / sampling / logging 都没接。
+# 握手时客户端声明空 capabilities(不假装支持),而对端声明了什么以前**直接丢掉** ——
+# 于是"这台服务器还能给什么、学长用不上哪几样"在界面与探测结果里永远看不见。
+CLIENT_PRIMITIVES = ("tools",)
 
 DEFAULT_START_TIMEOUT = 10.0
 DEFAULT_CALL_TIMEOUT = 60.0
@@ -664,6 +668,7 @@ class McpClient:
         self._closed = False
         self.tools: list[dict] = []            # tools/list 原始结果
         self.server_info: dict = {}
+        self.server_caps: dict = {}            # 对端在握手里声明的能力(原样留着)
         self.error: str = ""
 
     # ----------------------------------------------------------- 生命周期
@@ -687,6 +692,8 @@ class McpClient:
                 "clientInfo": {"name": CLIENT_NAME, "version": _version()},
             }, timeout=self.cfg.start_timeout)
             self.server_info = (info or {}).get("serverInfo", {}) if isinstance(info, dict) else {}
+            caps = (info or {}).get("capabilities") if isinstance(info, dict) else None
+            self.server_caps = caps if isinstance(caps, dict) else {}
             self._notify("notifications/initialized", {})
             listed = self._request("tools/list", {}, timeout=self.cfg.start_timeout)
             tools = (listed or {}).get("tools", []) if isinstance(listed, dict) else []
@@ -716,12 +723,30 @@ class McpClient:
             self.transport.close()
         self._closed = False
         self.tools, self.server_info, self.error = [], {}, ""
+        self.server_caps = {}
         self.transport = make_transport(self.cfg, log=self._log)
         return self.start()
 
     def stderr_tail(self) -> str:
         """最近输出(stdio 是 stderr,HTTP 是最近一次网络错误)。"""
         return self.transport.tail()
+
+    def caps_line(self) -> str:
+        """对端在握手里声明了什么能力,以及学长实际接了哪几项。
+
+        这一句存在的理由是**不假装**:对端说它提供 resources/prompts,而学长只实现了
+        tools —— 不写清的话,用户在面板上看到"连上了、N 个工具",会以为那台服务器的
+        其余能力也能用。反过来对端什么都没声明时也照实说,不替它编一份能力表。
+        """
+        declared = sorted(self.server_caps or {})
+        if not declared:
+            return "对端没在握手里声明能力(学长按 tools 用)"
+        unused = [k for k in declared if k not in CLIENT_PRIMITIVES]
+        line = ("对端声明: " + "、".join(declared)
+                + ";学长只接了 " + "、".join(CLIENT_PRIMITIVES))
+        if unused:
+            line += "(" + "、".join(unused) + " 没实现,不会去调)"
+        return line
 
     # ------------------------------------------------------------- 协议
 
@@ -877,7 +902,8 @@ class McpManager:
     def tools_summary(self) -> list[dict]:
         return [
             {"id": c.cfg.sid, "label": c.cfg.label, "n_tools": len(c.list_tools()),
-             "server": (c.server_info or {}).get("name", "")}
+             "server": (c.server_info or {}).get("name", ""),
+             "caps": c.caps_line()}
             for c in self.clients
         ]
 
@@ -1076,7 +1102,8 @@ def probe_server(raw: dict, log=None) -> dict:
     ok = client.start()
     out = {"ok": ok, "error": "" if ok else client.error,
            "n_tools": len(client.tools) if ok else 0,
-           "server": str((client.server_info or {}).get("name") or "")}
+           "server": str((client.server_info or {}).get("name") or ""),
+           "caps": client.caps_line() if ok else ""}
     client.close()
     return out
 

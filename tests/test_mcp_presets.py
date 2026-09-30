@@ -137,10 +137,15 @@ class _FakeClient:
     def __init__(self, sid, label, n_tools):
         self.cfg = type("C", (), {"sid": sid, "label": label})()
         self.server_info = {"name": f"{sid}-server"}
+        self.server_caps = {"tools": {}}
         self._tools = list(range(n_tools))
 
     def list_tools(self):
         return self._tools
+
+    def caps_line(self):
+        # 真客户端的这一句由 server_caps 生成;替身只要形状对(健康行悬停要吃它)
+        return "对端声明: tools;学长只接了 tools"
 
 
 class _FakeManager:
@@ -161,6 +166,9 @@ def test_bridge_mcp_summary_merges_config_and_live(config, tmp_path):
     assert items["files"]["server"] == "files-server"
     assert items["dead"]["connected"] is False and items["dead"]["n_tools"] == 0
     assert items["off"]["enabled"] is False and items["off"]["connected"] is False
+    # 连上的那台带能力那句;没连上的不编(握手都没发生,拿不到对端声明)
+    assert "学长只接了 tools" in items["files"]["caps"]
+    assert items["dead"]["caps"] == "" and items["off"]["caps"] == ""
 
 
 def test_bridge_mcp_summary_empty_when_nothing_configured(config, tmp_path):

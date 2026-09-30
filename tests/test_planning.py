@@ -438,6 +438,34 @@ def test_dispatch_start_refuses_failed_and_done_steps(tmp_path):
     assert got["steps"][1]["status"] == "done"
 
 
+def test_dispatch_start_refuses_a_step_whose_deps_are_not_done(tmp_path):
+    """依赖没做完就派活,面板上会出现一个上游还空着、自己却「进行中」的步。"""
+    ctx = _ctx(tmp_path)
+    plan(ctx, "write", goal="g", steps=_DEP_STEPS)
+    err = dispatch_start(ctx, 2, ["implement"])
+    assert "依赖还没做完" in err and "第 1 步" in err
+    text = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    assert "- [ ] 2. 实现后端接口" in text          # 拒绝了就别偷偷改状态
+
+    plan(ctx, "update", step=1, status="done")
+    assert dispatch_start(ctx, 2, ["implement"]) is None      # 上游做完就放行
+    # 第 3 步依赖第 2 步,第 2 步只是「进行中」≠ 做完 → 仍不放行
+    assert "依赖还没做完" in dispatch_start(ctx, 3, ["implement"])
+    assert "- [ ] 3. 前端联调" in (tmp_path / "plans" / "plan.md").read_text(
+        encoding="utf-8")
+
+
+def test_dispatch_start_twice_overwrites_the_note(tmp_path):
+    """计划文件是状态不是历史:同一步派两次,备注写的是最后那一次。"""
+    ctx = _ctx(tmp_path)
+    _write_call(ctx)
+    dispatch_start(ctx, 2, ["explore"])
+    dispatch_start(ctx, 2, ["implement", "code"])
+    text = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    assert "备注: 子代理在跑:implement、code(2 路)" in text
+    assert "explore" not in text
+
+
 def test_dispatch_end_writes_facts_and_never_marks_done(tmp_path):
     """备注只写跑出来的事实;状态仍停在进行中 —— 成没成由主代理按报告标。"""
     ctx = _ctx(tmp_path)

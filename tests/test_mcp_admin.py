@@ -89,6 +89,54 @@ def test_probe_server_rejects_invalid_raw():
     assert out["ok"] is False and "不合法" in out["error"]
 
 
+# ------------------------------------------------------------ 能力如实上报
+
+def test_caps_line_says_what_the_server_declared_and_what_we_use(client):
+    """对端声明 resources/prompts,而学长只实现了 tools —— 这句必须说清。
+
+    不说清的表现是:用户看到「连上了、2 个工具」,就以为那台服务器的其余能力
+    也能用;而握手时客户端声明的是空 capabilities,学长从来不去调 resources。
+    """
+    line = client.caps_line()
+    assert "对端声明" in line
+    for prim in ("tools", "resources", "prompts"):
+        assert prim in line, prim
+    assert "学长只接了 tools" in line and "没实现" in line
+
+
+def test_caps_line_when_the_server_declared_nothing():
+    """没握过手/对端没声明:照实说,不替它编一份能力表。"""
+    c = McpClient(mcp_mod.parse_servers([_fake_config("no-caps")])[0])
+    assert c.server_caps == {}
+    assert "没在握手里声明能力" in c.caps_line()
+
+
+def test_restart_refreshes_caps(client):
+    """重连先清空再握手:清完忘了填回去,面板上就成了「对端没声明能力」。"""
+    assert "对端声明" in client.caps_line()
+    assert client.restart() is True
+    assert "对端声明" in client.caps_line()
+
+
+def test_probe_server_reports_caps():
+    ok = probe_server(_fake_config("probe-caps"))
+    assert ok["ok"] is True and "学长只接了 tools" in ok["caps"]
+    bad = probe_server({"name": "probe-bad2",
+                        "command": "no-such-cmd-xz", "args": []})
+    assert bad["ok"] is False and bad["caps"] == ""
+
+
+def test_tools_summary_carries_caps():
+    """侧栏健康行的悬停提示吃的就是这一份:summary 少了 caps,前端就无话可说。"""
+    mgr = mcp_mod.McpManager(mcp_mod.parse_servers([_fake_config("sum")]))
+    mgr.connect_all()
+    try:
+        rows = mgr.tools_summary()
+        assert rows and "学长只接了 tools" in rows[0]["caps"]
+    finally:
+        mgr.close_all()
+
+
 # ---------------------------------------------------------------- 管理面
 
 def test_admin_without_hook_is_honest(monkeypatch):

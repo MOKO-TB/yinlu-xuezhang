@@ -56,7 +56,10 @@ def main() -> None:
         if rid is None:          # 通知(notifications/initialized)无需响应
             continue
         if method == "initialize":
-            reply(rid, {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+            # 故意声明得比学长实际支持的多(resources/prompts 学长没实现):
+            # caps_line 那句「只接了 tools、其余不会去调」要有真数据才验得到。
+            reply(rid, {"protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
                         "serverInfo": {"name": "fake-mcp", "version": "0.0.1"}})
         elif method == "tools/list":
             reply(rid, {"tools": TOOLS})

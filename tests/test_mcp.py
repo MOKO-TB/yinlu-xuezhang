@@ -153,7 +153,10 @@ def test_manager_builds_tools_and_summary():
         assert all(t.read_only is False for t in tools)
         summary = mgr.tools_summary()
         assert summary == [{"id": "demo", "label": "演示服务", "n_tools": 2,
-                            "server": "fake-mcp"}]
+                            "server": "fake-mcp",
+                            # 不抄第二份措辞:能力那句由 caps_line 自己说,这里只钉
+                            # "summary 的每一行都带着它"(形状仍是精确比对,多一个键就红)
+                            "caps": mgr.clients[0].caps_line()}]
 
         ctx = ToolContext(workspace=Path.cwd(), config=Config())
         out = tools[0].handler(ctx, message="hi")

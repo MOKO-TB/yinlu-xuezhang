@@ -6891,6 +6891,10 @@ function renderMcpLine(items) {
   el.textContent = "🔌 MCP:" + list.map(i =>
     `${i.label}(${i.enabled === false ? "停用" : i.connected ? `${i.n_tools} 工具` : "未连上"})`
   ).join(" · ");
+  // 健康行太窄,塞不下「对端声明了哪些能力、学长只接了 tools」——挂成悬停提示。
+  // 没连上的那台不编能力:握手都没发生,拿不到对端声明。
+  el.title = list.map(i =>
+    `${i.label}:${i.caps || "未连上,没握过手,拿不到对端声明的能力"}`).join("\n");
 }
 window.addEventListener("DOMContentLoaded", () => {
   applyTheme(document.documentElement.classList.contains("dark"), false);

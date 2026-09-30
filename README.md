@@ -263,6 +263,8 @@ GUI 顶栏的「🛡 沙箱开/关」可随时切换(写回 config.json);CLI 用
 **sse**(老式 HTTP+SSE:`GET` 一条长流拿到 `endpoint` 事件后再 POST 到那条地址)。
 只有网址、没有启动命令的服务器从此也能连,而且**不额外依赖任何第三方库**(走标准库 `urllib`)。
 
+**能力协商照实说(v0.9.82)**:握手时学长声明的 `capabilities` 是空的 —— 它只实现了 MCP 的 `tools` 这一个原语,`resources` / `prompts` / `sampling` / `logging` 都没接,所以不假装支持。对端在握手里声明了什么则**原样留着并说给你听**:添加服务器成功那句话会带上「对端声明: prompts、resources、tools;学长只接了 tools(prompts、resources 没实现,不会去调)」,侧栏 🔌 MCP 健康行悬停是同一句;没连上(没握过手)的服务器**不编能力表**,直说拿不到。`mcp action=list` 仍是配置层口径(它不去连服务器),活状态与能力在这两处。
+
 在 `config.json` 里配置(完整示例见 `config.example.json`):
 
 ```json
