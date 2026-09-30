@@ -255,15 +255,15 @@ def main() -> int:
             picked = [c for c in calls() if c[0] == "switch_workspace"][-1][1]
             check(picked == PICKED, f"选文件夹后没按返回路径切:{picked}")
 
-            # 5. 权限四档下拉
-            opts = page.eval_on_selector_all(
-                "#perm option", "els => els.map(e => ({v: e.value, t: e.textContent}))")
-            check([o["v"] for o in opts] ==
-                  ["confirm", "accept_edits", "accept_all", "full"],
-                  f"权限下拉四档不对:{opts}")
-            check(page.evaluate("() => document.getElementById('perm').value")
-                  == "confirm", "权限下拉初始选中值应为 confirm")
-            page.select_option("#perm", "accept_edits")
+            # 5. 权限四档(v0.9.94 起是自定义浮层菜单,不再是原生 select;
+            #    同样的语义:四档清单正确、初始 confirm、切换真调桥)
+            pill = page.locator("#permPill")
+            check("变更前确认" in pill.inner_text(), "权限药丸初始为 confirm")
+            pill.click()
+            menu = page.locator("#permMenu")
+            check(menu.is_visible() and menu.locator(".at-item").count() == 4,
+                  "权限浮层四档(计划模式不在老桩里)")
+            menu.locator(".at-item", has_text="自动编辑").click()
             page.wait_for_function(
                 "() => window.__E2E_CALLS__.some("
                 "c => c[0] === 'set_permission_mode' && c[1] === 'accept_edits')")

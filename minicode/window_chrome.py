@@ -105,10 +105,32 @@ def _dwmapi():
 
 
 def _hwnd_of(window) -> int:
-    """pywebview 窗口 → 原生 HWND(拿不到返回 0,调用方据此降级)。"""
+    """pywebview 窗口 → 原生 HWND(拿不到返回 0,调用方据此降级)。
+
+    v0.9.94 兜底:原先只认 `native.Handle` 一条路 —— 但用户真机(图 p1,
+    标题栏始终白底)显示这条在部分安装形态下拿不到有效句柄,apply() 如实
+    报 failed 却没有任何人看见,染色静默失效。现在按序多找两层
+    (`native.Form.Handle`),再不行用 Win32 `FindWindowW` 按**当前标题**
+    找(标题正是我们 set 的当前工作区名,找错窗口的概率趋近于零,
+    因为这名字是我们自己写上去的)。
+    """
     try:
-        handle = getattr(getattr(window, "native", None), "Handle", None)
-        return int(handle) if handle is not None else 0
+        native = getattr(window, "native", None)
+        for obj in (native, getattr(native, "Form", None)):
+            handle = getattr(obj, "Handle", None)
+            if handle is not None:
+                return int(handle)
+    except Exception:
+        pass
+    try:
+        title = getattr(window, "title", None)
+        if not title:
+            return 0
+        user32 = ctypes.windll.user32 if getattr(ctypes, "windll", None) else None
+        if not user32:
+            return 0
+        hwnd = user32.FindWindowW(None, str(title))
+        return int(hwnd) if hwnd else 0
     except Exception:
         return 0
 

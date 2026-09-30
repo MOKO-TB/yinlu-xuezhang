@@ -1670,6 +1670,64 @@ try {
 .at-item .cmd-tag { flex: none; font-size: 9.5px; font-weight: 700; padding: 1px 5px;
                     margin-right: 6px; border-radius: var(--r-full);
                     color: var(--primary); border: 1px solid var(--primary); opacity: .8; }
+.at-item .cmd-tag { flex: none; font-size: 9.5px; font-weight: 700; padding: 1px 5px;
+                    margin-right: 6px; border-radius: var(--r-full);
+                    color: var(--primary); border: 1px solid var(--primary); opacity: .8; }
+/* ---- 权限模式浮层菜单(v0.9.94,p5):替换原生 select(深色下 option 白底白字) ---- */
+.perm-pill{ background:var(--glass-strong); color:var(--text-1); border:1px solid var(--line);
+            border-radius:var(--r-full); padding:6px 14px; font-size:12.5px; cursor:pointer;
+            backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); transition:.15s; }
+.perm-pill:hover{ border-color:var(--primary); }
+.perm-menu{ position:fixed; top:52px; right:180px; z-index:76; min-width:230px;
+            background:var(--glass-strong); border:1px solid var(--line);
+            border-radius:var(--r-m); padding:5px; box-shadow:var(--shadow-lg);
+            backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
+.perm-menu .at-item{ display:flex; align-items:center; gap:9px; padding:9px 11px;
+                     border-radius:var(--r-m); cursor:pointer; }
+.perm-menu .at-item:hover, .perm-menu .at-item.on{ background:var(--glass-lite); }
+.perm-menu .at-item.on .pm-check{ opacity:1; }
+.pm-ic{ flex:none; font-size:15px; }
+.pm-body{ min-width:0; display:flex; flex-direction:column; gap:1px; }
+.pm-body b{ font-size:12.5px; color:var(--text-1); }
+.pm-desc{ font-size:11px; color:var(--text-3); }
+.pm-check{ margin-left:auto; color:var(--primary); font-weight:700; opacity:0; }
+/* ---- 会话轮次导航条(v0.9.94,p6):右侧细条按轮分刻度,hover 出预览 ---- */
+.chat-rail{ position:absolute; right:2px; top:10px; bottom:14px; width:8px;
+            display:flex; flex-direction:column; justify-content:space-between;
+            align-items:center; opacity:.5; transition:.15s; z-index:12; }
+.chat-rail[hidden]{ display:none; }   /* flex 会盖掉 hidden 的 UA 样式,必须显式收回 */
+.chat-wrap:hover .chat-rail{ opacity:1; }
+.chat-rail .tick{ width:6px; flex:1 1 0; min-height:8px; margin:1px 0;
+                  border-radius:3px; background:var(--line); cursor:pointer;
+                  transition:.15s; }
+.chat-rail .tick:hover{ background:var(--primary); flex-grow:1.4; }
+.rail-pop{ position:fixed; z-index:61; max-width:380px; padding:10px 13px;
+           background:var(--glass-strong); border:1px solid var(--line);
+           border-radius:var(--r-m); box-shadow:var(--shadow-lg);
+           backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+           font-size:12px; color:var(--text-1); line-height:1.6; pointer-events:none; }
+.rail-pop b{ color:var(--text-3); font-size:11px; display:block; margin-bottom:2px; }
+/* ---- 会话图片灯箱(v0.9.94,p7/p8) ---- */
+#imgLightbox{ z-index:80; cursor:zoom-out; }
+#imgLightbox .il-stage{ display:flex; align-items:center; justify-content:center;
+                        width:100%; height:100%; }
+#ilImg{ max-width:88vw; max-height:80vh; border-radius:var(--r-m);
+        box-shadow:var(--shadow-lg); transition:transform .12s; cursor:grab; }
+.il-nav{ position:fixed; top:50%; transform:translateY(-50%); font-size:26px;
+         width:46px; height:46px; border-radius:50%; border:1px solid var(--line);
+         background:var(--glass-strong); color:var(--text-1); cursor:pointer; z-index:81; }
+#ilPrev{ left:22px; } #ilNext{ right:22px; }
+.il-nav:hover{ border-color:var(--primary); color:var(--primary); }
+#imgLightbox .lb-close{ position:fixed; top:18px; right:22px; }
+.il-bar{ position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+         display:flex; align-items:center; gap:12px; padding:6px 16px;
+         background:var(--glass-strong); border:1px solid var(--line);
+         border-radius:var(--r-full); color:var(--text-1); font-size:12.5px; z-index:81; }
+.il-bar button{ border:none; background:transparent; color:var(--text-1);
+                font-size:15px; cursor:pointer; padding:2px 8px; }
+.il-bar button:hover{ color:var(--primary); }
+.msg .att img{ cursor:zoom-in; }
+.msg .body img{ cursor:zoom-in; }
 </style>
 </head>
 <body>
@@ -1719,11 +1777,13 @@ try {
       <button class="wspill" id="wsPill" title="当前工作区(点击切换)">📁 …</button>
       <span class="spacer"></span>
       <span class="modelpill" id="modelPill"></span>
-      <select id="perm" title="权限模式:变更前确认 / 自动编辑 / 自动放行 / 完全访问"></select>
+      <button class="perm-pill" id="permPill" title="权限模式(点开选择)">变更前确认</button>
     </div>
 
     <div class="chat-wrap">
       <div id="chat"></div>
+      <div class="chat-rail" id="chatRail" hidden></div>
+      <div class="rail-pop" id="railPop" hidden></div>
       <div id="findBar" role="search">
         <input id="findInput" type="search" placeholder="在这条对话里找…（Ctrl+F）"
                aria-label="会话内搜索" autocomplete="off">
@@ -1819,6 +1879,26 @@ try {
   <div class="map-card" id="mapCard"></div>
   <div class="map-list" id="mapList"></div>
 </aside>
+
+<!-- 权限浮层菜单(v0.9.94):必须放 body 级 —— topbar 的 backdrop-filter 会
+     创建层叠上下文,菜单困在里面会被后续的聊天区盖住(e2e 实测 hero 拦截) -->
+<div class="perm-menu" id="permMenu" hidden></div>
+
+<!-- 会话图片灯箱(v0.9.94,p7/p8):点对话里的照片放大,左右切换本会话内的图片 -->
+<div class="overlay" id="imgLightbox">
+  <div class="il-stage">
+    <img id="ilImg" alt="对话中的图片查看">
+    <button class="il-nav" id="ilPrev" title="上一张(←)">←</button>
+    <button class="il-nav" id="ilNext" title="下一张(→)">→</button>
+    <button class="lb-close" id="ilClose" title="关闭(或按 Esc)">✕</button>
+    <div class="il-bar">
+      <button id="ilMinus" title="缩小">−</button>
+      <span id="ilPct">100%</span>
+      <button id="ilPlus" title="放大">+</button>
+      <span id="ilIdx"></span>
+    </div>
+  </div>
+</div>
 
 <div class="overlay" id="mapLightbox">
   <div class="lightbox">
@@ -2401,7 +2481,16 @@ function applyTheme(dark, persist) {
   // 系统标题栏跟着走(p2):它仍是系统画的,只是底色/文字对齐界面,
   // 那行字写的是当前工作区而不是又一遍「引路学长」。失败不影响界面。
   if (window.pywebview && pywebview.api && pywebview.api.set_chrome) {
-    try { Promise.resolve(pywebview.api.set_chrome(dark)).catch(() => {}); } catch (e) {}
+    try {
+      Promise.resolve(pywebview.api.set_chrome(dark)).then(r => {
+        // v0.9.94:老 Windows 会拒 caption/text/border 三条,此前这个失败
+        // 没人看见(标题栏永远白底)。打一行到控制台,F12 就能自助定位
+        // —— 不是界面故障,是系统不收。
+        if (r && r.failed && r.failed.length) {
+          console.info("[标题栏] 系统不接受:" + r.failed.join("、") + " —— " + (r.msg || ""));
+        }
+      }).catch(() => {});
+    } catch (e) {}
   }
 }
 $("btnTheme").addEventListener("click", () => {
@@ -2727,6 +2816,7 @@ function addUserMsg(text, atts) {
   wrap.querySelector(".ed").addEventListener("click", () => startEdit(ord, text));
   chat.appendChild(wrap);
   nearBottom = true; toBottom();
+  rebuildChatRail();      // 每来一问,导航条加一枚刻度(p6)
 }
 
 function ensureAssistant() {
@@ -3348,6 +3438,7 @@ function renderHistory(messages) {
   nearBottom = true; toBottom();
   fixImages(chat);
   renderMermaidBlocks(chat);
+  rebuildChatRail();      // 轮次导航条(p6):整个会话重建后按真实消息重收刻度
 }
 
 function renderSessions(items) {
@@ -6543,19 +6634,174 @@ function uploadDroppedFiles(files, label) {
 })();
 
 
+/* ---------------- 权限模式:自定义浮层菜单(v0.9.94,p5) ----------------
+   原生 <select> 展开的 option 列表是 OS 画的,深色模式下白底白字(p3)——
+   换成与 UI 同色的浮层菜单(图标 + 名称 + 说明 + 当前档勾选),深浅都协调。 */
+const PERM_META = {
+  plan: { icon: "💡", desc: "编辑前先出计划。" },
+  confirm: { icon: "✋", desc: "改文件先问我。" },
+  accept_edits: { icon: "🛡", desc: "自动编辑文件。" },
+  accept_all: { icon: "✓", desc: "减少确认次数。" },
+  full: { icon: "🔓", desc: "沙箱内全放,敏感路径仍拦。" },
+};
+let permModes = [{ value: "confirm", label: "变更前确认" }, { value: "accept_all", label: "自动放行" }];
+let permCurrent = "confirm";
+
 function renderPermOptions(info) {
-  const sel = $("perm");
-  const modes = info.permission_modes && info.permission_modes.length
+  permModes = info.permission_modes && info.permission_modes.length
     ? info.permission_modes
     : [{ value: "confirm", label: "变更前确认" }, { value: "accept_all", label: "自动放行" }];
-  sel.innerHTML = modes.map(m =>
-    `<option value="${esc(m.value)}">${esc(m.label)}</option>`).join("");
-  sel.value = info.permission_mode;
-  sel.title = "权限档位:" + modes.map(m => `${m.label}(${m.value})`).join(" / ")
+  permCurrent = info.permission_mode || permModes[0].value;
+  renderPermPill();
+}
+
+function renderPermPill() {
+  const m = permModes.find(x => x.value === permCurrent) || permModes[0];
+  const meta = PERM_META[m.value] || {};
+  $("permPill").textContent = `${meta.icon || "✋"} ${m.label}`;
+  $("permPill").title = "权限模式:" + permModes.map(x => x.label).join(" / ")
     + "\n变更前确认=变更要逐次确认;自动编辑=工作区内普通编辑放行;"
     + "完全访问=沙箱内全放(敏感路径仍硬拒)";
 }
-$("perm").addEventListener("change", (e) => pywebview.api.set_permission_mode(e.target.value));
+
+function permMenuToggle(force) {
+  const menu = $("permMenu");
+  const show = force !== undefined ? force : menu.hidden;
+  if (!show) { menu.hidden = true; return; }
+  menu.innerHTML = "";
+  permModes.forEach(m => {
+    const meta = PERM_META[m.value] || { icon: "✋", desc: "" };
+    const el = document.createElement("div");
+    el.className = "at-item" + (m.value === permCurrent ? " on" : "");
+    el.innerHTML = `<span class="pm-ic">${meta.icon || ""}</span>`
+      + `<span class="pm-body"><b>${esc(m.label)}</b>`
+      + `<span class="pm-desc">${esc(meta.desc)}</span></span>`
+      + (m.value === permCurrent ? '<span class="pm-check">✓</span>' : "");
+    el.addEventListener("click", () => {
+      permCurrent = m.value;
+      renderPermPill();
+      permMenuToggle(false);
+      pywebview.api.set_permission_mode(m.value);
+    });
+    menu.appendChild(el);
+  });
+  menu.hidden = false;
+}
+$("permPill").addEventListener("click", (e) => {
+  e.stopPropagation();
+  permMenuToggle();
+});
+document.addEventListener("click", (e) => {
+  if (!$("permMenu").hidden && !$("permMenu").contains(e.target)
+      && e.target !== $("permPill")) permMenuToggle(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("permMenu").hidden) permMenuToggle(false);
+});
+
+/* ---------------- 会话轮次导航条(v0.9.94,p6) ----------------
+   Qoder/ZCode 同款:对话一长,右侧细条按「问」分刻度,hover 出该问的预览、
+   点击跳过去。刻度从 DOM 现收(每条 .msg.user 就是一问的边界),不做滚动
+   联动高亮 —— 那要滚动监听常开,收益配不上打扰;少做也是诚实。 */
+function rebuildChatRail() {
+  const chat = $("chat"), rail = $("chatRail");
+  const users = Array.from(chat.querySelectorAll(".msg.user .bubble"));
+  if (users.length < 3) { rail.hidden = true; rail.innerHTML = ""; return; }
+  rail.hidden = false;
+  rail.innerHTML = "";
+  users.forEach((b, i) => {
+    const tick = document.createElement("div");
+    tick.className = "tick";
+    tick.title = `第 ${i + 1} 问`;
+    tick.addEventListener("click", () => b.scrollIntoView({ block: "start" }));
+    tick.addEventListener("mouseenter", () => showRailPop(b, i));
+    tick.addEventListener("mouseleave", hideRailPop);
+    rail.appendChild(tick);
+  });
+}
+function showRailPop(bubble, i) {
+  const pop = $("railPop");
+  pop.innerHTML = `<b>第 ${i + 1} 问</b>${esc((bubble.textContent || "").slice(0, 120))}`;
+  pop.hidden = false;
+  const r = bubble.getBoundingClientRect();
+  pop.style.top = Math.max(60, Math.min(window.innerHeight - 130, r.top)) + "px";
+  pop.style.right = "26px";
+}
+function hideRailPop() { $("railPop").hidden = true; }
+
+/* ---------------- 会话图片灯箱(v0.9.94,p7/p8) ----------------
+   点对话里的照片放大(ZCode 同款):左右切换本会话内的图片、Esc/点遮罩关、
+   底部缩放。图源是会话里现有 <img> 的 src —— 附件是上传时的预览帧
+   (320px),放大后略糊但能看清内容;原图级清晰度等桥空闲后补 full 字段。 */
+let lightboxImgs = [];
+let lightboxIdx = 0;
+let lightboxZoom = 1;
+
+function collectLightboxImages() {
+  return Array.from($("chat").querySelectorAll(".msg img"))
+    .filter(i => i.src && !i.closest(".tr-tools"))
+    .map(i => i.src);
+}
+
+function openLightbox(src) {
+  lightboxImgs = collectLightboxImages();
+  lightboxIdx = Math.max(0, lightboxImgs.indexOf(src));
+  lightboxZoom = 1;
+  renderLightbox();
+  $("imgLightbox").classList.add("show");
+}
+
+function renderLightbox() {
+  $("ilImg").src = lightboxImgs[lightboxIdx] || "";
+  $("ilImg").style.transform = `scale(${lightboxZoom})`;
+  $("ilPct").textContent = Math.round(lightboxZoom * 100) + "%";
+  $("ilIdx").textContent = lightboxImgs.length > 1
+    ? `${lightboxIdx + 1} / ${lightboxImgs.length}` : "";
+  $("ilPrev").style.visibility = lightboxIdx > 0 ? "visible" : "hidden";
+  $("ilNext").style.visibility = lightboxIdx < lightboxImgs.length - 1 ? "visible" : "hidden";
+}
+
+function lightboxStep(d) {
+  if (!lightboxImgs.length) return;
+  lightboxIdx = (lightboxIdx + d + lightboxImgs.length) % lightboxImgs.length;
+  lightboxZoom = 1;
+  renderLightbox();
+}
+
+function closeLightbox() { $("imgLightbox").classList.remove("show"); }
+
+$("ilClose").addEventListener("click", closeLightbox);
+$("ilPrev").addEventListener("click", (e) => { e.stopPropagation(); lightboxStep(-1); });
+$("ilNext").addEventListener("click", (e) => { e.stopPropagation(); lightboxStep(1); });
+$("ilMinus").addEventListener("click", (e) => {
+  e.stopPropagation();
+  lightboxZoom = Math.max(0.5, lightboxZoom - 0.25); renderLightbox();
+});
+$("ilPlus").addEventListener("click", (e) => {
+  e.stopPropagation();
+  lightboxZoom = Math.min(3, lightboxZoom + 0.25); renderLightbox();
+});
+$("imgLightbox").addEventListener("click", (e) => {
+  if (e.target.id === "imgLightbox" || e.target.closest(".il-stage") && e.target.id === "ilImg" && false) {
+    // 点遮罩关;点图片本身不关(放大查看是主用途)
+  }
+  if (e.target === $("imgLightbox")) closeLightbox();
+});
+$("ilImg").addEventListener("click", (e) => e.stopPropagation());
+document.addEventListener("keydown", (e) => {
+  if ($("imgLightbox").classList.contains("show")) {
+    if (e.key === "Escape") closeLightbox();
+    if (e.key === "ArrowLeft") lightboxStep(-1);
+    if (e.key === "ArrowRight") lightboxStep(1);
+  }
+});
+// 事件委托:对话区任何 img 点开灯箱(含历史消息、模型产出的图;排除工具卡里的行内小图)
+$("chat").addEventListener("click", (e) => {
+  const img = e.target.closest(".msg img");
+  if (!img || img.closest(".tr-tools")) return;
+  if (!img.src) return;
+  openLightbox(img.src);
+});
 
 /* @ 文件引用:v0.9.64 —— 输入 @ 弹出工作区文件补全(Codex/Cursor 同款交互)。
    数据是真的:每 keystroke 防抖 150ms 问桥(桥上走 fs.search_files,跳过依赖/产物目录)。
