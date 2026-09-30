@@ -356,6 +356,38 @@ def _check_gates(root: Path, gate: Callable, has_dist: bool) -> list[dict]:
     return out
 
 
+def _check_injection_log(stats: Callable | None = None) -> Callable[[], dict]:
+    """注入防御留痕:这份日志以前只写不读(v0.9.96 才接进面板)。
+
+    口径两条:①**只报计数与类别,不搬正文** —— 记录里的 `arg`/`why` 可能带着本机
+    路径或外部内容片段,而这一行既显示在面板上也会进模型回话;②**0 条不等于防线在
+    工作**,只代表这台机器还没触发过一次强制确认,所以那句写得很直,不写成"一切正常"。
+    """
+    def run() -> dict:
+        if stats is None:
+            from minicode.provenance import log_stats
+            stats_ = log_stats()
+        else:
+            stats_ = stats()
+        if not stats_.get("readable"):
+            return _row("injection", "local", "注入防御留痕", UNKNOWN,
+                        detail="日志文件在,但这一版读不出来(不是没记,是没读成)",
+                        fix="不是配置坏了:这一项没查成。明细在数据目录的 "
+                            "injection-events.log,打开看一眼即知。")
+        n = int(stats_.get("events") or 0)
+        if not n:
+            return _row("injection", "local", "注入防御留痕", OK,
+                        detail="这台机器上还没出现过需要强制确认的敏感动作(0 条)。"
+                               "0 条不代表防线在工作,只代表没触发过。")
+        gates = "、".join(str(g) for g in (stats_.get("gates") or [])[:4])
+        last = str(stats_.get("last_at") or "")[:19].replace("T", " ")
+        return _row("injection", "local", "注入防御留痕", OK,
+                    detail=f"安全门过问并记下的敏感动作 {n} 次(最近一次 {last or '时刻没记上'};"
+                           f"门:{gates or '?'})。面板只给计数与类别,明细在数据目录的 "
+                           "injection-events.log —— 里面会有本机路径,截图前自己先看一眼。")
+    return run
+
+
 # ------------------------------------------------------------------------ 汇总
 
 
@@ -363,12 +395,13 @@ def report(workspace: Any = None, config: Any = None, project: Any = None,
            mcp_rows: Any = None, deep: bool = False, repo: Any = None,
            probe: Callable | None = None, browser_health: Callable | None = None,
            startup: Callable | None = None, gate: Callable | None = None,
+           injection_stats: Callable | None = None,
            timeout: float = 10.0) -> dict:
     """算一张体检表。逐项兜异常:某一项自己崩了绝不能把整张表带崩,也不能报成"正常"。
 
     `repo=None` 时自动判(非打包且 `scripts/check_docs.py` 在);传 False 强制关掉 ——
-    测试就靠它不真去跑那四支脚本。四个注入点(probe / browser_health / startup /
-    gate)默认取真实现,是给测试钉的,不是给用户配的开关。
+    测试就靠它不真去跑那四支脚本。五个注入点(probe / browser_health / startup /
+    gate / injection_stats)默认取真实现,是给测试钉的,不是给用户配的开关。
     """
     from minicode.paths import diagnostics as paths_diagnostics
 
@@ -385,6 +418,7 @@ def report(workspace: Any = None, config: Any = None, project: Any = None,
         ("mcp", "local", "MCP 服务器", _check_mcp(mcp_rows)),
         ("library", "local", "图书馆馆藏库", _check_library(workspace,
                                                             bool(diag.get("frozen")))),
+        ("injection", "local", "注入防御留痕", _check_injection_log(injection_stats)),
     ]
     if deep:
         checks += [

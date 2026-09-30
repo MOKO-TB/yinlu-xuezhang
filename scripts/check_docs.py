@@ -80,9 +80,17 @@ def state_targets() -> dict[str, list[str]]:
 
     只认字面量与"同模块内的简单常量赋值",不猜跨模块引用 —— 猜出来的清单
     会让这条检查看起来能过但其实没在看。
+
+    **扫描集必须含根目录那几个入口**:`gui_main.py` / `main.py` / `web_main.py`
+    也在往数据目录写(实测 `gui_warnings.log` 就是 `gui_main.py` 写的),而它们
+    不在 `minicode/` 下 —— 只看包内模块的那版扫不到,于是那份日志既不进
+    SHIP_NEVER 也不进「我的数据」,打包时没人删它。
     """
+    sources = sorted((ROOT / "minicode").glob("*.py")) + [
+        ROOT / name for name in ("gui_main.py", "main.py", "web_main.py")
+        if (ROOT / name).exists()]
     out: dict[str, list[str]] = {}
-    for py in sorted((ROOT / "minicode").glob("*.py")):
+    for py in sources:
         src = py.read_text(encoding="utf-8")
         consts = _module_constants(src)
         found: set[str] = set()

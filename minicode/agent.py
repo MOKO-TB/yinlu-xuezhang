@@ -263,6 +263,16 @@ class Agent:
             out.insert(0, {"role": "system", "content": prior})
         return out
 
+    def _effective_config(self):
+        """**真正发请求那个客户端**带的配置,不是全局那一份。
+
+        两处会让它与 `ctx.config` 分家:会话内切模型(`Bridge` 重建 `agent.llm`)、
+        子代理按档位换模型(v0.9.95 的 `LLMClient.scoped`)。记账与面板读 `ctx.config`
+        说的就是"没在跑的那个模型" —— 每日用量按模型分开那张图会把便宜档的字算到
+        主模型头上。测试桩的假 LLM 没有 config,退回 `ctx.config`。
+        """
+        return getattr(self.llm, "config", None) or self.ctx.config
+
     def _record_usage(self, turn) -> None:
         """把本轮真实 token 用量记进本地统计(见 minicode/usage.py)。
 
@@ -271,7 +281,7 @@ class Agent:
         """
         try:
             from minicode import usage
-            cfg = self.ctx.config
+            cfg = self._effective_config()
             usage.record_usage(
                 provider=cfg.provider.id if cfg.provider else "",
                 model=cfg.model,
@@ -293,7 +303,7 @@ class Agent:
             self.turn_tokens = getattr(self, "turn_tokens", 0) + pt + ct
         try:
             from minicode.model_catalog import push_turn_usage
-            push_turn_usage(self, self.session, self.ctx.config, turn)
+            push_turn_usage(self, self.session, self._effective_config(), turn)
         except Exception:
             pass
 

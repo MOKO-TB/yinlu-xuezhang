@@ -74,6 +74,12 @@ SHIP_NEVER: tuple[StateFile, ...] = (
     StateFile("injection-events.log", FILE, "上下文注入日志:防注入排查现场,含本机内容"),
     StateFile("close-pref.json", FILE, "关窗时怎么办:最小化到托盘还是直接退出"),
     StateFile("tray.log", FILE, "托盘与通知的诊断日志:弹不出来时看的就是它"),
+    # v0.9.96:入口脚本 `gui_main.py` 写的界面警告日志(原生右键菜单开没开、
+    # WebView2 就绪超时)。它一直在数据目录里躺着,而这份清单以前只扫 `minicode/`,
+    # 根目录那几个入口不在扫描集里 —— 于是它既没进这里、也没进「我的数据」,
+    # 打包时没人删。现在扫描集扩到入口脚本,这条由闸逼出来,不是顺手加的。
+    StateFile("gui_warnings.log", FILE,
+              "界面警告日志:装好的机器上界面行为不对时看的就是它,含本机路径"),
     StateFile("monitor-pref.json", FILE, "任务监控栏的开合与折叠偏好"),
     StateFile("onboarding.json", FILE, "首次运行向导的「不再显示」"),
     StateFile("notify-pref.json", FILE, "桌面提醒开关与类别偏好"),

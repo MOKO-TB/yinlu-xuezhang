@@ -86,6 +86,28 @@ def log(msg: str) -> None:
 
 LOG_CAP_LINES = 500            # v0.9.66:与 watchdog.log 同款滚动,别让诊断日志无限长
 
+# `desktop_notify` 认的 action,**这一处是真相**:工具 schema 的 enum 从这里取,
+# 未知 action 那句"可用:…"也从这里拼。v0.9.79 给 kind 做过同一条对账,action 这条
+# 线以前是两处手抄 —— 加一个出口忘了改 enum 的表现很坏:模型照着描述调,
+# 参数校验先把它挡在门外,用户以为功能没做。
+NOTIFY_ACTIONS = ("status", "on", "off", "test", "startup_on", "startup_off",
+                  "log", "jobs", "tray_log")
+
+
+def log_tail(lines: int = 30) -> list[str]:
+    """托盘/通知诊断日志最后几行;没有日志回空列表(不是报错)。
+
+    为什么要有这个读法:v0.9.79 给 `watchdog.log` 开过同一个口子(`action=log`),
+    而 `tray.log` 一直是**只写不读** —— 代码里那句"原因也写在数据目录里的 tray.log"
+    等于让同学自己去开文件。"通知没弹""点 X 没问我了""开机自启没生效"这三件事
+    的现场恰好都在这里,而它们是最容易被误报成"学长坏了"的。
+    """
+    try:
+        rows = _ensure_parent(app_path(LOG_FILE)).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    return rows[-max(1, int(lines)):]
+
 
 def _trim_log(path) -> None:
     """超上限只留最近的 LOG_CAP_LINES 行;写失败照旧静默(日志不能拖垮托盘)。"""
@@ -1075,7 +1097,7 @@ def desktop_notify(ctx, action: str = "status", kind: str = "",
             return ("这条是**退回托盘气球**发的,不能算验证通过 —— "
                     + r.get("note", ""))
         return ("这条测试通知没能发出:" + r.get("msg", r.get("skipped", ""))
-                + "\n原因也写在数据目录里的 tray.log;"
+                + "\n再问一句「看看托盘日志」(action=tray_log)就能把原因读出来;"
                   "主动提醒仍会显示在聊天窗口顶部那条提示栏里。")
     if action == "jobs":
         # 定时任务可观测(v0.9.79):「这周的任务跑没跑、为什么没跑」的查询口。
@@ -1098,5 +1120,17 @@ def desktop_notify(ctx, action: str = "status", kind: str = "",
                   "「今天已推过」是按天账本(pushed-today.json)在去重,"
                   "「今日简报已覆盖」是简报把单条提醒顶掉了。"
                   "日志里只有类别和去重键,没有通知正文。")
-    return (f"未知的 action「{action}」,可用:status / on / off / test / "
-            "startup_on / startup_off / log")
+    if action == "tray_log":
+        rows = log_tail(30)
+        path = _ensure_parent(app_path(LOG_FILE))
+        if not rows:
+            return ("托盘还没留下一行诊断(" + str(path) + ")。\n"
+                    "通常是:这个形态没起托盘(命令行/网页版),或这台机器的数据目录写不进去。")
+        return ("最近 " + str(len(rows)) + " 条托盘与通知诊断(" + str(path) + "):\n"
+                + "\n".join(rows)
+                + "\n读法:这里记的是**动作走没走通**——托盘图标建没建起来、桌面通知"
+                  "两条通道(toast/气球)各自的结果、开机自启那条快捷方式指向哪个 exe、"
+                  "关窗拦截接上没有。查「通知为什么没弹」「点 X 怎么直接退了」"
+                  "「开机自启没生效」看这份;查「今天该提醒的提醒了没有」看 action=log。"
+                  "里面没有通知正文,但会有本机的绝对路径 —— 截图给同学前自己看一眼。")
+    return (f"未知的 action「{action}」,可用:" + " / ".join(NOTIFY_ACTIONS))

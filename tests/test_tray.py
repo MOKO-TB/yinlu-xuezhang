@@ -1290,3 +1290,53 @@ def test_desktop_notify_jobs_answers_did_it_run():
     assert "定时任务 2 个" in out
     assert "mood_weekly_review" in out and "kb_gap_digest" in out
     assert "每周周日" in out and "每周周六" in out
+
+
+# ------------------------------------------------ tray.log 有人读(v0.9.96)
+
+
+def test_log_tail_reads_back_what_log_wrote_in_order():
+    """`log()` 写的东西要能从这里读回来 —— 以前 tray.log 是只写不读的。"""
+    tray.log("托盘图标已就绪")
+    tray.log("桌面通知失败: toast=没有 PowerShell 气球=没试")
+    rows = tray.log_tail(10)
+    assert len(rows) == 2, rows
+    assert rows[0].endswith("托盘图标已就绪")          # 先后顺序不反
+    assert "气球=没试" in rows[1]
+    assert rows[0][:10] == time.strftime("%Y-%m-%d")   # 每行开头是当天时刻,不是凑的
+
+
+def test_log_tail_is_silent_when_there_is_no_log(tmp_path):
+    """没日志 = 空列表,不是抛异常:查状态的那条路不能因为文件不存在而红。"""
+    assert tray.log_tail(5) == []
+
+
+def test_action_tray_log_answers_the_three_real_questions():
+    """「通知没弹 / 点 X 直接退了 / 开机自启没生效」这三件事从此问得出来。"""
+    tray.log(r"开机自启:开(C:\Start\x.lnk → D:\app\x.exe)")
+    out = tray.desktop_notify(None, action="tray_log")
+    assert "开机自启:开" in out
+    assert "没有通知正文" in out                    # 口径照写:不谎称什么都有
+    assert "action=log" in out                      # 说清与看门狗日志的分工
+
+
+def test_action_tray_log_says_so_when_empty():
+    out = tray.desktop_notify(None, action="tray_log")
+    assert "还没留下一行诊断" in out
+    assert "命令行/网页版" in out                   # 给的是原因,不是一句"没有"
+
+
+def test_notify_actions_are_one_source_not_two_copies():
+    """工具 schema 的 enum 与 handler 认的 action 必须同一份 —— 手抄的第二份一定漂。
+
+    漂了的后果不是报错,是"模型照着描述调,参数校验先把它挡在门外",
+    而用户看到的正是"这个功能没做"。
+    """
+    from minicode.tools.registry import build_default_registry
+    tool = next(t for t in build_default_registry() if t.name == "desktop_notify")
+    assert tool.parameters["properties"]["action"]["enum"] == list(tray.NOTIFY_ACTIONS)
+    for action in tray.NOTIFY_ACTIONS:
+        assert action in tool.parameters["properties"]["action"]["description"], action
+    unknown = tray.desktop_notify(None, action="弹窗")
+    for action in tray.NOTIFY_ACTIONS:
+        assert action in unknown, f"未知 action 那句没把所有出口列全: {unknown}"

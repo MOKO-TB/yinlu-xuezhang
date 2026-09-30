@@ -41,6 +41,11 @@ def test_state_scan_actually_finds_the_real_files():
                  "pushed-today.json", "watchdog.log", "weather.json",
                  "web-sessions", "web-usage.log", "migrate-backup"):
         assert name in found, f"{name} 在代码里写进数据目录,却没被扫出来"
+    # **根目录那几个入口也在写数据目录**,扫描集不能只看 `minicode/`:
+    # `gui_warnings.log` 是 `gui_main.py` 写的,它因此在包里躺了很久 —— 既没进
+    # 不外发清单,也没进「我的数据」,而那道闸当时是绿的。
+    assert "gui_warnings.log" in found, "入口脚本写的数据目录文件没被扫到(扫描集缩回去了)"
+    assert "gui_main.py" in found["gui_warnings.log"], found["gui_warnings.log"]
 
 
 def test_state_exemptions_are_all_still_needed():

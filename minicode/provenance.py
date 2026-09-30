@@ -121,6 +121,40 @@ def log_escalation(gate_name: str, tool_name: str, args: dict, note: str,
         pass
 
 
+def log_stats(lines: int = INJECTION_LOG_CAP_LINES) -> dict:
+    """数一数这份留痕:几条、最近一次什么时候、都是哪几道门开的。
+
+    这份日志以前**只写不读**(全仓唯一读它的是 `scripts/e2e_injection.py`):
+    注入防御是这产品最该自证的部分,而它的痕只躺在一个纯文本文件里,同学问
+    "学长有没有替我拦过什么"答不上来。v0.9.96 把它接进 🩺 体检面板。
+
+    **只回计数与类别,绝不回内容**:记录里的 `arg`/`why` 可能带着本机路径或
+    外部内容片段,而面板那一行是要显示、也进模型回话的。要看明细请开那个文件。
+    没有文件 = 一次都没触发(这是实情,不是"查不成");文件在却读不出才报 unknown。
+    """
+    import json
+    from minicode.paths import app_path
+    path = app_path("injection-events.log")
+    if not path.exists():
+        return {"readable": True, "events": 0, "gates": [], "last_at": ""}
+    try:
+        raw = path.read_text(encoding="utf-8").splitlines()[-max(1, int(lines)):]
+    except (OSError, UnicodeDecodeError):
+        return {"readable": False, "events": 0, "gates": [], "last_at": ""}
+    counts: dict[str, int] = {}
+    last = ""
+    for line in raw:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        gate = str(rec.get("gate") or "?")
+        counts[gate] = counts.get(gate, 0) + 1
+        last = str(rec.get("at") or last)
+    return {"readable": True, "events": sum(counts.values()),
+            "gates": sorted(counts, key=lambda k: (-counts[k], k)), "last_at": last}
+
+
 def contains_external(messages) -> bool:
     """消息序列里是否出现过外部内容(压缩时决定摘要口径)。"""
     for m in messages or []:

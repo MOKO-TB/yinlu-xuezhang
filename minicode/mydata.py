@@ -162,6 +162,8 @@ TABLE: tuple[Entry, ...] = (
           note="点通知直达用的端口;换机器/重启后由新实例重写"),
     # ---- 日志与留档
     Entry("tray.log", "托盘与通知日志", LOG, False),
+    Entry("gui_warnings.log", "界面警告日志", LOG, False,
+          note="界面本身不对时看的就是它(原生右键菜单/WebView2 就绪);只记发生了什么,不记对话内容"),
     Entry("watchdog.log", "提醒看门狗日志", LOG, False,
           note="只记结论,不记正文;截图发给维护者看的就是它"),
     Entry("injection-events.log", "上下文注入日志", LOG, False),

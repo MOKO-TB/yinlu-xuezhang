@@ -94,14 +94,20 @@ def deep_report(fake_repo, **kw):
 # ---------------------------------------------------------------- 表的结构
 
 
-def test_local_only_shape_is_seven_rows_and_no_network_group():
+def test_local_only_shape_is_eight_rows_and_no_network_group():
+    """开面板就该看到的八行(毫秒级、一个都不敲网络)。
+
+    v0.9.96 加了第八行「注入防御留痕」—— 它读的是本机一份 ≤500 行的日志,
+    与深检那三条(问网络/起浏览器/查快捷方式)不是一类成本,所以留在 local 组。
+    """
     rep = make(config=FakeConfig(), project=FakeSpec(), mcp_rows=[])
     assert rep["ok"] is True and rep["deep"] is False
     assert [r["key"] for r in rows_of(rep, "local")] == [
-        "form", "dirs", "workspace", "modelcfg", "permission", "mcp", "library"]
+        "form", "dirs", "workspace", "modelcfg", "permission", "mcp", "library",
+        "injection"]
     assert rows_of(rep, "deep") == []          # 没点深检就不许有联网那几行
     assert rows_of(rep, "repo") == []
-    assert rep["total"] == 7
+    assert rep["total"] == 8
 
 
 def test_empty_groups_render_nothing_and_badges_come_from_backend():
@@ -481,3 +487,40 @@ def test_web_visitors_cannot_read_the_owners_machine_through_this_panel():
 def test_the_health_button_is_reachable_from_the_slash_menu():
     html = _html()
     assert 'label: "一键体检"' in html and '$("btnHealth").click()' in html
+
+
+# --------------------------------------- 注入防御留痕这一行(v0.9.96)
+
+
+def test_injection_row_reports_counts_and_points_at_the_file():
+    row = by_key(make(injection_stats=lambda: {
+        "readable": True, "events": 3, "last_at": "2026-09-30T10:00:00+08:00",
+        "gates": ["credential", "project_allow"]}), "injection")
+    assert row["status"] == "ok"
+    assert "3 次" in row["detail"] and "credential" in row["detail"]
+    assert "injection-events.log" in row["detail"]      # 明细在哪要说得出地方
+    assert "2026-09-30 10:00:00" in row["detail"]        # 时刻照人话写,不露 T
+
+
+def test_injection_row_zero_says_it_does_not_prove_the_defense_works():
+    """0 条只说明"没触发过",不能写成"防线正常"——那是没有来源的结论。"""
+    row = by_key(make(injection_stats=lambda: {
+        "readable": True, "events": 0, "gates": [], "last_at": ""}), "injection")
+    assert "0 条" in row["detail"]
+    assert "不代表防线" in row["detail"]
+
+
+def test_injection_row_unreadable_is_unknown_not_ok():
+    """文件在但读不出 = 没查成。报 ok 等于对着用户谎称"这台机器没触发过敏感动作"。"""
+    row = by_key(make(injection_stats=lambda: {
+        "readable": False, "events": 0, "gates": [], "last_at": ""}), "injection")
+    assert row["status"] == "unknown"
+    assert "不是没记" in row["detail"]
+
+
+def test_injection_row_is_in_the_local_group():
+    """这一行开面板就要看到(毫秒级读一个 ≤500 行的文件),不该藏在深检里。"""
+    row = next(r for r in rows_of(make(injection_stats=lambda: {
+        "readable": True, "events": 0, "gates": [], "last_at": ""}), group="local")
+        if r["key"] == "injection")
+    assert row["group"] == "local"

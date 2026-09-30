@@ -346,3 +346,60 @@ def test_injection_log_rolls_at_cap(tmp_path, monkeypatch):
     lines = log.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 10
     assert "echo 14" in lines[-1] and "echo 4" not in "".join(lines)
+
+
+# ------------------------------------------- 留痕有人读(v0.9.96:接进 🩺 体检面板)
+
+
+def _isolate_app_dir(tmp_path, monkeypatch):
+    from minicode import paths
+    app = tmp_path / "app"
+    app.mkdir(parents=True, exist_ok=True)      # 真机上 APP_DIR 一定在;写日志不建父目录
+    monkeypatch.setattr(paths, "APP_DIR", app)
+
+
+def test_log_stats_when_no_log_yet(tmp_path, monkeypatch):
+    """没文件 = 一次都没触发,这是**读成了**的结论(readable True、events 0),
+    不能和"读不出来"混成一种说法 —— 后者要报 unknown。"""
+    _isolate_app_dir(tmp_path, monkeypatch)
+    st = provenance.log_stats()
+    assert st == {"readable": True, "events": 0, "gates": [], "last_at": ""}
+
+
+def test_log_stats_counts_gates_and_never_returns_content(tmp_path, monkeypatch):
+    """计数与类别可以报,`arg`/`why` 一个字都不许带出去 —— 那里面是本机路径与片段。"""
+    _isolate_app_dir(tmp_path, monkeypatch)
+    secret = r"D:\Users\me\config.local.json"
+    provenance.log_escalation("credential", "read_file", {"path": secret},
+                              "读到凭据文件", "yes")
+    provenance.log_escalation("credential", "bash", {"command": "type " + secret},
+                              "命令里带着凭据路径", "no")
+    provenance.log_escalation("project_allow", "bash", {"command": "pytest -q"},
+                              "白名单免确认放行", "auto")
+    st = provenance.log_stats()
+    assert st["readable"] is True and st["events"] == 3
+    assert st["gates"] == ["credential", "project_allow"]      # 按次数多在前
+    assert st["last_at"].startswith("20")                      # 真时刻,不是凑的
+    assert secret not in str(st), "面板那一行会进模型回话:内容片段绝不能跟着出来"
+
+
+def test_log_stats_unreadable_file_is_not_zero(tmp_path, monkeypatch):
+    """文件在但读不出(被别的程序写坏/编码不对)= 读不成,不是"没记过"。"""
+    _isolate_app_dir(tmp_path, monkeypatch)
+    from minicode.paths import app_path
+    path = app_path("injection-events.log")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xfe\x00bad")
+    st = provenance.log_stats()
+    assert st["readable"] is False and st["events"] == 0
+
+
+def test_log_stats_skips_broken_lines(tmp_path, monkeypatch):
+    """半截行(崩溃时写坏)跳过,不把整份日志判成读不出来 —— 读得出的那些条还是要报。"""
+    _isolate_app_dir(tmp_path, monkeypatch)
+    from minicode.paths import app_path
+    provenance.log_escalation("credential", "read_file", {}, "一条", "yes")
+    path = app_path("injection-events.log")
+    with path.open("a", encoding="utf-8") as f:
+        f.write('{"gate": "credential", 半条\n')
+    assert provenance.log_stats()["events"] == 1

@@ -82,6 +82,7 @@ skill-usage.jsonl
 /close-pref.json
 /monitor-pref.json
 /tray.log
+/gui_warnings.log
 /.write-probe.tmp
 
 # v0.9.23 首次运行向导的「不再显示」偏好(本机状态,开发态落在仓库根)
