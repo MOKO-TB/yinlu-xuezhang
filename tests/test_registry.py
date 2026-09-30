@@ -4,7 +4,8 @@ from minicode.tools.registry import build_default_registry
 def test_registry_contents():
     tools = build_default_registry()
     names = [t.name for t in tools]
-    assert names == ["read_file", "write_file", "edit_file", "bash", "py_script",
+    assert names == ["read_file", "write_file", "edit_file", "bash",
+                     "bash_status", "bash_kill", "py_script",
                      "glob", "grep", "repo_outline", "web_crawl", "web_search",
                      "browser_open", "browser_eval", "browser_snapshot",
                      "browser_click", "browser_fill", "browser_screenshot",
@@ -30,6 +31,8 @@ def test_read_only_flags():
         "write_file": False,
         "edit_file": False,
         "bash": False,
+        "bash_status": True,           # 只读:查后台任务的进度与输出尾部,不该弹确认框
+        "bash_kill": False,            # 终止进程是动手面,必须用户点头
         "py_script": False,          # 内置运行时执行脚本:能读写文件,要确认
         "glob": True,
         "grep": True,

@@ -1,3 +1,6 @@
+import re
+import time
+
 import pytest
 from minicode.config import Config, Provider
 from minicode.tools import shell
@@ -91,3 +94,133 @@ def test_bash_detection_rejects_wsl_and_missing_git(tmp_path, monkeypatch):
 
     monkeypatch.setattr(shell.shutil, "which", lambda n: None)
     assert shell._pick_bash() is None
+
+
+# ------------------------------------------------------------- 后台命令(v0.9.84)
+
+
+def _job_id_of(out: str) -> str:
+    m = re.search(r"已放进后台:(j\d+)", out)
+    assert m, f"没拿到 job 编号,实际回话:{out[:200]}"
+    return m.group(1)
+
+
+def _wait_done(job_id: str, seconds: float = 8.0) -> bool:
+    """等这次后台真跑完(不拿秒数当判据,轮询到 poll() 给结果为止)。"""
+    job = shell._bg_jobs[job_id]
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not job.running:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_background_returns_at_once_without_running_to_completion(ctx):
+    """background=true 的价值就是"不干等":睡 5 秒的命令 2 秒内就该回话。"""
+    t0 = time.monotonic()
+    out = shell.bash(ctx, "sleep 5 && echo late", background=True)
+    spent = time.monotonic() - t0
+    job_id = _job_id_of(out)
+    try:
+        assert spent < 2, f"后台派发改成了同步等:{spent:.1f}s"
+        assert "不受 timeout 限制" in out           # 生命周期边界写在回话里
+        assert "内存缓冲" in out or "重启就没了" in out
+        assert shell._bg_jobs[job_id].running
+    finally:
+        shell.bash_kill(ctx, id=job_id)
+
+
+def test_bash_status_lists_state_then_reads_the_tail(ctx):
+    out = shell.bash(ctx, "echo hi-bg-tail", background=True)
+    job_id = _job_id_of(out)
+    assert _wait_done(job_id), "后台命令没在 8 秒内跑完"
+    listing = shell.bash_status(ctx)
+    assert job_id in listing and "已结束,退出码 0" in listing
+    detail = shell.bash_status(ctx, id=job_id)
+    assert "hi-bg-tail" in detail
+    assert "echo hi-bg-tail" in detail              # 命令摘要跟着走,认得出是哪一条
+
+
+def test_bash_status_with_no_jobs_says_so_and_how_to_start_one(monkeypatch, ctx):
+    monkeypatch.setattr(shell, "_bg_jobs", {})      # 没起过任务时不许摆空表
+    out = shell.bash_status(ctx)
+    assert "还没有后台任务" in out and "background=true" in out
+
+
+def test_bash_status_unknown_id_names_the_ones_that_exist(monkeypatch, ctx):
+    monkeypatch.setattr(shell, "_bg_jobs", {})
+    out = shell.bash(ctx, "echo x", background=True)
+    job_id = _job_id_of(out)
+    try:
+        bad = shell.bash_status(ctx, id="j999")
+        assert "错误" in bad and "没有后台任务 j999" in bad
+        assert job_id in bad                        # 把存在的编号报回去,模型一回合自纠
+        assert "echo x" in shell.bash_status(ctx, id=job_id.lstrip("j"))  # 传 1 也认
+    finally:
+        shell.bash_kill(ctx, id=job_id)
+
+
+def test_bash_kill_terminates_a_running_job(ctx):
+    out = shell.bash(ctx, "sleep 30", background=True)
+    job_id = _job_id_of(out)
+    res = shell.bash_kill(ctx, id=job_id)
+    assert "已终止" in res, res
+    assert not shell._bg_jobs[job_id].running
+    assert "被终止" in shell.bash_status(ctx, id=job_id).splitlines()[0]
+
+
+def test_bash_kill_on_a_finished_job_is_not_an_error(ctx):
+    out = shell.bash(ctx, "echo done-early", background=True)
+    job_id = _job_id_of(out)
+    assert _wait_done(job_id)
+    assert "不用杀" in shell.bash_kill(ctx, id=job_id)
+
+
+def test_too_many_running_jobs_is_refused_not_silently_evicted(monkeypatch, ctx):
+    """超上限必须拒绝:静默挤掉旧的等于偷偷杀用户的任务。"""
+    monkeypatch.setattr(shell, "MAX_BG_JOBS", 1)
+    first = _job_id_of(shell.bash(ctx, "sleep 20", background=True))
+    try:
+        second = shell.bash(ctx, "sleep 20", background=True)
+        assert "错误" in second and "上限 1" in second
+        assert shell._bg_jobs[first].running        # 旧的没被挤掉
+    finally:
+        shell.bash_kill(ctx, id=first)
+
+
+def test_buffer_keeps_the_tail_and_reports_what_it_dropped():
+    """缓冲只留尾部,但**丢了多少字要说出来** —— 不说就成了静默截断。"""
+    import types
+    job = shell._BgJob("jT", types.SimpleNamespace(poll=lambda: 0, stdout=None),
+                       "pytest -q")
+    original = shell.BG_BUFFER_CHARS
+    shell.BG_BUFFER_CHARS = 60
+    try:
+        for i in range(20):
+            job._append(f"line-{i:02d}-abcdefghij\n")
+        assert job.dropped > 0
+        tail = job.tail(200)
+        assert "缓冲只留尾部" in tail and f"前面 {job.dropped} 字已丢掉" in tail
+        assert "line-19" in tail and "line-00" not in tail
+        assert f"{job.dropped} 字" in job.line()    # 状态行也带着这笔账
+    finally:
+        shell.BG_BUFFER_CHARS = original
+
+
+def test_no_output_yet_is_stated_not_left_blank():
+    """一行输出都没有时回「还没有输出」,不能让模型看到空字符串去猜。"""
+    import types
+    job = shell._BgJob("jE", types.SimpleNamespace(poll=lambda: None, stdout=None),
+                       "sleep 99")
+    assert "还没有输出" in job.tail(100)
+
+
+def test_registry_flags_read_only_split(ctx):
+    """看进度是只读、终止是动手:这个分界错了要么弹无用确认框,要么放任乱杀。"""
+    from minicode.tools.registry import build_default_registry
+    by_name = {t.name: t for t in build_default_registry()}
+    assert by_name["bash_status"].read_only is True
+    assert by_name["bash_kill"].read_only is False
+    assert {"background", "command", "timeout", "reason"} <= set(
+        by_name["bash"].parameters["properties"])

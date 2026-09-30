@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import re
 
+from minicode.sandbox import KNOWN_LIMITS
+
 MAX_WHY = 200
 
 # (正则, 人话解读) —— 从具体到宽泛,取第一个命中的
@@ -37,7 +39,7 @@ _READONLY_TOOLS = {"read_file", "glob", "grep", "search_knowledge", "use_skill",
                    "search_history",
                    "library_search", "map_find_place", "map_show_list",
                    "map_highlight_building", "map_drop_pin", "map_clear",
-                   "browser_status"}
+                   "browser_status", "bash_status"}
 
 
 def _clean(text: str) -> str:
@@ -87,7 +89,14 @@ def risk_notes(tool_name: str, args: dict) -> list[str]:
             notes.append("会改动代码仓库状态,可能覆盖他人提交或本地改动")
         if not notes:
             notes.append("看起来是只读操作,不会改动文件")
+        if args.get("background"):
+            # 确认框是纯文本框,别写 markdown 强调符(会照原样显示)
+            notes.append("放后台跑:这一轮就返回 job 编号,命令继续在后台跑完")
+            notes.append(KNOWN_LIMITS["background"])
         notes.append("bash 产生的改动不在「撤销」的跟踪范围内")
+    elif name == "bash_kill":
+        notes.append("会终止一个后台命令(连它的子进程一起);"
+                     "它已经写出去的文件不会回滚")
     elif name == "write_file":
         notes.append("会写入文件,原内容可用「撤销」回滚")
     elif name == "edit_file":

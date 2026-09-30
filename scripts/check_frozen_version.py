@@ -236,7 +236,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.gpa": ("gpa_calc",),
     "minicode.tools.crawl": ("web_search", "_resolve_redirect"),
     # ---- v0.9.15:上下文面板 + py_script ----
-    "minicode.tools.shell": ("py_script", "_py_runtime_command"),
+    "minicode.tools.shell": ("py_script", "_py_runtime_command",
+    # v0.9.84:后台命令(漏收 = `bash background=true` 在装好的包里静默变回同步等,
+    # 长任务照样 300 秒被砍,而工具描述还在教模型用后台)
+    "bash_status", "bash_kill", "_BgJob", "_bg_start", "_bg_kill_tree",
+    "_bg_shutdown", "MAX_BG_JOBS"),
     # ---- v0.9.39 #84:注册表按领域拆成 6 份目录(registry.py 只管装配顺序)----
     # 漏收一份 = 装好的包里**那个领域的工具整组消失**,而 build_default_registry()
     # 不报错(它只是拼不出那一段),模型侧表现是"这个能力没有了"。

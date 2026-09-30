@@ -299,24 +299,50 @@ def _manual_text() -> str:
     return src[start:end] if start > 0 and end > start else ""
 
 
+def tool_count_problems(n_tools: int, handoff_current: str) -> list[str]:
+    """HANDOFF §1 那句「内置 N 工具」必须等于注册表实测条数。
+
+    单独成一个函数是为了能被喂假文本测(工具数每加一只工具就会变一次,
+    而 §1 是**当前态**描述,不是历史 —— 历史行(§2 及以后)不许被改)。
+    """
+    problems: list[str] = []
+    for m in re.finditer(r"内置\s*(\d+)\s*(?:个)?工具", handoff_current):
+        got = int(m.group(1))
+        if got != n_tools:
+            problems.append(f"HANDOFF §1 写「内置 {got} 工具」,"
+                            f"注册表实测 {n_tools} 个")
+    return problems
+
+
+def _handoff_section_1() -> str:
+    """HANDOFF §1 那一段(当前态一句话),只有它里面的数字算"当前口径"。"""
+    text = (ROOT / "HANDOFF.md").read_text(encoding="utf-8")
+    m = re.search(r"^## 1\.(.*?)(?=^## 2\.)", text, re.S | re.M)
+    return m.group(1) if m else ""
+
+
 def check_agent_doc_sync() -> list[str]:
-    """提交前对账:代码里的档位/上限/技能数,活文档是不是也这么说。"""
+    """提交前对账:代码里的档位/上限/技能数/工具数,活文档是不是也这么说。"""
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
     try:
         from minicode import router
         from minicode.subagents import (MAX_PARALLEL_TASKS, SUBAGENT_TYPES,
                                         TYPE_KEYS)
+        from minicode.tools.registry import build_default_registry
     except Exception as e:                 # 源码读不到不该由对账闸顶罪
         return [f"读不到子代理档位口径({type(e).__name__}: {e})"]
     labels = {k: v.label for k, v in SUBAGENT_TYPES.items()}
     labels.update({k: v.label for k, v in router.DOMAINS.items()})
     n_skills = len(list((ROOT / "skills").glob("*/SKILL.md")))
-    return doc_sync_problems(
+    problems = doc_sync_problems(
         list(TYPE_KEYS), labels, MAX_PARALLEL_TASKS, n_skills,
         (ROOT / "README.md").read_text(encoding="utf-8"),
         (ROOT / "system_prompt.md").read_text(encoding="utf-8"),
         _manual_text())
+    problems += tool_count_problems(len(build_default_registry()),
+                                    _handoff_section_1())
+    return problems
 
 
 def pyproject_problems(text: str) -> list[str]:

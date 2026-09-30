@@ -26,7 +26,10 @@ TOOLS_DIR = ROOT / "minicode" / "tools"
 # 之后新增的工具:`search_history`(跨会话记忆)插在 `search_knowledge` 后,
 # `campus_notices`(v0.9.46 时效性)挨着同类插在 `get_weather` 后,其余顺序一字未动。
 ORDER = [
-    "read_file", "write_file", "edit_file", "bash", "py_script", "glob", "grep",
+    "read_file", "write_file", "edit_file", "bash",
+    # v0.9.84:后台命令的两只眼睛与一只手 —— 挨着 bash,模型先派活、再看进度、才终止
+    "bash_status", "bash_kill",
+    "py_script", "glob", "grep",
     "repo_outline",
     "web_crawl", "web_search", "browser_open", "browser_eval", "browser_snapshot",
     "browser_click", "browser_fill", "browser_screenshot", "browser_close",
@@ -81,13 +84,13 @@ def _catalog_tool_names() -> dict[str, str]:
 
 # ---------------- 1. 顺序与数量 ----------------
 
-def test_registry_returns_the_same_forty_one_tools_in_the_same_order():
+def test_registry_returns_the_same_tools_in_the_same_order():
     assert [t.name for t in registry.build_default_registry()] == ORDER
 
 
 def test_order_pin_is_not_stale():
-    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 47 个不重名。"""
-    assert len(ORDER) == len(set(ORDER)) == 47
+    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 49 个不重名。"""
+    assert len(ORDER) == len(set(ORDER)) == 49
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

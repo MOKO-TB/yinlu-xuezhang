@@ -184,3 +184,27 @@ def test_real_repo_passes_the_doc_sync_gate():
     manual = check_docs._manual_text()
     assert "份技能" in manual, "《使用说明》区域没抠到 —— 这道闸会空转"
     assert check_docs.check_agent_doc_sync() == []
+
+
+def test_tool_count_gate_follows_the_registry():
+    """HANDOFF §1 的「内置 N 工具」是**当前态**数字:加一只工具就得同步,否则这里红。"""
+    assert check_docs.tool_count_problems(
+        49, "已完成:Agent 主循环 + 内置 49 工具(...)") == []
+    drift = check_docs.tool_count_problems(49, "已完成:内置 47 工具")
+    assert any("47" in p and "49" in p for p in drift)
+
+
+def test_tool_count_only_reads_section_one():
+    """§2 及以后的历史数字不许被改(那是当时的实情),所以子规则只读 §1 那一段。
+
+    函数本身不认章节 —— 它只吃调用方给的文本,因此"范围对不对"要钉在抠取那一步。
+    """
+    body = check_docs._handoff_section_1()
+    assert body and "## 2" not in body, "§1 抠得不干净,会把历史行一起扫进当前口径"
+    assert "已完成事项" not in body      # §2 的标题都不该进来
+
+
+def test_handoff_section_one_is_actually_found():
+    """抠不到 §1 就等于这条子规则永远绿 —— 先证明抠得到。"""
+    body = check_docs._handoff_section_1()
+    assert "内置" in body and "工具" in body, "HANDOFF §1 没抠到,工具数子规则在空转"

@@ -97,3 +97,30 @@ def test_permission_why_bundle():
     assert why["risks"]
     # 非 bash 工具不该硬塞一段命令解读
     assert permission_why("edit_file", {"path": "a.py"})["digest"] == ""
+
+
+# ------------------------------------------------------------ 后台命令的代价
+
+def test_background_job_tells_the_lifetime_limit_in_the_confirm_box():
+    """放后台就是绕开超时 —— 确认框必须把这条边界摆出来,不能只说"执行一条命令"。"""
+    from minicode.sandbox import KNOWN_LIMITS
+    notes = risk_notes("bash", {"command": "pytest -q", "background": True})
+    assert any("后台" in n for n in notes)
+    assert KNOWN_LIMITS["background"] in notes     # 措辞只有沙箱那一份真相
+    plain = risk_notes("bash", {"command": "pytest -q"})
+    assert KNOWN_LIMITS["background"] not in plain  # 没传 background 就不唠叨
+
+
+def test_bash_status_is_read_only_and_bash_kill_states_the_cost():
+    assert any("只读" in n for n in risk_notes("bash_status", {}))
+    kill = risk_notes("bash_kill", {"id": "j2"})
+    assert any("子进程" in n for n in kill)
+    assert any("不会回滚" in n for n in kill)
+
+
+def test_prefixed_subagent_tool_names_still_get_the_notes():
+    """子代理的工具叫 `campus·bash_kill`,前缀切分后要拿到同一条风险说明。"""
+    from minicode.sandbox import KNOWN_LIMITS
+    assert KNOWN_LIMITS["background"] in risk_notes(
+        "campus·bash", {"command": "make", "background": True})
+    assert any("子进程" in n for n in risk_notes("implement·bash_kill", {"id": "j1"}))

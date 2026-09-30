@@ -1,6 +1,7 @@
 """文件与命令类工具(v0.9.39 #84 从 registry.py 搬出来)。
 
-读写文件、按模式找文件、按正则搜内容,以及两条会动手的执行入口(bash / py_script)。
+读写文件、按模式找文件、按正则搜内容,以及三条会动手的执行入口(bash / py_script
+/ bash_kill),外加一条只读的 bash_status。
 
 搬的是**原文**:每个 `Tool(...)` 的字段与描述一字未改,只是换了文件。
 注册表里这些工具的**先后顺序**由 `registry.build_default_registry()` 决定,
@@ -64,18 +65,69 @@ def tools() -> list[Tool]:
         ),
         Tool(
             name="bash",
-            description="在工作区目录执行一条 shell 命令并返回退出码与输出。用于运行脚本、测试、git 等只读或用户确认后的操作。",
+            description=(
+                "在工作区目录执行一条 shell 命令并返回退出码与输出。用于运行脚本、"
+                "测试、git 等只读或用户确认后的操作。"
+                "**预计要跑超过 300 秒的活儿(全量测试、装依赖、构建、大数据批处理)"
+                "请传 background=true**:命令放后台跑、立刻返回一个 job 编号,"
+                "之后用 bash_status 看进度与输出尾部、bash_kill 终止。"
+                "后台任务不会因为这一轮结束而停止,也不受 timeout 限制 —— "
+                "没人替它超时收手,要停必须显式 kill;输出只存在内存里,"
+                "学长退出或重启就没了,要留档请自己重定向到工作区文件。"
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "要执行的命令"},
-                    "timeout": {"type": "integer", "description": "超时秒数,默认 60,最大 300"},
+                    "timeout": {"type": "integer", "description": "超时秒数,默认 60,最大 300(background=true 时不适用)"},
+                    "background": {"type": "boolean",
+                                   "description": "true = 放后台跑,立刻返回 job 编号(长任务用这个,别把 timeout 顶到 300 干等)"},
                     "reason": {"type": "string",
                                "description": "用一句中文向用户说明这条命令要达成的目的(显示在权限确认框里),如:列出知识库里 8 月以来的新条目"},
                 },
                 "required": ["command"],
             },
             handler=shell.bash,
+        ),
+        Tool(
+            name="bash_status",
+            description=(
+                "看后台命令跑到哪了:不带 id 列出本次运行起过的所有后台任务"
+                "(在不在跑、跑了多久、输出了多少字),带 id 则回看那一个的状态"
+                "与输出尾部。只读 —— 不会启动、也不会终止任何东西。"
+                "两个已知边界:①输出只在内存里留尾部(超出缓冲的部分被丢掉并如实报数),"
+                "学长退出就没了;②这里看不到后台任务往磁盘上写了什么,产物请用 "
+                "read_file/glob 或「任务监控」的产出行确认。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string",
+                           "description": "job 编号(如 j3);不传就列全部"},
+                    "tail": {"type": "integer",
+                             "description": "回看输出的字符数,默认 4000,上限 30000"},
+                },
+            },
+            handler=shell.bash_status,
+            read_only=True,
+        ),
+        Tool(
+            name="bash_kill",
+            description=(
+                "终止一个后台命令。Windows 上走 taskkill /T 连子进程一起杀"
+                "(Git Bash 那条命令真正干活的是它下面的 python/pytest,只杀 bash "
+                "会留孤儿);这台机器没有 taskkill 时只能杀直接子进程,"
+                "**会照实告诉你子进程可能还活着**,不假装杀干净。已经结束的不用杀,"
+                "回一句退出码就完事。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "要终止的 job 编号(如 j3)"},
+                },
+                "required": ["id"],
+            },
+            handler=shell.bash_kill,
         ),
         Tool(
             name="py_script",
