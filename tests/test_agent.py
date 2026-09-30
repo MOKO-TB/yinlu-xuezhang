@@ -795,3 +795,38 @@ def test_session_token_limit_counts_across_turns_of_same_session(config, ctx):
     assert getattr(ui, "token_limits", None) is None
     agent.run_turn("第二问")            # 累计 140 > 120,这轮顶部触发
     assert getattr(ui, "token_limits", []) == [(120, 140)]
+
+
+# ------------------------------------------- 后台命令状态搭在请求上(v0.9.85)
+
+class _StubJob:
+    """喂 `_messages_for_request` 用的假任务:已结束、还没播报过。"""
+
+    def __init__(self, jid: str = "j9"):
+        self.id = jid
+        self.running = False
+        self.announced = False
+
+    def line(self) -> str:
+        return "j9 已结束,退出码 0 · 已输出 12 字 · pytest -q"
+
+
+def test_bg_brief_rides_the_request_not_the_transcript(config, ctx, monkeypatch):
+    """状态行只活在本次请求里:留档一个字都不该多,系统提示词(整段前缀)也不动。"""
+    from minicode.tools import shell
+    monkeypatch.setattr(shell, "_bg_jobs", {"j9": _StubJob()})
+    agent = make_agent(config, ctx, FakeLLM([]), FakeUI())
+    before = len(agent.session.messages)
+    msgs = agent._messages_for_request()
+    assert msgs[-1]["role"] == "user" and "本机后台命令现状" in msgs[-1]["content"]
+    assert "j9 已结束,退出码 0" in msgs[-1]["content"]
+    assert len(agent.session.messages) == before, "写进留档 = 之后每一步都重复带着"
+    assert msgs[0]["content"] == "sys", "塞进系统提示词会把 KV Cache 前缀打断"
+
+
+def test_no_bg_jobs_adds_nothing_to_the_request(config, ctx, monkeypatch):
+    from minicode.tools import shell
+    monkeypatch.setattr(shell, "_bg_jobs", {})
+    agent = make_agent(config, ctx, FakeLLM([]), FakeUI())
+    msgs = agent._messages_for_request()
+    assert len(msgs) == 1 and msgs[0]["role"] == "system"

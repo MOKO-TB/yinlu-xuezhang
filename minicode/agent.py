@@ -240,11 +240,23 @@ class Agent:
         # v0.9.66:剥掉本地记账字段(ts) —— 留档里的键比协议多,严格端点会对
         # 未知字段报 400。拷贝剥离,不动 session.messages 本体。
         msgs = session_outbound(msgs)
+        out = list(msgs)
+        # 后台命令的现状(v0.9.85):挂在**请求末尾**的一条临时消息,与撞上限时那句
+        # WRAP_UP_NOTE 同一个手法 —— 不写进留档,也不动系统提示词(那是整段前缀,
+        # 每步往里加变化会把 KV Cache 从那里打断,与 D0 时钟按天重建同一套取舍)。
+        # 没有后台任务时它是空串,一个字都不注入。网页版是独立进程(web_main.py),
+        # 任务表天生为空,所以访客也看不到主人的运行痕迹。
+        try:
+            from minicode.tools.shell import bg_brief_for_model
+            brief = bg_brief_for_model()
+        except Exception:
+            brief = ""                      # 注入失败绝不能拖垮这次请求
+        if brief:
+            out.append({"role": "user", "content": brief})
         prior = self._pending_prior
         if not prior:
-            return msgs
+            return out
         self._pending_prior = ""
-        out = list(msgs)
         if out and isinstance(out[0], dict) and out[0].get("role") == "system":
             out[0] = {**out[0], "content": f"{out[0].get('content') or ''}\n\n{prior}"}
         else:

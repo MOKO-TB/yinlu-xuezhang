@@ -240,7 +240,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.84:后台命令(漏收 = `bash background=true` 在装好的包里静默变回同步等,
     # 长任务照样 300 秒被砍,而工具描述还在教模型用后台)
     "bash_status", "bash_kill", "_BgJob", "_bg_start", "_bg_kill_tree",
-    "_bg_shutdown", "MAX_BG_JOBS"),
+    "_bg_shutdown", "MAX_BG_JOBS",
+    # v0.9.85:状态注入(漏收 = 模型只能自己想起来轮询,后台跑完了也没人告诉它,
+    # 于是它会替用户宣布一个还没发生的结果)
+    "bg_brief_for_model", "BG_KEEP_FINISHED", "_bg_prune_locked"),
     # ---- v0.9.39 #84:注册表按领域拆成 6 份目录(registry.py 只管装配顺序)----
     # 漏收一份 = 装好的包里**那个领域的工具整组消失**,而 build_default_registry()
     # 不报错(它只是拼不出那一段),模型侧表现是"这个能力没有了"。

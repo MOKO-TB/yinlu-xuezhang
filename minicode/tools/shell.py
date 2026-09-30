@@ -170,6 +170,7 @@ def _clip(text: str) -> str:
 # ------------------------------------------------------------------ 后台命令
 
 MAX_BG_JOBS = 12               # 同时在跑的后台任务上限(超了就拒绝,不静默挤掉旧的)
+BG_KEEP_FINISHED = 5           # 已结束且已播报过的任务最多留几个(清历史,不清在跑的)
 BG_BUFFER_CHARS = 200_000      # 每个任务只在内存里留尾部这么多字符
 BG_TAIL_DEFAULT = 4000         # bash_status 一次回看的默认长度
 BG_TAIL_MAX = 30_000
@@ -202,6 +203,7 @@ class _BgJob:
         self.kept = 0
         self.dropped = 0
         self.killed = False
+        self.announced = False      # 结束状态有没有已经告知过模型(只播一次)
         self.lock = threading.Lock()
 
     # -------------------------------------------------------------- 读输出
@@ -283,6 +285,7 @@ def _bg_start(ctx: ToolContext, command: str, argv: list[str] | None,
     job = _BgJob(job_id, proc, command, env_note)
     with _bg_lock:
         _bg_jobs[job_id] = job
+        _bg_prune_locked()        # 在跑的不受这条影响:只清已结束且播过的历史
     threading.Thread(target=job._pump, daemon=True,
                      name=f"bg-{job_id}").start()
     return (f"已放进后台:{job_id}(pid={proc.pid}) · {job.command}\n"
@@ -392,6 +395,46 @@ def _bg_list_snapshot() -> list[str]:
     """给测试与界面用的编号清单(不暴露进程对象)。"""
     with _bg_lock:
         return list(_bg_jobs)
+
+
+def bg_brief_for_model() -> str:
+    """本机后台任务的现状一行,给**本次请求**用;没有任务时返回空串。
+
+    为什么要这一行:后台任务的处境是"模型容易忘记去查"——它派完活就往下做,
+    下一步直接跟用户说"跑完了",而进程其实还在跑。等它想起来调 `bash_status`
+    往往要再一轮。
+
+    为什么挂在请求尾部而不是系统提示词里:系统提示词是**整段前缀**,每步往里加
+    变化的内容会把 KV Cache 从那里打断(与 D0 时钟"按天重建而不是每轮注入一行
+    时间"是同一套取舍)。所以这段只作为一条末尾的临时消息发出去,**不进留档**,
+    历史前缀一个字不动;没有后台任务时更是空串,一个字都不注入。
+
+    播几次:还在跑的每一步都播(状态在变);跑完的**只播一次**(`announced` 记账),
+    免得一条旧任务的死讯每步都跟模型说一遍。
+    """
+    with _bg_lock:
+        picked = [j for j in _bg_jobs.values() if j.running or not j.announced]
+        for j in picked:
+            if not j.running:
+                j.announced = True
+    if not picked:
+        return ""
+    lines = "\n".join("- " + j.line() for j in picked)
+    return (f"〔本机后台命令现状(这一行只活在本次请求里,没有进留档;"
+            f"共 {len(_bg_list_snapshot())} 个任务曾起过)〕\n{lines}\n"
+            "要看输出调 bash_status(id=…),要停调 bash_kill(id=…)。"
+            "**别替用户假设它已经跑完了** —— 只有 poll 到的状态才算数。")
+
+
+def _bg_prune_locked() -> None:
+    """清掉"已结束且已播报过"的老任务,只留最近 BG_KEEP_FINISHED 个。
+
+    为什么要清:上限 12 只管**在跑的**,而历史任务会一直堆在表里 —— 不清就是
+    只涨不落,还会把 bash_status 的清单撑成一屏旧账。
+    """
+    done = [j for j in _bg_jobs.values() if not j.running and j.announced]
+    for j in sorted(done, key=lambda x: x.started)[:-BG_KEEP_FINISHED]:
+        _bg_jobs.pop(j.id, None)
 
 
 # ------------------------------------------------------- py_script(内置运行时)

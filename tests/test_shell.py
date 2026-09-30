@@ -224,3 +224,51 @@ def test_registry_flags_read_only_split(ctx):
     assert by_name["bash_kill"].read_only is False
     assert {"background", "command", "timeout", "reason"} <= set(
         by_name["bash"].parameters["properties"])
+
+
+# -------------------------------------------------- 状态注入(bg_brief_for_model)
+
+def test_bg_brief_is_empty_when_there_are_no_jobs(monkeypatch):
+    """没起过后台任务时一个字都不注入 —— 这是常态,不能每轮都带一段无关话。"""
+    monkeypatch.setattr(shell, "_bg_jobs", {})
+    assert shell.bg_brief_for_model() == ""
+
+
+def test_bg_brief_keeps_announcing_a_running_job(monkeypatch, ctx):
+    monkeypatch.setattr(shell, "_bg_jobs", {})
+    jid = _job_id_of(shell.bash(ctx, "sleep 5", background=True))
+    try:
+        for _ in range(2):            # 每一步都要播:状态在变,模型也可能忘记查
+            brief = shell.bg_brief_for_model()
+            assert jid in brief and "运行中" in brief
+        assert "别替用户假设" in brief
+        assert "bash_status" in brief and "bash_kill" in brief
+    finally:
+        shell.bash_kill(ctx, id=jid)
+
+
+def test_bg_brief_announces_a_finished_job_exactly_once(monkeypatch, ctx):
+    """死讯播一次就够:每条旧任务每步都向模型汇报一遍是纯噪音。"""
+    monkeypatch.setattr(shell, "_bg_jobs", {})
+    jid = _job_id_of(shell.bash(ctx, "echo one-two", background=True))
+    assert _wait_done(jid)
+    first = shell.bg_brief_for_model()
+    assert jid in first and "已结束,退出码 0" in first
+    assert shell.bg_brief_for_model() == ""
+
+
+def test_announced_finished_jobs_get_pruned(monkeypatch, ctx):
+    """在跑的受上限 12 管,历史的没人管就会只涨不落 —— 播过的要被清掉。"""
+    monkeypatch.setattr(shell, "_bg_jobs", {})
+    monkeypatch.setattr(shell, "BG_KEEP_FINISHED", 1)
+    ids = [_job_id_of(shell.bash(ctx, f"echo p{i}", background=True))
+           for i in range(3)]
+    for jid in ids:
+        assert _wait_done(jid)
+        shell.bg_brief_for_model()                 # 播一次,标成 announced
+    keeper = _job_id_of(shell.bash(ctx, "echo keeper", background=True))
+    left = shell._bg_list_snapshot()
+    assert keeper in left, left
+    assert ids[0] not in left and ids[1] not in left   # 最旧的两个播过就被清掉
+    assert len(left) <= 2, left                        # 留 1 个播过的 + 在跑的这个
+    shell.bash_kill(ctx, id=keeper)
