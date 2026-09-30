@@ -119,3 +119,68 @@ def test_count_check_bites_when_an_old_number_lurks_in_the_doc():
     assert check_docs.count_problems(1684, "测试都跑过了,全绿") != []
     # ④ 只认这一种句式:历史条数写成 passed 形态不该被误当成基线
     assert check_docs.count_problems(1684, "全绿 1684 项(实跑 1683 passed / 1 skipped)") == []
+
+
+# ---------------------------------------------- 档位与数字口径同步(v0.9.83)
+
+TYPES = ["explore", "implement", "review", "code", "writing", "data",
+         "english", "campus", "material", "auto"]
+LABELS = {"explore": "侦察", "campus": "校园办事", "material": "文档材料"}
+_KEYS = "explore implement review code writing data english campus material"
+# 一份"三份活文档都同步好了"的样本:闸要能被喂假数据测,不能只测真仓库
+GOOD_DOCS = (f"{_KEYS} 并行 最多 6 个",
+             "explore implement review code writing data english 校园办事 文档材料"
+             " 子代理 最多 6 个",
+             f"skills/ 里那 21 份技能;{_KEYS} 侦察")
+
+
+def test_doc_sync_passes_on_a_consistent_set():
+    assert check_docs.doc_sync_problems(TYPES, LABELS, 6, 21, *GOOD_DOCS) == []
+
+
+def test_doc_sync_flags_a_bucket_that_skipped_the_docs():
+    """加一档却没同步活文档 —— v0.9.68 那次《使用说明》就漏了两个领域档。"""
+    readme, prompt, manual = GOOD_DOCS
+    problems = check_docs.doc_sync_problems(
+        TYPES, LABELS, 6, 21, readme.replace("material", ""), prompt, manual)
+    assert any("material" in p and "README.md" in p for p in problems)
+
+
+def test_doc_sync_accepts_the_chinese_label():
+    """文档用中文标签提过就算提到 —— 随包说明书本来就不写英文键名。"""
+    assert check_docs.doc_sync_problems(
+        ["campus"], {"campus": "校园办事"}, 6, 21,
+        "校园办事 并行", "校园办事", "校园办事") == []
+
+
+def test_doc_sync_flags_a_drifted_skill_count():
+    """「skills/ 里那 N 份技能」是总数声明:实测 22 而文档写 21 就该红(v0.9.81 撞过)。"""
+    problems = check_docs.doc_sync_problems(TYPES, LABELS, 6, 22, *GOOD_DOCS)
+    assert any("22 份" in p for p in problems)
+
+
+def test_doc_sync_reads_the_arrow_form_as_the_current_number():
+    """「上限 4→6」是"从 4 放到了 6",取后一个数;写成「上限 4 个」才是漂了。"""
+    readme, prompt, manual = GOOD_DOCS
+    assert check_docs.doc_sync_problems(
+        TYPES, LABELS, 6, 21, readme.replace("最多 6 个", "上限 4→6"),
+        prompt, manual) == []
+    stale = check_docs.doc_sync_problems(
+        TYPES, LABELS, 6, 21, readme.replace("最多 6 个", "上限 4 个"),
+        prompt, manual)
+    assert any("上限 4" in p for p in stale)
+
+
+def test_doc_sync_does_not_mind_unrelated_limits():
+    """附件那行的「上限 20MiB」与子代理无关:不含"子代理/并行"的行不归这道闸管。"""
+    readme, prompt, manual = GOOD_DOCS
+    assert check_docs.doc_sync_problems(
+        TYPES, LABELS, 6, 21,
+        readme + "\n单文件上限 20MiB、解码后不超过 4000 像素", prompt, manual) == []
+
+
+def test_real_repo_passes_the_doc_sync_gate():
+    """真仓库必须过这道闸,而且《使用说明》区域真抠得到 —— 抠空了就是永远绿的假闸。"""
+    manual = check_docs._manual_text()
+    assert "份技能" in manual, "《使用说明》区域没抠到 —— 这道闸会空转"
+    assert check_docs.check_agent_doc_sync() == []

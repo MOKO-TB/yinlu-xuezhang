@@ -227,6 +227,98 @@ def check_collected_count() -> list[str]:
                           (ROOT / "HANDOFF.md").read_text(encoding="utf-8"))
 
 
+# ---------------------------------- 子代理档位与数字口径的文档对账(v0.9.83)
+
+_PARALLEL_HINT = ("子代理", "并行")
+_LIMIT_RES = (re.compile(r"上限\s*(\d+)(?:\s*→\s*(\d+))?"),
+              re.compile(r"最多\s*(\d+)\s*个"))
+
+
+def doc_sync_problems(types, labels, max_parallel, n_skills,
+                      readme, prompt, manual) -> list[str]:
+    """活文档(README / system_prompt / 随包《使用说明》)与代码口径对账,纯函数。
+
+    为什么要有这道闸:v0.9.81/82 两轮撞到的漂移全是**同一个形状** —— 代码改了、
+    文档没跟上,而没有任何一处会报错:《使用说明》只写四个领域档(实际六个)、
+    "skills/ 里那 22 份技能"(实测 21)、README 还写着"上限 4 个"(v0.9.60 起是 6,
+    漂了八个版本)。`audit` 那档子代理能人肉查这件事,但"能查"和"每次都查"是两回事
+    —— 闸放在提交前,漂移当场红,比派一路子代理事后翻仓库便宜。
+
+    三条规则都刻意收窄,免得把历史叙述当成当前口径:
+    ①**档位覆盖**:除 `auto` 外每个档位名(或它的中文标签)必须在这三份活文档里出现过;
+    ②**技能份数**:只认《使用说明》里那句总数(README 的"7 份技能"是历史句,不算总数);
+    ③**并行上限**:只在提到子代理/并行的行里查「上限 N」「上限 A→B」「最多 N 个」,
+      箭头形式取**后一个数**(那是"从 4 放到 6"的意思);附件那行的「上限 20 MiB」
+      不归这里管。
+    """
+    problems: list[str] = []
+    docs = {"README.md": readme, "system_prompt.md": prompt, "《使用说明》": manual}
+
+    for key in types:
+        if key == "auto":
+            continue
+        alias = str(labels.get(key) or "")
+        for name, text in docs.items():
+            if key not in text and (not alias or alias not in text):
+                problems.append(f"档位 {key}({alias or '无中文名'})"
+                                f"在 {name} 里一次都没提")
+
+    for m in re.finditer(r"(\d+)\s*份技能", manual):
+        n = int(m.group(1))
+        if n != n_skills:
+            problems.append(f"《使用说明》写「{n} 份技能」,"
+                            f"实测 skills/ 下是 {n_skills} 份")
+
+    for name, text in docs.items():
+        for line in text.splitlines():
+            if not any(h in line for h in _PARALLEL_HINT):
+                continue
+            for rx in _LIMIT_RES:
+                for mm in rx.finditer(line):
+                    nums = [int(g) for g in mm.groups() if g]
+                    if not nums:
+                        continue
+                    # 取最后一个数:「上限 4→6」的意思是"从 4 放到了 6",当前值是 6
+                    got = nums[-1]
+                    if got != max_parallel:
+                        problems.append(
+                            f"{name} 写「{mm.group(0).strip()}」,现在的上限是 "
+                            f"{max_parallel}:" + line.strip()[:70])
+    return problems
+
+
+def _manual_text() -> str:
+    """从 scripts/build_exe.py 里抠出《使用说明》那段字面量。
+
+    不整份读:脚本自己也有一堆数字,整份扫会把无关数字算进口径。区域定位手法与
+    `tests/test_manual_entries.py` 一致(第一条起到 write_text 的 encoding 终止符)。
+    """
+    src = (ROOT / "scripts" / "build_exe.py").read_text(encoding="utf-8")
+    start = src.find('\n        "1. ')
+    end = src.find('",\n        encoding="utf-8"', start)
+    return src[start:end] if start > 0 and end > start else ""
+
+
+def check_agent_doc_sync() -> list[str]:
+    """提交前对账:代码里的档位/上限/技能数,活文档是不是也这么说。"""
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    try:
+        from minicode import router
+        from minicode.subagents import (MAX_PARALLEL_TASKS, SUBAGENT_TYPES,
+                                        TYPE_KEYS)
+    except Exception as e:                 # 源码读不到不该由对账闸顶罪
+        return [f"读不到子代理档位口径({type(e).__name__}: {e})"]
+    labels = {k: v.label for k, v in SUBAGENT_TYPES.items()}
+    labels.update({k: v.label for k, v in router.DOMAINS.items()})
+    n_skills = len(list((ROOT / "skills").glob("*/SKILL.md")))
+    return doc_sync_problems(
+        list(TYPE_KEYS), labels, MAX_PARALLEL_TASKS, n_skills,
+        (ROOT / "README.md").read_text(encoding="utf-8"),
+        (ROOT / "system_prompt.md").read_text(encoding="utf-8"),
+        _manual_text())
+
+
 def pyproject_problems(text: str) -> list[str]:
     """对一份 pyproject 文本做对账(拆成纯函数是为了让测试能喂它假文本)。
 
@@ -305,6 +397,7 @@ def main() -> int:
               ("个人数据三处同步", check_state_targets),
               ("不外发清单自洽", check_ship_never_manifest),
               ("HANDOFF 长度", check_handoff_size),
+              ("档位与数字口径同步", check_agent_doc_sync),
               ("pyproject 单一事实源", check_pyproject)]
     if "--collect" in sys.argv:
         checks.append(("测试基线条数", check_collected_count))
