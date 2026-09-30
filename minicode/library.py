@@ -91,7 +91,7 @@ def conn(path: Path) -> sqlite3.Connection:
     不出来”报错就是它)。缓存命中时连接可能已是别的线程建过的,所以
     **读一律走 `_read`**(execute + fetch 在同一次持锁里做完,游标不跨锁使用);
     只在 conn() 里上锁是不够的 —— 两条线程各自 execute 完再各自 fetch,
-    取到的是别人那条语句的结果(v0.9.94 的并行子代理实测撞过:fetchone()
+    取到的是别人那条语句的结果(并行子代理一路一个提示词,实测撞过:fetchone()
     回来 None,上层只捕 sqlite3.Error,于是整路子代理报"执行出错")。
     """
     key = str(path)

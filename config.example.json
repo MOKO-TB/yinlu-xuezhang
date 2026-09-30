@@ -25,7 +25,7 @@
   "session_token_limit": 0,
   "subagent_time_limit_seconds": 600,
   "subagent_models": {},
-  "_说明_subagent_models": "按档位分模型(v0.9.94):{\"explore\": \"模型名\", \"code\": \"模型名\"}。只换模型名、不换供应商;名字必须是当前供应商里已启用的模型,对不上就退回主模型并在那一路的报告里写清为什么退。留空 = 所有档位都用主模型。",
+  "_说明_subagent_models": "按档位分模型(v0.9.95):{\"explore\": \"模型名\", \"code\": \"模型名\"}。只换模型名、不换供应商;名字必须是当前供应商里已启用的模型,对不上就退回主模型并在那一路的报告里写清为什么退。留空 = 所有档位都用主模型。",
   "feedback_recall": true,
   "context_window": 131072,
   "compact_at_ratio": 0.7,

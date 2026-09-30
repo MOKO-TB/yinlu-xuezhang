@@ -519,7 +519,7 @@ def test_search_miss_not_logged_when_db_unreadable(tmp_path, monkeypatch):
     assert not (tmp_path / "app" / growth.GAPS_FILE).exists()
 
 
-# ------------------------------------------------ 跨线程共用连接(v0.9.94 的并行子代理实测撞过)
+# ------------------------------------------------ 跨线程共用连接(v0.9.95 的并行子代理实测撞过)
 
 
 def _stats_of(tmp_path):
@@ -532,7 +532,7 @@ def test_read_holds_the_lock_across_execute_and_fetch():
 
     手法:第二条线程等 `_read` 进到 execute 之后来抢锁 —— **在 fetch 还没做完之前**
     就抢到,说明锁松了(那才是出事的样子)。只在 conn() 里上锁防不住:两条线程各自
-    execute 完再各自 fetch,拿回来的是别人那条语句的结果(v0.9.94 的并行子代理实测
+    execute 完再各自 fetch,拿回来的是别人那条语句的结果(并行子代理一路一份系统提示词,实测
     过 fetchone() 直接给 None,而上面一层只捕 sqlite3.Error,于是整路"子代理执行出错")。
     """
     entered = threading.Event()

@@ -471,7 +471,7 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
     `parent_undo` 是主代理回滚栈的**引用**(同一个列表对象,v0.9.53):
     implement 子代理的写快照进这个栈,主代理 /undo 才撤得掉子代理的改动。
     """
-    # 按档位分模型(v0.9.94):一个模型名一份客户端,同一个档位反复派活不该每次
+    # 按档位分模型(v0.9.95):一个模型名一份客户端,同一个档位反复派活不该每次
     # 都新建一条 httpx 连接。客户端的构造规则在 `LLMClient.scoped` 一处。
     clients: dict[str, object] = {}
 
@@ -572,7 +572,7 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
 
         # 批量是静默模式(各路输出互不进聊天区):开始时在聊天区说一声,不然
         # 用户看到的就是发完之后一片安静,直到合并报告突然出现。
-        # 这段字符串算在 try 之外:v0.9.94 把它写在 try 里,一次 `s.type` 写错
+        # 这段字符串算在 try 之外:本轮第一版把它写在 try 里,一次 `s.type` 写错
         # (specs 是三元组)就被那个「CLI 没有 push 也不碍事」的 except 吞掉,
         # 于是所有并行批次的开始提示一起静默消失 —— 界面上什么都没发生。
         names = "、".join(f"{spec.type}" + (f"→{r[1]}" if r[1] else "")
