@@ -1,4 +1,6 @@
 """CLI 斜杠命令的回归测试:每个命令都必须能跑通(不能有 NameError 之类)。"""
+import types
+
 import pytest
 
 from main import handle_slash, unmanagle_slash_command
@@ -35,6 +37,9 @@ class FakeAgent:
 
     def __init__(self, workspace):
         self.ctx = ToolContext(workspace=workspace, config=Config())
+        # 真 Agent 一定带 gate,gate 一定带 project(PermissionGate.__init__ 无条件装载);
+        # 替身缺这面,/permission 会在测试里走到真代码走不到的分支。
+        self.gate = types.SimpleNamespace(project=None)
         self.tools_tokens = 1234       # /history 要能把工具定义那份占用单独报出来
 
     def undo(self): return "已撤销"
@@ -59,7 +64,7 @@ SILENT_COMMANDS = ("/clear", "/compact")   # 只改状态,不往 UI 打消息
     "/sandbox", "/sandbox off", "/memory", "/memory user",
     "/remember 喜欢先给结论", "/dream", "/dream all",
     "/skills", "/kb", "/plan", "/nothing-like-this",
-    "/find", "/find 三体",
+    "/find", "/find 三体", "/permission", "/permission full",
 ])
 def test_slash_commands_do_not_crash(env, cmd):
     """重构 handle_slash 时漏传 workspace,曾让 /memory /plan /skills /kb 直接 NameError。"""
@@ -117,3 +122,32 @@ def test_dream_command_reports_result(env):
     handle_slash("/dream", Session(system_prompt="x"), Config(), ui, agent)
     text = "\n".join(t for _kind, t in ui.messages)
     assert "整理完成" in text and "2 条 → 1 条" in text
+
+
+def test_permission_view_reports_the_project_whitelist_state(env):
+    """/permission 要看得见项目白名单的现状(生效/未批准/没有),且命令行不给批准入口。"""
+    from minicode import permspec
+    _workspace, ui, agent = env
+    rules, _problems = permspec.parse_rules(
+        [{"tool": "write_file", "path_prefix": "notes/"}], {"write_file"})
+    spec = permspec.Spec(workspace=_workspace, sha="ab" * 32, rules=rules)
+    agent.gate.project = spec
+    handle_slash("/permission", Session(system_prompt="x"), Config(), ui, agent)
+    text = chr(10).join(t for _k, t in ui.messages)
+    assert "1 条**未生效**" in text and "在对话里说" in text
+    spec.trusted = True
+    handle_slash("/permission", Session(system_prompt="x"), Config(), ui, agent)
+    assert "1 条**已生效**" in chr(10).join(t for _k, t in ui.messages)
+    # 命令行不留 trust/revoke:那条路必须走确认框,绕过它等于给自己发通行证
+    ui.messages.clear()
+    handle_slash("/permission trust", Session(system_prompt="x"), Config(), ui, agent)
+    assert any(k == "error" for k, _t in ui.messages), "trust 不该被当成档位接受"
+
+
+def test_permission_view_survives_a_workspace_without_a_file(env):
+    """没有 permissions.json 也要说一句"无",而不是静默少一行让用户以为没实现。"""
+    from minicode import permspec
+    _workspace, ui, agent = env
+    agent.gate.project = permspec.load(_workspace, set())
+    handle_slash("/permission", Session(system_prompt="x"), Config(), ui, agent)
+    assert "项目白名单:无" in chr(10).join(t for _k, t in ui.messages)

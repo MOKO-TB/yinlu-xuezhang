@@ -264,7 +264,7 @@ class TerminalUI:
             "  /undo         撤销最近一次文件改动(可连续;bash 改动不在跟踪范围)\n"
             "  /compact      立即压缩上下文(平时到达阈值会自动压缩)\n"
             "  /sandbox [on|off] 查看/临时切换沙箱(持久化改 config.json)\n"
-            "  /permission [档位] 查看/切换权限档位(confirm/accept_edits/accept_all/full)\n"
+            "  /permission [档位] 查看/切换权限档位(confirm/accept_edits/accept_all/full;不带参数时同时报出项目白名单的生不生效)\n"
             "  /think [档位]     查看/切换思考档位(default/off/low/high/max,按模型能力)\n"
             "  /memory [user] 查看长期记忆(默认本项目;user=用户级)\n"
             "  /remember <内容> 记一条用户级偏好(跨项目)\n"
