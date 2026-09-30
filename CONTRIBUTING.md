@@ -27,6 +27,17 @@ python scripts/gen_changelog.py                      # ⑤ 重新生成 CHANGELO
 python -m pytest -q                                  # 提交前再跑一次**全量**(实测 ~350 s)
 ```
 
+上面这四件事现在也挂在 `.github/workflows/ci.yml` 上(v0.9.89):**推 main 或开 PR 就自动跑**
+`ruff` → `check_docs.py --collect` → `check_frontend_js.py` → `pytest -m "not slow"`。三点写在
+这份 yml 的注释里,改它之前先看:①跑 **windows-latest** 而不是 ubuntu —— 这本来就是 Windows
+桌面应用,而且**不设 `PYTHONIOENCODING`** 才能复现 GBK 控制台那一类崩(那类点前几轮修过四个);
+②`actions/checkout` 要 `fetch-depth: 0`,因为 `test_changelog` 拿 CHANGELOG 尾注里那个提交重算
+一遍再逐字比,浅克隆里那个提交不存在,只会得到一条假红;③慢车道(`-m slow`)挂在
+`workflow_dispatch` 的勾上,免得每次推送多花四分钟。**CI 不能替代本地那条回路**:它是"忘了跑"
+的兜底,不是新的真相来源。彩排方式(不推远端也能确认那份 yml 不是想象):
+`git worktree add --detach _tmp_ci_dryrun HEAD`,在那份没有 `crawled/`、没有 `config.local.json`、
+没有 `dist/` 的干净克隆里把上面四行逐字跑一遍。
+
 - **① 平时不要跑全量**:耗时大户都打了 `slow` 标记(名单与秒数是量出来的,写在
   `pytest.ini` 里 —— 五个文件占全量 342 s 里的 240 s)。`tests/test_markers.py`
   钉住"快车道里一项都不许来自那五个文件",所以忘了打标会被红告诉你在哪。

@@ -6,7 +6,7 @@
 只回答一个问题:搬家有没有把哪个入口搬丢、搬成死图标、或者把"沙箱开/关""记忆 7 条"
 这种真状态搬没。
 
-做法:**真点击 14 颗,一颗不落**,每颗断它自己那条真去处 ——
+做法:**真点击每一颗,一颗不落**,每颗断它自己那条真去处 ——
   弹层类 → 那个 `#*Overlay` 真的 `.show` 了,而且里面画的是后端给的内容(不是空壳);
   右侧那栏 → `.app.act-open` + 按钮 `aria-expanded="true"`;
   地图 → `.map-panel.open`(地图数据出自真 `minicode.campus.frontend_payload()`);
@@ -30,9 +30,11 @@ FRONTEND = ROOT / "frontend"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# 界面上从上到下的 14 颗(与 tests/test_rail_entries.py 那份清单同源)
+# 界面上从上到下那一串(与 tests/test_rail_entries.py 那份清单同源):
+# v0.9.39 搬进来 14 颗,v0.9.89 加了第 15 颗「体检」—— 两份清单必须一起改。
 RAIL_IDS = ["btnMap", "btnSchedule", "btnMood", "btnPlan", "btnActivity",
-            "btnSkills", "btnMemory", "btnUsage", "btnMyData", "btnSandbox",
+            "btnSkills", "btnMemory", "btnUsage", "btnMyData", "btnHealth",
+            "btnSandbox",
             "btnExport", "btnUndo", "btnCompact", "btnTheme"]
 
 STUB_JS = """
@@ -69,6 +71,10 @@ const base = {
                                            backend: "dir", workspace: "D:/demo/campus",
                                            warnings: [], groups: [],
                                            totals: {files: 0, size: "0 B"}}),
+  /* 体检载荷由真 minicode.health 造(@@HEALTH@@,见 _stub_health):状态凑齐三种,
+     好让"徽章字来自后端"这条在浏览器里也验得到。 */
+  get_health: (deep) => { window.__CALLS__.push(["get_health", deep]);
+    return Promise.resolve(@@HEALTH@@); },
   get_activity: () => Promise.resolve({ok: true, empty: true, groups: [],
                                        summary: {calls: 0, errors: 0, running: 0}}),
   get_monitor_pref: () => Promise.resolve({ok: true, open: false, folded: {}}),
@@ -106,6 +112,33 @@ window.pywebview = {api: new Proxy(base, {
 STUB_NO_SANDBOX = "window.__SANDBOX__ = {available: false, enabled: false, description: ''};"
 
 
+def _stub_health() -> dict:
+    """体检面板的载荷:行由真 `health._row` 造(字段名一漂这场就红),状态凑齐三种。
+
+    写这份而不是随手编字典,是因为面板只认后端给的 `status`/`badge`/`action.kind`;
+    后端改了字段名而这里还是老字典,浏览器就会画出一排空白格子还全绿。
+    """
+    from minicode import health as H
+    rows = [
+        H._row("dirs", "local", "数据目录可写", H.OK, detail="可写:D:/demo/app"),
+        H._row("modelcfg", "local", "模型配置", H.BAD, detail="当前供应商没有可用密钥",
+               fix="点右边「去配置模型」填 Key",
+               action={"kind": "models", "label": "去配置模型"}),
+        H._row("permission", "local", "权限与项目白名单", H.WARN,
+               detail="档位「confirm」 · 白名单写了 2 条但**未生效**(没核对批准过)",
+               fix="要生效请在对话里说一声,学长会弹确认框请你核对",
+               action=H._ask("请把这个项目根下的 permissions.json 白名单批准一下"
+                             "(用 permissions_trust 工具,我要在确认框里核对)。")),
+    ]
+    summary = {s: sum(1 for r in rows if r["status"] == s) for s in H.BADGE}
+    return {"ok": True, "deep": False, "repo": False, "checked_at": "10:00:00",
+            "total": len(rows), "summary": summary, "attention": ["模型配置"],
+            "verdict": H._verdict(summary, rows, len(rows)),
+            "groups": [{"key": k, "label": lb, "icon": ic,
+                        "rows": [r for r in rows if r["group"] == k]}
+                       for k, lb, ic in H.GROUPS]}
+
+
 def _serve(directory: Path):
     class _QuietHandler(SimpleHTTPRequestHandler):
         def log_message(self, *args):
@@ -123,6 +156,7 @@ def main() -> int:
 
     stub = STUB_JS.replace("@@MAP@@", json.dumps(campus.frontend_payload(),
                                                  ensure_ascii=False))
+    stub = stub.replace("@@HEALTH@@", json.dumps(_stub_health(), ensure_ascii=False))
     url, shutdown = _serve(FRONTEND)
     failures: list[str] = []
     errors: list[str] = []
@@ -173,7 +207,7 @@ def main() -> int:
                     inTopbar: [...tb.querySelectorAll('button')].map(b => b.id)};
         }""")
         check(geo["first"], "入口栏是 .app 的第一个子元素(视觉上最左)")
-        check(geo["ids"] == RAIL_IDS, f"入口栏里就是这 14 颗、顺序也没乱:{geo['ids']}")
+        check(geo["ids"] == RAIL_IDS, f"入口栏里就是这一串、顺序也没乱:{geo['ids']}")
         check(not [b for b in geo["inTopbar"] if b in RAIL_IDS],
               f"顶栏不再有任何面板入口(只剩):{geo['inTopbar']}")
 
@@ -258,6 +292,42 @@ def main() -> int:
               "我的数据弹层里是真的数据目录路径(mydata_inventory 给的)")
         close_overlays()
 
+        # ---- 10b. 🩺 体检(v0.9.89):字全是后端给的,空组不渲染,修的那句只填不发 ----
+        payload = _stub_health()
+        before_h = len(calls("get_health"))
+        page.click("#btnHealth")
+        page.wait_for_selector("#healthOverlay.show")
+        got_h = calls("get_health")
+        check(len(got_h) == before_h + 1 and got_h[-1][1] is False,
+              f"开面板只跑本机那一档(deep=False),没擅自去问网络:{got_h[-1:]}")
+        body = page.inner_text("#hdBody")
+        check(payload["verdict"] in body,
+              f"结论那一句就是后端 verdict 的原文,界面没有自己判一遍:{body[:60]!r}")
+        check("有问题" in body and "要注意" in body and "正常" in body,
+              "三枚徽章写的都是后端 BADGE 里的那两个字")
+        for absent in ("联网与外部进程", "源码仓库闸"):
+            check(absent not in body, f"rows 为空的那一组整组不渲染:「{absent}」不该出现")
+        check("统计于 10:00:00" in page.inner_text("#hdTotals"),
+              "顶上那行时间是本轮算的时刻(后端 checked_at),不是页面加载时刻")
+        # 「问学长怎么修」:话进输入框,一个字都不发 —— 面板不许成为第二条批准通道
+        page.locator("#hdBody .hd-act").nth(1).click()
+        page.wait_for_timeout(200)
+        check(page.input_value("#input").startswith("请把这个项目根下的"),
+              f"那句修话只填进了输入框:{page.input_value('#input')[:24]!r}")
+        check(not calls("send_task"), "点那颗按钮没有替用户按回车(send_task 一次都没被叫)")
+        check("#healthOverlay" not in page.evaluate(
+            "() => [...document.querySelectorAll('.overlay.show')].map(e => '#' + e.id)"),
+            "填完就把面板收掉,输入框才是接下来要点的地方")
+        # 「去配置模型」:打开的是本来就有的那个对话框,不是面板里另起一张表
+        page.click("#btnHealth")
+        page.wait_for_selector("#healthOverlay.show")
+        page.locator("#hdBody .hd-act").first.click()
+        page.wait_for_selector("#provOverlay.show")
+        check("provOverlay" in page.evaluate(
+            "() => [...document.querySelectorAll('.overlay.show')].map(e => e.id)"),
+            "那颗按钮真的打开了模型管理对话框")
+        close_overlays()
+
         # ---- 11. 🛡 沙箱:点下去送的是"翻转后"的值,格子上跟着改口 ----
         before = len(calls("set_sandbox"))
         page.click("#btnSandbox")
@@ -293,7 +363,7 @@ def main() -> int:
         check(cap("btnTheme") == ("浅色" if dark_after else "深色"),
               f"格子上写的仍是'下一步能切去的那一档':{cap('btnTheme')!r}")
 
-        # ---- 14. 矮窗口里 14 颗仍全部够得到(入口看不见 = 功能没了) ----
+        # ---- 14. 矮窗口里每一颗仍全部够得到(入口看不见 = 功能没了) ----
         page.set_viewport_size({"width": 1280, "height": 480})
         page.wait_for_timeout(250)
         reach = page.evaluate("""() => {
@@ -334,7 +404,7 @@ def main() -> int:
     check(all("favicon" in e for e in bad_http),
           f"除 favicon 外没有丢资源(拿到 {len(bad_http)} 条):{bad_http[:3]}")
     real = [e for e in errors if "favicon" not in e and "Failed to load resource" not in e]
-    check(not real, f"整场点完 14 颗,控制台没有一条报错:{real[:3]}")
+    check(not real, f"整场点完每一颗,控制台没有一条报错:{real[:3]}")
 
     print()
     if failures:

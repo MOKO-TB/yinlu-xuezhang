@@ -1,0 +1,97 @@
+# 每次推送必跑的那四件事(v0.9.90,#4 CI)。
+#
+# 为什么要有这份文件:v0.9.34 那次 `renderTaskMetrics` 里一个未声明变量让窗口半路死掉
+# (地图整块用不了),却一路绿灯发进了 Release —— 这类"界面开着但半路死了"的账,
+# 后来是靠 `scripts/e2e_ui_init.py` 和 `check_frontend_js.py` 补的。但补完仍然只对着
+# **开发者手敲**才生效:忘了跑就等于没这道闸。这份文件把它变成推送就查。
+#
+# 为什么跑在 windows-latest 而不是 ubuntu:
+# ①这本来就是一个 Windows 桌面应用(托盘/PowerShell 读快捷方式/DWM 染色),课表、
+#   馆藏路径那批用例都是按 Windows 形状写的;
+# ②**这里刻意不设 PYTHONIOENCODING** —— Windows 控制台默认 GBK,`print("✓")` 那类
+#   崩溃只在 Windows 上复现得到(2026-09 那轮就在四支 dev 脚本里修掉过四个这种点)。
+#   换 ubuntu 就等于把这一整类 bug 从闸口放掉。代价:Windows 跑器按 2 倍分钟计费。
+#
+# 与本地那条回路的对应关系(命令逐字相同,见 CONTRIBUTING.md「改完必跑」):
+#   ruff check .                    → 代码风格与真实问题
+#   scripts/check_docs.py --collect → 八道闸(版本号/三处同步/口径/基线条数…)
+#   scripts/check_frontend_js.py    → 前端内联脚本交给 node --check
+#   pytest -m "not slow"            → 快车道(实测约 100~150 s)
+# 慢车道(-m slow,真线程/真 socket 那五个文件)只在手动触发时勾,免得每次推送多花四分钟。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      slow:
+        description: "也跑一遍慢车道(pytest -m slow)"
+        type: boolean
+        default: false
+
+env:
+  PYTHONUNBUFFERED: "1"     # 卡住时日志要能看见最后一步,而不是空到超时
+
+jobs:
+  fast:
+    name: 快车道 + 三道闸(Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # CHANGELOG 是 git log 的视图,那条测试要拿**它尾注里那个提交**重算一遍
+          # 再逐字比;默认浅克隆(depth=1)里那个提交根本不存在 → 闸会变红,而且是假红。
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 装依赖(requirements + dev)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: ruff(只开 F/E722/B006/B023/B002)
+        run: python -m ruff check .
+
+      - name: 文档与口径对账(八道闸)
+        run: python scripts/check_docs.py --collect
+
+      - name: 前端内联脚本语法闸
+        run: python scripts/check_frontend_js.py
+
+      - name: 快车道测试
+        env:
+          # 内置校园供应商的 Key 在开发者本机来自 gitignore 的 config.local.json
+          # (口径见 README「内置模型的 Key」那条)。没有它时"切到内置档"会被拒,而
+          # `test_model_manage` / `test_workspace` 各有一条用例测的就是**切换本身**
+          # (一个请求都不发)—— 干净工作树里实测这两条会红,所以给一个明显是假的占位值。
+          # 真 Key 永远不进仓库、不进这条 yml、也不出现在日志里。
+          YINLUXS_BUILTIN_API_KEY: ci-placeholder-not-a-real-key
+        run: python -m pytest -m "not slow" -q
+
+  slow:
+    name: 慢车道(手动勾选才跑)
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.slow == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: 装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: 耗时大户(真线程 / 真 socket / 真超时)
+        env:
+          YINLUXS_BUILTIN_API_KEY: ci-placeholder-not-a-real-key   # 理由见上面快车道那一段
+        run: python -m pytest -m slow -q

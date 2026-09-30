@@ -28,9 +28,12 @@ HTML = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 E2E = (ROOT / "scripts" / "e2e_ui_v0939_p3.py").read_text(encoding="utf-8")
 
 # 顺序 = 界面上从上到下的顺序(入口栏里就是这一份顺序)
+# v0.9.39 搬进来的是前 14 颗;v0.9.89 新加第 15 颗「体检」,摆在「数据」旁边
+# (两颗都是"看本机这台机器"的入口)。加一颗要同时改这里、下面两处计数、
+# 以及 scripts/e2e_ui_v0939_p3.py 那份真点击清单 —— 这个测试就是为了让漏改当场红。
 RAIL_IDS = ["btnMap", "btnSchedule", "btnMood", "btnPlan", "btnActivity",
-            "btnSkills", "btnMemory", "btnUsage", "btnMyData", "btnSandbox",
-            "btnExport", "btnUndo", "btnCompact", "btnTheme"]
+            "btnSkills", "btnMemory", "btnUsage", "btnMyData", "btnHealth",
+            "btnSandbox", "btnExport", "btnUndo", "btnCompact", "btnTheme"]
 
 # 每一颗**原来**去的地方(与 e2e_ui_v0939_p3.py 真点击断的是同一份口径):
 # 弹层类写弹层 id,动作类写桥方法名 —— 都能在这份文件里追回真代码。
@@ -44,6 +47,7 @@ HANDLES = {
     "btnMemory": "consolidate_memory",
     "btnUsage": "usageOverlay",
     "btnMyData": "myDataOverlay",
+    "btnHealth": "healthOverlay",
     "btnSandbox": "set_sandbox",
     "btnExport": "export_session",
     "btnUndo": "api.undo()",
@@ -136,9 +140,9 @@ def test_entry_has_a_live_click_binding(bid: str):
 
 
 def test_overlay_entries_target_their_own_dialog():
-    """六个弹层入口各自的目标弹层仍在,且仍是被 `.classList.add("show")` 打开。"""
+    """七个弹层入口各自的目标弹层仍在,且仍是被 `.classList.add("show")` 打开。"""
     for ov in ["scheduleOverlay", "moodOverlay", "planOverlay",
-               "skillsOverlay", "usageOverlay", "myDataOverlay"]:
+               "skillsOverlay", "usageOverlay", "myDataOverlay", "healthOverlay"]:
         assert HTML.count(f'id="{ov}"') == 1, ov
         assert f'$("{ov}").classList.add("show")' in HTML, f"{ov} 不再被 show 打开"
 
@@ -148,7 +152,7 @@ def test_overlay_entries_target_their_own_dialog():
 def test_every_entry_has_one_cap_line(rail: str):
     """"图标 + 字"两行结构:每颗按钮都得留一个 `.cap` 给真状态写。"""
     buttons = re.findall(r"<button\b[^>]*>(.*?)</button>", rail, flags=re.S)
-    assert len(buttons) == len(RAIL_IDS) == 14, "入口栏的格子数不是这 14 个"
+    assert len(buttons) == len(RAIL_IDS) == 15, "入口栏的格子数与这份清单不一致"
     for bid, body in zip(RAIL_IDS, buttons):
         assert body.count('class="cap"') == 1, f"{bid} 的标签行不是一份,状态没地方写"
 
@@ -180,7 +184,7 @@ def test_every_entry_is_labeled_in_words_not_only_an_icon(rail: str, bid: str):
 
 
 def test_rail_is_scrollable_when_the_window_is_short():
-    """14 格在矮窗口里放不下:能滚是唯一可接受的解(裁掉 = 入口没了)。"""
+    """入口栏在矮窗口里放不下:能滚是唯一可接受的解(裁掉 = 入口没了)。"""
     assert "overflow-y:auto" in _css(".rail")
 
 
@@ -220,7 +224,7 @@ def test_sandbox_entry_is_hidden_until_the_bridge_reports_it():
 
 @pytest.mark.parametrize("bid", sorted(RAIL_IDS))
 def test_the_browser_round_actually_clicks_this_entry(bid: str):
-    """源码断言只证明"结构在";真点击在 e2e 那一场。两边必须是同一份 14 个。"""
+    """源码断言只证明"结构在";真点击在 e2e 那一场。两边必须是同一份清单。"""
     assert f"#{bid}" in E2E, f"e2e_ui_v0939_p3.py 没有真点过 {bid}"
 
 
@@ -236,7 +240,7 @@ def test_user_manual_documents_the_rail(rail: str):
     assert "入口栏" in src, "《使用说明》里没写这条竖栏"
     caps = [c.strip() for c in re.findall(
         r'<span class="cap"[^>]*>([^<]+)</span>', rail)]
-    assert len(caps) == 14, f"从界面取到的标签数不是 14:{caps}"
+    assert len(caps) == 15, f"从界面取到的标签数不是 15:{caps}"
     for label in re.findall(r"顶栏「([^」]*)」", src):
         hit = [c for c in caps if c in label]
         assert not hit, f"《使用说明》还把「{label}」指到顶栏,它已经在入口栏里了"

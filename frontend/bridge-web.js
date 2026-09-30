@@ -119,7 +119,9 @@
     "#btnMemory", "#btnSandbox", "#btnUndo", "#btnAttach", "#perm", "#btnSkills",
     // 计划面板:plans/plan.md 在老板自己的工作区里,访客点开只会拿到一句拒绝
     // 「我的数据」:列的是服务器本机的文件清单,导出还会往服务器上写 zip —— 不给访客
-    "#btnSchedule", "#btnPlan", "#btnMyData",
+    // 「体检」:每一行写的都是服务器那台机器的目录、模型地址、馆藏库大小与自启指向;
+    //   METHODS 表里也刻意没有 get_health,不是藏掉按钮就完事(点不到才算断得干净)。
+    "#btnSchedule", "#btnPlan", "#btnMyData", "#btnHealth",
   ].join(",") + "{display:none !important}";
   function injectCss() {
     var style = document.createElement("style");
