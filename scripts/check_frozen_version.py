@@ -119,7 +119,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "_web_row", "_WEB_NOTE_LINE", "_WEB_VERBS",
                           # v0.9.92:父行下面挂的子步骤(漏 _children = 时间线里那一层
                           # 整块消失而面板不报错;漏 _dur_text = 时长出现第二份格式化)
-                          "_children", "_dur_text"),
+                          "_children", "_dur_text",
+                          # 出包对账挖出来的欠账(v0.9.76 当时就没进针表):子代理那份
+                          # 报告开头的 [files|档位] 尾注要有人解析,产出才进得了面板。
+                          # 漏 _FILE_TOOLS_LINE = 正则没了、行行都不认;漏 _extract_files
+                          # = 认了解析不收 —— 两种表现都是「装好的包里子代理写的文件
+                          # 不出现在产出栏」,而不报错。
+                          "_FILE_TOOLS_LINE", "_extract_files"),
     # v0.9.37:工具口径只有一份真相 —— 聊天里的工具卡片、右侧时间线、实时表三处
     # 都调它。漏收 = 三处措辞各自漂移(时间线里写「读取」,卡片里写「读文件」),
     # 而配对靠的是同一个 summarize 结果,漂了就再也对不上,行行都显示不了耗时。
@@ -329,7 +335,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                     "CRAWLED_UNVERIFIED",
                     # v0.9.39 B0:"没查到"这句话与判它的那一处必须同时在包里 ——
                     # 只收一个,回灌就静默失灵(界面照旧,只是再也不提示)
-                    "NO_HIT_TEXT", "is_no_hit"),
+                    "NO_HIT_TEXT", "is_no_hit",
+                    # v0.9.90 未命中即给联网入库路径(第三梯队 ⑦):这句话是**写死在
+                    # 工具回话里**的,不靠模型自觉 —— 漏收 = 包内未命中又变回一句
+                    # 「没查到」,模型爱查不查,而源码测试全绿看不出差别
+                    "FALLBACK_HINT"),
     # ---- v0.9.18:课表持久化 + 天气 chip ----
     "minicode.schedule": ("parse_weeks", "classes_on", "next_class_note",
                           "schedule_prompt_section",
