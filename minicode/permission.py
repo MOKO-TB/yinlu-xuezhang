@@ -20,6 +20,7 @@ import re
 from pathlib import Path
 
 from minicode.config import Config
+from minicode import permspec
 from minicode.sandbox import (
     ASK as SB_ASK, BLOCKED, KNOWN_LIMITS, OUTSIDE,
     REJECT as SB_REJECT, SECRET, check_command, classify_for_write,
@@ -39,14 +40,10 @@ WRITE_TOOLS = ("write_file", "edit_file")
 # 少了这道门就等于"给个绝对路径就能把工作区外的图片读走"(注入防御要堵的洞)。
 PATH_TOOLS = ("read_file", "write_file", "edit_file", "py_script", "ocr_image")
 
-# accept_edits(自动编辑)档放行的构建类命令首词。只放"跑测试/装依赖/编译"
-# 这类可重复执行、不直接破坏数据的动作;删改类(rm/del/Remove-Item/git push…)
-# 一律不进表 —— 宁可多问一次,不放走一个破坏性动词。
-BUILD_COMMANDS = frozenset({
-    "python", "python3", "py", "pytest", "pip", "pip3",
-    "node", "npm", "npx", "yarn", "pnpm",
-    "make", "cargo", "go",
-})
+# accept_edits(自动编辑)档放行的构建类命令首词。**名单只有一份**,放在
+# `minicode/permspec.py::SAFE_COMMAND_HEADS`:项目白名单与这一档必须是同一批动词,
+# 两处各抄一份的话,总有一天白名单能批到一个档位不肯自动放行的命令(反之亦然)。
+BUILD_COMMANDS = permspec.SAFE_COMMAND_HEADS
 
 # 权限档位全集(前端下拉、CLI /permission 都按这个顺序展示)
 PERMISSION_MODES = ("confirm", "accept_edits", "accept_all", "full")
@@ -142,13 +139,18 @@ class PermissionGate:
     的敏感动作"强制确认。设计按的是"档位越高越信任**用户**,不更信任**外部内容**"。
     """
 
-    def __init__(self, config: Config, sandbox=None):
+    def __init__(self, config: Config, sandbox=None, workspace=None,
+                 tool_names: set[str] | None = None):
         self.config = config
         self.sandbox = sandbox          # minicode.sandbox.SandboxState
         self._turn_allowed: set[str] = set()
         # 回合内的"外部接触"标志(注入防御 M3.2);Agent._execute 调 note_external 置位
         self._touched_external = False
         self._external_source = ""
+        # 项目级白名单(v0.9.87):**装载即核对信任**,没批准过/改过字都是一份空规则。
+        # 只在"按档位本该问一次"的那一步起作用,红线链在它前面就已经 return。
+        self.project = permspec.load(workspace, tool_names or set())
+        self.project_allow_reason = ""
         self._ask_note = ""
 
     def new_turn(self) -> None:
@@ -372,6 +374,7 @@ class PermissionGate:
         # 子代理的工具名带类型前缀(如 "explore·bash"),取末段判断
         name = tool.name.rsplit("·", 1)[-1]
         self._ask_note = ""
+        self.project_allow_reason = ""
         if name == "bash":
             reason = check_disaster_command(args.get("command", ""))
             if reason:
@@ -439,8 +442,20 @@ class PermissionGate:
                 return ALLOW
             if name == "bash" and self._is_workspace_build_command(args):
                 return ALLOW
-            return ASK
+            return self._project_or_ask(name, args)
         if name in self._turn_allowed:
+            return ALLOW
+        return self._project_or_ask(name, args)
+
+    def _project_or_ask(self, name: str, args: dict) -> str:
+        """本该问一次的地方,先看项目白名单是否**已核对且命中**。
+
+        命中就放行并留下一句理由:Agent 那边要往安全日志记一行、界面上推一条
+        info —— 这是"用户当场没点过头"的放行,静默等于没有审计。
+        """
+        hit = self.project.decide(name, args)
+        if hit:
+            self.project_allow_reason = hit
             return ALLOW
         return ASK
 
@@ -448,17 +463,11 @@ class PermissionGate:
     def _is_workspace_build_command(args: dict) -> bool:
         """accept_edits 档放行的"构建类"命令:python/pytest/pip 等无破坏性前缀。
 
-        只认命令的**第一个词**(venv 包装器也算),避免 `-rf` 这类参数混进来;
-        删除/格式化/强制类命令不在这里,维持逐次确认。
+        只认命令的**第一个词**,首词口径与 `permspec.command_head` 是同一份实现
+        (两处各写一遍的话,总有一天一处认得 pytest、另一处不认);删除/格式化/强制类
+        命令不在这里,维持逐次确认。
         """
-        cmd = str(args.get("command", "")).strip()
-        if not cmd:
-            return False
-        head = re.split(r"[\s|;&]", cmd, 1)[0].strip("\"'").lower()
-        if head.endswith(".exe"):
-            head = head[:-4]
-        head = head.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-        return head in BUILD_COMMANDS
+        return permspec.command_head(str(args.get("command", ""))) in BUILD_COMMANDS
 
     def approve_for_turn(self, tool_name: str) -> None:
         self._turn_allowed.add(tool_name)

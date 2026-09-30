@@ -424,6 +424,12 @@ class Agent:
             # 会话级(不落盘,换工作区/重启即失效)
             self.gate.approve_outside(tool, args, session=(choice == "always"))
 
+        # 项目白名单放行(v0.9.87):用户当场没点过头的一步必须留两处痕 ——
+        # 安全日志一行 + 界面一条 info。静默放行等于没有审计。
+        by_project = getattr(self.gate, "project_allow_reason", "") or ""
+        if by_project:
+            self._note_project_allow(tool, args, by_project)
+
         self._note_low_rated_prior(tool, args)
         self._snapshot_before_mutation(tool, args)
         self.ui.tool_start(tool, args)
@@ -518,6 +524,25 @@ class Agent:
             return result + "\n\n" + feedback_recall.repeat_note(times)
         except Exception:
             return result
+
+    def _note_project_allow(self, tool: Tool, args: dict, why: str) -> None:
+        """按项目白名单放行时留痕:安全日志一行 + 界面一句人话。
+
+        两句都是必要的:日志给事后排查("这一步是谁批的"),info 给当场看见
+        (不然用户只会发现"今天学长没问我",而不是"因为这份文件里第 2 条")。
+        失败静默 —— 留痕不能把工具执行带崩。
+        """
+        try:
+            from minicode import provenance
+            provenance.log_escalation("project_allow", tool.name, args, why, "auto")
+        except Exception:
+            pass
+        try:
+            info = getattr(self.ui, "info", None)
+            if callable(info):
+                info(f"这一步没问你:{why}(文件核对批准过;改一个字就失效)")
+        except Exception:
+            pass
 
     def _log_security_ask(self, tool: Tool, args: dict, note: str, choice: str) -> None:
         """安全门(凭据/升级)开口就留一行痕(方案 M6)。失败静默。"""

@@ -387,6 +387,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # v0.9.77:失败连击止损(漏收 = 装好的包里同一个调用
                        # 连挂 N 次只会烧 token 到 max_steps/整轮时限)
                        "FAIL_STREAK_LIMIT", "FAIL_STREAK_NOTE", "_fail_streak_hit",
+                       # v0.9.87:免确认放行的留痕(漏收 = 白名单生效了却没人记得
+                       # 是谁批的,事后查不到)
+                       "_note_project_allow",
                        # v0.9.78:成本闸门(漏收 = config 里的上限在包里没人读,
                        # 跑飞了还是只能等时间限)
                        "TOKEN_LIMIT_NOTE", "session_token_limit"),
@@ -474,6 +477,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # ---- v0.9.24:计划面板(漏收 = 顶栏「🗂 计划」点开永远说没计划) ----
     # v0.9.33:对话流里的计划卡片靠 in_progress/running 画出"正在做哪一步"
     # (漏收 = 卡片只剩一堆待办和勾,转圈的那一行永远不出现)
+    # v0.9.87:项目级权限白名单(漏收 = permissions.json 在装好的包里根本没人读,
+    # 用户批了权限却发现每次还是被问,或更糟:模型自己写的那份被当真)
+    "minicode.permspec": ("load", "parse_rules", "Rule", "Spec", "decide",
+                          "command_head", "SAFE_COMMAND_HEADS", "trust", "revoke",
+                          "approved_sha", "trust_path", "permissions",
+                          "permissions_trust", "PERMISSIONS_FILE", "TRUST_FILE"),
     "minicode.planning": ("plan_state", "dispatch_text", "notify_plan",
                           "in_progress", "running",
                           # v0.9.81:计划与子代理对上号(漏收 = task 的 step 参数

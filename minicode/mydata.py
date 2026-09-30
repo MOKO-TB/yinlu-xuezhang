@@ -130,6 +130,8 @@ TABLE: tuple[Entry, ...] = (
           note="本机成长日志,含对话摘要"),
     Entry("kb-hits.jsonl", "知识库检索命中账", PERSONAL, False,
           note="问句 + 命中的条目 id,供评价绑条目;含本机提问记录"),
+    Entry("perms-trust.json", "项目权限白名单的批准记录", PERSONAL, False,
+          note="工作区绝对路径 + 文件指纹;换机器带走等于替那台机器上的项目批了权限"),
     # ---- 设置与偏好
     Entry("config.json", "模型与权限配置", PREF, True, restart=True,
           note="导出前会洗掉里面的 API Key,新机器要重填一次"),

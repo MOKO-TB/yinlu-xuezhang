@@ -6,7 +6,8 @@ def test_registry_contents():
     names = [t.name for t in tools]
     assert names == ["read_file", "write_file", "edit_file", "bash",
                      "bash_status", "bash_kill", "py_script",
-                     "glob", "grep", "repo_outline", "web_crawl", "web_search",
+                     "glob", "grep", "repo_outline",
+                     "permissions", "permissions_trust", "web_crawl", "web_search",
                      "browser_open", "browser_eval", "browser_snapshot",
                      "browser_click", "browser_fill", "browser_screenshot",
                      "browser_close", "browser_status", "page_parse",
@@ -33,6 +34,8 @@ def test_read_only_flags():
         "bash": False,
         "bash_status": True,           # 只读:查后台任务的进度与输出尾部,不该弹确认框
         "bash_kill": False,            # 终止进程是动手面,必须用户点头
+        "permissions": True,           # 只是看一眼这个项目批了什么
+        "permissions_trust": False,    # 批准 = 从此免确认放行,必须用户点过头
         "py_script": False,          # 内置运行时执行脚本:能读写文件,要确认
         "glob": True,
         "grep": True,

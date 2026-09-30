@@ -97,6 +97,15 @@ def risk_notes(tool_name: str, args: dict) -> list[str]:
     elif name == "bash_kill":
         notes.append("会终止一个后台命令(连它的子进程一起);"
                      "它已经写出去的文件不会回滚")
+    elif name == "permissions_trust":
+        action = str(args.get("action", "trust") or "trust")
+        if action == "revoke":
+            notes.append("撤销批准只会让这个项目回到「每次都问一次」,不动任何文件")
+        else:
+            notes.append("会把这个项目 permissions.json 里那几条规则变成**免确认放行**,"
+                         "直到文件改一个字或被撤销")
+            notes.append("敏感路径 / 工作区外路径 / 凭据文件 / 灾难命令不受它影响;"
+                         "能预授权的只有构建类命令与工作区内的路径")
     elif name == "write_file":
         notes.append("会写入文件,原内容可用「撤销」回滚")
     elif name == "edit_file":

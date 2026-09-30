@@ -105,7 +105,11 @@ def build_runner_agent(config: Config, workspace: Path, ui, llm,
         llm=llm,
         registry=registry,
         session=session,
-        gate=PermissionGate(config, sandbox=ctx.sandbox),
+        # workspace/tool_names 是给项目级白名单用的(v0.9.87):装载时就要按工作区
+        # 找到 permissions.json 并核对信任,工具名用来拒掉指向不存在的工具的规则。
+        gate=PermissionGate(config, sandbox=ctx.sandbox, workspace=workspace,
+                             tool_names={t.name.rsplit("·", 1)[-1]
+                                         for t in registry}),
         ui=ui,
         ctx=ctx,
     )

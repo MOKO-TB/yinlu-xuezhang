@@ -31,6 +31,8 @@ ORDER = [
     "bash_status", "bash_kill",
     "py_script", "glob", "grep",
     "repo_outline",
+    # v0.9.87:项目级权限白名单(看 = 只读,批准 = 要确认),紧挨着文件/命令那组
+    "permissions", "permissions_trust",
     "web_crawl", "web_search", "browser_open", "browser_eval", "browser_snapshot",
     "browser_click", "browser_fill", "browser_screenshot", "browser_close",
     "browser_status", "page_parse",
@@ -89,8 +91,8 @@ def test_registry_returns_the_same_tools_in_the_same_order():
 
 
 def test_order_pin_is_not_stale():
-    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 49 个不重名。"""
-    assert len(ORDER) == len(set(ORDER)) == 49
+    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 51 个不重名。"""
+    assert len(ORDER) == len(set(ORDER)) == 51
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

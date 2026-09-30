@@ -124,3 +124,12 @@ def test_prefixed_subagent_tool_names_still_get_the_notes():
     assert KNOWN_LIMITS["background"] in risk_notes(
         "campus·bash", {"command": "make", "background": True})
     assert any("子进程" in n for n in risk_notes("implement·bash_kill", {"id": "j1"}))
+
+
+def test_trusting_a_project_whitelist_says_what_it_grants():
+    """确认框必须讲清"批准之后哪些动作不再问你",否则用户是在盲签一份授权书。"""
+    trust = risk_notes("permissions_trust", {"action": "trust"})
+    assert any("免确认放行" in n for n in trust)
+    assert any("凭据文件" in n for n in trust)          # 说清它管不到的那一半
+    revoke = risk_notes("permissions_trust", {"action": "revoke"})
+    assert any("每次都问一次" in n for n in revoke)

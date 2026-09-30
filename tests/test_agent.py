@@ -4,6 +4,7 @@ from minicode.agent import WRAP_UP_NOTE, Agent
 from minicode.llm import AssistantTurn, ToolCall
 from minicode.permission import PermissionGate
 from minicode.session import Session
+from minicode.tools.base import ToolContext
 from minicode.tools.registry import build_default_registry
 
 
@@ -830,3 +831,86 @@ def test_no_bg_jobs_adds_nothing_to_the_request(config, ctx, monkeypatch):
     agent = make_agent(config, ctx, FakeLLM([]), FakeUI())
     msgs = agent._messages_for_request()
     assert len(msgs) == 1 and msgs[0]["role"] == "system"
+
+
+# FakeUI 本来就记 info(自我基类第 59 行)与确认调用,不需要额外子类。
+
+
+def test_project_allow_leaves_both_traces(config, tmp_path, monkeypatch):
+    """按项目白名单放行必须留两处痕:安全日志一行 + 界面一条 info。
+
+    这是"用户当场没点过头"的放行,静默等于没有审计 —— 而这份文件被设计成
+    不可自证(见 permspec 模块开头),事后能查就是唯一的兜底。
+    """
+    import json as _json
+    from minicode import permspec, provenance
+    from minicode.permission import PermissionGate
+    from minicode.tools.registry import build_default_registry
+
+    log = []
+    monkeypatch.setattr(provenance, "log_escalation",
+                        lambda gate, name, args, note, choice: log.append(
+                            (gate, name, note, choice)))
+    monkeypatch.setattr(permspec, "trust_path", lambda: tmp_path / "trust.json")
+
+    ws = tmp_path / "proj"
+    (ws / "notes").mkdir(parents=True)
+    (ws / permspec.PERMISSIONS_FILE).write_text(
+        _json.dumps({"allow": [{"tool": "write_file", "path_prefix": "notes/"}]},
+                    ensure_ascii=False), encoding="utf-8")
+    names = {t.name for t in build_default_registry()}
+    spec = permspec.load(ws, names)
+    permspec.trust(ws, spec.sha, len(spec.rules))
+
+    ctx = ToolContext(workspace=ws, config=config)
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="w1", name="write_file",
+            arguments=_json.dumps({"path": "notes/a.md", "content": "x"}))]),
+        AssistantTurn(text="写好"),
+    ])
+    ui = FakeUI()
+    agent = make_agent(config, ctx, llm, ui)
+    agent.gate = PermissionGate(config, workspace=ws, tool_names=names)
+    agent.run_turn("写个笔记")
+
+    assert (ws / "notes" / "a.md").exists(), "白名单没生效 = 这条测试没测到东西"
+    assert log and log[0][0] == "project_allow", log
+    assert "第 1 条" in log[0][2] and log[0][3] == "auto"
+    infos = getattr(ui, "infos", [])
+    assert any("没问你" in t for t in infos), infos
+    assert any("改一个字" in t for t in infos), "界面上要看得出这是一份会失效的授权"
+
+
+def test_untrusted_whitelist_still_asks_and_leaves_no_trace(config, tmp_path, monkeypatch):
+    """没批准过的白名单不生效:该弹确认框弹确认框,不许出现 project_allow 留痕。"""
+    import json as _json
+    from minicode import permspec, provenance
+    from minicode.permission import PermissionGate
+    from minicode.tools.registry import build_default_registry
+
+    log = []
+    monkeypatch.setattr(provenance, "log_escalation",
+                        lambda *a: log.append(a))
+    monkeypatch.setattr(permspec, "trust_path", lambda: tmp_path / "trust.json")
+    ws = tmp_path / "proj2"
+    (ws / "notes").mkdir(parents=True)
+    (ws / permspec.PERMISSIONS_FILE).write_text(
+        _json.dumps({"allow": [{"tool": "write_file", "path_prefix": "notes/"}]}),
+        encoding="utf-8")
+    names = {t.name for t in build_default_registry()}
+    ctx = ToolContext(workspace=ws, config=config)
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="w1", name="write_file",
+            arguments=_json.dumps({"path": "notes/a.md", "content": "x"}))]),
+        AssistantTurn(text="算了"),
+    ])
+    ui = FakeUI(confirm_choice="no")
+    agent = make_agent(config, ctx, llm, ui)
+    agent.gate = PermissionGate(config, workspace=ws, tool_names=names)
+    agent.run_turn("写个笔记")
+    assert not (ws / "notes" / "a.md").exists()      # 用户拒绝了 = 本来就该问
+    assert ui.confirmed, "没批准过就该弹确认框"
+    assert not [e for e in log if e[0] == "project_allow"]
+    assert not any("没问你" in t for t in getattr(ui, "infos", []))
