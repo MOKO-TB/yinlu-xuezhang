@@ -693,6 +693,9 @@ def now_line(now: dict | None) -> dict | None:
             "title": _clip(summary) or toolsum.verb(name),
             "agent_type": toolsum.agent_type(name),
             "start": _clock(now.get("start")),
+            # 长命令的实时那一行(shell 报的"已跑多久/多少字/最后一行")。没有就是空串,
+            # 前端那一行整条不出现 —— 拿"没有进度"装作"刚开始"是最容易看漏的谎。
+            "progress": str(now.get("progress") or ""),
             "elapsed": max(0, int(now.get("elapsed") or 0))}
 
 

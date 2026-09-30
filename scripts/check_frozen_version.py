@@ -130,6 +130,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.gui_ui": ("confirm_tool",  # v0.9.60:label 参数要能传到 handler
                         "live_rows", "live_now", "live_abandon", "_live_begin",
                         "_live_end", "LIVE_CAP",
+                        # v0.9.90:长命令的实时那一行(漏收 = bash 那边 getattr 拿不到方法,
+                        # 进度静默没有 —— 而这一轮的卖点恰恰是"中间那段不再是黑的")
+                        "tool_progress",
                         # v0.9.39:一轮总时限到点要说得出声(漏收 = 停下时界面一个字也不显示,
                         # 用户只看到"它不动了",以为卡死)
                         "turn_time_limited",
@@ -252,7 +255,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "_bg_shutdown", "MAX_BG_JOBS",
     # v0.9.85:状态注入(漏收 = 模型只能自己想起来轮询,后台跑完了也没人告诉它,
     # 于是它会替用户宣布一个还没发生的结果)
-    "bg_brief_for_model", "BG_KEEP_FINISHED", "_bg_prune_locked"),
+    "bg_brief_for_model", "BG_KEEP_FINISHED", "_bg_prune_locked",
+    # v0.9.90:前台命令边跑边读 + 进度上报(漏收 = 装好的包里长命令中间又是黑的,
+    # 而工具描述与 HANDOFF 都写着"每 15 秒报一行";_drain 漏了更坏:回到只读一条管道,
+    # 两路都写满时子进程直接卡死在那条命令上)
+    "PROGRESS_EVERY", "_Progress", "_drain", "_report_progress"),
     # ---- v0.9.39 #84:注册表按领域拆成 6 份目录(registry.py 只管装配顺序)----
     # 漏收一份 = 装好的包里**那个领域的工具整组消失**,而 build_default_registry()
     # 不报错(它只是拼不出那一段),模型侧表现是"这个能力没有了"。

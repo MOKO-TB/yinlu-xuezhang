@@ -74,6 +74,19 @@ class GuiUI:
         self.push("tool_start", name=tool.name, summary=summary,
                   trust=getattr(tool, "trust", "local"))
 
+    def tool_progress(self, text: str) -> None:
+        """长命令的实时进度:**只改"此刻"那一行**,不往聊天里叠新消息。
+
+        为什么走实时表而不是另开一份状态:`live_now()` 已经是"最深一层在跑什么"的唯一
+        来源(耗时也是从它算的)。进度塞进同一行,面板刷新时不用猜"这行字属于哪一步";
+        而那一步一结束,行从 `_live_open` 里移除,进度自然跟着消失 —— 不会留下一条
+        "还在跑"的假象(与 `live_abandon` 那条是同一个顾虑)。
+        """
+        with self._live_lock:
+            if self._live_open:
+                self._live_open[-1]["progress"] = str(text or "")
+        self.push("tool_progress", text=str(text or ""))
+
     def tool_done(self, tool: Tool, result: str) -> None:
         # 成没成、截多长都由 toolsum 一处说了算(原来这两行各写了一份字面量:
         # 一份 startswith 元组、一个 [:300],与 activity 那份是三份真相)
@@ -173,7 +186,7 @@ class GuiUI:
 
     def _live_begin(self, name: str, summary: str) -> None:
         row = {"name": str(name or ""), "summary": str(summary or ""),
-               "start": time.time(), "end": None, "ok": None}
+               "start": time.time(), "end": None, "ok": None, "progress": ""}
         with self._live_lock:
             self._live.append(row)
             self._live_open.append(row)

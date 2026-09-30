@@ -157,7 +157,7 @@ class _QuietUI:
 
     _SILENT = frozenset({
         "on_text_delta", "on_reasoning_delta", "finish_stream",
-        "tool_start", "tool_done", "tool_rejected_hard", "compacted",
+        "tool_start", "tool_done", "tool_progress", "tool_rejected_hard", "compacted",
         "info", "on_retry", "banner", "max_steps_reached",
     })
 
@@ -235,7 +235,11 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
                                 tool_names={t.name.rsplit("·", 1)[-1]
                                             for t in registry}),
             ui=ui,
-            ctx=ctx,
+            # v0.9.91:工具是靠 `ctx.ui` 把进度/图形指令递回界面的。继续沿用父 ctx,
+            # 并行批次里几路子代理的 bash 进度就会**盖到父会话「此刻」那一行**上
+            # (那一行写的是父会话最深一层在跑的东西)—— 串味的进度等于假进度。
+            # 静默那一路(`_QuietUI`)本来就吞掉 tool_start/tool_done,现在进度走同一条闸。
+            ctx=dc_replace(ctx, ui=ui),
             max_steps=MAX_SUB_STEPS,
         )
         if undo_stack is not None:

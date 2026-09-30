@@ -6,6 +6,8 @@
 ② 干净脚本、普通联网命令**不被骚扰**,且自述不许吹成"已断网"。
 """
 import subprocess
+import time
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -210,17 +212,60 @@ def test_policy_roundtrip_keeps_the_switch():
 
 # ------------------------------------------------------------------ 子进程真的看不到 Key
 
-def _capture_env(monkeypatch, root, policy, call):
-    """把 subprocess.run 换成"只记录环境、不真跑"的桩,验证交给子进程的那份 env。"""
+def _fake_children(monkeypatch, out=b"ok", err=b"", ret=0, wait_raises=False):
+    """把 shell 起子进程的**两种方式**都换成"只记账、不真跑"的桩。
+
+    v0.9.91 起前台 `bash` 走 `Popen` + 两条管道各一个读线程(边跑边读才看得到进度),
+    `py_script` 那条仍是 `subprocess.run`。只换一种会让另一种的桩静默失效 ——
+    表现是"环境没摘干净"这类断言其实在真起进程,所以这里两个一起换。
+    """
     seen = {}
 
-    class Fake:
-        returncode = 0
-        stdout = b"ok"
-        stderr = b""
+    class FakeDone:
+        returncode = ret
+        stdout, stderr = out, err
 
-    monkeypatch.setattr(shell.subprocess, "run",
-                        lambda cmd, **kw: seen.update(cmd=cmd, env=kw.get("env")) or Fake())
+    def fake_run(cmd, **kw):
+        seen.update(cmd=cmd, env=kw.get("env"))
+        return FakeDone()
+
+    class FakeStream:
+        def __init__(self, data):
+            self._f = BytesIO(data)
+
+        def readline(self):
+            return self._f.readline()
+
+    class FakePopen:
+        def __init__(self, cmd, **kw):
+            seen.update(cmd=cmd, env=kw.get("env"))
+            self.stdout, self.stderr = FakeStream(out), FakeStream(err)
+            self.pid = 4242
+            self._dead = True       # 桩里的命令"一叫就完",不模拟还在跑
+            self.returncode = ret   # 真 Popen 也是靠 poll/wait 填这个字段
+
+        def poll(self):
+            return self.returncode if self._dead else None
+
+        def wait(self, timeout=None):
+            if wait_raises:
+                # 演"这段时间它确实还在跑":真 wait() 会阻塞,桩不睡就变成空转几千圈
+                time.sleep(min(timeout or 0, 0.2))
+                raise subprocess.TimeoutExpired(cmd="whatever", timeout=timeout)
+            self._dead = True
+            return self.returncode
+
+        def kill(self):
+            self._dead = True
+
+    monkeypatch.setattr(shell.subprocess, "run", fake_run)
+    monkeypatch.setattr(shell.subprocess, "Popen", FakePopen)
+    return seen
+
+
+def _capture_env(monkeypatch, root, policy, call):
+    """验证交给子进程的那份 env(两种起法都记账,见 `_fake_children`)。"""
+    seen = _fake_children(monkeypatch)
     monkeypatch.setenv("MY_PROBE_API_KEY", "sk-leak")
     monkeypatch.setenv("HARMLESS_FLAG", "1")
     ctx = ToolContext(workspace=root, config=Config())
@@ -252,15 +297,7 @@ def test_py_script_child_env_follows_the_switch(monkeypatch, ws):
 
 def test_no_sandbox_keeps_the_env_as_it_was(monkeypatch, ws):
     """没装沙箱(老配置/测试环境)时不该有第三种行为,更不该凭空报错。"""
-    seen = {}
-
-    class Fake:
-        returncode = 0
-        stdout = b"ok"
-        stderr = b""
-
-    monkeypatch.setattr(shell.subprocess, "run",
-                        lambda cmd, **kw: seen.update(env=kw.get("env")) or Fake())
+    seen = _fake_children(monkeypatch)
     monkeypatch.setenv("MY_PROBE_API_KEY", "sk-leak")
     out = shell.bash(ToolContext(workspace=ws, config=Config()), "echo hi")
     assert seen["env"]["MY_PROBE_API_KEY"] == "sk-leak"
@@ -268,25 +305,18 @@ def test_no_sandbox_keeps_the_env_as_it_was(monkeypatch, ws):
 
 
 def test_bash_output_is_capped_and_says_how_much_was_dropped(monkeypatch, ws):
-    class Fake:
-        returncode = 0
-        stdout = b"x" * 20000
-        stderr = b""
-
-    monkeypatch.setattr(shell.subprocess, "run", lambda *a, **kw: Fake())
+    _fake_children(monkeypatch, out=b"x" * 20000)
     out = shell.bash(ToolContext(workspace=ws, config=Config()), "produce lots")
     assert "输出过长" in out and "20000" in out
     assert len(out) < 20000
 
 
 def test_timeout_message_still_arrives(monkeypatch, ws):
-    def boom(*a, **kw):
-        raise subprocess.TimeoutExpired(cmd="sleep 999", timeout=1)
-
-    monkeypatch.setattr(shell.subprocess, "run", boom)
+    _fake_children(monkeypatch, wait_raises=True)
     ctx = ToolContext(workspace=ws, config=Config())
     ctx.sandbox = SandboxState(SandboxPolicy(), ws)
-    assert "超时" in shell.bash(ctx, "sleep 999")
+    # timeout=1:桩每次都"还在跑",循环要熬到预算用完才算超时 —— 别让它真等默认那 60 秒
+    assert "超时" in shell.bash(ctx, "sleep 999", timeout=1)
 
 
 def test_describe_names_what_it_actually_does(ws):

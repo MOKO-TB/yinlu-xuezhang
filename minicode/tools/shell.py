@@ -112,6 +112,10 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
          background: bool = False) -> str:
     """在工作区目录执行一条 shell 命令,返回退出码与输出。
 
+    前台这一条**边跑边读**:每 `PROGRESS_EVERY` 秒给界面报一行"已跑多久 / 已输出多少字
+    / 最后一行",命令一结束就立刻返回原来那份文本(模型看到的字没变,变的是中间那段
+    不再是黑的)。报不出去也不能影响命令本身。
+
     `background=true` 时**不等结果**:命令放后台跑,立刻返回一个 job 编号,
     之后用 `bash_status` 看进度与输出、`bash_kill` 终止(实现见 `_BgJob`)。
     """
@@ -127,24 +131,53 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
     if state is not None:                      # 沙箱收紧执行超时上限
         timeout = state.policy.command_timeout(timeout)
 
-    try:
-        if argv is None:
-            proc = subprocess.run(
-                command, shell=True, cwd=ctx.workspace, capture_output=True,
-                timeout=timeout, creationflags=creationflags, env=env,
-            )
-        else:
-            proc = subprocess.run(
-                [*argv, command], cwd=ctx.workspace, capture_output=True,
-                timeout=timeout, creationflags=creationflags, env=env,
-            )
-    except subprocess.TimeoutExpired as e:
-        partial = _decode(e.stdout or b"")
-        return (f"错误: 命令超时(>{timeout}s),已被终止。"
-                f"已产生的输出:\n{partial[:TIMEOUT_OUTPUT_LIMIT]}{env_note}")
+    # 自己起进程 + 自己读两条管道(而不是 `subprocess.run(capture_output=True)`):
+    # 那条路要等命令结束才一次给全,一条跑几分钟的命令中间界面完全是黑的。两条管道
+    # 各一个读线程 —— 只读一条、或先 wait 再读,都会在另一条写满时把子进程卡死。
+    # stdin 给 DEVNULL:以前它继承控制台,GUI 那边等于"永远没人输入",命令会干等;
+    # 交互式命令仍然不该走这里(那是 PTY 那条没做的路),但现在不会吊住。
+    proc = subprocess.Popen(
+        ([*argv, command] if argv is not None else command),
+        shell=(argv is None), cwd=ctx.workspace,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+        env=env, creationflags=creationflags)
+    out_buf: list[str] = []
+    err_buf: list[str] = []
+    prog = _Progress()
+    readers = [threading.Thread(target=_drain, args=(proc.stdout, out_buf, prog),
+                                 daemon=True, name="bash-stdout"),
+               threading.Thread(target=_drain, args=(proc.stderr, err_buf, prog),
+                                daemon=True, name="bash-stderr")]
+    for r in readers:
+        r.start()
+    t0 = time.monotonic()
+    timed_out = False
+    while True:
+        left = timeout - (time.monotonic() - t0)
+        if left <= 0:
+            timed_out = True
+            break
+        try:
+            proc.wait(timeout=min(left, PROGRESS_EVERY))   # 命令一结束就出去,不空等一格
+            break
+        except subprocess.TimeoutExpired:
+            _report_progress(ctx, prog, time.monotonic() - t0, timeout)
+    killed_note = ""
+    if timed_out:
+        # 超时也走那棵树的杀法:只杀 bash.exe 会留下一堆继续写文件的孤儿
+        _ok, killed_note = _bg_kill_tree(_BgJob("fg", proc, command))
+    for r in readers:
+        r.join(JOIN_AFTER_EXIT)
+    lost = "" if not any(r.is_alive() for r in readers) else \
+        f"(命令已经收尾,但最后 {JOIN_AFTER_EXIT} 秒里管道没读完,这段输出可能少了几行)"
 
-    out = _clip(_decode(proc.stdout or b"").strip())
-    err = _clip(_decode(proc.stderr or b"").strip())
+    if timed_out:
+        partial = ("".join(out_buf) + "".join(err_buf)).strip()
+        return (f"错误: 命令超时(>{timeout}s),已终止{killed_note}。"
+                f"已产生的输出:\n{partial[:TIMEOUT_OUTPUT_LIMIT]}{lost}{env_note}")
+
+    out = _clip("".join(out_buf).strip())
+    err = _clip("".join(err_buf).strip())
     sections = [f"退出码: {proc.returncode}"]
     if out:
         sections.append(f"--- stdout ---\n{out}")
@@ -152,7 +185,7 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
         sections.append(f"--- stderr ---\n{err}")
     if proc.returncode != 0 and not out and not err:
         sections.append("(无输出。命令可能不存在,或需要不同的参数。)")
-    return "\n".join(sections) + env_note
+    return "\n".join(sections) + lost + env_note
 
 
 BASH_OUTPUT_LIMIT = 6000
@@ -165,6 +198,76 @@ def _clip(text: str) -> str:
     return (text[:BASH_OUTPUT_LIMIT]
             + f"\n…(输出过长,只保留了前 {BASH_OUTPUT_LIMIT} 字,"
             + f"共 {len(text)} 字;要完整结果请把命令输出重定向到工作区文件再读)")
+
+
+# ------------------------------------------------------------- 前台命令的实时进度
+
+PROGRESS_EVERY = 15.0      # 秒:一条前台命令最长每隔这么久往界面报一行
+JOIN_AFTER_EXIT = 3.0      # 进程结束后最多再等这么久收管道(等不到就照实说)
+
+
+class _Progress:
+    """前台命令的实时读数(字符数 + 最后一行),**只给界面,不进模型回话**。
+
+    为什么不进回话:模型看到的输出仍然是命令跑完那一份。往每步塞变化的文字会把它
+    记进留档(与 v0.9.85 后台状态"搭在请求末尾、不进留档"是同一取舍),而这一行
+    几秒后就是旧的 —— 旧进度留在历史里只会误导。
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.chars = 0
+        self.lines = 0
+        self.last = ""
+
+    def feed(self, text: str) -> None:
+        with self.lock:
+            self.chars += len(text)
+            body = text.strip()
+            if body:
+                self.lines += 1
+                self.last = body.split("\n")[-1].strip()[:160]
+
+    def line(self, elapsed: float, timeout: int) -> str:
+        with self.lock:
+            chars, last = self.chars, self.last
+        parts = [f"已跑 {int(elapsed)} 秒(上限 {timeout}s)", f"已输出 {chars} 字"]
+        if last:
+            parts.append(f"最后一行: {last}")
+        else:
+            parts.append("还没有输出(命令可能在等输入,或不打印东西)")
+        return " · ".join(parts)
+
+
+def _drain(stream, buf: list[str], prog: _Progress) -> None:
+    """逐行读到 EOF 塞进 buf。与 `_BgJob._pump` 同一条规矩:异常只进缓冲,不外抛。
+
+    进度只能读到**子进程已经吐出来的**那些字:它的 stdout 接的是管道,默认会攒满缓冲区
+    才吐(有的命令干脆到退出才flush)。所以只按 `\\n` 分行、且"能不能看见中间"取决于对方
+    肯不肯 flush —— 像 `python -u`、`pytest` 那种边跑边印的看得见,憋着不印的看不见。
+    这是"尽力看见它在动",不是逐字符转播,更不是进度条(curl/pip 用 `\\r` 刷的那种要等
+    那一行结束才算一行)。
+    """
+    try:
+        while True:
+            line = stream.readline() if stream is not None else b""
+            if not line:
+                break
+            text = _decode(line)
+            buf.append(text)
+            prog.feed(text)
+    except Exception as e:            # 强杀时管道会抛
+        buf.append(f"\n(读取输出中断:{type(e).__name__}: {e})\n")
+
+
+def _report_progress(ctx: ToolContext, prog: _Progress, elapsed: float,
+                     timeout: int) -> None:
+    """把一行进度交给界面。没有 UI(单测、脚本直接调 handler)时什么都不做。"""
+    emit = getattr(getattr(ctx, "ui", None), "tool_progress", None)
+    if emit is None:
+        return
+    with contextlib.suppress(Exception):    # 进度报不出去绝不能影响命令本身
+        emit(prog.line(elapsed, timeout))
 
 
 # ------------------------------------------------------------------ 后台命令

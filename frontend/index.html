@@ -3056,7 +3056,10 @@ window.__gcodeEvent = function (e) {
   // 活动面板(v0.9.34)只在开着的时候跟着工具事件防抖刷新:一次调用开始/结束都会让
   // "本轮做了什么"多一行或改一行状态。放在上面那道"后台会话不往当前视图里画"的闸
   // **之后** —— 别的会话在跑什么,不该混进你正在看的这一栏。
+  // tool_progress(v0.9.91):长命令每 15 秒一行进度。桥那边改的是实时表里那一行的字段,
+  // 面板不重画就看不见 —— 所以这里只借 activityRefresh 那一条现成的路,不新增渲染。
   if (actOpen && (e.type === "tool_start" || e.type === "tool_done"
+                  || e.type === "tool_progress"
                   || e.type === "busy" || e.type === "cleared"
                   || e.type === "resumed" || e.type === "workspace")) {
     activitySchedule(e.type === "tool_start" ? 900 : 300);
@@ -5686,6 +5689,13 @@ function buildNow(parent, data) {
     if (now.agent_type) bits.push("子代理 " + now.agent_type);
     bits.push(now.start ? "开始于 " + now.start : "开始时刻没记到(并行子代理或上一版程序跑的)");
     mid.appendChild(actEl("act-s", bits.join(" · ")));
+    // 长命令的实时那一行(shell 每 15 秒报一次:v0.9.91)。没有进度就整条不出现,
+    // 不写"刚开始"或转圈动画凑数 —— 那正好是"看不见它在动"该被看见的时候。
+    if (now.progress) {
+      const pr = actEl("act-s", "↳ " + now.progress);
+      pr.id = "actNowProgress";
+      mid.appendChild(pr);
+    }
     row.appendChild(mid);
     const el = actEl("act-time", "已跑 " + now.elapsed + " 秒");
     el.id = "actNowElapsed";

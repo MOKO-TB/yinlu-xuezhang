@@ -102,6 +102,14 @@ class TerminalUI:
             f"[dim]{escape(self._arg_summary(tool, args))}[/dim]"
         )
 
+    def tool_progress(self, text: str) -> None:
+        """长命令每 `shell.PROGRESS_EVERY` 秒一行(与 GUI 同一份节流,不是逐行刷屏)。
+
+        GUI 那边是原地改「此刻」那一行,终端只能往上追加 —— 所以间隔由调用方(shell)
+        统一管,这里**不自己再判一次要不要打印**:两处各判总有一天不一样。
+        """
+        self.console.print(f"  [dim]↳ {escape(str(text or ''))}[/dim]")
+
     def tool_done(self, tool: Tool, result: str) -> None:
         dt = time.monotonic() - self._tool_t0
         # 与 GUI 那侧同一个口径:失败判定与截断长度都取自 toolsum
