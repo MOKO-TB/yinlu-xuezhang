@@ -1,6 +1,7 @@
 ---
 name: photo-print
 description: 证件照排版打印页与换底色:Pillow 实现 1寸/2寸多张排到 6寸相纸,纯色底证件照可换蓝/白/红底,内置 Python 运行时直接跑
+libs: PIL
 ---
 
 # 什么时候用

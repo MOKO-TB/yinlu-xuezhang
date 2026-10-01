@@ -109,3 +109,90 @@ def test_clip_body_hard_cut_when_one_giant_fence():
     body = "```python\n" + "x" * 9000 + "\n```"
     clipped = sk._clip_body(body, 8000)
     assert len(clipped) == 8000
+
+
+# ------------------------------------------- 依赖声明与真核对(v0.9.98)
+
+def _decl_skill(tmp_path, body="正文", **meta):
+    d = tmp_path / "skills" / "dep-skill"
+    d.mkdir(parents=True)
+    front = "".join(f"{k}: {v}\n" for k, v in meta.items())
+    (d / "SKILL.md").write_text(f"---\nname: dep-skill\n{front}---\n{body}",
+                                encoding="utf-8")
+    return load_skills([tmp_path / "skills"])[0]
+
+
+def test_frontmatter_declares_tools_and_libs(tmp_path):
+    s = _decl_skill(tmp_path, tools="write_file, edit_file", libs="pptx, pypdf ，PIL")
+    assert s.tools == ("write_file", "edit_file")
+    assert s.libs == ("pptx", "pypdf", "PIL")     # 全角逗号也认,空项丢弃
+
+
+def test_no_declaration_means_no_check(tmp_path):
+    s = _decl_skill(tmp_path)
+    r = sk.dependency_report(s, available_tools=set(),
+                             probe=lambda m: False)
+    assert r == {"missing_tools": [], "missing_libs": []}
+    assert sk._dependency_warning(s, available_tools=set()) == ""
+
+
+def test_missing_tools_none_vs_empty_two_semantics(tmp_path):
+    s = _decl_skill(tmp_path, tools="write_file")
+    # None = 这次没核对;[] = 核对过、都齐 —— 两种语义不许合并(router 同一条老规矩)
+    assert sk.dependency_report(s, available_tools=None)["missing_tools"] is None
+    assert sk.dependency_report(s, available_tools={"write_file"})["missing_tools"] == []
+
+
+def test_missing_lib_reports_top_level_package(tmp_path):
+    s = _decl_skill(tmp_path, libs="pptx.utils, ghostlib")
+    # pptx.utils 查的是顶层包 pptx;ghostlib 探不到 → 缺
+    r = sk.dependency_report(s, probe=lambda m: m == "pptx")
+    assert r["missing_libs"] == ["ghostlib"]
+
+
+def test_use_skill_prepends_warning_when_deps_missing(ctx, tmp_path, monkeypatch):
+    from minicode.tools.base import Tool
+    d = tmp_path / "skills" / "dep-skill"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: dep-skill\ndescription: 测试\nlibs: ghostlib, nosuchlib\n---\n正文第一行",
+        encoding="utf-8")
+    monkeypatch.setattr(sk, "skill_dirs", lambda ws=None: [tmp_path / "skills"])
+    monkeypatch.setattr(sk, "usage_path", lambda: tmp_path / "usage.jsonl")
+    out = sk.use_skill(ctx, "dep-skill")
+    assert out.index("⚠ 依赖缺") < out.index("正文第一行"), "警语必须在正文之前"
+    assert "ghostlib、nosuchlib" in out and "照实" in out
+    # 齐了(或没声明)时输出与旧版逐字一致
+    (d / "SKILL.md").write_text("---\nname: dep-skill\ndescription: 测试\n---\n正文第一行",
+                                encoding="utf-8")
+    assert sk.use_skill(ctx, "dep-skill") == "# 技能: dep-skill\n\n正文第一行"
+
+
+def test_declared_tools_must_exist_in_the_registry():
+    """仓库里现役技能声明的 tools 必须真在注册表里(声明写错=红,不是静默落空)。"""
+    from minicode.tools.registry import build_default_registry
+    names = {t.name for t in build_default_registry()}
+    for s in load_skills(skill_dirs(None)):
+        r = sk.dependency_report(s, available_tools=names)
+        assert r["missing_tools"] == [], (s.name, r["missing_tools"])
+
+
+def test_declared_libs_are_importable_on_this_machine():
+    """仓库里现役技能声明的 libs 必须本机真装得到(requirements 与打包清单都管着)。"""
+    for s in load_skills(skill_dirs(None)):
+        r = sk.dependency_report(s, available_tools=set())
+        assert r["missing_libs"] == [], (s.name, r["missing_libs"])
+
+
+def test_content_skills_declare_the_libs_their_templates_import():
+    """声明是承诺:带 python 模板的技能,模板里 import 的第三方库必须已声明
+    (反方向:没 import 的不许乱声明)。这里逐个 grep 模板行核对,防漂。"""
+    import re
+    third_party = {"openpyxl", "docx", "pptx", "pypdf", "PIL"}
+    for s in load_skills(skill_dirs(None)):
+        found = set()
+        for m in re.finditer(r"^\s*(?:from|import)\s+([A-Za-z_][A-Za-z0-9_]*)",
+                             s.body, re.M):
+            if m.group(1) in third_party:
+                found.add(m.group(1))
+        assert found <= set(s.libs), (s.name, sorted(found - set(s.libs)))

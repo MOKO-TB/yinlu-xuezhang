@@ -1,6 +1,7 @@
 ---
 name: xlsx
 description: 生成或读取/统计 Excel(.xlsx):成绩单、值班表、报名汇总、账目统计,用内置 Python 运行时跑 openpyxl
+libs: openpyxl
 ---
 
 # 什么时候用

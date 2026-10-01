@@ -1,6 +1,7 @@
 ---
 name: pptx
 description: 生成或修改 PPT(.pptx):课程展示、社团招新、活动策划、班级汇报等,用内置 Python 运行时跑 python-pptx
+libs: pptx
 ---
 
 # 什么时候用

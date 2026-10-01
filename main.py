@@ -86,13 +86,27 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
         else:
             ui.info("当前没有计划文件(工作区 plans/plan.md)。")
     elif name == "/skills":
-        from minicode.skills import load_skills, skill_dirs
+        from minicode.skills import load_skills, skill_dirs, dependency_report
         skills = load_skills(skill_dirs(workspace))
         if not skills:
             ui.info("还没有安装技能。把技能文件夹(含 SKILL.md)放进程序目录的 skills/ 即可。")
         else:
-            ui.info("可用技能\n" + "\n".join(
-                f"  • {s.name} —— {s.description or '(无描述)'}" for s in skills))
+            try:
+                from minicode.tools.registry import build_default_registry
+                tool_names = {t.name for t in build_default_registry()}
+            except Exception:
+                tool_names = None          # 装配不起来就只标库,不猜工具
+            rows = []
+            for s in skills:
+                r = dependency_report(s, available_tools=tool_names)
+                miss = []
+                if r["missing_tools"]:
+                    miss.append("缺工具:" + "、".join(r["missing_tools"]))
+                if r["missing_libs"]:
+                    miss.append("缺库:" + "、".join(r["missing_libs"]))
+                rows.append(f"  • {s.name} —— {s.description or '(无描述)'}"
+                            + (f"(⚠ {';'.join(miss)})" if miss else ""))
+            ui.info("可用技能\n" + "\n".join(rows))
     elif name == "/kb":
         from minicode.kb import kb_stats, kb_dirs
         stats = kb_stats(kb_dirs(workspace))

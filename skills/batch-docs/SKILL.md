@@ -1,6 +1,7 @@
 ---
 name: batch-docs
 description: 批量生成个人化文档:从名单 Excel 每人生成一份成绩条/获奖证书/参赛证明/录用通知(docx 或 pdf),一条循环搞定全班
+libs: openpyxl, docx
 ---
 
 # 什么时候用

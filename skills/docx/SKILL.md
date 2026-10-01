@@ -1,6 +1,7 @@
 ---
 name: docx
 description: 生成或读取/修改 Word(.docx):申请书、通知、活动策划、实践报告等,用内置 Python 运行时跑 python-docx
+libs: docx
 ---
 
 # 什么时候用

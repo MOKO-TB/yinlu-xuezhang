@@ -2,6 +2,13 @@
 
 加载来源:应用目录 skills/(随应用分发)与工作区 skills/(项目级,同名时后者忽略——
 先到先得)。系统提示词注入"可用技能"清单;模型通过 use_skill 工具按需读取全文。
+
+**依赖声明(v0.9.98)**:frontmatter 可选 `tools:`(逗号分隔的内置工具名)与
+`libs:`(逗号分隔的 import 名,如 `pptx, pypdf`)。声明了才核对 —— `use_skill`
+读取时真查一遍(工具名对注册表、库对 importlib),缺了就在技能正文**之前**摆一句
+"缺什么、别硬跑",而不是等模型把模板抄进 py_script 跑到一半才报
+ModuleNotFoundError。没声明的技能一个字不多问(声明是承诺,不是猜测;
+库里已有技能的 libs 声明是逐个 grep 过模板里真 import 的,不是按名字猜的)。
 """
 from __future__ import annotations
 
@@ -43,6 +50,14 @@ class Skill:
     description: str
     path: Path
     body: str
+    tools: tuple[str, ...] = ()   # 声明依赖的内置工具名(frontmatter `tools:`)
+    libs: tuple[str, ...] = ()    # 声明依赖的 Python 库 import 名(frontmatter `libs:`)
+
+
+def _csv_decl(value) -> tuple[str, ...]:
+    """frontmatter 里逗号分隔的声明 → 元组;全角逗号也认(技能是中文用户手编的)。"""
+    return tuple(x.strip() for x in str(value or "").replace("，", ",").split(",")
+                 if x.strip())
 
 
 def skill_dirs(workspace: Path | None = None) -> list[Path]:
@@ -102,8 +117,46 @@ def load_skills(dirs: list[Path]) -> list[Skill]:
             seen.add(name)
             skills.append(Skill(name=name,
                                 description=str(meta.get("description") or ""),
-                                path=md, body=body.strip()))
+                                path=md, body=body.strip(),
+                                tools=_csv_decl(meta.get("tools")),
+                                libs=_csv_decl(meta.get("libs"))))
     return skills
+
+
+def dependency_report(skill: Skill, available_tools=None, probe=None) -> dict:
+    """对技能声明的依赖做**真核对**(v0.9.98)。返回:
+
+    - `missing_tools`:声明了但注册表里没有的工具名;`available_tools=None`
+      表示这次没核对(与 router 的 None/[] 两种语义同一条规矩,不把"没查"
+      说成"本机没有");
+    - `missing_libs`:声明了但本机 import 不到的库。probe 按顶层包名查
+      (`pptx.utils` 查的是 `pptx`),缺省 `importlib.util.find_spec`,
+      测试可注入替身。
+
+    只核**声明过的**:没声明的技能既不查也不警告 —— 依赖声明是技能作者的
+    承诺,程序不猜"这份技能大概要用什么"。
+    """
+    import importlib.util
+    if probe is None:
+        probe = lambda mod: importlib.util.find_spec(mod) is not None
+    missing_tools = (None if available_tools is None
+                     else [t for t in skill.tools if t not in set(available_tools)])
+    missing_libs = [lib for lib in skill.libs if not probe(lib.split(".")[0])]
+    return {"missing_tools": missing_tools, "missing_libs": missing_libs}
+
+
+def _dependency_warning(skill: Skill, available_tools) -> str:
+    """缺依赖时给模型看的那句警语;什么都不缺(或没声明)回空串。"""
+    r = dependency_report(skill, available_tools=available_tools)
+    bits = []
+    if r["missing_tools"]:
+        bits.append("工具本机没有:" + "、".join(r["missing_tools"]))
+    if r["missing_libs"]:
+        bits.append("Python 库没装:" + "、".join(r["missing_libs"]))
+    if not bits:
+        return ""
+    return ("(⚠ 依赖缺:" + ";".join(bits) + " —— 这份技能里有一部分代码/工具用不了。"
+            "把缺的**照实**告诉用户并给安装/替代办法,不要照模板硬跑,更不要假装跑过。)")
 
 
 def find_skill(skills: list[Skill], name: str) -> Skill | None:
@@ -216,17 +269,27 @@ def merge_usage(skills: list[dict]) -> list[dict]:
 
 
 def use_skill(ctx, name: str) -> str:
-    """工具处理器:按名字返回技能全文(截断)。每次成功调用记一笔使用账。"""
+    """工具处理器:按名字返回技能全文(截断)。每次成功调用记一笔使用账。
+
+    声明了依赖的技能先真核对一遍(v0.9.98):缺了就把警语摆在正文**之前**
+    —— 模型读到的第一眼就是"哪些用不了",不是抄完模板跑一半才炸。
+    核对用的工具清单现取自注册表(与模型实际拿到的同一份);全部齐(或没声明)
+    时输出与旧版逐字一致。
+    """
     skills = load_skills(skill_dirs(ctx.workspace))
     skill = find_skill(skills, name)
     if skill is None:
         available = ", ".join(s.name for s in skills) or "(无)"
         return f"错误: 未找到技能 '{name}'。可用技能: {available}"
     log_skill_use(skill.name)
+    from minicode.tools.registry import build_default_registry
+    warn = _dependency_warning(
+        skill, available_tools={t.name for t in build_default_registry()})
     body = _clip_body(skill.body)
     tail = ("\n…(技能内容过长,已截断;若尾部有未完整的代码模板,不要凭空补全 —— "
             "按已有的部分说明缺什么即可)" if len(skill.body) > SKILL_BODY_LIMIT else "")
-    return f"# 技能: {skill.name}\n\n{body}{tail}"
+    head = f"# 技能: {skill.name}\n\n" + (f"{warn}\n\n" if warn else "")
+    return f"{head}{body}{tail}"
 
 
 # ------------------------------------------------------------ 技能面板(渠道)

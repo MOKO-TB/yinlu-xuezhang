@@ -1,6 +1,7 @@
 ---
 name: pdf
 description: PDF 合并/拆分/提取文本(pypdf)与网页转 PDF(Edge 无头打印):奖助学金材料合并、课件拆页、通知存档
+libs: pypdf
 ---
 
 # 什么时候用
