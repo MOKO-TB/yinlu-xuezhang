@@ -278,3 +278,29 @@ def test_list_sessions_captures_first_user_text(tmp_path):
     rows2 = session_mod.list_sessions(tmp_path, limit=5)
     old = next(r for r in rows2 if r.path.name == "session_old.jsonl")
     assert old.first_user_text == "" and session_mod.derive_title(old.first_user_text) == ""
+
+
+# ------------------------------------------- 留档 schema 版本(F4,v0.9.100)
+
+def test_session_start_carries_schema_version(tmp_path):
+    """session_start 行带 schema=2:留档格式从此有版本记账,格式再变时有
+    一条明确的迁移路径,而不是各消费方自己猜形状。"""
+    import glob as _glob
+    import json as _json
+    from minicode import session as _smod
+    sess = Session(system_prompt="s", log_dir=tmp_path, workspace=tmp_path)
+    sess.add_user("第一句")
+    f = _glob.glob(str(tmp_path / "session_*.jsonl"))[0]
+    head = _json.loads(open(f, encoding="utf-8").readline())
+    assert head["schema"] == _smod.LOG_SCHEMA_VERSION
+
+
+def test_old_session_without_schema_still_loads(tmp_path):
+    """老留档(无 schema 行)照常恢复:消费方把"没有这个字段"当正常形状。"""
+    (tmp_path / "session_old.jsonl").write_text(
+        json.dumps({"type": "session_start", "time": "t"}) + "\n"
+        + json.dumps({"role": "user", "content": "旧会话的一句话"}) + "\n",
+        encoding="utf-8")
+    s = Session(system_prompt="s", log_dir=tmp_path, workspace=tmp_path)
+    n = s.load_from(tmp_path / "session_old.jsonl")
+    assert n == 1 and s.messages[-1]["content"] == "旧会话的一句话"

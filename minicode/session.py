@@ -11,6 +11,12 @@ from minicode.llm import AssistantTurn
 from minicode.paths import SESSIONS_DIR
 
 
+# F4(v0.9.100):留档格式版本。当前格式 = 2(消息带 ts,session_start 带 schema);
+# 1 = v0.9.66 之前(无 ts / 无 schema)。加载侧按这个数**迁移**而不是各处猜形状
+# —— 留档格式再变时,新增一个迁移函数、把版本号 +1,消费方只认迁移后的形状。
+LOG_SCHEMA_VERSION = 2
+
+
 @dataclass
 class SessionSummary:
     path: Path
@@ -70,6 +76,7 @@ class Session:
             "type": "session_start",
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
             "workspace": str(self.workspace) if self.workspace else "",
+            "schema": LOG_SCHEMA_VERSION,   # F4(v0.9.100):留档版本记账
         })
 
     def fresh_start(self) -> None:
