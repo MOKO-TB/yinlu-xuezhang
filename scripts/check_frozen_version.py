@@ -182,6 +182,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        "STATE_BACKEND"),
     # ---- v0.9.22:托盘 + 关窗确认(整套新模块,漏收 = X 又变成直接退出) ----
     "minicode.tray": (
+        # 2026-10-01:界面警告日志从此有人读、也终于有盖(漏收 = 同学说「右键粘贴不出来」
+        # 时学长查不到证据;或那份裸日志在用户机器上无限长下去)
+        "warn_log_tail", "WARN_LOG_FILE", "cap_log",
         # v0.9.98:自启「位置变了」探针/修复/启动核对(漏收 = 重装挪位后
         # 勾看着是开、开机不响,而谁也说不清为什么)
         "startup_stale", "repair_startup_shortcut", "check_stale_startup",

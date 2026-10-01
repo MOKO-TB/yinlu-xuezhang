@@ -79,7 +79,7 @@ def log(msg: str) -> None:
             path = _ensure_parent(app_path(LOG_FILE))
             with open(path, "a", encoding="utf-8") as f:
                 f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
-            _trim_log(path)
+            cap_log(path)
     except Exception:
         pass
 
@@ -91,7 +91,7 @@ LOG_CAP_LINES = 500            # v0.9.66:与 watchdog.log 同款滚动,别让诊
 # 线以前是两处手抄 —— 加一个出口忘了改 enum 的表现很坏:模型照着描述调,
 # 参数校验先把它挡在门外,用户以为功能没做。
 NOTIFY_ACTIONS = ("status", "on", "off", "test", "startup_on", "startup_off",
-                  "log", "jobs", "tray_log")
+                  "log", "jobs", "tray_log", "gui_log")
 
 
 def log_tail(lines: int = 30) -> list[str]:
@@ -109,13 +109,43 @@ def log_tail(lines: int = 30) -> list[str]:
     return rows[-max(1, int(lines)):]
 
 
-def _trim_log(path) -> None:
-    """超上限只留最近的 LOG_CAP_LINES 行;写失败照旧静默(日志不能拖垮托盘)。"""
+# 界面层那份警告是 `gui_main.py:80` 的 `_log_warning` 写的 —— 记的就一件事:
+# **原生右键菜单与编辑快捷键(Ctrl+C/V/A)开没开起来**(那一段轮询 WebView2 就绪、
+# 开成功写一行、失败每个异常写一行、等不到写一行超时)。
+WARN_LOG_FILE = "gui_warnings.log"
+
+
+def warn_log_tail(lines: int = 30) -> list[str]:
+    """界面警告日志最后几行;没有日志回空列表(不是报错)。
+
+    为什么这份归这里读:与 `tray.log` 完全同一个形状 —— **只写不读**。上两轮分别给
+    `watchdog.log`(v0.9.79)和 `tray.log`(v0.9.96)开了 `desktop_notify` 的口子,
+    同学说「对话框里右键粘贴不出来」「复制快捷键没用」时,现场就在 `gui_warnings.log`
+    里,而以前只能让他自己去开文件(他大多找不到数据目录在哪)。
+    放在 `tray.py` 是因为读者就是这里的 `desktop_notify`;`gui_main.py` 已经引了本模块,
+    反过来引会在启动路径上多一条环。
+    """
+    try:
+        rows = (_ensure_parent(app_path(WARN_LOG_FILE))
+                .read_text(encoding="utf-8").splitlines())
+    except (OSError, UnicodeDecodeError):
+        return []
+    return rows[-max(1, int(lines)):]
+
+
+def cap_log(path, keep=None) -> None:
+    """超上限只留最近的若干行(默认 `LOG_CAP_LINES`);写失败照旧静默(日志不能拖垮托盘)。
+
+    上限在函数体里读全局,不是默认参数 —— 测试要 `monkeypatch` 那个数来验滚动,
+    写成 `keep=LOG_CAP_LINES` 会在定义时就把值焊死,滚动那条针等于空跑。
+    `gui_main.py` 那份界面警告也走这里:裸日志的滚动只准有一份口径。
+    """
+    keep = LOG_CAP_LINES if keep is None else int(keep)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-        if len(lines) > LOG_CAP_LINES:
+        if len(lines) > keep:
             tmp = path.with_suffix(".tmp")
-            tmp.write_text("\n".join(lines[-LOG_CAP_LINES:]) + "\n", encoding="utf-8")
+            tmp.write_text("\n".join(lines[-keep:]) + "\n", encoding="utf-8")
             tmp.replace(path)
     except Exception:
         pass
@@ -1216,4 +1246,19 @@ def desktop_notify(ctx, action: str = "status", kind: str = "",
                   "关窗拦截接上没有。查「通知为什么没弹」「点 X 怎么直接退了」"
                   "「开机自启没生效」看这份;查「今天该提醒的提醒了没有」看 action=log。"
                   "里面没有通知正文,但会有本机的绝对路径 —— 截图给同学前自己看一眼。")
+    if action == "gui_log":
+        rows = warn_log_tail(30)
+        path = _ensure_parent(app_path(WARN_LOG_FILE))
+        if not rows:
+            return ("界面警告日志还是空的(" + str(path) + ")—— "
+                    "说明这台机器上没记到任何一次失败,原生右键菜单与编辑快捷键那一段"
+                    "没抛过异常。用户说「右键粘贴不出来/Ctrl+C 没用」而这里又是空的,"
+                    "就别拿日志当证据,直接让他试一次快捷键,再按 action=test 那条链路查通知通道。")
+        return ("最近 " + str(len(rows)) + " 条界面层警告(" + str(path) + "):\n"
+                + "\n".join(rows)
+                + "\n读法:这份只记**原生右键菜单与编辑快捷键**那一段的成败 —— "
+                  "「已开启(验证标记)」= 成功,「打开原生右键菜单失败: 异常类型」= "
+                  "开起来抛错了,「等待 WebView2 就绪超时」= 窗口起来了但开关没能挂上"
+                  "(表现就是对话框里右键没有粘贴、Ctrl+V 没反应,其余功能不受影响)。"
+                  "查「通知为什么没弹」看 action=tray_log,查「今天提醒了没」看 action=log。")
     return (f"未知的 action「{action}」,可用:" + " / ".join(NOTIFY_ACTIONS))

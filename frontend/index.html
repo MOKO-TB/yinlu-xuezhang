@@ -3581,7 +3581,9 @@ function renderSessions(items) {
       el.className = "sess" + (s.current ? " current" : "") + (s.running ? " running" : "");
       el.innerHTML = `<div class="t">${s.running ? '<span class="spin" title="任务正在后台运行"></span>' : ""}<span class="tt"></span></div>`
         + `<div class="m"></div><button class="sx" title="删除该会话">✕</button>`;
-      el.querySelector(".tt").textContent = s.last_user_text || "(无用户消息)";
+      // v0.9.98:标题(第一条提问派生)优先 —— 最后一句会漂,题目不该漂;
+      // 老留档没有 title 字段时退回原样,兼容不破
+      el.querySelector(".tt").textContent = s.title || s.last_user_text || "(无用户消息)";
       el.querySelector(".m").textContent =
         `${s.time} · ${s.n_messages} 条` + (s.running ? " · 运行中" : "");
       if (!g.here && s.workspace) el.title = `属于工作区:${s.workspace}`;

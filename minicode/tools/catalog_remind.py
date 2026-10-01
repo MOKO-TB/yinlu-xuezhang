@@ -196,7 +196,9 @@ def remind_tools() -> list[Tool]:
                                               "log=读看门狗运行日志(查「没提醒」或「重复弹」);"
                                               "jobs=定时任务跑没跑(查周报/缺口周报);"
                                               "tray_log=读托盘与通知诊断日志(查「通知没弹」「点 X 直接退」"
-                                              "「开机自启没生效」;无正文,有本机路径)"},
+                                              "「开机自启没生效」;无正文,有本机路径);"
+                                              "gui_log=读界面层警告(查「对话框右键没有粘贴」"
+                                              "「Ctrl+C/V 没用」——那一段原生菜单开关的成败就在这份里)"},
                     "kind": {"type": "string",
                              "description": "可选:只开关这一类提醒(briefing 今日简报 / class 课前 / "
                                             "schedule 课程 / reminders 待办 / calendar 校历 / "

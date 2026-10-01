@@ -6,6 +6,7 @@
 """
 import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -1286,11 +1287,19 @@ def test_desktop_notify_kind_enum_matches_notify_kinds():
 
 
 def test_desktop_notify_jobs_answers_did_it_run():
-    """「这周的任务跑没跑」的查询口:报出注册的任务与节奏。"""
+    """「这周的任务跑没跑」的查询口:报出注册的任务与节奏。
+
+    条数与任务名都从 `proactive.JOB_SPECS` 现取,不写死数字 —— 1448788 加进
+    `data_backup_weekly`(周六自动备份)时那句"2 个"就是这么静默漂成红的;
+    写死第三个名字同样会随下一次加任务再红一遍,而"报的正是注册的那一份"才是这条要钉的事。
+    """
+    from minicode import proactive
     out = tray.desktop_notify(None, action="jobs")
-    assert "定时任务 2 个" in out
-    assert "mood_weekly_review" in out and "kb_gap_digest" in out
+    assert f"定时任务 {len(proactive.JOB_SPECS)} 个" in out, out
+    for spec in proactive.JOB_SPECS:
+        assert spec.id in out, f"{spec.id} 没出现在查询口里"
     assert "每周周日" in out and "每周周六" in out
+    assert "不含任务正文" in out                 # 口径照写:只报节奏与结论
 
 
 # ------------------------------------------------ tray.log 有人读(v0.9.96)
@@ -1325,6 +1334,70 @@ def test_action_tray_log_says_so_when_empty():
     out = tray.desktop_notify(None, action="tray_log")
     assert "还没留下一行诊断" in out
     assert "命令行/网页版" in out                   # 给的是原因,不是一句"没有"
+
+
+# ------------------------------------------ 界面警告日志有人读 + 有盖(2026-10-01)
+
+
+def _warn(text: str) -> None:
+    """真写手:`gui_main._log_warning` —— 不自己拼文件,免得测的是我造的现场。"""
+    import gui_main
+    # 写手那侧是 `open(..., "a")` 且整段吞异常(生产里数据目录必然已存在),
+    # 临时目录里得先把父目录造出来,否则它静默不写 —— 那正好是这条测试查不出来的形状。
+    paths.APP_DIR.mkdir(parents=True, exist_ok=True)
+    gui_main._log_warning(text)
+
+
+def test_warn_log_tail_reads_back_what_the_gui_wrote():
+    _warn("原生右键菜单与编辑快捷键已开启(验证标记)")
+    _warn(r"打开原生右键菜单失败: InvalidOperationException: CoreWebView2 只能")
+    rows = tray.warn_log_tail(10)
+    assert len(rows) == 2, rows
+    assert rows[0].endswith("(验证标记)")            # 先后顺序不反
+    assert rows[0][:10] == time.strftime("%Y-%m-%d")  # 每行开头是当天时刻,不是凑的
+    assert "InvalidOperationException" in rows[1]
+
+
+def test_warn_log_tail_is_empty_when_nothing_was_written():
+    """没日志 = 空列表:回话那条要走"所以这次没证据"的分支,不能抛。"""
+    assert tray.warn_log_tail(5) == []
+
+
+def test_gui_warnings_log_rolls_at_cap(monkeypatch):
+    """裸日志必须有盖:v0.9.66 给两份补过,这份当时漏了 —— 以前它无限长。"""
+    monkeypatch.setattr(tray, "LOG_CAP_LINES", 10)
+    for i in range(15):
+        _warn(f"line {i}")
+    rows = (paths.APP_DIR / tray.WARN_LOG_FILE).read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 10
+    assert rows[-1].endswith("line 14") and not any("line 0" in r for r in rows)
+
+
+def test_action_gui_log_reports_the_menu_switch_and_divides_labour():
+    """同学说「对话框右键没粘贴 / Ctrl+V 没用」时,这一次问得出证据。"""
+    _warn(r"等待 WebView2 就绪超时,原生右键菜单未开启(不影响其他功能)")
+    out = tray.desktop_notify(None, action="gui_log")
+    assert "等待 WebView2 就绪超时" in out
+    assert "原生右键菜单" in out and "Ctrl+V" in out     # 说清这份记的是哪一段
+    assert "action=tray_log" in out and "action=log" in out   # 三份日志各管什么
+
+
+def test_action_gui_log_says_so_when_empty():
+    out = tray.desktop_notify(None, action="gui_log")
+    assert "界面警告日志还是空的" in out
+    assert "别拿日志当证据" in out                 # 空不等于"没问题",给下一步怎么验
+
+
+def test_the_gui_writer_and_the_tray_reader_name_the_same_file():
+    """写侧字面量与读侧常量必须同名 —— 而且写侧**必须**留字面量给个人数据那道闸扫。
+
+    换成 `app_path(tray.WARN_LOG_FILE)` 这道闸就扫不到(`_CONST` 只认同模块内的常量),
+    表现不是红,是这份文件从此脱离"写了就必须登记"的管束。
+    """
+    src = (Path(__file__).resolve().parent.parent / "gui_main.py").read_text(encoding="utf-8")
+    assert 'app_path("gui_warnings.log")' in src, "写侧的字面量被换掉了,那道闸扫不到"
+    assert "tray.cap_log(" in src, "写侧不滚动了,这份又会变成无限长"
+    assert tray.WARN_LOG_FILE == "gui_warnings.log"
 
 
 def test_notify_actions_are_one_source_not_two_copies():

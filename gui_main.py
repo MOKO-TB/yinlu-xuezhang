@@ -79,8 +79,13 @@ def apply_context_menu_settings(window) -> bool:
 
 def _log_warning(text: str) -> None:
     try:
-        with open(app_path("gui_warnings.log"), "a", encoding="utf-8") as f:
+        # 文件名写**字面量**是有意的:个人数据那道闸扫的是 app_path 里的字符串字面量
+        # (常量只认同模块内的赋值),换成 tray.WARN_LOG_FILE 就扫不到,这份文件会静默
+        # 脱离"写了就必须登记"的管束。两边是否同一个名字由 tests/test_tray.py 钉住。
+        path = app_path("gui_warnings.log")
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}\n")
+        tray.cap_log(path)      # v0.9.66 给两份裸日志补过盖,这份漏了:以前它无限长
     except Exception:
         pass
 

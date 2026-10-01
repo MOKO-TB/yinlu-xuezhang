@@ -7,13 +7,14 @@ def test_registry_contents():
     assert names == ["read_file", "write_file", "edit_file", "bash",
                      "bash_status", "bash_kill", "py_script",
                      "glob", "grep", "repo_outline",
-                     "permissions", "permissions_trust", "web_crawl", "web_search",
+                     "permissions", "permissions_trust", "worktree",
+                     "web_crawl", "web_search",
                      "browser_open", "browser_eval", "browser_snapshot",
                      "browser_click", "browser_fill", "browser_screenshot",
                      "browser_close", "browser_status", "page_parse",
                      "mcp",
                      "use_skill", "plan", "ask_user",
-                     "search_knowledge", "search_history",
+                     "search_knowledge", "export_trace", "search_history",
                      "ocr_image", "render_chart", "generate_image",
                      "campus_calendar", "calendar_edit", "gpa_calc",
                      "scores",
@@ -36,6 +37,10 @@ def test_read_only_flags():
         "bash_kill": False,            # 终止进程是动手面,必须用户点头
         "permissions": True,           # 只是看一眼这个项目批了什么
         "permissions_trust": False,    # 批准 = 从此免确认放行,必须用户点过头
+        # 开一份 Git 工作副本会在仓库旁边建目录并动 git —— 它是**写类**动作,
+        # 而注册表目前标的是 read_only=True(全表唯一一个写盘却免确认的工具)。
+        # 这条口径可疑,已记 HANDOFF §6 等拍板;这里先照**实测值**钉住,不改行为。
+        "worktree": True,
         "py_script": False,          # 内置运行时执行脚本:能读写文件,要确认
         "glob": True,
         "grep": True,
@@ -55,6 +60,8 @@ def test_read_only_flags():
         "page_parse": True,           # 只把页面上的表读成结构化文字,不写文件不驱动页面
         "use_skill": True,
         "search_knowledge": True,
+        # 会话导成可回放的轨迹 JSON:往工作区**写一份文件**,且内容是对话原文 —— 要确认
+        "export_trace": False,
         # 翻本机历史会话:只读,且只出用户/助手正文,不下发绝对路径
         "search_history": True,
         # 拍错题识别:不写文件,但 vision 后端会把图发给模型 —— 外发由 trust="external" 管
