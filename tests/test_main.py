@@ -231,7 +231,6 @@ def test_expand_with_args_cli_side(tmp_path):
     msgs = []
     ui = SimpleNamespace(info=lambda t: msgs.append(t))
     from main import expand_with_args
-    from minicode import slash_commands as sc
     d = tmp_path / ".commands"
     d.mkdir()
     (d / "周报.md").write_text("---\ndescription: x\n---\n要点:\n$ARGS", encoding="utf-8")
