@@ -24,7 +24,12 @@ v0.9.60 起**写类型(implement 等)也开放并行**:每一路的确认请求�
 父行下面(`GuiUI.live_child_begin/end/progress`,带「第 N 路[档位]」标签与真实时刻)——
 聊天区照旧安静,过程不再是黑箱。
 并行写的前提是**各路负责不同文件**:两路改同一个文件是内容竞争,task 描述
-必须按文件划好地盘(工具描述里也这么教模型)。
+必须按文件划好地盘(工具描述里也这么教模型)。这条规矩从 v0.9.98 起有了
+程序闸:同一批里有至少两路写型子代理时,`write_file` / `edit_file` 的显式
+路径会过一份批次级占用表 —— 谁先写了某个文件,别的路整批都写不了它(本路
+自己可以反复写),后到的路拿到一句指名道姓的报错,而不是把先写的内容整表
+覆盖掉。**闸只看这两只工具的显式 path**:bash / py_script 里间接写出来的
+文件管不住,"划好地盘"的口头规矩对它们仍然适用 —— 边界要说得出自己拦不住什么。
 
 与计划的联动:`task` 可以带 `step=编号`,表示这批子代理是在做 `plans/plan.md` 里的
 那一步。派活**之前**先把该步标成 in_progress、备注写上派了哪几路(计划面板与调度视图
@@ -39,6 +44,7 @@ v0.9.60 起**写类型(implement 等)也开放并行**:每一路的确认请求�
 from __future__ import annotations
 
 import contextlib
+import os
 import threading
 import time
 from dataclasses import dataclass, replace as dc_replace
@@ -228,6 +234,83 @@ class _TaggedUI:
         return getattr(self._inner, name)
 
 
+# 批次文件闸只看显式写路径的这两只工具:bash / py_script 间接写出来的文件
+# 没有可靠的"这次调用要写哪个文件"可取,硬扫内容就是另一套不可靠的猜测 ——
+# 不做,并在工具描述里说清这条边界(§3 决策 26 同一条口径:边界要说得出自己拦不住什么)。
+_LOCKED_TOOLS = frozenset({"write_file", "edit_file"})
+
+
+def _lock_key(path: str, workspace) -> str:
+    """把 write/edit 的 path 归一化成占用表的键。
+
+    相对路径按工作区补全(与文件工具的落点同一口径),绝对路径原样;
+    Windows 上大小写不敏感(normcase),`A.TXT` 与 `a.txt` 是同一个文件。
+    """
+    p = Path(str(path or "").strip())
+    if not p.is_absolute():
+        p = (Path(workspace) if workspace else Path.cwd()) / p
+    return os.path.normcase(str(os.path.abspath(str(p))))
+
+
+class _BatchFileLocks:
+    """并行写批次的文件占用表(v0.9.98):"各路负责不同文件"的程序闸。
+
+    当年(v0.9.60)只立了口头规矩,因为两路同写一个文件时后写的是**整表覆盖**,
+    而且不报错 —— 用户看到的是"报告都说完成了",文件里只剩后写那路的内容。
+    语义:批次级,谁先写了某个文件,别的路**整批**都写不了它(不是"这一步
+    写不了"):同一批就是一个并行单元,先写的那路随时可能再改,中途放闸等于
+    又把竞争窗口打开。本路自己重入放行(先写再改是正常操作)。表随批次创建、
+    随批次销毁,不跨批次记仇 —— 下一批要改同一个文件是新的派活决定。
+    """
+
+    def __init__(self):
+        self._mu = threading.Lock()
+        self._holds: dict[str, str] = {}   # 归一化路径 -> 持有者路标签
+
+    def try_acquire(self, path: str, workspace, owner: str) -> str:
+        """占住 path。被**别人**占着时返回持有者标签(调用方拿去报错),
+        否则占住并返回空串;同一 owner 重入放行。"""
+        key = _lock_key(path, workspace)
+        with self._mu:
+            holder = self._holds.get(key)
+            if holder and holder != owner:
+                return holder
+            self._holds[key] = owner
+            return ""
+
+
+def _guard_write_tools(tools: list[Tool], locks: "_BatchFileLocks",
+                       owner: str) -> list[Tool]:
+    """给本路工具集里的 write_file / edit_file 包上占用闸,其余工具原样。
+
+    拦下时返回**错误文本**而不是阻塞等锁:等锁会把这一路挂在一个看不见的
+    等待上(批量静默模式下用户连它在等都看不出来),而报错让模型当场改道
+    —— 写别的文件或把"这个文件被谁占了"如实写进报告。
+    """
+    def guarded(handler):
+        def call(ctx, **kwargs):
+            path = str(kwargs.get("path") or "").strip()
+            if path:
+                holder = locks.try_acquire(
+                    path, getattr(ctx, "workspace", None), owner)
+                if holder:
+                    return (f"错误: 文件 {path} 正被 {holder} 写着(并行写的程序闸:"
+                            f"同一批里两路改同一个文件是内容竞争)。这一路不要再写它,"
+                            f"把要改的内容写进报告,由主代理在那一路结束后再处理;"
+                            f"要写的其他文件不受影响。")
+            return handler(ctx, **kwargs)
+        return call
+
+    out = []
+    for t in tools:
+        bare = t.name.rsplit("·", 1)[-1]
+        if bare in _LOCKED_TOOLS:
+            out.append(dc_replace(t, handler=guarded(t.handler)))
+        else:
+            out.append(t)
+    return out
+
+
 def sub_tool_registry(registry: list[Tool], spec: SubAgentSpec) -> list[Tool]:
     """按类型裁剪并重命名子代理工具集(排除 task 防递归;只读类型只留只读工具)。
 
@@ -245,12 +328,18 @@ def sub_tool_registry(registry: list[Tool], spec: SubAgentSpec) -> list[Tool]:
 
 def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
                  llm, ui, config: Config, registry: list[Tool],
-                 undo_stack: list | None = None) -> str:
+                 undo_stack: list | None = None,
+                 file_locks: "_BatchFileLocks | None" = None,
+                 route_label: str = "") -> str:
     """跑一个子代理,返回它的最终文字报告(不含前缀)。异常收敛成报告文本。
 
     `undo_stack` 是**主代理的回滚栈**(v0.9.53):implement 子代理写坏文件时,
     主代理的 /undo 必须救得回来 —— 子代理自己的栈随实例消失,不共享就等于
     "子代理的改动不在回滚范围"。共享同一个列表,后写的在后,弹出顺序天然正确。
+
+    `file_locks` 是**批次级文件占用表**(v0.9.98,并行写的程序闸):并行批次
+    给所有路传同一个实例,每路带上自己的路标签;单发与串行不传(None) ——
+    没有并行就没有竞争,不白挂一层。
     """
     from minicode.app_setup import build_system_prompt  # 延迟导入避免循环
     # 子代理不参与跨天重建:`_refresh_clock` 只在 `run_turn` 开头查一次,而子代理
@@ -270,7 +359,11 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
         # 重新确认一次,方向安全。
         sub_agent = Agent(
             llm=llm,
-            registry=sub_tool_registry(registry, spec),
+            registry=(
+                _guard_write_tools(sub_tool_registry(registry, spec),
+                                   file_locks, route_label or spec.type)
+                if file_locks is not None
+                else sub_tool_registry(registry, spec)),
             session=sub_session,
             gate=PermissionGate(config, sandbox=ctx.sandbox,
                                 workspace=getattr(ctx, "workspace", None),
@@ -574,6 +667,9 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
         # 但每路经 _TaggedUI 贴上「第 N 路[类型]任务」标签,用户分得清在等谁;
         # accept_edits/accept_all 档下写操作不弹框,各路真正并行。----
         writers = [s.type for s, _, _ in specs if not s.read_only]
+        # 并行写的程序闸(v0.9.98):至少两路能写才挂 —— 单写路没有竞争对象,
+        # 全只读批次更没有;挂了也是一层白过的水。
+        file_locks = _BatchFileLocks() if len(writers) > 1 else None
         # 每路一个客户端:派活之前就把模型定下来,开始提示与合并报告说的才是同一件事
         # (先建后用的顺序也保证这里不会中途抛错)。
         routes = [route_llm(s.type) for s, _, _ in specs]
@@ -605,7 +701,9 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             (lambda s=spec, x=text, i=idx, sub=routes[idx][0]: run_subagent(
                 ctx, s, x, sub, route_ui(i, s, x),
                 config, registry,
-                undo_stack=parent_undo))
+                undo_stack=parent_undo,
+                file_locks=file_locks,
+                route_label=f"第{i + 1}路[{s.type}]"))
             for idx, (spec, text, _note) in enumerate(specs)], limit)
         pairs = [(spec, text, rep if rep is not None else _timeout_note(limit))
                  for (spec, text, _note), rep in zip(specs, reports)]
@@ -652,8 +750,10 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             "一次要查/做多件互不相干的事时,type 和 task 都传数组即可并行(最多 6 个),"
             "v0.9.60 起写类型(implement/code 等)也能并行:确认模式下每个确认框会标明"
             "「第几路[类型] 在等」,accept_edits/accept_all 档下各路直接并行跑完 —— "
-            "这是减少等待的正确姿势。**并行写的硬规矩:各路负责不同文件**(任务描述里"
-            "把文件划好地盘),两路改同一个文件是内容竞争,必须串行。"
+            "这是减少等待的正确姿势。**并行写各路负责不同文件**(任务描述里把文件"
+            "划好地盘):这条现在是程序闸,同一批里两路都写同一个文件时,后到的那路"
+            "会当场被拦下并指名是谁占着(write_file/edit_file 的显式路径;"
+            "bash/py_script 里间接写的文件闸管不住,划地盘的规矩对它们仍然适用)。"
             "每一路最多等 config.subagent_time_limit_seconds 秒,超时会如实标成"
             "「未返回」而不是失败。"
             "这一批是在做计划里的某一步时,带上 step=编号:那一步会被标成进行中、"
