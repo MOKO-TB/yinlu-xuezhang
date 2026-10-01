@@ -297,11 +297,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 漏收一份 = 装好的包里**那个领域的工具整组消失**,而 build_default_registry()
     # 不报错(它只是拼不出那一段),模型侧表现是"这个能力没有了"。
     "minicode.tools.registry": ("build_default_registry",),
-    "minicode.tools.catalog_files": ("tools",),
+    "minicode.tools.catalog_files": ("tools", "perms_tools",
+                         # v0.9.98:worktree 只读工具(漏收 = 模型看不到,
+                         # "再开一份工作"只剩嘴上说)
+                         "worktree_tools"),
     "minicode.tools.fs": ("repo_outline", "write_file", "edit_file"),
-    # v0.9.98:worktree 只读工具(漏收 = 模型看不到这只工具,"再开一份工作"
-    # 只剩嘴上说)
-    "minicode.tools.catalog_files": ("tools", "perms_tools", "worktree_tools"),
     "minicode.worktree": ("worktree_facts", "suggest", "parse_worktree_list",
                           "build_add_command", "suggest_copy_path",
                           "worktree_tool"),
