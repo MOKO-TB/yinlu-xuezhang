@@ -1773,7 +1773,9 @@ try {
     <div class="side-title">项目</div>
     <button class="side-newtask" id="btnNewTask" title="开一个新会话（Ctrl+N）；正在后台跑的任务不会被打断">＋ 新建任务</button>
     <div class="projects" id="projects"></div>
-    <div class="side-title">历史会话</div>
+    <div class="side-title">历史会话
+      <button id="btnBoard" title="跨会话看板:几件事在跑、哪几件在等你决定、最近做完了什么(只读,不改任何东西)">📋 看板</button>
+    </div>
     <div class="sess-search">
       <input id="sessSearch" placeholder="搜索历史会话…"
              title="在所有历史会话的内容里搜关键词(Enter 搜索)">
@@ -1781,6 +1783,8 @@ try {
     </div>
     <div class="sessions" id="sessions"><div style="color:var(--text-3);padding:8px 10px">暂无</div></div>
     <div class="side-mcp" id="mcpLine" hidden></div>
+    <!-- L3(v0.9.101):这一轮真读到了哪几层指令文件。没读到就整行不出现,不摆"未配置" -->
+    <div class="side-mcp" id="instrLine" hidden></div>
   </aside>
 
   <section class="main">
@@ -1970,6 +1974,17 @@ try {
       <button class="b-always" id="memDream">整理记忆</button>
       <button class="b-yes" id="memSaveUser">记到用户级</button>
       <button class="b-yes" id="memSaveProject">记到本项目</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="boardOverlay">
+  <div class="dialog" style="width:520px">
+    <h3>📋 跨会话看板</h3>
+    <p id="boardNote" style="color:var(--text-2);font-size:12.5px"></p>
+    <div id="boardBody" style="max-height:56vh;overflow:auto"></div>
+    <div class="btns">
+      <button class="b-no" id="boardClose">关闭</button>
+      <button class="b-yes" id="boardRefresh" title="重读四处现成的账">刷新</button>
     </div>
   </div>
 </div>
@@ -6013,6 +6028,76 @@ function buildGroups(parent, data) {
   return groups.reduce((n, g) => n + g.count, 0);
 }
 
+// ---------------- 「本轮改动」段:把那本撤销栈摊开给人看 —— 一行退一处(v0.9.101)
+// 读的是后端 `Agent.undo_records()`(就是撤销栈本身),与产出行同源、前端不另记一份。
+// 所以栈被 /clear、换会话、压缩历史清空时这一段跟着变空,不会留下一份"看起来还能退"的旧账。
+function buildChanges(parent, data) {
+  const ch = data.changes;
+  if (!ch) return 0;                        // 后端没给这一份(网页版/老桥):整段不出现
+  if (!ch.ok) {
+    parent.appendChild(actEl("act-idle", "本轮改动读不出来:" + (ch.hint || "未知原因")));
+    return 1;
+  }
+  const items = ch.items || [];
+  if (!items.length) return 0;              // 这一轮没写文件就别摆一段"暂无"
+  parent.appendChild(actEl("act-s", ch.note));
+  for (const item of items) {
+    const row = actEl({ cls: "act-row" });
+    row.dataset.k = "change:" + item.seq;
+    const mid = actEl({ cls: "act-m" });
+    mid.appendChild(actEl("act-t", (item.kind === "新建" ? "✚ " : "✎ ") + item.path));
+    const bits = [item.kind + "于 " + item.at];
+    if (item.newer) bits.push("这之后还有 " + item.newer + " 处没退");
+    if (item.drift) bits.push("我改过之后它又被别的工具动过");
+    mid.appendChild(actEl("act-s", bits.join(" · ")));
+    row.appendChild(actEl({ cls: "act-dot" }));
+    row.appendChild(mid);
+    row.appendChild(actEl("act-badge", item.verb));
+    row.title = "回退这一处:" + (item.verb === "删除"
+      ? "删掉这个新建的文件" : "恢复成它改动前的内容");
+    row.addEventListener("click", () => undoChange(item));
+    parent.appendChild(row);
+  }
+  if (ch.more) parent.appendChild(actEl("act-more", `另有 ${ch.more} 处没列出(共 ${ch.total} 处)`));
+  const all = actEl({ cls: "act-row" }, `全部回退 ${ch.total} 处(一路退回本轮开始前)`);
+  all.title = "按最新到最旧逐处退;命令(bash / py_script)与外部程序改的不在这份账里";
+  all.addEventListener("click", undoAllChanges);
+  parent.appendChild(all);
+  return items.length;
+}
+
+// 回退是动手面:点头之前把"退下去会连带影响什么"念出来(与提问卡同一口径,不静默动手)
+function undoChange(item) {
+  const api = activityApi();
+  if (!api || !api.undo_step) { toast("逐文件回退只在桌面版有"); return; }
+  const warn = [];
+  if (item.newer) warn.push(`这一处之后还有 ${item.newer} 处改动没退,退它会让磁盘回到更早的那份`);
+  if (item.drift) warn.push("这一处在被改过之后还让别的工具动过,那部分也会一起没掉");
+  appConfirm(`回退这一处:${item.path} —— 将${item.verb === "删除"
+    ? "删掉这个新建的文件" : "恢复成它改动前的内容"}。`
+    + (warn.length ? "注意:" + warn.join(";") + "。" : ""),
+    () => {
+      api.undo_step(item.seq).then(r => {
+        toast((r && r.msg) || "没有退成(清单可能已过期)");
+        activityRefresh();
+      }).catch(e => toast("回退失败:" + String(e).slice(0, 60), true));
+    }, "回退这一处");
+}
+
+function undoAllChanges() {
+  const api = activityApi();
+  if (!api || !api.undo_all) { toast("全部回退只在桌面版有"); return; }
+  const ch = (actData && actData.changes) || {};
+  appConfirm(`全部回退 ${ch.total || 0} 处改动:按最新到最旧逐处退,同一文件退到最早那份前像。`
+    + "命令(bash / py_script)与外部程序改出来的东西不在这份账里,退不掉。",
+    () => {
+      api.undo_all().then(r => {
+        toast((r && r.msg) || "没有退成");
+        activityRefresh();
+      }).catch(e => toast("回退失败:" + String(e).slice(0, 60), true));
+    }, "全部回退");
+}
+
 // 一段:标题可点(折叠状态记在 monitor-pref.json),内容交给 builder 填
 function actSect(key, label, countText, builder) {
   const bodyEl = actEl({ cls: "act-sectbody" });
@@ -6056,6 +6141,8 @@ function renderActivity(data) {
     actSect("timeline", "🧾 时间线", tl.calls ? tl.calls + " 次调用" : "",
       b => buildTimeline(b, tl)),
     actSect("groups", "📦 产出与来源", "", b => buildGroups(b, data)),
+    actSect("changes", "🛠 本轮改动", (data.changes && data.changes.total)
+      ? data.changes.total + " 处可退" : "", b => buildChanges(b, data)),
   ].filter(Boolean);
   for (const s of secs) body.appendChild(s);
   if (!secs.length || data.empty) {
@@ -7432,6 +7519,119 @@ function renderMcpLine(items) {
   el.title = list.map(i =>
     `${i.label}:${i.caps || "未连上,没握过手,拿不到对端声明的能力"}`).join("\n");
 }
+// 指令层那一行(v0.9.101 L3):"我明明写了规矩它不听"不该变成扯皮 —— 至少能确认
+// 它读没读到、读了几行。只报份数与来源,不贴内容,也不报"命中了哪条所以这么做"。
+function renderInstrLine(info) {
+  const el = $("instrLine");
+  const d = info || {};
+  if (!d.line) { el.hidden = true; el.textContent = ""; return; }
+  el.hidden = false;
+  el.textContent = "📐 指令:" + d.line;
+  el.title = (d.layers || []).map(i =>
+    `${i.scope} ${i.name}:${i.lines} 行${i.truncated ? "(注入时被截过)" : ""}`).join("\n")
+    + "\n安全边界不吃这两份文件:沙箱、敏感路径、确认门由代码把守。";
+}
+
+// ---------------- 跨会话看板(v0.9.101 ③B1):四处现成的账拼的一屏,只读不改状态
+const BOARD_STATES = [["running", "在跑"], ["waiting", "等你"], ["done", "完成"]];
+
+function boardEl(cls, text) {
+  const el = document.createElement("div");
+  el.className = cls;
+  el.textContent = text;
+  return el;
+}
+
+function boardRow(r) {
+  const act = r.action || {};
+  const row = boardEl("act-row" + (act.type ? "" : " plain"), "");
+  const mid = boardEl("act-m", "");
+  mid.appendChild(boardEl("act-t", r.title || "(没标题)"));
+  if (r.sub) mid.appendChild(boardEl("act-s", r.sub));
+  row.appendChild(boardEl("act-dot", ""));
+  row.appendChild(mid);
+  row.appendChild(boardEl("act-badge", r.source || ""));
+  if (act.type) {
+    row.addEventListener("click", () => boardAct(act));
+    row.title = act.type === "session" ? "切到那个会话"
+      : act.type === "panel" ? "打开计划面板" : "把这句话填进输入框(不替你发送)";
+  } else {
+    row.title = "这一条没有可点的动作(它要你看的是事实,不是入口)";
+  }
+  return row;
+}
+
+// 每一行的点击都得是真会发生事情的那一种(与活动栏同一口径);没有真动作就不给可点。
+function boardAct(a) {
+  const api = window.pywebview && window.pywebview.api;
+  const overlay = $("boardOverlay");
+  if (a.type === "session") {
+    if (api && api.resume_session) api.resume_session(a.index);
+    overlay.classList.remove("show");
+    return;
+  }
+  if (a.type === "panel") {
+    overlay.classList.remove("show");
+    openPlanDlg();
+    return;
+  }
+  if (a.type === "ask") {
+    const el = $("input");
+    el.value = a.text || "";
+    el.focus();
+    overlay.classList.remove("show");
+    return;
+  }
+  toast("这一条只能看,不能点");
+}
+
+async function loadBoard() {
+  const api = window.pywebview && window.pywebview.api;
+  const body = $("boardBody"), note = $("boardNote");
+  if (!api || !api.get_board) {
+    note.textContent = "跨会话看板只在桌面版有";
+    body.textContent = "";
+    return;
+  }
+  let d = null;
+  try {
+    d = await api.get_board();
+  } catch (e) {
+    note.textContent = "读不出来:" + String(e).slice(0, 60);
+    return;
+  }
+  if (!d || !d.ok) { note.textContent = (d && d.msg) || "读不出来"; return; }
+  const bits = [d.scan_note, d.boundary];
+  if (d.at) bits.push("统计于 " + d.at);
+  note.textContent = bits.join(" · ");
+  body.textContent = "";
+  let shown = 0;
+  for (const one of BOARD_STATES) {
+    const rows = (d.groups || {})[one[0]] || [];
+    if (!rows.length) continue;              // 空的态不摆"暂无"占位撑版面
+    body.appendChild(boardEl("act-cap",
+      one[1] + "(" + ((d.counts || {})[one[0]] || 0) + ")"));
+    for (const r of rows) { body.appendChild(boardRow(r)); shown++; }
+    const more = (d.more || {})[one[0]] || 0;
+    if (more) body.appendChild(boardEl("act-more", `另有 ${more} 条没列出`));
+  }
+  if (!shown) {
+    body.appendChild(boardEl("act-idle",
+      "现在这四处账里没有可报的事。读不到的那一处会在上面写「没读到」并说明原因,"
+      + "不会被当成「没有任务」。"));
+  }
+}
+
+$("btnBoard").addEventListener("click", () => {
+  $("boardOverlay").classList.add("show");
+  loadBoard();
+});
+$("boardRefresh").addEventListener("click", loadBoard);
+$("boardClose").addEventListener("click", () => $("boardOverlay").classList.remove("show"));
+$("boardOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "boardOverlay") $("boardOverlay").classList.remove("show");
+});
+
 window.addEventListener("DOMContentLoaded", () => {
   applyTheme(document.documentElement.classList.contains("dark"), false);
 
@@ -7467,6 +7667,7 @@ window.addEventListener("DOMContentLoaded", () => {
       loadSlashCmds();     // 对话型 slash 命令表(v0.9.74)
       loadPlan();          // 计划角标:工作区里已有计划时开窗就看得见进度
       renderMcpLine(info.mcp_servers);   // 侧栏 MCP 健康行(v0.9.70)
+      renderInstrLine(info.instructions);  // 侧栏指令层那一行(v0.9.101 L3)
       if (info.activate_panel) openPanel(info.activate_panel);   // 点通知直达(首屏落点)
       actPrefPull();       // 任务监控栏:上次收起还是展开、哪几段折着(v0.9.37)
     }).catch(e => {

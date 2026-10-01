@@ -15,8 +15,8 @@ import json
 from minicode.paths import app_path
 
 PREF_FILE = "monitor-pref.json"
-# 四段各自的折叠状态。名字与前端那四个 section 一一对应,改一处要改两处。
-SECTIONS = ("now", "plan", "timeline", "groups")
+# 五段各自的折叠状态。名字与前端那几个 section 一一对应,改一处要改两处。
+SECTIONS = ("now", "plan", "timeline", "groups", "changes")
 DEFAULTS = {"open": False, "folded": {}}
 
 

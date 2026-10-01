@@ -200,3 +200,14 @@ def test_snapshot_weekly_not_yet_and_due(ledger):
     assert "本周还没到周日那一班" in before
     at_deadline = jobs.snapshot(specs, now=dt("2026-10-04 20:05"))
     assert "现在已到期,下一次心跳(≤5 分钟)就会跑" in at_deadline
+
+
+def test_every_registered_job_has_a_human_label():
+    """看板那一行给人看的是「周复盘」,不是 mood_weekly_review(B1 的 §四.1:每行都得读得懂)。"""
+    from minicode import proactive
+    assert proactive.JOB_SPECS, "任务表空了?"
+    for spec in proactive.JOB_SPECS:
+        assert spec.label.strip(), f"{spec.id} 没有给人看的名"
+        assert spec.label not in (spec.id,), "label 抄个 id 等于没起名字"
+    ids = {s.id for s in proactive.JOB_SPECS}
+    assert ids == set(proactive.JOB_HANDLERS), "登记了却没接线 / 接线了却没登记"

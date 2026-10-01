@@ -17,7 +17,8 @@ from minicode import APP_NAME, __version__
 from minicode import asking, model_probe
 from minicode import workspace as ws
 from minicode.activate import take_pending_panel as _take_pending_panel
-from minicode.app_setup import build_runner_agent, mcp_log
+from minicode.app_setup import (build_runner_agent, instruction_layers,
+                                instructions_line, mcp_log)
 from minicode.attachments import (
     UPLOAD_DIR, Attachment, build_content, data_url, display_text, is_image,
     mime_for, parse_attachment_note, preview_data_url, save_attachments,
@@ -228,6 +229,14 @@ class PublicApi:
     def undo(self) -> dict:
         return self._b.undo()
 
+    def undo_step(self, seq=None) -> dict:
+        """审查视图「回退这一处」:只退清单上那一条,比它更新的改动原样留着。"""
+        return self._b.undo_step(seq)
+
+    def undo_all(self) -> dict:
+        """审查视图「全部回退」:一路退回本轮开始前(命令改的不在这份账里)。"""
+        return self._b.undo_all()
+
     def new_task(self) -> dict:
         return self._b.new_task()
 
@@ -254,6 +263,10 @@ class PublicApi:
 
     def get_activity(self) -> dict:
         return self._b.get_activity()
+
+    def get_board(self) -> dict:
+        """跨会话看板:几件事在跑、哪几件等你的决定、最近做完了什么(只读)。"""
+        return self._b.get_board()
 
     def get_monitor_pref(self) -> dict:
         return self._b.get_monitor_pref()
@@ -446,6 +459,19 @@ class PublicApi:
         return self._b.list_project_files(path, subdir)
 
 
+def _instructions_info(workspace) -> dict:
+    """侧栏那一行「指令层」的数据:读到几层、各几行、有没有被截。
+
+    读不动就当没这一层(空 line → 前端整行不出现),不编一句"未配置指令"占版面。
+    """
+    try:
+        layers = instruction_layers(workspace)
+        return {"ok": True, "line": instructions_line(workspace), "layers": layers}
+    except Exception as exc:          # 这一行读不出来不该把整个 get_info 带崩
+        return {"ok": False, "line": "", "layers": [],
+                "msg": f"读取指令层失败:{type(exc).__name__}: {exc}"}
+
+
 def _within(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -572,6 +598,9 @@ class Bridge:
         self._ask_event = threading.Event()
         self._ask_answer: dict = {}
         self._ask_questions: list = []      # 当前这张卡问了什么(留痕那一行要用)
+        # 「此刻有没有一张卡等人答」(跨会话看板 B1 用,见 _wait_event)
+        self._ask_open = False
+        self._confirm_open = False
         self._closing = False             # 关窗中:等前端回答的线程据此收口
         # 标题栏(p2):前端报过一次主题之后就记着,切工作区时只改字不重染
         self._chrome_dark: bool | None = None
@@ -740,6 +769,9 @@ class Bridge:
             "vision": self._vision_on(fallback_model=self.config.model),
             "vision_forced": bool(self.config.vision),
             "paths": paths_diagnostics(),
+            # L3(v0.9.101 ④):这一轮实际读到了哪几层指令文件。只报份数与行数,
+            # 不贴内容、也不报"命中了哪条" —— 后者是把模型的自述当因果证据。
+            "instructions": _instructions_info(self.workspace),
             "campus_map": campus_map_data(),
             # 馆藏库自检:共享给同学后「图书馆搜书用不了」的头号原因就是库没装全
             # (1.3 GB 的大文件)。启动就把结论一并下发给界面,不用等搜书失败。
@@ -1056,17 +1088,129 @@ class Bridge:
         live = getattr(ui, "live_rows", None)
         now = getattr(ui, "live_now", None)
         try:
-            return session_activity(
+            data = session_activity(
                 self.session.messages, workspace=self.workspace,
                 live=live() if callable(live) else None,
                 now=now() if callable(now) else None,
                 busy=bool(getattr(self._current, "busy", False)))
+            # 「本轮改动」跟着这一份载荷走:它和产出行是同一份事实的两个视图,
+            # 同一次刷新到位,就不会出现"产出行说写了 3 个文件、审查清单还空着"。
+            data["changes"] = self.undo_records()
+            return data
         except Exception as exc:
             return {"ok": False, "groups": [], "timeline": {}, "now": None,
-                    "summary": {}, "empty": True,
+                    "summary": {}, "empty": True, "changes": self.undo_records(),
                     "msg": f"读取会话活动失败:{type(exc).__name__}: {exc}"}
 
+    # ------------------------------------------------------------ 跨会话看板(B1)
+
+    def get_board(self) -> dict:
+        """「我手上到底有几件事在跑?」——四处现成结论拼的一屏,只读、不落盘。
+
+        四处真源:在跑的会话来自 `running_sessions()`(桥内存,跨进程看不见,所以载荷
+        里带着那句边界)、后台命令来自 `shell.bg_facts()`、计划状态来自
+        `planning.plan_state`、定时任务来自 `jobs` 那本账。这里刻意**不重算任何东西**,
+        也不新开一份"任务状态"文件(那要回答"会话被杀后谁清",还要交四处登记税)。
+        """
+        from minicode import board
+        return board.aggregate({"会话": self._board_sessions,
+                                "后台命令": self._board_background,
+                                "计划": self._board_plan,
+                                "定时任务": self._board_jobs})
+
+    def _board_sessions(self) -> list[dict]:
+        from minicode import board
+        running = {str(r.log_path) for r in self.running_sessions() if r.log_path}
+        rows = []
+        for i, s in enumerate(list_sessions(self.sessions_dir,
+                                            limit=board.SESSION_SCAN), start=1):
+            if str(s.path) not in running:
+                continue          # 拿不到确证就不列 —— 宁可少列,也不谎报"在跑"
+            rows.append(board.row(
+                "running", derive_title(s.first_user_text) or s.path.name,
+                f"{s.n_messages} 条 · {s.time} · 侧栏第 {i} 个",
+                action={"type": "session", "index": i}, source="会话"))
+        if self._ask_open or self._confirm_open:
+            rows.append(board.row(
+                "waiting", "学长在等你答",
+                "提问卡或确认框开着还没回(没答按没同意算,这一条不会自己往下走)",
+                action={"type": "card"}, source="会话"))
+        return rows
+
+    def _board_background(self) -> list[dict]:
+        from minicode import board
+        from minicode.tools import shell
+        rows = []
+        for j in shell.bg_facts():
+            if j["running"]:
+                rows.append(board.row(
+                    "running", f"后台命令 {j['id']}:{j['command']}",
+                    f"已跑 {j['elapsed']} 秒 · 输出 {j['chars']} 字",
+                    action={"type": "ask", "text": f"看一下后台命令 {j['id']} 跑到哪了"},
+                    source="后台命令"))
+            else:
+                rows.append(board.row(
+                    "done", f"后台命令 {j['id']}:{j['command']}",
+                    f"已结束,退出码 {j['exit_code']} · 输出 {j['chars']} 字",
+                    action={"type": "ask", "text": f"看一下后台命令 {j['id']} 的输出"},
+                    source="后台命令"))
+        return rows
+
+    def _board_plan(self) -> list[dict]:
+        from minicode import board
+        from minicode.planning import plan_state
+        st = plan_state(self.workspace)
+        if not st.get("has_plan"):
+            return []
+        by_n = {s["n"]: s for s in st["steps"]}
+        rows = []
+        for n in st.get("running") or []:
+            s = by_n.get(n) or {}
+            rows.append(board.row("running", f"计划第 {n} 步:{s.get('title') or ''}",
+                                  "已标进行中(做完要标 done)" + (
+                                      f" · 验收 {s['verify']}" if s.get("verify") else ""),
+                                  action={"type": "panel", "panel": "plan"},
+                                  source="计划"))
+        for n in st.get("blocked") or []:
+            s = by_n.get(n) or {}
+            rows.append(board.row("waiting", f"第 {n} 步被上游卡住:{s.get('title') or ''}",
+                                  "要人工决定:重做上游还是改计划",
+                                  action={"type": "panel", "panel": "plan"},
+                                  source="计划"))
+        for n in st.get("verify") or []:
+            s = by_n.get(n) or {}
+            rows.append(board.row("waiting", f"第 {n} 步的验收没跑:{s.get('title') or ''}",
+                                  f"判据 {s.get('verify')}",
+                                  action={"type": "panel", "panel": "plan"},
+                                  source="计划"))
+        if st["total"] and st["done"] == st["total"]:
+            rows.append(board.row("done", f"计划「{st.get('goal') or '未命名'}」全部做完",
+                                  f"{st['done']}/{st['total']} 步",
+                                  action={"type": "panel", "panel": "plan"},
+                                  source="计划"))
+        return rows
+
+    def _board_jobs(self) -> list[dict]:
+        from minicode import board, jobs, proactive
+        book = jobs.load_state()
+        rows = []
+        for spec in proactive.JOB_SPECS:
+            entry = book.get(spec.id) if isinstance(book.get(spec.id), dict) else {}
+            last = str(entry.get("last_run") or "")
+            if not last:
+                continue          # 从没跑过的不占一行:这里没有"结论"可报
+            result = str(entry.get("result") or "")
+            rows.append(board.row(
+                "done", f"定时任务「{spec.label or spec.id}」",
+                f"上次 {last[:16]} · 结论 {result or '(没记结论)'}"
+                f" · 共 {jobs.runs_of(spec.id, book)} 次",
+                action={"type": "ask",
+                        "text": f"说一下「{spec.label or spec.id}」上次跑出了什么"},
+                source="定时任务"))
+        return rows
+
     # ------------------------------------------------------------ 任务监控栏偏好
+
 
     def get_monitor_pref(self) -> dict:
         """这一栏开没开、哪几段被折叠过(纯本机界面偏好,不含任何内容数据)。"""
@@ -2323,6 +2467,30 @@ class Bridge:
         self.ui.push("info", text=msg)
         return {"ok": True, "msg": msg}
 
+    def undo_records(self) -> dict:
+        """「本轮改动」清单 —— 这一屏读的就是 agent 那本撤销栈,不开第三本账。
+
+        栈被 /clear、换会话、压缩历史清空时它自然为空,前端那句"没有可退的改动"
+        于是是真话,而不是界面自己缓存了一份看起来还能退的旧清单。
+        """
+        try:
+            return self.agent.undo_records()
+        except Exception as exc:      # 清单读坏了不该让整栏打不开
+            return {"ok": False, "items": [], "total": 0, "more": 0, "note": "",
+                    "hint": f"读取本轮改动失败:{type(exc).__name__}: {exc}"}
+
+    def undo_step(self, seq=None) -> dict:
+        """只回退清单上的那一处(其余原样留着)。前端已弹过确认框,这里动手。"""
+        msg = self.agent.undo(seq)
+        self.ui.push("info", text=msg)
+        return {"ok": msg.startswith("已撤销"), "msg": msg}
+
+    def undo_all(self) -> dict:
+        """一路退回本轮开始前。命令(bash/py_script)改的不在账里,退不到 —— 这话在后端那句回话里。"""
+        msg = self.agent.undo_all()
+        self.ui.push("info", text=msg)
+        return {"ok": msg.startswith("已全部回退"), "msg": msg}
+
     def new_task(self) -> dict:
         """新建任务:直接开一个新会话,原会话(如果正在跑)转后台继续。
 
@@ -2843,13 +3011,15 @@ class Bridge:
                          why=why.get("why", ""), digest=why.get("digest", ""),
                          risks=risks, alert=bool(note),
                          label=str(label or ""))
-            if not self._wait_event(self._confirm_event):
+            if not self._wait_event(self._confirm_event,
+                                    open_flag="_confirm_open"):
                 # 没人回答:按"拒绝"收口。这方向是安全的 —— 不执行任何东西,
                 # 也不会把"没点"说成"同意了"。
                 self.ui.push("info", text="这次没等到你的确认,已按**不执行**处理。")
             return self._confirm_choice
 
-    def _wait_event(self, event: threading.Event, slice_s: float = 1.0) -> bool:
+    def _wait_event(self, event: threading.Event, slice_s: float = 1.0,
+                    open_flag: str = "") -> bool:
         """等一个"用户点了什么"的事件,每秒醒一次看还有没有人会来回答它。
 
         为什么不能 `event.wait()` 一把梭:确认框与提问卡都是**后台线程阻塞等前端**,
@@ -2858,11 +3028,21 @@ class Bridge:
         之后所有确认框都弹不出来(症状是"学长再也不问我了,也什么都不做")。
         每秒探一次"还要不要等",等不到就按**未回答**收口:既不凭空造一个超时把慢的人
         挡在门外,也绝不无期限地占着一条线程。
+
+        `open_flag` 是跨会话看板(B1)要的那个事实:"此刻有没有一张卡等人答"。
+        它只在等待期间为真,`finally` 里必清 —— 看板把"等你"报成"在跑"会让用户
+        以为还有活在动,而真相是它停在你手上。
         """
-        while not event.wait(slice_s):
-            if self._closing or self.ui.stop_requested:
-                return False
-        return True
+        if open_flag:
+            setattr(self, open_flag, True)
+        try:
+            while not event.wait(slice_s):
+                if self._closing or self.ui.stop_requested:
+                    return False
+            return True
+        finally:
+            if open_flag:
+                setattr(self, open_flag, False)
 
     # 提问握手(v0.9.96):Agent 线程阻塞在此,前端点完按钮后带答案返回
     def ask_user(self, questions: list[dict], note: str = "",
@@ -2874,7 +3054,8 @@ class Bridge:
             self._ask_questions = questions
             self.ui.push("ask_request", questions=questions,
                          note=str(note or ""), label=str(label or ""))
-            if not self._wait_event(self._ask_event):
+            if not self._wait_event(self._ask_event,
+                                    open_flag="_ask_open"):
                 reason = ("窗口正在关闭" if self._closing else "你按了停止")
                 self._push_ask_trace("没等到回答,这一题按未回答处理")
                 return {"mode": asking.MODE_UNANSWERED, "reason": reason}

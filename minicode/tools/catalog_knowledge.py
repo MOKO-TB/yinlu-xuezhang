@@ -41,6 +41,9 @@ def skills_plan_search() -> list[Tool]:
                 "显示成「进行中」,做完再标 done;"
                 "失败的上游步骤标 status=failed,下游会被自动判为「被卡住」;"
                 "action=read:查看当前计划与调度视图(进行中/可执行/被卡住的步骤)。"
+                "**能给判据的步骤就写 verify**(这一步的验收命令,如 `pytest -q tests/x.py`):"
+                "带 verify 的步骤,在你用 bash 原样跑完那条命令之前,标 done 会被直接拒绝 —— "
+                "跑不过就不许标完成,也别为此编一条空跑的命令。"
                 "接到多文件/多阶段的复杂任务时应先建计划。"
                 "写完不必反复 read 念给用户:计划会以一张**内联清单**出现在对话里"
                 "(顶栏「🗂 计划」也同步显示每一步的状态与进度),提醒用户看那里即可。"
@@ -51,10 +54,13 @@ def skills_plan_search() -> list[Tool]:
                     "action": {"type": "string", "enum": ["write", "read", "update"],
                                "description": "write=新建/覆盖计划;read=查看;update=更新某步状态"},
                     "goal": {"type": "string", "description": "action=write 时:计划目标(一句话)"},
-                    "steps": {"type": "array", "description": "action=write 时:2-8 步,每步 {title, detail?, depends_on?},每步一个可独立验证的动作;depends_on 是前置步骤编号数组,如 [1,2]",
+                    "steps": {"type": "array", "description": "action=write 时:2-8 步,每步 {title, detail?, depends_on?, verify?},每步一个可独立验证的动作;depends_on 是前置步骤编号数组,如 [1,2]",
                               "items": {"type": "object", "properties": {
                                   "title": {"type": "string"},
                                   "detail": {"type": "string"},
+                                  "verify": {"type": "string",
+                                             "description": "这一步的验收命令(会被拼进 detail 的 `verify:` 尾巴);"
+                                                            "带它的步骤没跑过就不许标 done"},
                                   "depends_on": {"type": "array", "items": {"type": "integer"},
                                                  "description": "前置步骤编号;这些步骤完成后本步才可执行"}}}},
                     "step": {"type": "integer", "description": "action=update 时:步骤编号"},

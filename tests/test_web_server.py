@@ -213,6 +213,8 @@ def test_owner_only_methods_refused(server):
                  "get_token_usage",
                  "get_skills", "get_skill_body", "get_skill_channels", "add_skill",
                  "get_plan",
+                 # v0.9.101 ①R1:审查视图写的是服务器工作区里的文件,访客看不见后果
+                 "undo_step", "undo_all", "undo_records",
                  "set_sandbox", "set_permission_mode", "consolidate_memory",
                  "pick_attachments"):
         status, payload = client.post(name, {})

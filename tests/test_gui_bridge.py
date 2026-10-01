@@ -230,6 +230,32 @@ def test_undo_via_bridge(config, tmp_path):
     assert not (tmp_path / "gui.txt").exists()
 
 
+def test_activity_payload_carries_changes(config, tmp_path):
+    """「本轮改动」跟着 get_activity 一起走:产出行与审查清单是同一份事实的两个视图。
+
+    读的是 agent 那本撤销栈,所以退完之后载荷自己就空了 —— 前端不许留一份
+    "看起来还能退"的旧清单,这一条就是钉那件事的。
+    """
+    llm = FakeLLM([AssistantTurn(tool_calls=[_write_call()]),
+                   AssistantTurn(text="ok"), AssistantTurn(text="done")])
+    bridge, window, _ = make(config, tmp_path, llm)
+    bridge.send_task("创建 gui.txt")
+    assert wait_until(lambda: any(e["type"] == "confirm_request" for e in window.events))
+    bridge.confirm_reply("always")
+    assert wait_until(lambda: not bridge._busy)
+
+    ch = bridge.get_activity()["changes"]
+    assert ch["ok"] and ch["total"] == 1
+    assert ch["items"][0]["path"] == "gui.txt"      # 相对工作区,绝对路径不出桥
+    assert ch["items"][0]["verb"] == "删除"          # 新建的那处:是删除不是恢复
+    assert "命令" in ch["note"]                      # 抬头那句:别以为一键回到本轮开始前
+
+    assert bridge.undo_step(ch["items"][0]["seq"])["ok"]
+    assert not (tmp_path / "gui.txt").exists()
+    assert bridge.get_activity()["changes"]["total"] == 0
+    assert not bridge.undo_step(9999)["ok"]          # 过期编号要说清,不能装成功
+
+
 def test_get_info_has_skills_and_providers(config, tmp_path):
     bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
     info = bridge.get_info()
@@ -1078,3 +1104,52 @@ def test_workspace_search_files_returns_relative_paths(config, tmp_path):
     empty = bridge.workspace_search_files("")
     assert set(empty["items"]) == {"agent.py", "sub/note.md"}
     assert all("\\" not in i for i in empty["items"])   # 一律 posix 斜杠
+
+def test_get_info_reports_instruction_layers(config, tmp_path, monkeypatch):
+    """L3:侧栏那一行报"读到哪几层、各几行",报的是真读到的数,不是猜的。"""
+    from minicode import app_setup
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(app_setup, "app_path", lambda *p: home.joinpath(*p))
+    (home / "AGENTS.md").write_text("一\n二\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("甲\n乙\n丙\n", encoding="utf-8")
+    bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    d = bridge.get_info()["instructions"]
+    assert d["ok"] and d["line"] == "内置 + 用户级(2 行) + 项目级(3 行)"
+    assert [it["scope"] for it in d["layers"]] == ["用户级", "项目级"]
+    assert "一" not in d["line"]              # 只报数,不把内容再贴一遍
+
+
+def test_board_reads_the_four_real_accounts(config, tmp_path):
+    """桥这一侧不重算:看板里计划那几行出自 plans/plan.md 这本真账。"""
+    (tmp_path / "plans").mkdir(exist_ok=True)
+    (tmp_path / "plans" / "plan.md").write_text(
+        "# 计划:测试看板\n\n- [!] 1. 上游失败了\n"
+        "- [ ] 2. 被卡住的下游\n  - 依赖: 1\n"
+        "- [/] 3. 正在做 —— verify: pytest -q t.py\n", encoding="utf-8")
+    bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    d = bridge.get_board()
+    assert d["ok"] and d["scan"] > 0
+    joined = " ".join(r["title"] for g in d["groups"].values() for r in g)
+    assert "第 2 步被上游卡住" in joined          # plan_state 的 blocked
+    assert "计划第 3 步" in joined               # plan_state 的 running
+    assert "验收没跑" in joined                  # V1 那份 verify 清单
+    assert d["failed_sources"] == []             # 四处都读到了才敢这么写
+    # 「在跑」只有桥内存里确证的那一路才列:刚开的这个会话此刻不在跑,就不该出现
+    assert all("在等你答" not in r["title"] for r in d["groups"]["waiting"])
+
+
+def test_board_open_card_flag_lives_only_while_waiting(config, tmp_path):
+    """`_ask_open` 只在等待期间为真:把"等你"报成"在跑"是这一屏最坏的错。"""
+    bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    assert bridge._ask_open is False and bridge._confirm_open is False
+    got = {}
+
+    def spy(event, slice_s=1.0, open_flag=""):
+        got["flag"] = open_flag
+        return True
+    bridge._wait_event = spy                      # 只探参数,不真等
+    bridge.ask_user([{"q": "要哪个", "options": [{"label": "甲"}]}])
+    assert got["flag"] == "_ask_open"
+    bridge.confirm_tool(_tool("bash"), {"command": "echo hi"})
+    assert got["flag"] == "_confirm_open"

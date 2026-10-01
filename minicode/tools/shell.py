@@ -185,6 +185,11 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
         sections.append(f"--- stderr ---\n{err}")
     if proc.returncode != 0 and not out and not err:
         sections.append("(无输出。命令可能不存在,或需要不同的参数。)")
+    # 跑完了的这条命令进「验收执行账」(V1):计划里带 `verify:` 的那一步靠这本账
+    # 判断"到底跑过没有"。后台任务与超时的上面已经 return 掉了,不进这本账 ——
+    # 它们没有"退出码是几"这个结论,记进去等于给"跑过了"开门。
+    from minicode import planning
+    planning.note_verify_run(ctx, command, proc.returncode, out or err)
     return "\n".join(sections) + lost + env_note
 
 
@@ -498,6 +503,19 @@ def _bg_list_snapshot() -> list[str]:
     """给测试与界面用的编号清单(不暴露进程对象)。"""
     with _bg_lock:
         return list(_bg_jobs)
+
+
+def bg_facts() -> list[dict]:
+    """后台命令的结构化事实(跨会话看板用它列「在跑」,不再拼一次人话)。
+
+    只读、不落盘:这本账天生是"这一程的临时物",重启就没了 —— 看板那一屏
+    必须把这句边界说出来(board.BOUNDARY_NOTE),藏着它就是在骗人。
+    """
+    with _bg_lock:
+        jobs = list(_bg_jobs.values())
+    return [{"id": j.id, "command": j.command, "running": j.running,
+             "exit_code": j.exit_code, "chars": j.kept,
+             "elapsed": int(time.monotonic() - j.started)} for j in jobs]
 
 
 def bg_brief_for_model() -> str:

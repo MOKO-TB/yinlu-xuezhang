@@ -1017,3 +1017,232 @@ def test_agents_md_truncated_with_marker(tmp_path):
     (tmp_path / "AGENTS.md").write_text("长" * (AGENTS_CHAR_LIMIT + 500), encoding="utf-8")
     out = agents_prompt_section(tmp_path)
     assert "已截断" in out and len(out) < AGENTS_CHAR_LIMIT + 200
+
+
+# ------------------------------------------------------------ 本轮改动审查(v0.9.101 ①R1)
+
+def _two_writes(config, ctx, tmp_path, second="v2-longer"):
+    llm = FakeLLM([
+        _write_turn("doc.txt", "v1", "c1"),
+        AssistantTurn(text="done1"),
+        _write_turn("doc.txt", second, "c2"),
+        AssistantTurn(text="done2"),
+    ])
+    agent = make_agent(config, ctx, llm, FakeUI())
+    agent.run_turn("第一版")
+    agent.run_turn("第二版")
+    return agent
+
+
+def test_undo_records_lists_newest_first_with_kinds(config, ctx, tmp_path):
+    agent = _two_writes(config, ctx, tmp_path)
+    rep = agent.undo_records()
+    assert rep["ok"] and rep["total"] == 2
+    assert [it["path"] for it in rep["items"]] == ["doc.txt", "doc.txt"]
+    # 最新在前:第一条是"改"(有前像),第二条是"新建"(前像是 None)——
+    # 撤销它俩的动作不一样:恢复 vs 删除,话术必须分开(§四.4)。
+    assert [it["kind"] for it in rep["items"]] == ["改", "新建"]
+    assert [it["verb"] for it in rep["items"]] == ["恢复", "删除"]
+    assert rep["items"][0]["newer"] == 0           # 最新那条之上没有更动的了
+    assert rep["items"][1]["newer"] == 1           # 退更早那次会连带跳过更新的改动
+    assert rep["items"][0]["seq"] != rep["items"][1]["seq"]
+
+
+def test_undo_by_seq_only_touches_that_one(config, ctx, tmp_path):
+    """退第 2 次不吃第 1 次:这是「逐文件回退」与「换个名字的乱序撤销」唯一的区别。"""
+    agent = _two_writes(config, ctx, tmp_path, second="v2-longer")
+    latest = agent.undo_records()["items"][0]
+    assert latest["newer"] == 0
+    assert "已撤销" in agent.undo(latest["seq"])
+    assert agent.undo_records()["total"] == 1      # 更早的那条原样留着
+    assert (tmp_path / "doc.txt").read_text(encoding="utf-8") == "v1"
+
+
+def test_undo_older_entry_warns_newer_ones_remain(config, ctx, tmp_path):
+    """退更早的那一处必须说清"上面还有几处没退"——否则用户以为退到了本轮开始前。"""
+    agent = _two_writes(config, ctx, tmp_path, second="v2-longer")
+    older = agent.undo_records()["items"][1]
+    assert older["newer"] == 1
+    msg = agent.undo(older["seq"])
+    assert "删除" in msg and "还有 1 处改动没退" in msg
+    assert agent.undo_records()["total"] == 1
+
+
+def test_undo_without_seq_still_pops_latest(config, ctx, tmp_path):
+    """「/undo」与「↶ 撤销」的老行为零变化:不传编号就是后进先出退最近一步。"""
+    agent = _two_writes(config, ctx, tmp_path, second="v2-longer")
+    assert "已撤销" in agent.undo()
+    assert (tmp_path / "doc.txt").read_text(encoding="utf-8") == "v1"
+    assert agent.undo_records()["total"] == 1
+
+
+def test_undo_unknown_seq_says_list_is_stale(config, ctx, tmp_path):
+    agent = _two_writes(config, ctx, tmp_path)
+    msg = agent.undo(9999)
+    assert "清单可能已经过期" in msg
+    assert agent.undo_records()["total"] == 2      # 没退成就一条都不能少
+
+
+def test_undo_records_never_show_absolute_path(config, ctx, tmp_path):
+    """载荷里只给相对工作区的路径 —— 绝对路径不出桥(与导出面同一口径)。"""
+    ag = _two_writes(config, ctx, tmp_path)
+    payload = ag.undo_records()
+    text = json.dumps(payload, ensure_ascii=False)
+    assert str(tmp_path) not in text
+    for it in payload["items"]:
+        assert not it["path"].startswith(("\\", "/")) and ":" not in it["path"]
+
+
+def test_undo_records_flag_external_touch(config, ctx, tmp_path):
+    """快照之后被 bash / 外部程序改过 → 这一处必须被点名,不许静默按前像 diff。"""
+    ag = _two_writes(config, ctx, tmp_path, second="v2")
+    (tmp_path / "doc.txt").write_text(
+        "v2 之后命令又往里写了一大段,长度也变了", encoding="utf-8")
+    item = ag.undo_records()["items"][0]
+    assert item["drift"] is True
+    assert "还被别的工具动过" in ag.undo(item["seq"])
+
+
+def test_undo_records_exclude_bash_changes(config, ctx, tmp_path):
+    """命令改的东西不进清单 —— 否则「全部回退」就成了一句假承诺(§四.1)。"""
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="bash",
+            arguments=json.dumps({"command": "echo hi > from_bash.txt"}))]),
+        AssistantTurn(text="done"),
+    ])
+    ag = make_agent(config, ctx, llm, FakeUI())
+    ag.run_turn("执行命令")
+    rep = ag.undo_records()
+    assert rep["total"] == 0
+    assert "命令" in rep["note"]
+
+
+def test_failed_write_leaves_no_rollback_row(config, ctx, tmp_path):
+    """没落盘的那一次不进清单:退不动的行比少列一行更容易骗人。"""
+    (tmp_path / "f.py").write_text("a = 1\n", encoding="utf-8")
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="edit_file",
+            arguments=json.dumps({"path": "f.py", "old_string": "压根没有的这一行",
+                                  "new_string": "b = 2"}))]),
+        AssistantTurn(text="done"),
+    ])
+    ag = make_agent(config, ctx, llm, FakeUI())
+    ag.run_turn("改坏")
+    assert ag.undo_records()["total"] == 0
+    assert "没有可撤销" in ag.undo()
+
+
+def test_undo_new_file_says_delete_not_restore(config, ctx, tmp_path):
+    llm = FakeLLM([_write_turn("new.txt", "内容", "c1"), AssistantTurn(text="done")])
+    ag = make_agent(config, ctx, llm, FakeUI())
+    ag.run_turn("新建")
+    msg = ag.undo()
+    assert "删除" in msg and "恢复" not in msg
+    assert not (tmp_path / "new.txt").exists()
+
+
+def test_undo_all_walks_back_to_start(config, ctx, tmp_path):
+    ag = _two_writes(config, ctx, tmp_path, second="v2-longer")
+    msg = ag.undo_all()
+    assert "已全部回退 2 处" in msg
+    assert not (tmp_path / "doc.txt").exists()      # 新建的那处退到最后 = 文件不在
+    assert "没有可撤销" in ag.undo()
+    assert "命令" in msg                            # 退不掉的那一类要一并说清
+
+
+# ------------------------------------------------- 分层指令文件(v0.9.101 ④L1/L3)
+
+def _user_layer(monkeypatch, tmp_path, text="用户级 MARKER-USER\n- 回答先给结论\n"):
+    """把「本机数据目录」指到 tmp,免得测试碰到真仓库里那份 AGENTS.md。"""
+    from minicode import app_setup
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(app_setup, "app_path", lambda *p: home.joinpath(*p))
+    if text is not None:
+        (home / "AGENTS.md").write_text(text, encoding="utf-8")
+    return home
+
+
+def test_two_layers_ordered_user_then_project(tmp_path, monkeypatch):
+    from minicode import app_setup
+    _user_layer(monkeypatch, tmp_path)
+    (tmp_path / "AGENTS.md").write_text("项目级 MARKER-PROJ\n", encoding="utf-8")
+    out = app_setup.instructions_prompt_section(tmp_path)
+    assert out.index("MARKER-USER") < out.index("MARKER-PROJ")
+    assert "工程规矩(用户级" in out and "项目指令(工作区" in out
+
+
+def test_user_layer_without_project_says_nothing_about_it(tmp_path, monkeypatch):
+    """缺的那一层不写"本项目未提供"那种装饰 —— 没读到的东西就不出现在屏上。"""
+    from minicode import app_setup
+    _user_layer(monkeypatch, tmp_path)
+    out = app_setup.instructions_prompt_section(tmp_path)
+    assert "MARKER-USER" in out and "项目指令" not in out
+
+
+def test_no_files_injects_nothing_and_creates_nothing(tmp_path, monkeypatch):
+    from minicode import app_setup
+    home = _user_layer(monkeypatch, tmp_path, text=None)
+    assert app_setup.instructions_prompt_section(tmp_path) == ""
+    assert list(home.iterdir()) == []          # 不静默创建模板文件
+
+
+def test_switching_workspace_switches_project_layer(tmp_path, monkeypatch):
+    from minicode import app_setup
+    _user_layer(monkeypatch, tmp_path)
+    a = tmp_path / "A"
+    b = tmp_path / "B"
+    a.mkdir()
+    b.mkdir()
+    (a / "AGENTS.md").write_text("A 的规矩 MARKER-A", encoding="utf-8")
+    (b / ".agents.md").write_text("B 的规矩 MARKER-B", encoding="utf-8")
+    assert "MARKER-A" in app_setup.instructions_prompt_section(a)
+    assert "MARKER-B" in app_setup.instructions_prompt_section(b)
+    assert "MARKER-A" not in app_setup.instructions_prompt_section(b)
+
+
+def test_guard_line_present_in_both_layers(tmp_path, monkeypatch):
+    """红线不吃指令文件:两段都必须带那句"改不动它们",且不写"以本文件为准"。"""
+    from minicode import app_setup
+    _user_layer(monkeypatch, tmp_path)
+    (tmp_path / "AGENTS.md").write_text("项目 MARKER", encoding="utf-8")
+    out = app_setup.instructions_prompt_section(tmp_path)
+    assert out.count(app_setup.INSTRUCTION_GUARD) == 2
+    assert "改不动它们" in out
+
+
+def test_layers_report_counts_not_content(tmp_path, monkeypatch):
+    from minicode import app_setup
+    _user_layer(monkeypatch, tmp_path, text="一\n二\n三\n")
+    (tmp_path / "AGENTS.md").write_text("甲\n乙\n", encoding="utf-8")
+    layers = app_setup.instruction_layers(tmp_path)
+    assert [it["scope"] for it in layers] == ["用户级", "项目级"]
+    assert layers[0]["lines"] == 3 and layers[1]["lines"] == 2
+    assert layers[1]["name"] == "AGENTS.md"
+    text = app_setup.instructions_line(tmp_path)
+    assert text == "内置 + 用户级(3 行) + 项目级(2 行)"
+    assert "一" not in text and "甲" not in text      # 只报数,不重复贴内容
+
+
+def test_layers_empty_line_is_empty(tmp_path, monkeypatch):
+    from minicode import app_setup
+    _user_layer(monkeypatch, tmp_path, text=None)
+    assert app_setup.instruction_layers(tmp_path) == []
+    assert app_setup.instructions_line(tmp_path) == ""
+
+
+def test_truncation_reports_how_much(tmp_path, monkeypatch):
+    from minicode import app_setup
+    _user_layer(monkeypatch, tmp_path, text="长" * (app_setup.AGENTS_CHAR_LIMIT + 30))
+    out = app_setup.user_agents_prompt_section()
+    assert "已截断" in out and "只注入了前 4000 字" in out and "4030 字" in out
+    assert app_setup.instruction_layers(tmp_path)[0]["truncated"] is True
+
+
+def test_subagent_still_gets_project_layer(tmp_path):
+    """继承口径(v0.9.100 已定):派出去的那一路也在同一个工作区干活,项目规矩同样有效。"""
+    from minicode.app_setup import build_system_prompt
+    (tmp_path / "AGENTS.md").write_text("项目 MARKER", encoding="utf-8")
+    assert "MARKER" in build_system_prompt(tmp_path, for_subagent=True)

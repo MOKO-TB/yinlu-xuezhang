@@ -156,6 +156,9 @@ TABLE: tuple[Entry, ...] = (
           note="首页天气 chip 按这个城市查"),
     Entry("notice-watch.json", "官网通知看门狗", PREF, True,
           note="开关 + 已通知过的标题(所以同一批通知不会二次打扰)"),
+    Entry("AGENTS.md", "我的工程规矩(用户级指令)", PREF, True, scope="global",
+          note="存在就每轮自动进系统提示词:注释密度、回复格式这类按你的习惯来。"
+               "沙箱边界、敏感路径硬禁、确认门不吃这一份,任何指令文件都改不动它们"),
     # ---- 统计
     Entry("token-usage.db", "token 用量库", STATS, False,
           note="SQLite 常驻连接在 Windows 上会锁文件,统计也跟着机器走,不进包"),

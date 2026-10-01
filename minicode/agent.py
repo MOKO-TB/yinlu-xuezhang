@@ -67,6 +67,8 @@ class Agent:
         # 消息条数。量窗口那把尺子从此有了实测的下限 —— 见 `context_tokens`。
         self._real_prompt: tuple[int, int] | None = None
         self._undo_stack: list[dict] = []
+        self._undo_seq = 0         # 快照的稳定编号:摘掉中间一条不会让别的错位
+        self._undo_open = None     # 等这次真落盘之后补"改后指纹"的那条 seq
         self._narration = ""       # 本轮模型写的说明文字:权限确认框里当"为什么要做"的兜底
         self._pending_prior = ""   # B1:下一步 search_knowledge 命中历史差评时的那句系统侧先验
         # 身上这份 system prompt 是哪一天建的。system prompt 里烧着日期与"今天/明天
@@ -347,17 +349,130 @@ class Agent:
 
     # ------------------------------------------------------------ 回滚
 
-    def undo(self) -> str:
-        """撤销最近一次文件改动(后进先出)。"""
+    # 审查视图一屏列几处:超过就在载荷里明说"另有 N 处没列出"(与活动栏同一口径)。
+    CHANGE_VIEW_LIMIT = 50
+
+    def _change_display(self, p: Path) -> str:
+        """改动清单上的文件名口径:一律相对工作区,绝不出现绝对路径。
+
+        快照本身走 `resolve_path(for_write=True)`,工作区外根本进不来,所以这里不是
+        在做防御,是在守"绝对路径不出桥"那条既有口径(网页版、导出面同一个理由)。
+        """
+        try:
+            return p.relative_to(Path(self.ctx.workspace)).as_posix()
+        except (ValueError, TypeError):
+            return p.name
+
+    def undo_records(self) -> dict:
+        """「本轮改动」清单(倒序,最新在前)—— 审查视图读的就是这份栈,不另开账。
+
+        每一条都带着"能不能退、退下去会怎样"的事实:`newer` 是同一处在这之后还有几处
+        没退,`drift` 是这一处落盘之后又被别的工具动过。栈被 `/clear`、换会话、
+        压缩历史清空时这里就是空的,界面必须照实说"没有可退的改动",
+        不许留一份看起来还能退的缓存。
+        """
+        items = []
+        for rec in reversed(self._undo_stack):
+            created = rec["data"] is None
+            items.append({
+                "seq": rec["seq"],
+                "path": self._change_display(rec["path"]),
+                "kind": "新建" if created else "改",
+                "verb": "删除" if created else "恢复",
+                "at": time.strftime("%H:%M:%S", time.localtime(rec["at"])),
+                "newer": sum(1 for r in self._undo_stack
+                             if r["seq"] > rec["seq"] and r["path"] == rec["path"]),
+                "drift": self._drifted(rec),
+            })
+        more = max(0, len(items) - self.CHANGE_VIEW_LIMIT)
+        return {"ok": True, "items": items[:self.CHANGE_VIEW_LIMIT],
+                "total": len(items), "more": more,
+                # 抬头那句不是免责声明,是这一屏最容易骗人的一处:bash/py_script
+                # 改出来的东西压根不在快照里,点了"全部回退"也退不掉它们。
+                "note": ("只列我用 write_file / edit_file 改的文件;"
+                         "命令(bash / py_script)与外部程序改的不在这里,也退不掉。"),
+                "hint": ("没有可退的改动 —— 这份栈在 /clear、换会话、压缩历史时会清空,"
+                         "所以这里空着是真的空,不是还没加载。")}
+
+    def _apply_undo(self, rec: dict) -> dict:
+        """把一条快照落回磁盘:新建过的删掉,改过的写回前像。返回这处的事实与话术。"""
+        p: Path = rec["path"]
+        created = rec["data"] is None
+        name = self._change_display(p)
+        # 漂移要在动手**之前**判:落盘之后磁盘上就是我们写好的那份,提醒就永远不成立了。
+        drifted = self._drifted(rec)
+        if created:
+            p.unlink(missing_ok=True)
+            return {"path": name, "verb": "删除",
+                    "msg": f"已撤销:删除新建的 {name}"}
+        try:
+            p.write_bytes(rec["data"])
+        except OSError as e:
+            return {"path": name, "verb": "恢复", "failed": True,
+                    "msg": (f"撤销失败:{name} 写不回去"
+                            f"({type(e).__name__}),这份改动还在栈里。")}
+        tail = ("（提醒:这一处在我改过之后还被别的工具动过,那部分也一起没了。）"
+                if drifted else "")
+        return {"path": name, "verb": "恢复",
+                "msg": f"已撤销:{name} 已恢复为改动前的内容{tail}"}
+
+    def _undo_extra_tail(self, rec: dict) -> str:
+        """退完之后补一句"这一处上面还有几处没退"——逐文件回退最容易被误当成一键复原。"""
+        same = [r for r in self._undo_stack
+                if r["path"] == rec["path"] and r["seq"] > rec["seq"]]
+        if not same:
+            return ""
+        return (f"（这一处在这之后还有 {len(same)} 处改动没退,"
+                "现在磁盘上是更早的那份;要一路退回本轮开始前请用「全部回退」。）")
+
+    def undo(self, seq=None) -> str:
+        """撤销一处文件改动。
+
+        不传 `seq` = 退最近一步(后进先出,`/undo` 与「↶ 撤销」按钮的老行为)。
+        传 `seq` = **只退那一条**并从栈里摘掉它,比它更新的条目原样留着 ——
+        同一文件被改两次时,退第 2 次不会把第 1 次的成果一起吃掉;这条口径是
+        "逐文件回退"与"换个名字的乱序撤销"唯一的区别,所以单独有测试钉住。
+        """
         if not self._undo_stack:
             return "没有可撤销的文件改动(bash 产生的改动不在跟踪范围)。"
-        rec = self._undo_stack.pop()
-        p: Path = rec["path"]
-        if rec["data"] is None:
-            p.unlink(missing_ok=True)
-            return f"已撤销:删除新建的 {rec['display']}"
-        p.write_bytes(rec["data"])
-        return f"已撤销:{rec['display']} 已恢复为改动前的内容"
+        rec = None
+        if seq is None:
+            rec = self._undo_stack.pop()
+        else:
+            if isinstance(seq, bool) or not str(seq).strip().lstrip("-").isdigit():
+                return f"错误: seq 只接受清单里的编号,收到 {seq!r}。"
+            want = int(str(seq).strip())
+            for i, r in enumerate(self._undo_stack):
+                if r["seq"] == want:
+                    rec = self._undo_stack.pop(i)
+                    break
+            if rec is None:
+                return (f"没有编号 {want} 的改动 —— 清单可能已经过期"
+                        "(退过一条、或栈被 /clear 与压缩清空过),刷新一下再看。")
+        out = self._apply_undo(rec)
+        if out.get("failed"):
+            self._undo_stack.append(rec)     # 没退成的留在栈里,别让它凭空消失
+            return out["msg"]
+        return out["msg"] + self._undo_extra_tail(rec)
+
+    def undo_all(self) -> str:
+        """一路退回本轮开始前:按最新→最旧逐条退,同一文件退到最早那份前像。"""
+        if not self._undo_stack:
+            return "没有可撤销的文件改动(bash 产生的改动不在跟踪范围)。"
+        done, failed = [], []
+        while self._undo_stack:
+            rec = self._undo_stack.pop()
+            out = self._apply_undo(rec)
+            (failed if out.get("failed") else done).append(out)
+            if out.get("failed"):
+                self._undo_stack.append(rec)
+        n = len(done)
+        listed = "、".join(d["path"] for d in done[:5])
+        if n > 5:
+            listed += f" 等 {n} 处"
+        tail = (f"另有 {len(failed)} 处写不回去(仍在栈里)。" if failed else "")
+        return (f"已全部回退 {n} 处:{listed}。" if n else "没有一处退成功。") + tail + (
+            " 命令与外部程序改的不在账里。" if n else "")
 
     # ------------------------------------------------------------ 压缩
 
@@ -490,6 +605,7 @@ class Agent:
         except Exception as e:
             result = f"工具执行出错: {type(e).__name__}: {e}"
         self.ui.tool_done(tool, result)
+        self._mark_after_mutation(tool, args, result)
         # post 钩子:失败不拦截,在结果尾部如实附一行(一行,不刷屏)
         post = self._run_config_hook("post_tool", tool, args, result=result)
         if post is not None and not post.get("ok"):
@@ -642,7 +758,56 @@ class Agent:
             data = p.read_bytes() if p.exists() else None
         except OSError:
             return
-        self._undo_stack.append({"path": p, "data": data, "display": raw})
+        self._undo_seq += 1
+        self._undo_stack.append({"seq": self._undo_seq, "path": p, "data": data,
+                                 "display": raw, "at": time.time(), "post": None})
+        # 这一条还没兑现:工具可能因为参数错/权限失败而根本没落盘。落盘成功后由
+        # `_mark_after_mutation` 补上"改后指纹"(见那里的理由),没成功就把这条摘掉 ——
+        # 清单里留一条退不动的改动,比少列一条更容易骗人。
+        self._undo_open = self._undo_seq
+
+    def _mark_after_mutation(self, tool: Tool, args: dict, result: str) -> None:
+        """给刚才那条快照补上"我改完之后它长什么样"的指纹。
+
+        审查视图要回答的不是"我改了什么"而是"现在磁盘上这份还是不是我留下的那份":
+        bash / py_script 改的东西不在快照范围(`SNAPSHOT_TOOLS` 那句注释),所以一个
+        文件可能在我写完之后被命令又改过。用 size + mtime 认这个漂移,不重读整份内容。
+        写失败的那一次顺手从栈里摘掉:没有落盘就没有可退的东西。
+        """
+        seq, self._undo_open = self._undo_open, None
+        if seq is None or tool.name.rsplit("·", 1)[-1] not in SNAPSHOT_TOOLS:
+            return
+        idx = next((i for i, r in enumerate(self._undo_stack)
+                    if r["seq"] == seq), None)
+        if idx is None:
+            return
+        from minicode.toolsum import is_failure
+        if is_failure(result):
+            self._undo_stack.pop(idx)
+            return
+        try:
+            st = self._undo_stack[idx]["path"].stat()
+            self._undo_stack[idx]["post"] = {"size": st.st_size,
+                                             "mtime": st.st_mtime}
+        except OSError:
+            # 拿不到指纹就当"没漂移":宁可少提醒一句,也不给每个文件都扣上
+            # "可能被别的工具改过"—— 那会把真提醒淹掉。
+            self._undo_stack[idx]["post"] = None
+
+    def _drifted(self, rec: dict) -> bool:
+        """这一处改动落盘之后,磁盘上这份还被别的东西动过吗。"""
+        post = rec.get("post")
+        p: Path = rec["path"]
+        if not p.exists():
+            return rec["data"] is not None      # 新建的本来就该在;没了就是被动过
+        if not post:
+            return False
+        try:
+            st = p.stat()
+        except OSError:
+            return True
+        return (st.st_size != post["size"]
+                or st.st_mtime > post["mtime"] + 1.0)
 
     def _run_config_hook(self, kind: str, tool, args: dict,
                          result: str | None = None) -> "dict | None":

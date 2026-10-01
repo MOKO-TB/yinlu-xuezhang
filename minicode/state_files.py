@@ -73,6 +73,8 @@ SHIP_NEVER: tuple[StateFile, ...] = (
     StateFile("notice-watch.json", FILE, "官网通知看门狗:含已通知过的标题"),
     StateFile("injection-events.log", FILE, "上下文注入日志:防注入排查现场,含本机内容"),
     StateFile("close-pref.json", FILE, "关窗时怎么办:最小化到托盘还是直接退出"),
+    StateFile("AGENTS.md", FILE,
+              "用户级工程规矩:主人自己写给学长看的习惯,发出去的包不该替别人定规矩"),
     StateFile("tray.log", FILE, "托盘与通知的诊断日志:弹不出来时看的就是它"),
     # v0.9.96:入口脚本 `gui_main.py` 写的界面警告日志(原生右键菜单开没开、
     # WebView2 就绪超时)。它一直在数据目录里躺着,而这份清单以前只扫 `minicode/`,

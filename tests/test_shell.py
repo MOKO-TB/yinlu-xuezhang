@@ -272,3 +272,28 @@ def test_announced_finished_jobs_get_pruned(monkeypatch, ctx):
     assert ids[0] not in left and ids[1] not in left   # 最旧的两个播过就被清掉
     assert len(left) <= 2, left                        # 留 1 个播过的 + 在跑的这个
     shell.bash_kill(ctx, id=keeper)
+
+
+# -------------------------------------------------- 验收执行账(v0.9.101 ②V1 的唯一凭据)
+
+def test_bash_notes_completed_run(ctx):
+    out = shell.bash(ctx, "echo verify-me")
+    assert "退出码: 0" in out
+    runs = getattr(ctx, "verify_runs", [])
+    assert runs and runs[-1]["command"] == "echo verify-me"
+    assert runs[-1]["code"] == 0 and runs[-1]["at"]
+
+
+def test_bash_records_nonzero_too(ctx):
+    """跑过但没过也要进账:拒绝标 done 的那句话要报得出退出码与输出尾部。"""
+    shell.bash(ctx, "exit 3")
+    run = ctx.verify_runs[-1]
+    assert run["code"] == 3 and "exit 3" in run["command"]
+
+
+def test_background_run_is_not_a_verified_record(ctx):
+    """background=true 立刻返回,没有"退出码是几"这个结论 —— 记进去就等于给"跑过了"开门。"""
+    out = shell.bash(ctx, "echo bg-verify", background=True)
+    assert "后台" in out or "job" in out.lower()
+    assert not [r for r in getattr(ctx, "verify_runs", [])
+                if "bg-verify" in r["command"]]

@@ -1,4 +1,4 @@
-# 跨会话任务看板（对标 Qoder 的 My Quests 全局板 / ZCode 的 goal 模式）· 方案,未开工
+# 跨会话任务看板（对标 Qoder 的 My Quests 全局板 / ZCode 的 goal 模式）· ③B1 已落地(v0.9.101),B2/B3 仍未开工
 
 > 基线:`D:\game\mini-code` v0.9.99(`dab012c`)。先出方案等拍板再动手。
 > **本文有一处现状本轮没读到确出处**（running 标记从哪来，见 §二.4），已就地标出，
@@ -110,3 +110,19 @@ Qoder 把这一层做成 **My Quests 看板**（Running / Action Required / Comp
    且语义是"本次会话" —— 看板是跨会话的，混在一起会互相打脸）。我倾向新按钮 + 明确写"跨会话"。
 4. `running` 真源如果核出来是"只在桥内存里、跨进程看不见"：接受"退出重开后就不知道谁在跑"
    这个边界（我推荐，写进界面文案），还是那时再谈要不要落一份轻量状态账（要交四处登记税）？
+
+## 八、落地时补的账(v0.9.101,只做到 B1)
+
+- **§二.4 那笔"running 从哪来"已经核到确出处**:`Bridge.running_sessions()`(桥内存里
+  `r.busy` 的那几路)→ `_push_sessions` 用 `str(s.path) in running_paths` 给侧栏每条会话
+  打标。**跨进程看不见**,所以稿 §七.4 选的那个边界写成了数据里的 `BOUNDARY_NOTE`,
+  界面顶栏原样显示 —— 不是注释里的一句话。
+- **"有没有人在等"原先问不出来**:`_ask_event` 答完仍是 set 状态,分不出"没问过"和"刚答完"。
+  所以加了 `_ask_open` / `_confirm_open` 两个旗,在 `_wait_event` 里 set、`finally` 里清。
+  把"等你"报成"在跑"是这一屏最坏的错,`test_board_open_card_flag_lives_only_while_waiting` 钉它。
+- **入口是侧栏「📋 看板」开 overlay,没占入口栏第 15 颗**:那颗要动 `RAIL_IDS` 三层针与
+  `scripts/e2e_ui_v0939_p3.py` 那份真点击清单,而看板不是"面板入口"那一族(它是状态)。
+- **两个读侧补充**:`shell.bg_facts()`(原来只有给人看的 `line()`)与 `JobSpec.label`
+  (看板那一行不能写 `mood_weekly_review`)。
+- **B2(跨工作区分组)与 B3(从看板派活)没做**,按稿继续等;归属那一句复用 `mydata.TABLE`
+  的 plan 也没启用 —— B1 第一版没有跨工作区维度。

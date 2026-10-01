@@ -41,6 +41,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # v0.9.40 D2:回合步数上限(漏收 = 配置文件里的数字没人读)
                         "max_steps"),
     "minicode.gui_bridge": ("test_model", "fetch_models",
+                            # v0.9.101 ①R1:审查视图的三个门面(漏 undo_step/undo_all =
+                            # 面板一行行列出来了却点不动;漏 undo_records = get_activity
+                            # 里那份 changes 永远是空的,整段不出现)
+                            "undo_records", "undo_step", "undo_all",
+                            # v0.9.101 ③B1:跨会话看板门面 + 等人答的那两个旗
+                            "get_board", "_board_sessions", "_board_background",
+                            "_board_plan", "_board_jobs", "_ask_open", "_confirm_open",
+                            # v0.9.101 ④L3:侧栏指令层那一行的后端
+                            "_instructions_info",
                             "export_session", "search_sessions",
                             "rate_message", "get_countdowns",
                             "_provider_credentials",
@@ -144,6 +153,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                          "SUBAGENT_PREFIX_SEP", "FAILED_PREFIXES", "ERROR_PREVIEW",
                          "is_failure", "error_preview"),
     # v0.9.37:折叠偏好整模块(漏收 = 点段头直接抛异常,整栏打不开)
+    # v0.9.101 ③B1:跨会话看板。漏 aggregate = 那一屏根本没有后端;
+    # 漏 BOUNDARY_NOTE/scan_note = "在跑"变成了一句没有边界的断言(它在桥内存里,
+    # 跨进程看不见),而这一屏最容易骗人的就是"没读到"被画成"没有任务"。
+    "minicode.board": ("aggregate", "row", "_row", "ROW_LIMIT", "SESSION_SCAN",
+                       "STATES", "BOUNDARY_NOTE"),
     "minicode.monitor": ("read_pref", "write_pref", "pref_path", "SECTIONS",
                          "DEFAULTS", "PREF_FILE", "_clean_folded"),
     # v0.9.37:实时耗时表(漏 live_rows = 时间线一行时刻都没有;漏 live_abandon =
@@ -183,6 +197,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 用户配了钩子以为在审计,其实什么都没跑) ----
     "minicode.hooks": ("run_hook", "_render", "HOOK_TIMEOUT"),
     # ---- v0.9.22:安装版可用性(数据目录写探针 + 诊断下发) ----
+    "minicode.app_setup": (
+        # v0.9.100 F1 + v0.9.101 ④L1/L3:两级指令文件。漏 user_agents_prompt_section =
+        # 装好的包里用户写的那份规矩根本不进提示词(源码态一切正常,最典型的一种漂);
+        # 漏 instruction_layers/instructions_line = 侧栏那一行永远空着,"读没读到"又变回扯皮。
+        "build_system_prompt", "agents_prompt_section", "user_agents_prompt_section",
+        "instructions_prompt_section", "instruction_layers", "instructions_line",
+        "project_agents_path", "_read_instruction", "_instruction_body",
+        "INSTRUCTION_GUARD", "USER_AGENTS_NAME", "AGENTS_CHAR_LIMIT", "AGENTS_FILES",
+        "apply_retention"),
     "minicode.paths": ("_is_writable", "_local_state_dir", "diagnostics",
                        "STATE_BACKEND"),
     # ---- v0.9.22:托盘 + 关窗确认(整套新模块,漏收 = X 又变成直接退出) ----
@@ -289,7 +312,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.gpa": ("gpa_calc",),
     "minicode.tools.crawl": ("web_search", "_resolve_redirect"),
     # ---- v0.9.15:上下文面板 + py_script ----
-    "minicode.tools.shell": ("py_script", "_py_runtime_command",
+    # v0.9.101 ③B1:bg_facts = 看板「后台命令」那几行的真源(漏收 = 那一栏永远空,
+    # 而 bash_status 的人话文本还在,最容易写成"两边各数一遍");
+    # v0.9.101 ②V1:note_verify_run 的调用点在这里(漏收 = 验收账本永远空,
+    # 带判据的步骤从此标不上 done)。
+    "minicode.tools.shell": ("bg_facts", "py_script", "_py_runtime_command",
     # v0.9.84:后台命令(漏收 = `bash background=true` 在装好的包里静默变回同步等,
     # 长任务照样 300 秒被砍,而工具描述还在教模型用后台)
     "bash_status", "bash_kill", "_BgJob", "_bg_start", "_bg_kill_tree",
@@ -339,7 +366,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "roll_repeats", "REPEAT_WEEKLY"),
     # ---- v0.9.42:定时任务底座(纯函数 + 账本);v0.9.56 A2 起被 proactive 引用,
     #      必须进包 —— 漏收 = import proactive 直接炸,整个看门狗起不来 ----
-    "minicode.jobs": ("JobSpec", "due", "due_jobs", "load_state", "last_run",
+    # v0.9.101 ③B1:JobSpec 多了 `label`(看板那一行给人看的名);漏收 = 装好的包里
+    # 看板只能列出 mood_weekly_review 这种内部 id。
+    "minicode.jobs": ("JobSpec", "label", "due", "due_jobs", "load_state", "last_run",
                       "runs_of", "mark_run", "log_outcome", "STATE_FILE",
                       # v0.9.79:定时任务可观测(漏收 = 装好的包里「这周任务
                       # 跑没跑、为什么没跑」永远答不上来)
@@ -469,7 +498,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        "_note_project_allow",
                        # v0.9.78:成本闸门(漏收 = config 里的上限在包里没人读,
                        # 跑飞了还是只能等时间限)
-                       "TOKEN_LIMIT_NOTE", "session_token_limit"),
+                       "TOKEN_LIMIT_NOTE", "session_token_limit",
+                       # v0.9.101 ①R1:改动审查清单与逐文件回退(漏 undo_records =
+                       # 面板那一整段没了;漏 _mark_after_mutation = 漂移永远报不出来,
+                       # 面板就敢把"被命令改过的那一处"也当成还能退)
+                       "undo", "undo_all", "undo_records", "CHANGE_VIEW_LIMIT",
+                       "_mark_after_mutation", "_drifted", "_apply_undo",
+                       "_change_display", "_undo_extra_tail"),
     "minicode.subagents": (
         # v0.9.98:并行写的文件占用闸(漏收 = 装好的包里两路同写一个文件
         # 退回"后写覆盖先写",用户还看不见任何报错)
@@ -597,7 +632,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "in_progress", "running",
                           # v0.9.81:计划与子代理对上号(漏收 = task 的 step 参数
                           # 在装好的包里静默失效,计划面板看不出哪一步正由谁在做)
-                          "dispatch_start", "dispatch_end", "_as_step_no"),
+                          "dispatch_start", "dispatch_end", "_as_step_no",
+                          # v0.9.101 ②V1:步骤的验收判据(漏 verify_of = 老文件照样解析
+                          # 但判据永远读不出来,硬闸就成了假闸;漏 note_verify_run =
+                          # bash 跑完没人记账,带判据的步骤从此永远标不上 done)
+                          "VERIFY_RE", "verify_of", "note_verify_run",
+                          "find_verify_run", "_with_verify", "_verify_gate",
+                          "VERIFY_RUNS_LIMIT"),
 }
 
 # ---- 包内前端(v0.9.94 起):界面那半边不在 PYZ 里,它由 packaging/gcode.spec 的
@@ -619,6 +660,15 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     "askOverlay", "renderAsk", "ask_reply", "ask-trace",
     # v0.9.97:长期记忆面板(界面上从此能记一条,不只 CLI 的 /remember)
     "memoryOverlay", "rememberIt", "memCountLine",
+    # v0.9.101 ①R1:改动审查那一段(漏 buildChanges = 监控栏里没有「本轮改动」;
+    # 漏 undo_step/undo_all = 行列出来了但点不动,回退仍然是"一次一步全凭猜")
+    "buildChanges", "undoChange", "undo_step", "undo_all", "本轮改动",
+    # v0.9.101 ④L3:指令层那一行(漏 renderInstrLine = 后端算了没人画;漏
+    # instrLine = 前端有函数但没有那个 DOM,首屏直接抛)
+    "renderInstrLine", "instrLine",
+    # v0.9.101 ③B1:跨会话看板那一屏(漏 loadBoard = 按钮点了没数据;漏 boardOverlay
+    # = JS 有函数但没有 DOM,首屏绑定直接抛;漏 btnBoard = 入口没了)
+    "loadBoard", "boardOverlay", "btnBoard", "boardRow", "boardAct",
 )
 
 

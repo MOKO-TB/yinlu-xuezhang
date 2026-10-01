@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 
 from minicode.tools.base import ToolContext
@@ -18,6 +19,13 @@ STEP_RE = re.compile(r"^- \[([ /xX!])\] (\d+)\. (.+)$")
 DEP_RE = re.compile(r"^- 依赖:\s*(.+)$")
 NOTE_RE = re.compile(r"^- 备注:\s*(.+)$")
 MAX_STEPS = 8
+
+# 步骤的验收判据(V1):`verify:` 跟着标题走,写在 detail 尾巴上 —— 不新增文件、
+# 不给 plan.md 加第二套方言,老计划文件里没有它就当没这回事(解析零变化)。
+VERIFY_RE = re.compile(r"(?:^|[\s,;，；])verify\s*[:：]\s*(.+)$", re.IGNORECASE)
+# 跑过哪些命令这本账只在内存里,且只留最近这么多条:验收输出不进留档(与 B0/B1、
+# 后台状态同一取舍),而"最近跑过没跑过"这个问题本身只需要尾巴。
+VERIFY_RUNS_LIMIT = 30
 
 # [ ] 待办 · [/] 进行中 · [x] 完成 · [!] 失败(上游失败后由主代理显式标,用来阻断下游)
 # "/" 这个记号不是随手挑的:它是单字符,parse_plan 那套正则照样吃得下;
@@ -32,6 +40,57 @@ VALID_STATUS = set(STATUS_TO_MARK)
 
 def plan_path(ctx: ToolContext) -> Path:
     return ctx.workspace / PLAN_REL
+
+
+# ------------------------------------------------- 验收命令的执行账(V1 的硬闸依据)
+
+
+def verify_of(text: str) -> str:
+    """从步骤文本里取出 `verify:` 后面那条命令;没有就返回空串(留空是正常态)。"""
+    m = VERIFY_RE.search(text or "")
+    return " ".join((m.group(1) or "").split()) if m else ""
+
+
+def note_verify_run(ctx: ToolContext, command: str, code: int | None,
+                    output: str = "") -> None:
+    """把一次**跑完了的** bash 命令记进这本内存账 —— 它是"这一步真被验证过"的唯一凭据。
+
+    为什么放在 bash 而不是 plan 里:验收命令跑的就是用户自己也能敲的那条路,
+    权限门、沙箱、超时全都原样生效(V1 不给验收开任何捷径)。后台任务与超时的
+    那一次不进账 —— 它们没有"退出码是几"这个结论,进了账就等于给"跑过了"开门。
+    不落盘:输出留在会话里已经是历史,再抄一份进 KV 前缀只会白占上下文。
+    """
+    cmd = " ".join(str(command or "").split())
+    if not cmd:
+        return
+    runs = getattr(ctx, "verify_runs", None)
+    if runs is None:
+        runs = ctx.verify_runs = []      # ToolContext 是普通 dataclass,子代理那份是派生物
+    runs.append({"command": cmd, "code": code,
+                 "at": time.strftime("%H:%M:%S"),
+                 "tail": " ".join(str(output or "").split())[-300:]})
+    del runs[:-VERIFY_RUNS_LIMIT]
+
+
+def find_verify_run(ctx: ToolContext, command: str) -> dict | None:
+    """这条验收命令最近一次跑完的记录。按归一化后的整条命令严格相等 ——
+    模型跑的是 `pytest -q x --tb=short` 而判据写的是 `pytest -q x`,那不算验过。"""
+    want = " ".join(str(command or "").split())
+    for rec in reversed(getattr(ctx, "verify_runs", None) or []):
+        if rec["command"] == want:
+            return rec
+    return None
+
+
+def _with_verify(detail: str, verify: str) -> str:
+    """把独立的 `verify` 字段拼进 detail 尾巴 —— plan.md 只有"标题 —— detail"一种方言。
+
+    detail 里已经写了 verify 就以它为准(同一句话不写两遍),不静默覆盖也不重复。
+    """
+    want = " ".join(str(verify or "").split())
+    if not want or verify_of(detail):
+        return detail
+    return (detail + " " if detail else "") + f"verify: {want}"
 
 
 def render_plan(goal: str, steps: list[dict]) -> str:
@@ -60,9 +119,9 @@ def render_plan(goal: str, steps: list[dict]) -> str:
 
 
 def parse_plan(text: str) -> dict:
-    """解析计划文件 → {goal, steps: [{n, title, detail, status, done, depends_on, note}]}。
+    """解析计划文件 → {goal, steps: [{n, title, detail, status, done, depends_on, note, verify}]}。
 
-    老版本的计划文件(没有依赖行/备注行)照常解析,depends_on 为空。
+    老版本的计划文件(没有依赖行/备注行/验收判据)照常解析,depends_on 与 verify 为空。
     """
     goal = ""
     steps: list[dict] = []
@@ -79,7 +138,10 @@ def parse_plan(text: str) -> dict:
             status = MARK_TO_STATUS.get(mark, "pending")
             steps.append({"n": num, "title": title.strip(), "detail": detail.strip(),
                           "status": status, "done": status == "done",
-                          "depends_on": [], "note": ""})
+                          "depends_on": [], "note": "",
+                          # 判据可能写在标题那截(模型直接把它当步骤文字打出来),
+                          # 所以整行都搜,不只看 detail。
+                          "verify": verify_of(rest)})
             continue
         if not steps:                 # 缩进行必须紧跟某个步骤,否则忽略
             continue
@@ -183,6 +245,11 @@ def scheduling_view(plan: dict, limit: int = 3) -> str:
                          "这一步会标成进行中并在备注里记下派了哪几路)。")
     else:
         lines.append("* 可执行(依赖已满足): 无")
+    with_v = [s for s in steps if s.get("verify") and s["status"] != "done"]
+    if with_v:
+        lines.append("* 带验收判据(标 done 前必须用 bash 原样跑一遍,整条命令一字不差): "
+                     + ", ".join(f"{s['n']}.`{s['verify']}`" for s in with_v[:limit])
+                     + ("" if len(with_v) <= limit else f" …等 {len(with_v)} 步"))
     if blocked:
         lines.append("* 被卡住(上游失败): "
                      + ", ".join(f"{s['n']}. {s['title']}" for s in blocked[:limit]))
@@ -200,7 +267,7 @@ def plan_state(workspace) -> dict:
     """
     p = Path(workspace) / PLAN_REL
     empty = {"has_plan": False, "path": PLAN_REL.as_posix(), "goal": "",
-             "steps": [], "total": 0, "done": 0,
+             "steps": [], "total": 0, "done": 0, "verify": [],
              "ready": [], "blocked": [], "failed": [], "running": []}
     if not p.exists():
         return empty
@@ -210,10 +277,13 @@ def plan_state(workspace) -> dict:
     rdy, blk = set(ready), set(blocked)
     steps = [{"n": s["n"], "title": s["title"], "detail": s["detail"],
               "status": s["status"], "depends_on": list(s["depends_on"]),
-              "note": s["note"], "ready": s["n"] in rdy, "blocked": s["n"] in blk}
+              "note": s["note"], "verify": s.get("verify", ""),
+              "ready": s["n"] in rdy, "blocked": s["n"] in blk}
              for s in plan["steps"]]
     return {"has_plan": True, "path": PLAN_REL.as_posix(), "goal": plan["goal"],
             "steps": steps, "total": len(steps),
+            "verify": [s["n"] for s in plan["steps"]
+                       if s.get("verify") and s["status"] != "done"],
             "done": sum(1 for s in plan["steps"] if s["status"] == "done"),
             "ready": ready, "blocked": blocked,
             "running": [s["n"] for s in plan["steps"]
@@ -374,9 +444,11 @@ def _plan_write(ctx: ToolContext, goal: str, steps: list) -> str:
                 return f"错误: 第 {i} 步的 depends_on 只接受步骤编号,收到 {d!r}。"
             deps.append(int(d))
         clean.append({"n": i, "title": str(s["title"]).strip(),
-                      "detail": str(s.get("detail") or "").strip(),
+                      "detail": _with_verify(str(s.get("detail") or "").strip(),
+                                             str(s.get("verify") or "").strip()),
                       "status": "pending", "done": False,
                       "depends_on": sorted(set(deps)), "note": ""})
+        clean[-1]["verify"] = verify_of(clean[-1]["detail"])
 
     err = validate_deps(clean)
     if err:
@@ -386,9 +458,17 @@ def _plan_write(ctx: ToolContext, goal: str, steps: list) -> str:
     listed = []
     for s in clean:
         dep = f" ← 依赖 {', '.join(str(d) for d in s['depends_on'])}" if s["depends_on"] else ""
-        listed.append(f"  {s['n']}. {s['title']}{dep}")
+        v = f" · 验收 {s['verify']}" if s.get("verify") else ""
+        listed.append(f"  {s['n']}. {s['title']}{dep}{v}")
+    with_verify = [s for s in clean if s.get("verify")]
+    gate = (f"\n其中 {len(with_verify)} 步带验收命令:标 done 之前必须用 bash 把它"
+            "原样跑一遍(整条命令一字不差),没跑过的这一条我不收。"
+            if with_verify else
+            "\n能给判据的步骤请在这一步的 detail 里补一条 `verify: <命令>`"
+            "(跑测试/跑构建/`--check` 这类);填不出就留空,别编一条空跑的命令。")
     return (f"计划已写入 {PLAN_REL.as_posix()}(共 {len(clean)} 步):\n"
             + "\n".join(listed)
+            + gate
             + scheduling_view({"steps": clean})
             + "\n请把计划展示给用户并等待确认;确认后逐步执行,"
               "每完成一步用 action=update 标记 done。")
@@ -402,6 +482,29 @@ def _plan_read(ctx: ToolContext) -> str:
     return text + scheduling_view(parse_plan(text))
 
 
+def _verify_gate(ctx: ToolContext, target: dict) -> str:
+    """带判据的步骤想过 done 只有一条路:那一轮真跑过那条命令,且退出码是 0。
+
+    通过时把"何时跑的"写进备注 —— 结论只有这一处真跑过,三个视图都读同一份状态。
+    """
+    verify = target.get("verify") or ""
+    if not verify:
+        return ""
+    n = target["n"]
+    run = find_verify_run(ctx, verify)
+    if run is None:
+        return (f"错误:第 {n} 步自带验收命令 `{verify}`,而这一轮没有它跑完的记录。"
+                "先用 bash 原样跑一遍这条命令(整条一字不差),跑过之后我再收 done;"
+                "确实不打算跑,就标 failed 写清原因,或改计划把这条判据去掉 —— "
+                "别在没有凭据的情况下把它标成完成。")
+    if run["code"] != 0:
+        return (f"错误:第 {n} 步的验收没通过(退出码 {run['code']},跑于 {run['at']});"
+                f"输出尾部:{run['tail'] or '(无输出)'}。我没有把它标成完成。"
+                "修好再原样跑一次,或标 failed 说清原因 —— 悄悄改回 pending 也算没做。")
+    target["note"] = f"验收已过({run['at']},退出码 0):{verify}"
+    return ""
+
+
 def _plan_update(ctx: ToolContext, step: int, status: str, note: str = "") -> str:
     plan = _load_plan(ctx)
     if plan is None:
@@ -412,6 +515,13 @@ def _plan_update(ctx: ToolContext, step: int, status: str, note: str = "") -> st
                 f"可用步骤: {', '.join(str(s['n']) for s in plan['steps'])}")
     if status not in VALID_STATUS:
         return f"错误: status 只支持 {'/'.join(sorted(VALID_STATUS))}。"
+    # V1 的硬闸:这一步自带判据,而这一轮没有它跑完的记录 → 拒绝标 done。
+    # 这是"标 done 的是模型自己的一句话"那条链上唯一一处外部凭据,所以宁可拒,
+    # 也不接受"看起来差不多"——跑不过、跑崩、超时都算没过。
+    if status == "done":
+        gate = _verify_gate(ctx, target)
+        if gate:
+            return gate
     target["status"] = status
     target["done"] = status == "done"
     if note.strip():

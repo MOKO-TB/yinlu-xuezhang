@@ -249,6 +249,15 @@ class PublicFacade:
             "search_sessions": self._search_sessions,
             "get_asset": self._get_asset,
             "undo": self._undo,
+            # 逐文件回退写的是**服务器工作区**里的文件,对访客既危险又看不见后果:
+            # 明确拒绝(与上面 `_undo` 那句"网页版没有需要撤销的文件改动"同一口径)。
+            "undo_step": lambda **k: _refuse("网页版不开放逐文件回退(退的是服务器本机的工作区文件)"),
+            "undo_all": lambda **k: _refuse("网页版不开放全部回退(退的是服务器本机的工作区文件)"),
+            "undo_records": lambda **k: _refuse("网页版不开放改动审查(列的是服务器本机的工作区文件)"),
+            # 跨会话看板列的是**这台机器上有几个会话在跑、都叫什么**(主人的工作现场),
+            # 加上服务器工作区的计划与定时任务:对访客既不是他的也不该看见。明确表态,
+            # 不靠"没写进白名单"那条兜底提示。
+            "get_board": lambda **k: _refuse("网页版不开放跨会话看板(列的是服务器本机的工作现场)"),
             # 以下方法前端会调,但对外模式不开放:返回可读的拒绝原因而不是静默失败
             "pick_attachments": lambda **k: _refuse("网页版暂不支持上传附件"),
             "set_sandbox": lambda **k: _refuse("网页版不开放沙箱设置"),
@@ -330,6 +339,9 @@ class PublicFacade:
         info["vision"] = False                       # 对外不开放图片理解
         info["memory_count"] = 0                     # 不暴露所有者记忆条数
         info["memory_user_count"] = 0
+        # 指令层那一行报的是**主人本机**写了几行规矩(用户级那份在服务器上):
+        # 访客的提示词走 build_public_system_prompt,这一行对他既不是他的也没意义。
+        info["instructions"] = {"ok": True, "line": "", "layers": []}
         info["mcp_servers"] = []
         info["permission_mode"] = "confirm"
         active = info.get("active_provider")

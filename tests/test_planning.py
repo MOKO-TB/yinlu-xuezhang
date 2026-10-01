@@ -512,3 +512,112 @@ def test_scheduling_view_teaches_the_step_param(tmp_path):
     assert "task 带上 step=编号" in view
     assert "这一步会标成进行中" in view
     assert "step=编号" in dispatch_text(plan_state(tmp_path))
+
+
+# ---------------------------------------------------- 步骤的验收判据(v0.9.101 ②V1)
+
+def _vctx(tmp_path):
+    ctx = _ctx(tmp_path)
+    ctx.verify_runs = []
+    return ctx
+
+
+def test_verify_parsed_from_step_line(tmp_path):
+    """`verify:` 跟着标题走,不新增文件也不给 plan.md 加第二套方言。"""
+    ctx = _ctx(tmp_path)
+    r = plan(ctx, "write", goal="修登录", steps=[
+        {"title": "修好登录跳转", "verify": "pytest -q tests/test_login.py"},
+        {"title": "顺手清理", "detail": "不改行为"},
+    ])
+    assert "验收 pytest -q tests/test_login.py" in r      # 写回来的时候就点明哪几步带判据
+    text = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    assert "verify: pytest -q tests/test_login.py" in text
+    parsed = parse_plan(text)
+    assert parsed["steps"][0]["verify"] == "pytest -q tests/test_login.py"
+    assert parsed["steps"][1]["verify"] == ""             # 留空是正常态,不硬凑
+
+
+def test_done_rejected_without_run_record(tmp_path):
+    ctx = _vctx(tmp_path)
+    plan(ctx, "write", goal="修登录",
+         steps=[{"title": "A"}, {"title": "修跳转", "verify": "pytest -q t.py"}])
+    r = plan(ctx, "update", step=2, status="done")
+    assert r.startswith("错误") and "没有它跑完的记录" in r
+    assert "pytest -q t.py" in r                          # 要说清跑哪一条
+    state = plan_state(tmp_path)
+    assert state["steps"][1]["status"] == "pending"       # 没退成就一条都不能变
+    assert state["verify"] == [2]
+
+
+def test_done_accepted_after_real_run(tmp_path):
+    ctx = _vctx(tmp_path)
+    plan(ctx, "write", goal="修登录",
+         steps=[{"title": "A"}, {"title": "修跳转", "verify": "pytest -q t.py"}])
+    from minicode.planning import note_verify_run
+    note_verify_run(ctx, "pytest -q t.py", 0, "1 passed")
+    r = plan(ctx, "update", step=2, status="done")
+    assert "已标记第 2 步为 done" in r
+    note = plan_state(tmp_path)["steps"][1]["note"]
+    assert "验收已过" in note and "退出码 0" in note
+
+
+def test_failed_run_blocks_done_with_code_and_tail(tmp_path):
+    ctx = _vctx(tmp_path)
+    plan(ctx, "write", goal="修登录",
+         steps=[{"title": "A"}, {"title": "修跳转", "verify": "pytest -q t.py"}])
+    from minicode.planning import note_verify_run
+    note_verify_run(ctx, "pytest -q t.py", 1, "2 failed in 3.1s")
+    r = plan(ctx, "update", step=2, status="done")
+    assert "验收没通过" in r and "退出码 1" in r and "2 failed" in r
+    assert plan_state(tmp_path)["steps"][1]["status"] == "pending"
+
+
+def test_extra_args_do_not_count_as_verified(tmp_path):
+    """严格相等:多带了 --tb=short 不算验过 —— 否则这条硬闸只是个摆设。"""
+    ctx = _vctx(tmp_path)
+    plan(ctx, "write", goal="修登录",
+         steps=[{"title": "A"}, {"title": "修跳转", "verify": "pytest -q t.py"}])
+    from minicode.planning import note_verify_run
+    note_verify_run(ctx, "pytest -q t.py --tb=short", 0, "1 passed")
+    assert "没有它跑完的记录" in plan(ctx, "update", step=2, status="done")
+
+
+def test_verify_ledger_is_memory_only(tmp_path):
+    """这本账只在内存:落盘就要交四处登记税,还会造出第二份真相(设计稿 §五)。"""
+    ctx = _vctx(tmp_path)
+    from minicode.planning import note_verify_run
+    note_verify_run(ctx, "pytest -q t.py", 0, "1 passed")
+    assert ctx.verify_runs[-1]["code"] == 0
+    assert not (tmp_path / "plans").exists() or [
+        p.name for p in (tmp_path / "plans").glob("*")] == []
+
+
+def test_ledger_capped(tmp_path):
+    ctx = _vctx(tmp_path)
+    from minicode.planning import VERIFY_RUNS_LIMIT, note_verify_run
+    for i in range(VERIFY_RUNS_LIMIT + 10):
+        note_verify_run(ctx, f"echo {i}", 0)
+    assert len(ctx.verify_runs) == VERIFY_RUNS_LIMIT
+    assert ctx.verify_runs[0]["command"] == f"echo {10}"   # 丢的是最老的
+
+
+def test_old_plan_without_verify_parses_unchanged(tmp_path):
+    old = ("# 计划:老计划\n\n- [ ] 1. 第一件事 —— 说明\n"
+           "  - 依赖: 无\n\n<!-- 由 plan 工具维护 -->\n")
+    parsed = parse_plan(old)
+    assert parsed["steps"][0]["verify"] == ""
+    assert parsed["steps"][0]["detail"] == "说明"
+    ctx = _vctx(tmp_path)
+    (tmp_path / "plans").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "plans" / "plan.md").write_text(old, encoding="utf-8")
+    assert "已标记第 1 步为 done" in plan(ctx, "update", step=1, status="done")
+
+
+def test_scheduling_view_lists_verify_steps(tmp_path):
+    ctx = _ctx(tmp_path)
+    plan(ctx, "write", goal="修登录",
+         steps=[{"title": "A", "verify": "pytest -q a.py"},
+                {"title": "B", "depends_on": [1]},
+                {"title": "C"}])
+    out = plan(ctx, "read")
+    assert "带验收判据" in out and "pytest -q a.py" in out

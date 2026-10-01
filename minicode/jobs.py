@@ -41,6 +41,9 @@ class JobSpec:
     minute: int = 0
     every: int = 1                  # every_days 的天数 / interval 的分钟数
     on_boot_catchup: bool = True    # 开机时补不补今天漏掉的那一次
+    # 给人看的名(跨会话看板那一行用它):没有就退回 id。加字段是补账,
+    # 不是改行为 —— 老代码一律按 id 记账与调度,一块表都不动。
+    label: str = ""
 
     def __post_init__(self) -> None:
         if self.cadence not in CADENCES:

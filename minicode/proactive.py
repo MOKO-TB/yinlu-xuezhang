@@ -822,13 +822,16 @@ def _rotate_backups(dest_dir: Path) -> str:
 
 
 JOB_SPECS: "list[_jobs.JobSpec]" = [
-    _jobs.JobSpec("mood_weekly_review", cadence="weekly", weekday=6, hour=20),
+    _jobs.JobSpec("mood_weekly_review", cadence="weekly", weekday=6, hour=20,
+                  label="周复盘"),
     # v0.9.98 修一处 off-by-one:文档口径一直是「周五 18:00」,这里却登记
     # weekday=5 —— Python weekday 5 是**周六**,缺口周报从 v0.9.57 起一直
     # 晚一天跑(测试还把错值钉住了)。周五是 4。
-    _jobs.JobSpec("kb_gap_digest", cadence="weekly", weekday=4, hour=18),
+    _jobs.JobSpec("kb_gap_digest", cadence="weekly", weekday=4, hour=18,
+                  label="知识库缺口周报"),
     # 周期自动备份(v0.9.98,§6 #17C 剩):周六上午 10 点,与两条周报错开。
-    _jobs.JobSpec("data_backup_weekly", cadence="weekly", weekday=5, hour=10),
+    _jobs.JobSpec("data_backup_weekly", cadence="weekly", weekday=5, hour=10,
+                  label="每周自动备份"),
 ]
 JOB_HANDLERS: "dict[str, object]" = {
     "mood_weekly_review": _job_weekly_review,
