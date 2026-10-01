@@ -408,30 +408,6 @@ try {
   .md-opt{ display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--text-2);
            margin-right:auto; }
 
-  /* ---------------- 一键体检面板(v0.9.89) ----------------
-     徽章上那两个字由后端给(minicode.health.BADGE),这里只上色 —— 界面不自己判"算不算故障",
-     否则一份判定会变成两份。空的那一组整组不渲染(前端负责),不摆一屏"没查成"。 */
-  .hd-row{ display:flex; align-items:flex-start; gap:9px; padding:7px 10px; margin-bottom:5px;
-           border-radius:9px; background:var(--glass-lite); border:1px solid var(--line-soft); }
-  .hd-nm{ flex:1; min-width:0; font-size:12.5px; color:var(--text-1); }
-  .hd-nm em{ display:block; font-style:normal; font-size:10.5px; color:var(--text-3);
-             margin-top:2px; line-height:1.55; white-space:pre-wrap; word-break:break-all; }
-  .hd-fix{ font-size:10.5px; color:var(--text-2); line-height:1.6; margin-top:4px;
-           padding-left:8px; border-left:2px solid var(--line-soft); }
-  .hd-badge{ flex:none; font-size:10px; line-height:1.5; padding:1px 7px; white-space:nowrap;
-             border-radius:var(--r-full); color:var(--text-3); background:transparent;
-             border:1px solid var(--line-soft); }
-  .hd-row.ok .hd-badge{ color:var(--success); border-color:var(--success); }
-  .hd-row.warn .hd-badge{ color:var(--warning); border-color:var(--warning); background:var(--warning-bg); }
-  .hd-row.bad .hd-badge{ color:var(--danger); border-color:var(--danger); background:var(--danger-bg); }
-  .hd-act{ flex:none; font-size:10.5px; color:var(--primary-text); background:var(--primary-light);
-           border:1px solid var(--line-soft); border-radius:8px; padding:3px 8px; cursor:pointer; }
-  .hd-verdict{ font-size:12px; line-height:1.7; padding:9px 12px; margin-bottom:10px;
-               border-radius:11px; background:var(--glass-strong); border:1px solid var(--line-soft); }
-  .hd-verdict.warn{ color:var(--warning); }
-  .hd-verdict.bad{ color:var(--danger); }
-  .hd-wait{ font-size:11.5px; color:var(--warning); margin-bottom:8px; line-height:1.6; }
-
   /* ---------------- 情绪日记面板(v0.9.32) ----------------
      这个面板刻意没有:连续天数、火焰图标、「你已经 N 天没记了」。
      记不记是可选的 —— 一旦它变成不能断的东西,记录本身就成了新的压力源。 */
@@ -1782,7 +1758,6 @@ try {
     <button id="btnMemory" title="整理长期记忆">🧠<span class="cap">记忆</span></button>
     <button id="btnUsage" title="查看每日 token 消耗">📊<span class="cap">用量</span></button>
     <button id="btnMyData" title="我的数据:都存在哪台目录、都有哪些文件,以及导出/导入迁移包(密钥与教务登录态永不外发)">💾<span class="cap">数据</span></button>
-    <button id="btnHealth" title="一键体检:数据目录能不能写、模型配没配、权限白名单生不生效、馆藏库/MCP 连没连上,逐项给真结论。「深检」会去问网络与外部进程(源码运行时还要跑四道 check 闸,要等一分多钟)">🩺<span class="cap">体检</span></button>
     <button id="btnSandbox" style="display:none" title="沙箱状态">🛡<span class="cap">沙箱</span></button>
     <div class="sep"></div>
     <button id="btnExport" title="把当前会话导出成 Markdown(方便贴进文档或发给同学)">⬇<span class="cap">导出</span></button>
@@ -2104,25 +2079,6 @@ try {
               title="选一个迁移包:先看逐条预览(会写哪些、本机更新所以保留哪些),你点头才落盘;替换前的原件先备份进 migrate-backup">导入迁移包</button>
       <button class="b-no" id="btnMdOpen" title="在资源管理器里打开数据目录">打开数据目录</button>
       <button class="b-no" id="btnMdClose">关闭</button>
-    </div>
-  </div>
-</div>
-
-<!-- v0.9.89「体检」:一屏看完本机各项的**真状态**。面板只读、一个字都不改:
-     每一行的判定来自它自己那个功能现成的自检(见 minicode/health.py),这里不重算第二遍。
-     修复动作只有两条真路 —— 打开本来就有的模型管理对话框,或把一句话填进输入框由你自己发出去。
-     刻意没有「一键批准白名单」那种按钮:项目白名单的批准要过确认框那一次点头,面板开捷径等于绕过它。 -->
-<div class="overlay" id="healthOverlay">
-  <div class="dialog" style="width:620px">
-    <div class="sc-head">
-      <h3>🩺 体检</h3>
-      <span class="sc-week" id="hdTotals"></span>
-    </div>
-    <div class="sc-body" id="hdBody"></div>
-    <div class="btns">
-      <button class="b-yes" id="btnHdDeep"
-              title="只在本机看的那几项之外,再多问三样:模型服务连不连得上、浏览器能不能用、开机自启指向对不对。源码运行时还会真跑四道 check 闸(文档对账 / 前端语法 / 馆藏库三层 / 包内版本),全跑一分多钟">联网深检</button>
-      <button class="b-no" id="btnHdClose">关闭</button>
     </div>
   </div>
 </div>
@@ -5328,124 +5284,6 @@ $("myDataOverlay").addEventListener("click", (e) => {
   if (e.target.id === "myDataOverlay") closeMyData();
 });
 
-/* ---------------- 一键体检面板(v0.9.89) ----------------
-   这一屏刻意不自己判"算不算故障":状态、徽章上那两个字、结论里那几个数,全部来自
-   minicode.health 本轮真读到的返回值。界面只上色(按 status)与排版(按 group)。
-   两个动作也只做得本来就做得到事:打开既有的模型管理对话框;把一句话**填进输入框**
-   (不发)。「深检」要等网络与外部进程,所以它是按钮而不是默认 —— 默认那一档毫秒级就有。 */
-let hdData = null;
-let hdErr = "";
-let hdBusy = false;
-
-const hdApi = () => (window.pywebview && pywebview.api && pywebview.api.get_health)
-  ? pywebview.api : null;
-
-function hdFind(key) {
-  for (const g of (hdData && hdData.groups) || []) {
-    for (const r of g.rows || []) { if (r.key === key) return r; }
-  }
-  return null;
-}
-
-function hdRow(row) {
-  // 动作按钮只带一个 key(文本从 hdData 里取):脚本回传的尾部输出会进 data-* 属性,
-  // 而 esc() 不转义双引号 —— 属性里塞外来文本是给自己挖坑。
-  const act = row.action
-    ? `<button class="hd-act" data-k="${esc(row.key)}">${esc(row.action.label)}</button>` : "";
-  return `<div class="hd-row ${esc(row.status)}">
-      <div class="hd-nm">${esc(row.label)}`
-      + (row.detail ? `<em>${esc(row.detail)}</em>` : "")
-      + (row.fix ? `<div class="hd-fix">${esc(row.fix)}</div>` : "")
-      + `</div><span class="hd-badge">${esc(row.badge)}</span>${act}
-    </div>`;
-}
-
-function renderHealth() {
-  const body = $("hdBody");
-  let html = "";
-  if (hdBusy) {
-    html += `<div class="hd-wait">正在深检:要问模型服务与浏览器`
-      + ((hdData && hdData.repo) ? ",还要真跑源码仓库那四道闸" : "")
-      + " —— 下面先留着刚才那一份。</div>";
-  }
-  if (!hdData) {
-    body.innerHTML = html + `<div class="sc-empty">${esc(hdErr || "还没读到体检结果")}</div>`;
-    $("hdTotals").textContent = "";
-    return;
-  }
-  const s = hdData.summary || {};
-  const cls = s.bad || s.unknown ? " bad" : (s.warn ? " warn" : "");
-  html += `<div class="hd-verdict${cls}">${esc(hdData.verdict || "")}</div>`;
-  (hdData.groups || []).forEach(g => {
-    if (!g.rows || !g.rows.length) return;   // 空组整组不渲染:后端这轮没给的行不摆占位
-    html += `<div class="md-cat">${g.icon} ${esc(g.label)}</div>`;
-    if (g.key === "deep") {
-      html += '<div class="md-hint">这几行要问网络或外部进程,只在点「深检」时才有值。</div>';
-    } else if (g.key === "repo") {
-      html += '<div class="md-hint">这四道只对着源码仓库;判定仍在 scripts/ 那四支脚本自己'
-        + '手里,这里带回的是它们的退出码与尾部输出。</div>';
-    }
-    html += g.rows.map(hdRow).join("");
-  });
-  body.innerHTML = html;
-  $("hdTotals").textContent = `${hdData.total} 项 · 统计于 ${hdData.checked_at}`;
-  $("btnHdDeep").textContent = hdData.deep ? "重新深检一次"
-    : (hdData.repo ? "深检(联网 + 四道闸)" : "联网深检");
-}
-
-function loadHealth(deep) {
-  const api = hdApi();
-  if (!api) { toast("这个功能只在桌面版有"); return; }
-  if (deep) { hdBusy = true; renderHealth(); $("btnHdDeep").disabled = true; }
-  api.get_health(!!deep).then(r => {
-    hdBusy = false;
-    $("btnHdDeep").disabled = false;
-    if (!r || !r.ok) {
-      hdErr = (r && r.verdict) || "体检没算出来(学长那边没接上)";
-      hdData = null;
-    } else {
-      hdErr = "";
-      hdData = r;
-    }
-    renderHealth();
-    $("healthOverlay").classList.add("show");
-  }).catch(() => {
-    hdBusy = false;
-    $("btnHdDeep").disabled = false;
-    hdErr = "体检没算出来:桥调用失败";
-    hdData = null;
-    renderHealth();
-    $("healthOverlay").classList.add("show");
-  });
-}
-
-function closeHealth() { $("healthOverlay").classList.remove("show"); }
-
-$("btnHealth").addEventListener("click", () => loadHealth(false));
-$("btnHdDeep").addEventListener("click", () => loadHealth(true));
-$("btnHdClose").addEventListener("click", closeHealth);
-$("healthOverlay").addEventListener("click", (e) => {
-  if (e.target.id === "healthOverlay") closeHealth();
-});
-$("hdBody").addEventListener("click", (e) => {
-  const btn = e.target.closest(".hd-act");
-  if (!btn) return;
-  const row = hdFind(btn.dataset.k);
-  const act = row && row.action;
-  if (!act) return;
-  if (act.kind === "models") { closeHealth(); openProvDlg(); return; }
-  if (act.kind !== "ask") return;   // 只认后端真给的那两种,不认识的一种都不做
-  // 「问学长」只填输入框,绝不代你发:白名单批准那类动作要过确认框,得由人按回车
-  const ta = $("input");
-  ta.value = act.text || "";
-  ta.style.height = "auto";
-  ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
-  closeHealth();
-  ta.focus();
-  ta.selectionStart = ta.selectionEnd = ta.value.length;
-  toast("这句话只填进了输入框,还没发 —— 按回车才发出去(该问的会弹确认框)");
-});
-
 /* ---------------- 情绪日记面板(v0.9.32) ----------------
    两个记录入口:这一格,或者直接在对话里说一句(模型用 mood 工具记)。
    面板只回读你自己记的内容 + 导出/删除,不做连续天数、不做"该记了"的催。 */
@@ -7124,7 +6962,6 @@ const SLASH_ACTIONS = [
   { label: "长期记忆", desc: "整理与查看", pick: () => $("btnMemory").click() },
   { label: "用量统计", desc: "每天花了多少 token", pick: () => $("btnUsage").click() },
   { label: "我的数据", desc: "存哪了 / 迁移包", pick: () => $("btnMyData").click() },
-  { label: "一键体检", desc: "本机各项真状态", pick: () => $("btnHealth").click() },
   { label: "模型管理", desc: "换模型 / 填密钥", pick: () => openProvDlg() },
 ];
 

@@ -99,10 +99,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # v0.9.69:恢复会话的附件标签(漏收 = 切回旧会话时
                             # resumed 载荷永远不带 atts,缩略图一个都不出现)
                             "restore_user_atts",
-                            # v0.9.89:一键体检面板(漏 get_health = 点左栏 🩺 那颗只得到
-                            # "桥调用失败",面板永远打不开;_as_bool 是「深检」那颗的唯一
-                            # 真值来源 —— 漏了它要么每次白等一分多钟、要么永远不跑,两种都不会报错)
-                            "get_health", "_as_bool"),
+                            # v0.9.97:界面上记一条长期记忆(漏收 = 按钮点了没方法)
+                            "remember",
+                            # v0.9.97 原钉的 get_health/_as_bool 随「体检」功能删除
+                            # (v0.9.100),health.report 的针移到 minicode.health 组
+                            ),
     # v0.9.39 p2:标题栏整模块。漏收 = 桥里那句 `from minicode import window_chrome`
     # 在装好的包里 ImportError,而它被前端那个 try/catch 吞掉 → 表现为"改了个寂寞"。
     "minicode.window_chrome": ("apply", "chrome_for", "blend", "colorref",
@@ -173,13 +174,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "import_pick", "import_apply", "forget_preview",
                         "deny_reason", "TABLE", "BACKUP_DIR", "MTIME_TOLERANCE",
                         "FORMAT_VERSION"),
-    # v0.9.89:一键体检整模块(新文件,漏收 = 面板连表都算不出来)。
-    # BADGE / GROUPS 也钉住:前端那行徽章字与分组标题只认后端给的这两份,
-    # 模块要是被改窄了(比如 BADGE 少一个状态),面板会画出一行没有徽章的空格子。
-    "minicode.health": ("report", "BADGE", "GROUPS", "GATE_SCRIPTS", "_verdict",
-                        # 无窗口出口(漏收 = 报障时那条 `python -m minicode.health`
-                        # 根本不存在,维护者只能让同学自己描述"哪儿不对")
-                        "render_text", "main",
+    # v0.9.89:体检模块(**v0.9.100 起只剩 report 这一个消费者** —— 面板/CLI 已删,
+    # 反馈包 export_feedback 靠它取浅检数据;BADGE/GROUPS/render_text/main 随 UI 删)
+    "minicode.health": ("report", "GATE_SCRIPTS", "_verdict",
                         "_check_gates", "_run_gate"),
     "minicode.model_probe": ("list_models", "explain_status", "remember"),
     # ---- v0.9.22:安装版可用性(数据目录写探针 + 诊断下发) ----

@@ -204,29 +204,3 @@ def test_history_survives_an_agent_without_a_source_label(env, tmp_path):
     assert not hasattr(agent, "context_source")
     handle_slash("/history", Session(system_prompt="x"), Config(), ui, agent)
     assert any(m[0] == "info" for m in ui.messages)
-
-
-# ------------------------------------------- 终端 /health(P3,v0.9.99)
-
-def test_slash_health_renders_rows(env):
-    """/health 出全表:MCP 行不再永远"没查成"(P3 抽了 mcp.summary_rows 共用真相)。"""
-    tmp_path, ui, agent = env
-    session = Session(system_prompt="s", log_dir=tmp_path / "s",
-                      workspace=tmp_path)
-    handle_slash("/health", session, agent.ctx.config, ui, agent)
-    assert ui.messages and ui.messages[0][0] == "info"
-    text = ui.messages[0][1]
-    assert "体检" in text and "MCP" in text
-
-
-def test_mcp_summary_rows_is_shared_truth():
-    """mcp.summary_rows:Bridge 与 CLI 消费同一份形状(P3 的收口点)。"""
-    from minicode import mcp as mcp_mod
-
-    class _Cfg:
-        mcp_servers = [{"id": "a", "description": "文件系统", "enabled": True}]
-
-    rows = mcp_mod.summary_rows(_Cfg(), manager=None)
-    assert rows[0]["id"] == "a" and rows[0]["label"] == "文件系统"
-    assert rows[0]["connected"] is False and rows[0]["n_tools"] == 0
-    assert mcp_mod.summary_rows(_Cfg(), manager=None) == rows   # 纯函数可重放

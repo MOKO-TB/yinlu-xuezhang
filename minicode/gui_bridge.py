@@ -55,17 +55,6 @@ DIFF_MAX_LINES = 40
 PREVIEW_CHARS = 1200      # 浏览器 JS 之类"长参数"在确认框里的截断长度
 
 
-def _as_bool(value) -> bool:
-    """把桥那边递来的布尔归一一次。
-
-    pywebview 有时把 JS 的 `true` 送成字符串 `"false"`,而 `bool("false")` 是真 ——
-    于是"不做深检"会变成每次都做深检(面板多点一下就白等几秒,不会报错,只会慢)。
-    """
-    if isinstance(value, str):
-        return value.strip().lower() in ("true", "1", "yes")
-    return bool(value)
-
-
 class PublicApi:
     """js_api 门面:只暴露方法,不暴露 Bridge 的成员对象图。
 
@@ -265,9 +254,6 @@ class PublicApi:
 
     def get_activity(self) -> dict:
         return self._b.get_activity()
-
-    def get_health(self, deep: bool = False) -> dict:
-        return self._b.get_health(deep)
 
     def get_monitor_pref(self) -> dict:
         return self._b.get_monitor_pref()
@@ -1070,30 +1056,6 @@ class Bridge:
             return {"ok": False, "groups": [], "timeline": {}, "now": None,
                     "summary": {}, "empty": True,
                     "msg": f"读取会话活动失败:{type(exc).__name__}: {exc}"}
-
-    # ------------------------------------------------------------ 一键体检
-
-    def get_health(self, deep: bool = False) -> dict:
-        """「体检」面板的数据:判定全在 `minicode.health`,这里只递现成的三份真相。
-
-        递 `agent.gate.project` 而不是让 health 自己去读 `permissions.json`:第二次
-        装载就是第二份真相,还会绕开门面上那套 `tool_names` 校验(同 v0.9.88 的口径)。
-        `mcp_rows` 同理 —— 在线状态只有桥知道。
-        `deep` 才去问网络与外部进程(模型探活、浏览器握手、PowerShell 读快捷方式),
-        面板上那一颗按钮写着"要等几秒",不是默认动作。
-        聚合再怎么坏都不该让窗口打不开,所以整段兜异常,回一句原因。
-        """
-        from minicode import health
-        gate = getattr(self.agent, "gate", None)
-        try:
-            return health.report(
-                workspace=self.workspace, config=self.config,
-                project=getattr(gate, "project", None),
-                mcp_rows=self._mcp_summary(), deep=_as_bool(deep))
-        except Exception as exc:
-            return {"ok": False, "groups": [], "summary": {}, "total": 0,
-                    "attention": [], "deep": False, "repo": False, "checked_at": "",
-                    "verdict": f"体检没算出来:{type(exc).__name__}: {exc}"}
 
     # ------------------------------------------------------------ 任务监控栏偏好
 
