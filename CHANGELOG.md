@@ -48,6 +48,7 @@
 - v0.9.90: career 就业档收尾 —— 子代理第七个领域档(README/HANDOFF/版本号;第八道闸全绿)  · 2026-09-30
 
 ## v0.9.89
+- feat!: 删掉「一键体检」功能(v0.9.89 引入)—— 用户点图 p1 左栏 🩺 那颗  · 2026-10-01
 - docs(changelog): 重新生成 —— 把 v0.9.89 收进清单  · 2026-09-30
 - v0.9.89: 一键体检面板 + 推送必跑的四道闸 —— minicode/health.py 只把各功能现成的自检收进一张表(馆藏库 / 浏览器 / MCP / 项目白名单 / 数据目录 / 开机自启),四道 check_* 用 subprocess 调脚本自己,同一条判定不出现第二份真相;查不成一律写「没查成」,白名单没递进来也不自己再装载一次;修复动作只有「去配置模型」与「把话填进输入框」两条真路,批准 permissions.json 仍然只在确认框里点一次头。CI(.github/workflows/ci.yml)跑的是 CONTRIBUTING 那四条命令,选 windows-latest 且刻意不设 PYTHONIOENCODING 才能复现 GBK 那一类崩,checkout 要 fetch-depth:0 否则 CHANGELOG 那条闸拿到假红。干净工作树彩排抓到两件事:test_model_manage 与 test_workspace 各有一条用例其实依赖本机 gitignore 的 config.local.json(于是 CI 给一个明摆着是假的占位 Key,而不是 skip 掉),我自己那条四道闸的针原本依赖真仓库 dist/ 在不在(改钉在假仓库上)。测试 +46(test_health 35 / test_ci_workflow 6 / 入口栏第 15 颗带来的参数化 4 / 门面闸 +1),collect 实测 2408,八道闸全绿  · 2026-09-30
 
@@ -386,4 +387,4 @@
 ## v0.3.0
 - 初始提交:引路学长 v0.3.0 —— Windows 桌面编程引路智能体(GUI+CLI 同核引擎)  · 2026-09-12
 
-<!-- 生成自 git 提交 1c4fa85;此后的提交还没收进来 -->
+<!-- 生成自 git 提交 0e3baac;此后的提交还没收进来 -->
