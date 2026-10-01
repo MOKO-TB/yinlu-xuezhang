@@ -737,6 +737,79 @@ def set_startup(enabled: bool) -> dict:
     return {"ok": True, "enabled": True, "lnk": lnk, "target": exe}
 
 
+def startup_stale() -> dict:
+    """自启「位置变了」探针(§6 #16 剩的账):勾看着是开、开机却不会响。
+
+    程序重装/挪位置后,「启动」文件夹里的快捷方式仍指旧路径 —— 文件在,
+    `startup_present()` 照样 True,托盘勾照样打着,开机启动的是旧位置那份
+    (或什么都没了)。这里把「指向的不是正在跑的这一份」查实,并分两种:
+
+    - `same_app=True`(目标 exe 与现在的**同名**):是本应用自己的快捷方式
+      换过位置/重装过 —— 可以安全重建,`stale=True`;
+    - 指向别的程序:`same_app=False`、`stale=False` —— 那是别人的文件,
+      与 `set_startup` 关闭分支同一条规矩,报告可以、动手不行。
+
+    冷启动一次 PowerShell(一两秒),只在启动核对与用户问到时跑,
+    **不进托盘菜单回调**(§4:右键画勾选态绝不起 PowerShell)。
+    """
+    import os
+    st = startup_status()
+    out = {"checked": bool(st["supported"] and st["installed"]),
+           "stale": False, "same_app": False,
+           "target": st.get("target", ""), "want": st.get("want", ""),
+           "lnk": st.get("lnk", "")}
+    if not out["checked"]:
+        return out
+    want_name = os.path.basename(st["want"]).lower()
+    tgt_name = os.path.basename(st["target"]).lower()
+    out["same_app"] = bool(want_name) and want_name == tgt_name
+    out["stale"] = bool(out["same_app"] and not st["ours"])
+    return out
+
+
+def repair_startup_shortcut() -> dict:
+    """把「启动」里的快捷方式重新指到**现在这份**程序(仅限 stale 场景)。
+
+    动手前**再查一遍** `startup_stale()`:从探针到修复之间用户可能自己换了
+    指向 —— 拿着旧结论动手,就是把别人的文件覆盖掉。指向别的程序时拒绝
+    并说清为什么;能重建时走 `set_startup(True)` 同一条路(建完读回指向核对,
+    没核对上不会说已开启)。
+    """
+    st = startup_stale()
+    if not st["checked"]:
+        return {"ok": False, "msg": "没有可核对的快捷方式(本来就没开自启,或系统不支持)"}
+    if not st["same_app"]:
+        return {"ok": False,
+                "msg": f"「启动」里那个快捷方式指向的是别的程序"
+                       f"({st['target'] or '(空)'}),不是本应用的旧位置,不动它"}
+    return set_startup(True)
+
+
+def check_stale_startup(ui) -> dict:
+    """启动时顺手核对一遍自启指向(v0.9.98,#16 剩的那句「启动时核对并提示」)。
+
+    只在**同应用的旧位置**时开口:界面 toast 一条 + 日志一行,话里带上怎么修
+    (对学长说「修好开机自启」)。指向别的程序的不出声 —— 那是别人的文件,
+    每次启动都打扰等于把他自己的安排当故障报。调用方(post_startup)用
+    守护线程调它:PowerShell 冷启动要一两秒,别挡窗口起来。
+    """
+    st = startup_stale()
+    if not st["checked"]:
+        return st
+    if not st["stale"]:
+        log("开机自启核对:指向正确")
+        return st
+    msg = ("开机自启的快捷方式还指向旧位置,开机不会启动现在这份学长 —— "
+           "对我说「修好开机自启」就能重新指过来。")
+    log(f"开机自启核对:指向旧位置({st['target']}),现在是 {st['want']};"
+        "托盘勾还打着是已知边界(画勾不起 PowerShell)")
+    try:
+        ui.push("info", text=msg)
+    except Exception:
+        pass        # 界面没起来/正在关:日志里已有这一行,不为一条提示炸启动
+    return st
+
+
 # ------------------------------------------------------------------ 控制器
 
 class TrayController:
@@ -1030,6 +1103,7 @@ KIND_LABELS = {"briefing": "今日简报", "class": "课前提醒", "schedule": 
 def desktop_notify(ctx, action: str = "status", kind: str = "",
                    reason: str = "") -> str:
     """desktop_notify 工具处理器:用嘴开关桌面提醒 / 看状态 / 当场试一条。"""
+    import os
     action = (action or "status").strip().lower()
     kind = (kind or "").strip().lower()
     if kind and kind not in NOTIFY_KINDS:
@@ -1043,8 +1117,17 @@ def desktop_notify(ctx, action: str = "status", kind: str = "",
         elif su["installed"] and su["ours"]:
             startup_line = f"开机自启:已开启({su['lnk']})。"
         elif su["installed"]:
-            startup_line = (f"开机自启:没开 —— 「启动」里有个同名快捷方式但指向 "
-                            f"{su['target'] or '(空)'},不是本应用,学长不会去动它。")
+            # 同名 exe 但路径不同 = 本应用换过位置/重装过(v0.9.98 起 vs 别人的文件)
+            same = (os.path.basename(su["want"]).lower()
+                    == os.path.basename(su["target"] or "").lower())
+            if same:
+                startup_line = (f"开机自启:**指错位置** —— 「启动」里的快捷方式指向 "
+                                f"{su['target'] or '(空)'},不是现在正在跑的这一份"
+                                f"(程序换过位置或重装过),开机不会启动现在这份。"
+                                f"说「修好开机自启」我就把它重新指过来。")
+            else:
+                startup_line = (f"开机自启:没开 —— 「启动」里有个同名快捷方式但指向 "
+                                f"{su['target'] or '(空)'},不是本应用,学长不会去动它。")
         else:
             startup_line = "开机自启:没开(说「开机自动启动学长」可以打开)。"
         on = [KIND_LABELS.get(k, k) for k in NOTIFY_KINDS if st["kinds"].get(k)]

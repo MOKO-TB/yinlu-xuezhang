@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from minicode.llm import AssistantTurn, ToolCall
+from minicode.llm import AssistantTurn
 from minicode import subagents
 from minicode.subagents import (_BatchFileLocks, _guard_write_tools, _lock_key)
 from minicode.tools.base import Tool

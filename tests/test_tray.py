@@ -1341,3 +1341,105 @@ def test_notify_actions_are_one_source_not_two_copies():
     unknown = tray.desktop_notify(None, action="弹窗")
     for action in tray.NOTIFY_ACTIONS:
         assert action in unknown, f"未知 action 那句没把所有出口列全: {unknown}"
+
+
+# ------------------------------------------- 自启「位置变了」探针与修复(v0.9.98)
+
+class _PushRecorder:
+    """最小 ui 替身:只记 push 的事件,check_stale_startup 只用这一条通道。"""
+
+    def __init__(self):
+        self.events = []
+
+    def push(self, type_, **payload):
+        self.events.append((type_, payload))
+
+
+def test_startup_stale_flags_same_app_old_path_only(monkeypatch, tmp_path):
+    import os
+    exe, _a, _w = tray.launch_target()
+
+    # 没开自启:checked=False,谈不上陈旧
+    _startup_env(monkeypatch, tmp_path)
+    st = tray.startup_stale()
+    assert st["checked"] is False and st["stale"] is False
+
+    # 本应用换过位置:同名 exe、路径不同 → stale
+    _startup_env(monkeypatch, tmp_path, installed=True,
+                 target=exe.replace(os.path.basename(exe),
+                                    os.path.basename(exe)))  # 先放一个同路径的
+    # 换成「旧目录」:同 basename、不同目录
+    old = os.path.join(os.path.dirname(exe), "old", os.path.basename(exe))
+    _startup_env(monkeypatch, tmp_path, installed=True, target=old)
+    st = tray.startup_stale()
+    assert st["checked"] is True and st["same_app"] is True and st["stale"] is True
+
+    # 别人的程序:同名都不同 → 不是 stale,也绝不给出"可重建"的口实
+    _startup_env(monkeypatch, tmp_path, installed=True,
+                 target=r"C:\Other\notepad.exe")
+    st = tray.startup_stale()
+    assert st["same_app"] is False and st["stale"] is False
+
+
+def test_repair_only_touches_our_own_stale_shortcut(monkeypatch, tmp_path):
+    import os
+    exe, _a, _w = tray.launch_target()
+    old = os.path.join(os.path.dirname(exe), "old", os.path.basename(exe))
+
+    # 别人的文件:拒绝动手,set_startup 一次都不该被调
+    _startup_env(monkeypatch, tmp_path, installed=True,
+                 target=r"C:\Other\notepad.exe")
+    called = []
+    monkeypatch.setattr(tray, "set_startup", lambda v: called.append(v) or {"ok": True})
+    r = tray.repair_startup_shortcut()
+    assert r["ok"] is False and "不动它" in r["msg"] and called == []
+
+    # 没开自启:没得修
+    _startup_env(monkeypatch, tmp_path)
+    r = tray.repair_startup_shortcut()
+    assert r["ok"] is False and "没开" in r["msg"]
+
+    # 同应用旧位置:走 set_startup(True) 重建
+    _startup_env(monkeypatch, tmp_path, installed=True, target=old)
+    r = tray.repair_startup_shortcut()
+    assert called == [True], "重建必须走 set_startup 那条已验证的路"
+
+
+def test_check_stale_startup_speaks_once_with_the_fix(monkeypatch, tmp_path):
+    import os
+    exe, _a, _w = tray.launch_target()
+    old = os.path.join(os.path.dirname(exe), "old", os.path.basename(exe))
+    ui = _PushRecorder()
+
+    # 指向正确:一声不吭
+    _startup_env(monkeypatch, tmp_path, installed=True, target=exe)
+    tray.check_stale_startup(ui)
+    assert ui.events == []
+
+    # 别人的文件:也不吭声(每次启动都打扰等于把用户自己的安排当故障报)
+    _startup_env(monkeypatch, tmp_path, installed=True,
+                 target=r"C:\Other\notepad.exe")
+    tray.check_stale_startup(ui)
+    assert ui.events == []
+
+    # 同应用旧位置:toast 一条,话里带怎么修
+    _startup_env(monkeypatch, tmp_path, installed=True, target=old)
+    tray.check_stale_startup(ui)
+    assert len(ui.events) == 1
+    kind, payload = ui.events[0]
+    assert kind == "info" and "修好开机自启" in payload["text"]
+
+
+def test_status_names_the_stale_case_and_how_to_fix(monkeypatch, tmp_path):
+    import os
+    exe, _a, _w = tray.launch_target()
+    old = os.path.join(os.path.dirname(exe), "old", os.path.basename(exe))
+
+    _startup_env(monkeypatch, tmp_path, installed=True, target=old)
+    out = tray.desktop_notify(None, action="status")
+    assert "指错位置" in out and "修好开机自启" in out
+
+    _startup_env(monkeypatch, tmp_path, installed=True,
+                 target=r"C:\Other\b.exe")
+    out = tray.desktop_notify(None, action="status")
+    assert "开机自启:没开" in out and "不是本应用" in out

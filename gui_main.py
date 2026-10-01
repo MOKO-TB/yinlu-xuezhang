@@ -153,6 +153,11 @@ def post_startup(ui) -> None:
     if tray.starts_hidden() and not tray.start_in_tray():
         _reveal_window()
     _start_activate_listener(ui)
+    # 自启指向核对(v0.9.98,§6 #16 剩):重装/挪位置后快捷方式还指旧路径,
+    # 勾看着是开、开机却不响。核对要冷启动一次 PowerShell,丢给守护线程。
+    import threading
+    threading.Thread(target=tray.check_stale_startup, args=(ui,),
+                     daemon=True, name="startup-stale-check").start()
 
 
 def _start_activate_listener(ui) -> None:
