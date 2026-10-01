@@ -11,7 +11,6 @@ import pytest
 from minicode import feedback_report as fr
 from minicode import growth
 from minicode.config import Config, Provider
-from minicode.paths import app_path
 from minicode.tools.base import ToolContext
 
 

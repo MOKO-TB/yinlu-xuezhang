@@ -2876,7 +2876,13 @@ function addUserMsg(text, atts) {
     el.className = "att" + (a.missing ? " missing" : "");
     el.innerHTML = `${a.preview ? '<img alt="">' : '<span class="ph">📄</span>'}
       <span class="meta"><span class="nm"></span><span class="sz"></span></span>`;
-    if (a.preview) el.querySelector("img").src = a.preview;
+    if (a.preview) {
+      const im = el.querySelector("img");
+      im.src = a.preview;
+      // 灯箱按这条路径问桥要原图(v0.9.97);恢复会话里文件已不在的就不给了,
+      // 点开也只会拿到「文件不在工作区」—— 不如一开始就留在预览帧
+      if (a.path && !a.missing) im.dataset.att = a.path;
+    }
     el.querySelector(".nm").textContent = a.name;
     // 恢复的会话:文件还在用真实大小;不在了的标题写实话,大小用留档里记下的那个
     const sz = a.size != null ? humanSize(a.size)
@@ -6919,10 +6925,12 @@ function showRailPop(bubble, i) {
 }
 function hideRailPop() { $("railPop").hidden = true; }
 
-/* ---------------- 会话图片灯箱(v0.9.94,p7/p8) ----------------
+/* ---------------- 会话图片灯箱(v0.9.94,p7/p8;原图 v0.9.97) ----------------
    点对话里的照片放大(ZCode 同款):左右切换本会话内的图片、Esc/点遮罩关、
-   底部缩放。图源是会话里现有 <img> 的 src —— 附件是上传时的预览帧
-   (320px),放大后略糊但能看清内容;原图级清晰度等桥空闲后补 full 字段。 */
+   底部缩放。图源是会话里现有 <img> 的 src —— 附件消息里那只是 320px 的
+   预览帧,所以灯箱打开时**按需**问桥要一次原图(attachment_full,只试一次,
+   成了换 src,超上限/文件不在就留在预览帧、console 里写原因);模型自己画的
+   图与工具产出的图没有附件路径,本来就是原图,不动。 */
 let lightboxImgs = [];
 let lightboxIdx = 0;
 let lightboxZoom = 1;
@@ -6930,25 +6938,38 @@ let lightboxZoom = 1;
 function collectLightboxImages() {
   return Array.from($("chat").querySelectorAll(".msg img"))
     .filter(i => i.src && !i.closest(".tr-tools"))
-    .map(i => i.src);
+    .map(i => ({ src: i.src, att: i.dataset.att || "" }));
 }
 
 function openLightbox(src) {
   lightboxImgs = collectLightboxImages();
-  lightboxIdx = Math.max(0, lightboxImgs.indexOf(src));
+  lightboxIdx = Math.max(0, lightboxImgs.findIndex(e => e.src === src));
   lightboxZoom = 1;
   renderLightbox();
   $("imgLightbox").classList.add("show");
 }
 
 function renderLightbox() {
-  $("ilImg").src = lightboxImgs[lightboxIdx] || "";
+  const entry = lightboxImgs[lightboxIdx] || { src: "" };
+  $("ilImg").src = entry.src;
   $("ilImg").style.transform = `scale(${lightboxZoom})`;
   $("ilPct").textContent = Math.round(lightboxZoom * 100) + "%";
   $("ilIdx").textContent = lightboxImgs.length > 1
     ? `${lightboxIdx + 1} / ${lightboxImgs.length}` : "";
   $("ilPrev").style.visibility = lightboxIdx > 0 ? "visible" : "hidden";
   $("ilNext").style.visibility = lightboxIdx < lightboxImgs.length - 1 ? "visible" : "hidden";
+  fetchLightboxFull(entry);
+}
+
+function fetchLightboxFull(entry) {
+  if (!entry || !entry.att || entry.fullDone) return;   // fullDone = 试过了(成不成都不再敲桥)
+  const api = window.pywebview && pywebview.api;
+  if (!api || !api.attachment_full) return;             // 老桥/网页版:安静留在预览帧
+  entry.fullDone = true;
+  api.attachment_full(entry.att).then(r => {
+    if (r && r.ok && r.data && lightboxImgs[lightboxIdx] === entry) $("ilImg").src = r.data;
+    else if (r && !r.ok && r.msg) console.info("[灯箱] 原图没换成:" + r.msg);
+  }).catch(() => {});
 }
 
 function lightboxStep(d) {

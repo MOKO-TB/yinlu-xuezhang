@@ -647,6 +647,50 @@ def test_text_only_model_still_sends_paths(config, tmp_path):
     assert "[附件]" in content
 
 
+def test_attachment_full_returns_original_bytes(config, tmp_path):
+    """灯箱按需取原图(v0.9.97):回的是原图字节(data URL),不是 320px 预览帧。
+
+    消息清单里的附件图是 preview_data_url 压出来的(max_edge=320),放大就糊;
+    原图不该跟着每条消息反复过桥,所以桥上开了个按需的口子。
+    """
+    import base64
+    import io
+
+    from PIL import Image
+    src = tmp_path / "大图.png"
+    Image.new("RGB", (1200, 900), (7, 8, 9)).save(src)   # 比 320 大:被压缩就露馅
+    bridge, _, _ = make(config, tmp_path, FakeLLM([]))
+    att = save_attachment(tmp_path, src)
+
+    r = bridge.attachment_full(att.path)
+    assert r["ok"] is True
+    assert r["data"].startswith("data:image/png;base64,")
+    img = Image.open(io.BytesIO(base64.b64decode(r["data"].split(",", 1)[1])))
+    assert img.size == (1200, 900)               # 预览帧是 320,这里必须是原尺寸
+
+
+def test_attachment_full_rejects_outside_nonimage_missing(config, tmp_path):
+    """与 _parse_attachments 同一条边界:工作区内、真实存在、是图片,三条都要过。"""
+    bridge, _, _ = make(config, tmp_path, FakeLLM([]))
+    (tmp_path / "说明.txt").write_text("不是图", encoding="utf-8")
+    assert bridge.attachment_full("../逃离工作区.png")["ok"] is False
+    assert bridge.attachment_full("说明.txt")["ok"] is False
+    assert bridge.attachment_full("uploads/没有这张.png")["ok"] is False
+    assert bridge.attachment_full("")["ok"] is False
+
+
+def test_attachment_full_oversize_is_honest(config, tmp_path, monkeypatch):
+    """超上限就拒绝并说人话 —— 前端拿不到 ok 会停在预览帧,绝不拿压缩图冒充原图。"""
+    src = _png(tmp_path)
+    bridge, _, _ = make(config, tmp_path, FakeLLM([]))
+    att = save_attachment(tmp_path, src)
+    monkeypatch.setattr(type(bridge), "ATTACHMENT_FULL_MAX_BYTES", 8)
+
+    r = bridge.attachment_full(att.path)
+    assert r["ok"] is False
+    assert "上限" in r["msg"]
+
+
 def test_set_vision_forces_images_and_persists(config, tmp_path):
     """手动强制:自己知道这个模型能看图(能力表没登记的网关模型)时点一下就行。"""
     src = _png(tmp_path)

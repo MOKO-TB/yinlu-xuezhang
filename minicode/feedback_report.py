@@ -97,7 +97,6 @@ def build_report(workspace=None, config=None, include_trace: bool = False,
 def export_feedback_tool(ctx, include_trace=False, note: str = "",
                          reason: str = "") -> str:
     """export_feedback 工具处理器:拼包落工作区根,回话教清发送方式。"""
-    from minicode import __version__
     sess = getattr(ctx, "session", None)
     msgs = getattr(sess, "messages", None) if sess else None
     rep = build_report(workspace=getattr(ctx, "workspace", None),
