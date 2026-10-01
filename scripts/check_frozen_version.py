@@ -51,6 +51,8 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # (漏收 = 前端点了没处回,或停止键叫不醒正在等的那条线程)
                             "ask_user", "ask_reply", "_ask_trace_text",
                             "abandon_pending", "_wait_event",
+                            # v0.9.97:界面上记一条长期记忆(漏收 = 按钮点了没方法)
+                            "remember",
                             # v0.9.23:教务课表导入 + 首次运行向导
                             "schedule_import_open", "schedule_import_read",
                             "schedule_import_model", "schedule_import_confirm",
@@ -425,6 +427,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "extra_prompt", "hit_line", "skills_of", "Match"),
     # v0.9.39:一轮总时限是真的在拦东西(漏收 = 配置文件里的数字没人读)
     "minicode.agent": ("run_turn", "turn_time_limited",
+                       # v0.9.97:量窗口那把尺子的实测下限(漏收 = 装好的包里压缩又回到
+                       # 只按字符估,英文/代码多的会话会一路撞到真实窗口才压)
+                       "_context_pair", "context_source", "REAL_FLOOR_WINDOW",
                        # v0.9.39 B0/B1:两个挂钩 + 那条"只活在一次请求里"的先验
                        "_messages_for_request", "_note_low_rated_prior",
                        "_mark_repeat_empty",
@@ -462,6 +467,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.95:馆藏连接的"整条语句在同一次持锁里跑完"(漏收 = 装好的包里并行派活
     # 随机一路"子代理执行出错",而这种只在并发下复现的毛病最难从用户话里倒推)
     "minicode.library": ("_read",),
+    # v0.9.97:语料新鲜度(漏收 = 提示词里那句"这批语料是几天前抓的"永远不出现,
+    # 而它存在的意义就是让模型别把旧语料当"最近")
+    "minicode.notices": ("corpus_age", "_corpus_line", "CRAWL_STAMP_FMT",
+                         "notices_prompt_section"),
     # v0.9.39:确认框要能讲清新工具的代价(漏收 = 弹了框但没说图会被发出去/文件落在哪)
     "minicode.explain": ("risk_notes", "permission_why", "action_reason"),
     # ---- v0.9.16/17/20:主动推荐 + 新版本检查 + 今日简报(合并成一个键,
@@ -565,6 +574,8 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.96:提问卡(漏收 = 后端推 ask_request 而界面没人接,用户看到的是
     # "学长卡住了" —— 这一层在包里,前端是整份文件拷进去的,漏的是改旧版没覆盖)
     "askOverlay", "renderAsk", "ask_reply", "ask-trace",
+    # v0.9.97:长期记忆面板(界面上从此能记一条,不只 CLI 的 /remember)
+    "memoryOverlay", "rememberIt", "memCountLine",
 )
 
 

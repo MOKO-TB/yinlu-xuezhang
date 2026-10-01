@@ -914,3 +914,81 @@ def test_untrusted_whitelist_still_asks_and_leaves_no_trace(config, tmp_path, mo
     assert ui.confirmed, "没批准过就该弹确认框"
     assert not [e for e in log if e[0] == "project_allow"]
     assert not any("没问你" in t for t in getattr(ui, "infos", []))
+
+
+# ------------------------------------ 压缩那把尺子:服务端实测当底线(v0.9.97)
+
+
+def _usage(pt: int) -> dict:
+    return {"prompt_tokens": pt, "completion_tokens": 5, "total_tokens": pt + 5}
+
+
+def _agent(config, ctx, llm, session=None, registry=None):
+    return Agent(llm=llm, registry=registry or [], session=session or _chatty_session(),
+                 gate=PermissionGate(config), ui=FakeUI(), ctx=ctx)
+
+
+def test_real_prompt_tokens_set_the_floor(config, ctx):
+    """端点给了 usage:量窗口就用那个真数,不再靠字符估。"""
+    config.context_window = 200000
+    agent = _agent(config, ctx, ScriptLLM([AssistantTurn(text="好", usage=_usage(9000))]))
+    agent.run_turn("再来一句")
+    assert agent.context_source() == "real"
+    assert agent.context_tokens() == 9000
+
+
+def test_a_smaller_real_number_never_shortens_the_ruler(config, ctx):
+    """只往上顶、不往下压:实测比估算小就用估算,不许把压缩推晚。"""
+    config.context_window = 200000
+    agent = _agent(config, ctx, ScriptLLM([AssistantTurn(text="好", usage=_usage(10))]),
+                   registry=[_big_tool("a")])
+    agent.run_turn("再来一句")
+    assert agent.tools_tokens > 1000
+    assert agent.context_source() == "estimated"
+    assert agent.context_tokens() >= agent.tools_tokens
+
+
+def test_the_floor_dies_when_the_message_count_jumps(config, ctx):
+    """/resume 换了一份长对话:那个实测数属于另一段上下文,不能拿来当底线。"""
+    config.context_window = 200000
+    agent = _agent(config, ctx, ScriptLLM([AssistantTurn(text="好", usage=_usage(9000))]))
+    agent.run_turn("再来一句")
+    assert agent.context_source() == "real"
+    agent._real_prompt = (len(agent.session.messages) + 400, 9000)   # 跳变
+    assert agent.context_source() == "estimated"
+
+
+def test_no_usage_means_no_fake_measurement(config, ctx):
+    """端点不给 usage:照旧估算,不假装量过(这条是"没有来源的数字一律不说"在这里的形状)。"""
+    config.context_window = 200000
+    agent = _agent(config, ctx, ScriptLLM([AssistantTurn(text="好")]))
+    agent.run_turn("再来一句")
+    assert agent._real_prompt is None
+    assert agent.context_source() == "estimated"
+
+
+def test_the_real_number_makes_compaction_come_earlier(config, ctx):
+    """存在的理由:估算够不到阈值、实测早就过了 —— 没有这层就会撞墙才压。"""
+    config.context_window = 2000
+    config.compact_at_ratio = 0.5              # 阈值 1000
+    llm = ScriptLLM([AssistantTurn(text="第一答", usage=_usage(1500)),
+                     AssistantTurn(text="(摘要)"), AssistantTurn(text="第二答")])
+    agent = _agent(config, ctx, llm)
+    agent.run_turn("第一问")
+    assert agent.context_source() == "real"          # 1500 > 估算,已经顶在上面了
+    assert agent.context_tokens() == 1500            # 而阈值是 1000 —— 下一次请求前就该压
+    agent.run_turn("第二问")
+    assert len(llm.calls) == 3, [c[0][0]["content"][:20] for c in llm.calls]
+    assert "会话压缩器" in llm.calls[1][0][0]["content"]   # 第二次请求前真的先压了
+
+
+def test_compaction_invalidates_the_floor_it_just_used(config, ctx):
+    """压完消息变少:那个实测数不能再当底线,否则会立刻又"过阈值"反复压。"""
+    config.context_window = 2000
+    config.compact_at_ratio = 0.5
+    llm = ScriptLLM([AssistantTurn(text="第一答", usage=_usage(1500)),
+                     AssistantTurn(text="(摘要)"), AssistantTurn(text="第二答")])
+    agent = _agent(config, ctx, llm)
+    agent.run_turn("第一问")
+    agent.run_turn("第二问")
+    assert agent.context_source() == "estimated", "压缩之后还拿旧的实测数当底线"

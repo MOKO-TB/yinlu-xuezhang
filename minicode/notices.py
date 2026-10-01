@@ -19,7 +19,9 @@
 """
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 
 from minicode import proactive
 
@@ -119,11 +121,78 @@ def campus_notices(ctx, action: str = "latest", limit: int = 10) -> str:
             + "\n要详情用 web_crawl 抓对应链接;回答时说清「这是上次抓到的」。")
 
 
-def notices_prompt_section() -> str:
-    """系统提示词段:时效类问题必须现拉,不要拿本地旧语料充数。"""
+CRAWLED_DIR_NAME = "crawled"
+# 抓取时刻的格式,**写的那一头在 `tools/crawl.py:495`** —— 两处各写一份字面量,
+# 改了写侧忘了改读侧的表现不是报错,是"永远读不出归档时间"(_corpus_line 从此不出现)。
+# 所以有一条针扫两边逐字相同,见 tests/test_notices.py。
+CRAWL_STAMP_FMT = "%Y-%m-%d %H:%M"
+
+
+def corpus_age(workspace) -> dict | None:
+    """本机爬虫语料最近一次抓取是什么时候(读 `crawled/*/index.json` 的 `crawled_at`)。
+
+    为什么要有这个数:提示词一直在喊"本地知识库是旧语料、回答不了时效问题",
+    但**旧到什么时候没人说得出**。"三天前抓的"和"八个月前抓的"是两种完全不同的话:
+    前者可以说"这台机器上最新的消息就是这些",后者只能现拉。
+
+    只认 `index.json` 里那次抓取亲手写下的 `crawled_at`,**不拿文件 mtime 猜** ——
+    仓库/归档文件被 clone、checkout、拷贝一遍时间就全变了,那是个看着可信的假数字。
+    没有归档、或归档里没有这个字段,一律返回 None(没有记录就说没有记录)。
+    """
+    if workspace is None:
+        return None
+    root = Path(workspace) / CRAWLED_DIR_NAME
+    if not root.is_dir():
+        return None
+    best: tuple[str, str] | None = None        # (可比较的时刻, 原文时刻)
+    sites = 0
+    try:
+        dirs = sorted(p for p in root.iterdir() if p.is_dir())
+    except OSError:
+        return None
+    for d in dirs:
+        idx = d / "index.json"
+        if not idx.is_file():
+            continue
+        sites += 1
+        try:
+            stamp = str(json.loads(idx.read_text(encoding="utf-8")).get("crawled_at") or "")
+        except (OSError, ValueError):
+            continue
+        try:
+            time.strptime(stamp, CRAWL_STAMP_FMT)
+        except ValueError:
+            continue                            # 格式不对的时刻不参与比较,也不拿来报数
+        if best is None or stamp > best[0]:
+            best = (stamp, d.name)
+    if best is None:
+        return None
+    then = time.mktime(time.strptime(best[0], CRAWL_STAMP_FMT))
+    return {"at": best[0], "host": best[1], "sites": sites,
+            "days": max(0, int((time.time() - then) // 86400))}
+
+
+def _corpus_line(workspace) -> str:
+    """提示词里那一句:有记录就给真数字,没记录就整句不说(不编"从没抓过")。"""
+    age = corpus_age(workspace)
+    if age is None:
+        return ""
+    return (f"- 本机这批爬虫语料最近一次抓取是 **{age['at']}({age['days']} 天前,"
+            f"来自 {age['host']})**,共 {age['sites']} 个站点有归档。"
+            "这个数只用来判断「本地答案能说到多新」:抓取再近也不改变上一条规矩 —— "
+            "时效类问题仍然要 campus_notices 现拉。\n")
+
+
+def notices_prompt_section(workspace=None) -> str:
+    """系统提示词段:时效类问题必须现拉,不要拿本地旧语料充数。
+
+    `workspace` 给了才会附那句"这批语料是几天前抓的"(见 `_corpus_line`):
+    没有工作区就没有可核对的归档,宁可不写这一句,也不写一句猜的。
+    """
     return (
         "\n# 校园近期通知(时效性)\n"
-        "- 手上有 campus_notices 工具:现场拉学校官网通知公告栏目的最新标题与链接。"
+        + _corpus_line(workspace)
+        + "- 手上有 campus_notices 工具:现场拉学校官网通知公告栏目的最新标题与链接。"
         "用户问「最近/最新/近日 学校有什么事 / 大事件 / 通知 / 活动 / 官网发了什么」时,"
         "**必须先调 campus_notices**,以拉到的结果为准 —— 本地知识库是爬虫旧语料,"
         "**回答不了时效问题**,也不要把旧语料里的日期当成「最近」。\n"

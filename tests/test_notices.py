@@ -3,11 +3,15 @@
 网络一律 stub:解析吃真博达站群形状的假 HTML,拉取在 handler 层被换掉,
 断网机器上也能跑。
 """
+import json
+import re
 from pathlib import Path
 
 import pytest
 
 from minicode import notices, proactive
+
+ROOT = Path(__file__).resolve().parent.parent
 
 LIST_HTML = """
 <html><body><div class="list">
@@ -252,3 +256,67 @@ def test_prompts_prefer_school_entry_over_national():
     """国务院条目与学校条目并存:放假天数以学校那条为准(提示词钉住)。"""
     from minicode import calendar as cal
     assert "以" in cal.calendar_prompt_section() and "学校那条为准" in cal.calendar_prompt_section()
+
+
+# ------------------------------------ 语料新鲜度:这批爬虫语料是几天前抓的(v0.9.97)
+
+
+def _archive(workspace, host: str, stamp: str | None) -> None:
+    d = workspace / "crawled" / host
+    d.mkdir(parents=True, exist_ok=True)
+    body = {"site": f"http://{host}/", "pages": []}
+    if stamp is not None:
+        body["crawled_at"] = stamp
+    (d / "index.json").write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+
+
+def test_corpus_age_reads_the_stamp_the_crawler_wrote(tmp_path):
+    import time
+    when = time.strftime(notices.CRAWL_STAMP_FMT, time.localtime(time.time() - 3 * 86400))
+    _archive(tmp_path, "www.gzasc.edu.cn", when)
+    age = notices.corpus_age(tmp_path)
+    assert age["at"] == when and age["host"] == "www.gzasc.edu.cn"
+    assert age["days"] == 3 and age["sites"] == 1
+
+
+def test_corpus_age_takes_the_newest_site_not_the_first(tmp_path):
+    _archive(tmp_path, "a.example", "2026-01-05 08:00")
+    _archive(tmp_path, "b.example", "2026-09-20 10:00")
+    age = notices.corpus_age(tmp_path)
+    assert age["at"] == "2026-09-20 10:00" and age["sites"] == 2
+
+
+def test_no_stamp_in_the_archive_is_not_a_number(tmp_path):
+    """归档在、里面没有 crawled_at:返回 None。宁可不说,也不拿文件时间猜一个。"""
+    _archive(tmp_path, "a.example", None)
+    assert notices.corpus_age(tmp_path) is None
+    _archive(tmp_path, "b.example", "不是个时刻")
+    assert notices.corpus_age(tmp_path) is None
+
+
+def test_prompt_says_the_real_age_when_there_is_a_record(tmp_path):
+    import time
+    when = time.strftime(notices.CRAWL_STAMP_FMT, time.localtime(time.time() - 9 * 86400))
+    _archive(tmp_path, "www.gzasc.edu.cn", when)
+    section = notices.notices_prompt_section(tmp_path)
+    assert when in section and "9 天前" in section
+    assert "campus_notices" in section          # 有了数字也不放松"时效要现拉"那条
+
+
+def test_prompt_stays_silent_when_there_is_nothing_to_report(tmp_path):
+    """没归档 / 没工作区:整句不说。写一句"这台机器从没抓过"是替用户下结论。"""
+    assert "最近一次抓取" not in notices.notices_prompt_section(tmp_path)
+    assert "最近一次抓取" not in notices.notices_prompt_section()
+    _archive(tmp_path, "a.example", None)
+    assert "最近一次抓取" not in notices.notices_prompt_section(tmp_path)
+
+
+def test_the_writer_and_the_reader_use_the_same_stamp_format():
+    """写侧(crawl.py)与读侧(notices.CRAWL_STAMP_FMT)必须同一个格式。
+
+    漂了的后果不是报错,是"这一句永远不出现" —— 面板与提示词都看不出少了什么。
+    """
+    src = (ROOT / "minicode" / "tools" / "crawl.py").read_text(encoding="utf-8")
+    assert 'time.strftime("' in src, "crawl.py 写 index.json 的时刻语句变了,这条针要跟改"
+    written = re.search(r'time\.strftime\("([^"]+)"\)', src).group(1)
+    assert written == notices.CRAWL_STAMP_FMT, (written, notices.CRAWL_STAMP_FMT)

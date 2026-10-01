@@ -343,7 +343,7 @@ class TerminalUI:
             "  /usage [1|7|30] 查看 token 用量统计(默认近 7 天)\n"
             "  /workspace [路径|default] 查看/切换工作区(Agent 在哪个文件夹里干活)\n"
             "  /browser      查看浏览器能力(能不能开网页/截图,连的是哪个浏览器)\n"
-            "  /library      查看馆藏书目库状态\n"
+            "  /library      查看馆藏书目库状态;带书名就是搜书:/library 活着\n"
             "  /history      查看上下文消息数与 token 估算\n"
             "  /resume [<n>] 查看/恢复历史会话\n"
             "  /find <关键词> 在自己的历史会话留档里搜(与模型侧 search_history 同一份)\n"

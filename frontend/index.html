@@ -1163,6 +1163,9 @@ try {
   .ask-trace{ font-size:12.5px; color:var(--text-2); line-height:1.7; margin:10px 0;
               border-left:3px solid var(--primary); padding:6px 10px;
               background:var(--glass-lite); border-radius:0 var(--r-m) var(--r-m) 0; }
+  /* ---------------- 长期记忆面板(v0.9.97:界面上从此也能记一条,不只 CLI) ---------------- */
+  .mem-count{ font-size:12.5px; color:var(--text-2); margin-bottom:8px; }
+  .mem-hint{ font-size:11.5px; color:var(--text-3); line-height:1.6; margin:6px 0 12px; }
 
   /* ---------------- 模型管理:供应商 + 模型清单(v0.9.13) ---------------- */
   /* 旧版是"一行一个供应商、一个供应商只有一个模型";现在改成左栏供应商、
@@ -1975,6 +1978,23 @@ try {
       <span class="ask-page" id="askPage">1 / 1</span>
       <button class="b-always" id="askRecommend" title="不逐题选,按学长标在第一项的推荐走">按推荐继续</button>
       <button class="b-yes" id="askSend">发送回复</button>
+    </div>
+  </div>
+</div>
+<!-- 长期记忆:记一条 + 整理(v0.9.97:以前界面上只能"整理",想主动记一条只有 CLI /remember) -->
+<div class="overlay" id="memoryOverlay">
+  <div class="dialog" style="width:520px">
+    <h3>🧠 长期记忆</h3>
+    <div class="mem-count" id="memCount"></div>
+    <textarea class="ask-free" id="memText" rows="3"
+      placeholder="要记住的一句话,如:我讨厌用表格讲数据 / 这个项目跑测试别加 -n auto"></textarea>
+    <div class="mem-hint">记下来之后学长每次开工都带着它。「整理」会合并重复、删掉被推翻的,
+      并自动备份原文件 —— 那一步要走模型,会花一点额度。</div>
+    <div class="btns">
+      <button class="b-no" id="memClose">关闭</button>
+      <button class="b-always" id="memDream">整理记忆</button>
+      <button class="b-yes" id="memSaveUser">记到用户级</button>
+      <button class="b-yes" id="memSaveProject">记到本项目</button>
     </div>
   </div>
 </div>
@@ -7312,12 +7332,38 @@ function renderMemoryButton(counts) {
   btn.title = `长期记忆:本项目 ${memoryCounts.project || 0} 条 · 用户级 ${memoryCounts.user || 0} 条`
     + "(点击整理:合并重复、删掉被推翻的,自动备份原文件)";
 }
+/* 记忆面板(v0.9.97):原来这颗按钮直接就是"整理",想主动记一条只能去命令行敲 /remember。
+   记一条走的是同一个 save_entry(桥里),整理仍走 consolidate_memory —— 两条都不在前端判断。 */
+function memCountLine(c) {
+  return `现在:本项目 ${(c && c.project) || 0} 条 · 用户级 ${(c && c.user) || 0} 条`;
+}
 $("btnMemory").addEventListener("click", () => {
+  $("memCount").textContent = memCountLine(memoryCounts);
+  $("memSaveProject").disabled = $("memSaveUser").disabled = busy;
+  $("memoryOverlay").classList.add("show");
+  $("memText").focus();
+});
+$("memClose").addEventListener("click", () => $("memoryOverlay").classList.remove("show"));
+function rememberIt(scope) {
+  const text = $("memText").value.trim();
+  if (!text) { toast("先写一句要记住的话", true); return; }
+  pywebview.api.remember(text, scope).then(r => {
+    if (!r || !r.ok) { toast((r && r.msg) || "没记上", true); return; }
+    renderMemoryButton({ project: r.project, user: r.user });
+    $("memCount").textContent = memCountLine(r);
+    $("memText").value = "";
+    toast(scope === "user" ? "已记到用户级(换项目也带着)" : "已记到本项目");
+  }).catch(e => toast("记失败:" + String(e).slice(0, 60), true));
+}
+$("memSaveProject").addEventListener("click", () => rememberIt("project"));
+$("memSaveUser").addEventListener("click", () => rememberIt("user"));
+$("memDream").addEventListener("click", () => {
   if (busy) { toast("有任务正在进行中", true); return; }
   toast("正在整理记忆…");
   pywebview.api.consolidate_memory("all").then(r => {
     if (!r || !r.ok) { toast((r && r.msg) || "整理失败", true); return; }
     renderMemoryButton({ project: r.project, user: r.user });
+    $("memCount").textContent = memCountLine(r);
     toast(`记忆已整理:本项目 ${r.project} 条 · 用户级 ${r.user} 条`);
   }).catch(e => toast("整理失败:" + String(e).slice(0, 60), true));
 });

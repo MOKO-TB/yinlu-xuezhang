@@ -266,3 +266,43 @@ def test_bridge_consolidate_single_scope(config, tmp_path, cred):
     r = bridge.consolidate_memory("user")
     assert r["ok"] and r["user"] == 1
     assert "用户级" in r["msg"] and "本项目" not in r["msg"]
+
+
+# ---------------------------------- 界面上能记一条(v0.9.97:以前只有 CLI /remember)
+
+
+def _bridge(tmp_path, config):
+    from tests.test_gui_bridge import FakeLLM, make
+    return make(config, tmp_path, FakeLLM([]))[0]
+
+
+def test_bridge_remember_writes_the_same_entry_the_cli_writes(config, tmp_path, cred):
+    """记一条走的是 `save_entry` 同一个函数、同一套归属,不另开第二份写入口径。"""
+    bridge = _bridge(tmp_path, config)
+    r = bridge.remember("我讨厌用表格讲数据", "user")
+    assert r["ok"] is True and r["user"] == 1
+    assert load_from(global_memory_path())[0].content == "我讨厌用表格讲数据"
+
+    r2 = bridge.remember("这个项目跑测试不加 -n auto", "project")
+    assert r2["ok"] is True and r2["project"] == 1
+    assert "跑测试" in load_from(memory_path(tmp_path))[0].content
+
+
+def test_bridge_remember_refuses_empty_and_unknown_scope(config, tmp_path, cred):
+    """空内容不存(存进去是一条没用的行还占去重位);归属写错就报错,不猜"两级都存"。"""
+    bridge = _bridge(tmp_path, config)
+    assert bridge.remember("   \n ", "project")["ok"] is False
+    assert bridge.remember("一句话", "两级都存")["ok"] is False
+    assert bridge.remember("", "user")["ok"] is False
+    counts = bridge._memory_counts()
+    assert counts == {"project": 0, "user": 0}, counts
+
+
+def test_facade_remember_only_forwards(config, tmp_path, cred):
+    """门面只转发的闸由 test_js_api_surface 全局管,这里钉的是"按钮点得到这个方法"。"""
+    from minicode.gui_bridge import PublicApi
+    bridge = _bridge(tmp_path, config)
+    api = bridge.public_api()
+    assert isinstance(api, PublicApi)
+    r = api.remember("前端点按钮走的就是这一条", "user")
+    assert r["ok"] is True and r["user"] == 1

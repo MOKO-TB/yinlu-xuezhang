@@ -65,6 +65,8 @@ SILENT_COMMANDS = ("/clear", "/compact")   # 只改状态,不往 UI 打消息
     "/remember 喜欢先给结论", "/dream", "/dream all",
     "/skills", "/kb", "/plan", "/nothing-like-this",
     "/find", "/find 三体", "/permission", "/permission full",
+    # v0.9.96 之前这三条根本不在清单里:/library 与 /usage 改坏了也没人红
+    "/library", "/library 活着", "/usage",
 ])
 def test_slash_commands_do_not_crash(env, cmd):
     """重构 handle_slash 时漏传 workspace,曾让 /memory /plan /skills /kb 直接 NameError。"""
@@ -151,3 +153,54 @@ def test_permission_view_survives_a_workspace_without_a_file(env):
     agent.gate.project = permspec.load(_workspace, set())
     handle_slash("/permission", Session(system_prompt="x"), Config(), ui, agent)
     assert "项目白名单:无" in chr(10).join(t for _k, t in ui.messages)
+
+
+# -------------------------------- /library 带书名 = 直接搜书(v0.9.97)
+
+
+def test_library_without_a_query_still_reports_health(env, tmp_path):
+    tmp_path, ui, agent = env
+    handle_slash("/library", Session(system_prompt="x"), Config(), ui, agent)
+    out = " ".join(m[1] for m in ui.messages)
+    assert "馆藏库状态" in out
+
+
+def test_library_with_a_query_searches_through_the_tool_handler(env, tmp_path, monkeypatch):
+    """搜书必须走工具那个 handler:同一份检索、同一句"没查到"、同一个坏库口径。"""
+    from minicode import library as lib
+
+    calls = []
+    real = lib.library_search
+
+    def spy(ctx, query, **kw):
+        calls.append((ctx.workspace, query))
+        return real(ctx, query, **kw)
+
+    monkeypatch.setattr(lib, "library_search", spy)
+    tmp_path, ui, agent = env
+    handle_slash("/library 活着", Session(system_prompt="x"), Config(), ui, agent)
+    assert calls == [(tmp_path, "活着")], calls
+    out = " ".join(m[1] for m in ui.messages)
+    assert "馆藏" in out or "本" in out        # 没库时也是工具自己那句实话,不是崩栈
+
+
+def test_history_says_which_ruler_it_used(env, tmp_path):
+    """`/history` 报的数要说得出来源:实测顶上来的 vs 本地估的,是两种可信度。"""
+    tmp_path, ui, agent = env
+    agent.context_source = lambda: "real"
+    handle_slash("/history", Session(system_prompt="x"), Config(), ui, agent)
+    assert "服务端真返回" in " ".join(m[1] for m in ui.messages)
+
+    ui2 = FakeUI()
+    agent2 = FakeAgent(tmp_path)
+    agent2.context_source = lambda: "estimated"
+    handle_slash("/history", Session(system_prompt="x"), Config(), ui2, agent2)
+    assert "本地估算" in " ".join(m[1] for m in ui2.messages)
+
+
+def test_history_survives_an_agent_without_a_source_label(env, tmp_path):
+    """替身没有 context_source 也不能崩(这条路径在测试桩与旧装配里都会走到)。"""
+    tmp_path, ui, agent = env
+    assert not hasattr(agent, "context_source")
+    handle_slash("/history", Session(system_prompt="x"), Config(), ui, agent)
+    assert any(m[0] == "info" for m in ui.messages)

@@ -108,7 +108,7 @@ python main.py --workspace "D:\我的资料"   # 指定工作区启动(路径不
 
 CLI 命令:`/help` `/clear` `/model`(供应商列表)`/history` `/resume [<n>]` `/find [<关键词>]`(搜自己的历史会话)`/undo` `/compact`
 `/sandbox` `/workspace [路径|default]` `/memory` `/remember` `/dream` `/skills` `/kb`(知识库统计)`/plan`
-`/library`(馆藏库状态)`/usage [1|7|30]`(token 用量)`/browser`(浏览器能力状态)`/exit`;
+`/library [书名]`(不带参数=馆藏库状态;带书名=直接在 133 万条书目里搜,与 `library_search` 工具同一个 handler)`/usage [1|7|30]`(token 用量)`/browser`(浏览器能力状态)`/exit`;
 `Ctrl+C` 中断当前回合。
 
 ## 网页版(校园助手)

@@ -123,7 +123,14 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                              "可看每日圆环图)")
             ui.info("\n".join(lines))
     elif name == "/library":
-        from minicode.library import catalog_health, health_notice
+        from minicode.library import catalog_health, health_notice, library_search
+        # 带书名 = 搜书。走的是工具**同一个 handler 与同一个 ctx**(同一份检索、
+        # 同一句"没查到"、同一个 CatalogUnavailable 口径),不在命令行里再抄一份
+        # 检索逻辑 —— 抄第二份就有两处真相,而这两处都会被人当成"学长说的"。
+        query = " ".join(parts[1:]).strip()
+        if query:
+            ui.info(library_search(agent.ctx, query))
+            return False
         health = catalog_health(workspace)
         notice = health_notice(health)
         lines = [f"馆藏库状态: {health.get('status')}",
@@ -155,14 +162,25 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                          "若只想用已开远程调试的浏览器,可设 YINLUXS_CDP_URL=http://127.0.0.1:9222。")
         ui.info("\n".join(lines))
     elif name == "/history":
-        # 与压缩触发器同一个数(消息 + 工具定义):只报消息那一半,读的人会对不上
-        # "为什么还没到阈值就压了"。
+        # 与压缩触发器同一份算法(消息 + 工具定义),阈值也走同一个
+        # `context_window_for`:以前这里直接拿 config.context_window 算阈值,
+        # 而触发器用的是运行时探测到的窗口 —— 两个数不一样时,用户按 /history
+        # 说的"还早"去判断,却见它突然压了一次。
+        from minicode.model_catalog import context_window_for
         total = agent.context_tokens()
         tools_only = agent.tools_tokens
-        threshold = int(config.context_window * config.compact_at_ratio)
+        window = context_window_for(config.model, config.context_window)
+        threshold = int(window * config.compact_at_ratio)
+        src = ""
+        if hasattr(agent, "context_source"):
+            src = ("这把尺子取的是上次请求**服务端真返回的 prompt_tokens**(当下限)。"
+                   if agent.context_source() == "real"
+                   else "这把尺子是本地估算(端点没返回 usage 时只能估)。")
+        probed = "" if window == config.context_window else \
+            f";窗口按运行时探测算 {window}(config 里写的是 {config.context_window})"
         ui.info(f"当前上下文 {len(session.messages)} 条消息,约 {total} tokens"
-                f"(其中工具定义 {tools_only} tokens;压缩阈值 {threshold} tokens)。"
-                f"会话留档在 sessions/ 目录。")
+                f"(其中工具定义 {tools_only} tokens;压缩阈值 {threshold} tokens{probed})。"
+                f"{src}会话留档在 sessions/ 目录。")
     elif name == "/resume":
         summaries = list_sessions(SESSIONS_DIR)
         if not summaries:

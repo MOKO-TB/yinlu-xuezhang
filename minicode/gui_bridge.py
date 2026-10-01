@@ -32,7 +32,7 @@ from minicode.kb import kb_dirs, kb_stats as kb_stats_fn
 from minicode.mcp import connect_servers, parse_servers
 from minicode.memory import (
     dream, dream_all, global_memory_path, load_from as mem_load_file,
-    memory_path as mem_path,
+    memory_path as mem_path, save_entry,
 )
 from minicode.llm import LLMClient
 from minicode.library import catalog_health, health_notice
@@ -112,6 +112,10 @@ class PublicApi:
 
     def consolidate_memory(self, scope: str = "all") -> dict:
         return self._b.consolidate_memory(scope)
+
+    def remember(self, text: str, scope: str = "project") -> dict:
+        """记一条长期记忆(只转发:存哪、怎么存都在桥里)。"""
+        return self._b.remember(text, scope)
 
     def edit_resend(self, ordinal: int, new_text: str, expect: str = "") -> dict:
         return self._b.edit_resend(ordinal, new_text, expect)
@@ -1902,6 +1906,27 @@ class Bridge:
         }
 
     # ------------------------------------------------------------ 长期记忆
+
+    def remember(self, text: str, scope: str = "project") -> dict:
+        """界面里「记一条长期记忆」—— 走的是 CLI `/remember` 同一个 `save_entry`。
+
+        为什么要给界面开这个口:以前只有命令行能主动记一条(门面这边只有 `consolidate_memory`
+        整理),同学想说"记住我讨厌表格"就只能打字让模型自己决定要不要存。
+        两条边界:①**空内容不存**(存进去是一条没用的行,还会占掉去重的位置);
+        ②归属只有 project/user 两种,写错就报错,不猜成"两级都存"。
+        """
+        got = str(text or "").strip()
+        if not got:
+            return {"ok": False, "msg": "没内容可记 —— 写一句再存。"}
+        sc = (scope or "project").strip().lower()
+        if sc not in ("project", "user"):
+            return {"ok": False,
+                    "msg": f"未知归属「{sc}」,可选:project(本项目)/ user(用户级)"}
+        msg = save_entry(self.workspace, sc, got, sc)
+        failed = msg.startswith(("错误", "工具执行出错"))
+        if not failed:
+            self.ui.push("info", text=msg)
+        return {"ok": not failed, "msg": msg, **self._memory_counts()}
 
     def consolidate_memory(self, scope: str = "all") -> dict:
         """整理长期记忆(去重/归并);scope: project / user / all。"""

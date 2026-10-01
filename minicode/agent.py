@@ -63,6 +63,9 @@ class Agent:
         # 工具 JSON Schema 每轮都随消息一起发出去,量窗口不能只数消息。
         # 注册表运行期不变(MCP 工具在装配时就并进来了),所以这里算一次存住。
         self.tools_tokens = schema_tokens(registry)
+        # 上一次请求**真发出去多少 prompt token**(服务端返回的,不是估的)与当时的
+        # 消息条数。量窗口那把尺子从此有了实测的下限 —— 见 `context_tokens`。
+        self._real_prompt: tuple[int, int] | None = None
         self._undo_stack: list[dict] = []
         self._narration = ""       # 本轮模型写的说明文字:权限确认框里当"为什么要做"的兜底
         self._pending_prior = ""   # B1:下一步 search_knowledge 命中历史差评时的那句系统侧先验
@@ -301,6 +304,10 @@ class Agent:
         ct = u.get("completion_tokens")
         if isinstance(pt, int) and pt >= 0 and isinstance(ct, int) and ct >= 0:
             self.turn_tokens = getattr(self, "turn_tokens", 0) + pt + ct
+        if isinstance(pt, int) and not isinstance(pt, bool) and pt > 0:
+            # 记的是"这一次请求发出去的量"与**当时的消息条数** —— 配对才有意义:
+            # 只记数字的话,压缩或 /resume 之后它就成了另一份上下文的量。
+            self._real_prompt = (len(self.session.messages), pt)
         try:
             from minicode.model_catalog import push_turn_usage
             push_turn_usage(self, self.session, self._effective_config(), turn)
@@ -354,13 +361,39 @@ class Agent:
 
     # ------------------------------------------------------------ 压缩
 
+    # 实测下限能用多久:同一轮里消息只会多出几条(工具结果 + 助手那句话)。
+    # 差得远就说明中间换过一份对话(/resume)或压过一次 —— 那时那个数属于**另一段**
+    # 上下文,拿它当底线会凭空触发一次真实的摘要调用(花额度、改留档),比估不准更糟。
+    REAL_FLOOR_WINDOW = 8
+
+    def _context_pair(self) -> tuple[int, str]:
+        """(这次量出来的 token 数, 这个数的来源)。
+
+        v0.9.97 补的那层:服务端返回过真实 prompt_tokens 时拿它**当底线**。
+        估算那条路是「CJK 一字一 token、其余四字符一 token」,英文、代码、JSON 工具
+        结果多的时候会明显低估,而低估的后果是撞墙才压。底线只往上顶、不往下压
+        (取 `max`):消息序列只会变长,上一次真发出去的量必然是这一次的下界 ——
+        所以它只可能让压缩来得更早,绝不会更晚。取不到实测(端点不给 usage)就照旧
+        用估算,不假装量过。
+        """
+        est = estimate_tokens(self.session.messages) + self.tools_tokens
+        rec = self._real_prompt
+        if (rec and rec[1] > est
+                and 0 <= len(self.session.messages) - rec[0] <= self.REAL_FLOOR_WINDOW):
+            return rec[1], "real"
+        return est, "estimated"
+
     def context_tokens(self) -> int:
         """这一次请求真正要发出去的东西占多少 token:消息 + 40 来个工具的定义。
 
         只数消息会系统性低估几千 token,于是阈值偏晚触发,把真实窗口顶到脸上才想起
         来压(v0.9.40 D2)。CLI 的 `/history` 与任务面板用的是这同一个数。
         """
-        return estimate_tokens(self.session.messages) + self.tools_tokens
+        return self._context_pair()[0]
+
+    def context_source(self) -> str:
+        """这把尺子这次是"实测顶上来的"还是"本地估的" —— 报出去要说得出来源。"""
+        return self._context_pair()[1]
 
     def compact_now(self) -> None:
         self._maybe_compact(force=True)

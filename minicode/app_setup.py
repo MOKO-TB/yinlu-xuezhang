@@ -47,7 +47,7 @@ def build_system_prompt(workspace: Path, for_subagent: bool = False) -> str:
     # (批量只读模式一次四路)。课表/馆藏/校历保留:data 与 english 档真的会用。
     return (prompt + skills_prompt_section(skills)
             + calendar_prompt_section()
-            + notices_prompt_section()
+            + notices_prompt_section(workspace)
             + browser_prompt_section()
             + kb_prompt_section(kb_dirs(workspace))
             + schedule_prompt_section()
