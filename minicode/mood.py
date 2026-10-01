@@ -170,7 +170,7 @@ def log(score=None, note: str = "", day: str = "", tags=None,
 
     entries = load_entries()
     prev = next((e for e in entries if e.get("date") == iso), None)
-    kept_tags = [str(t) for t in (tags or []) if str(t).strip()][:6]
+    kept_tags = _norm_tags(tags)
     row = {"date": iso, "score": value, "note": note, "tags": kept_tags,
            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
     entries = [e for e in entries if e.get("date") != iso] + [row]
@@ -210,16 +210,57 @@ def _is_crisis(text: str) -> bool:
     return any(w in body for w in CRISIS_WORDS)
 
 
-def list_recent(days: int = 30, today: date | None = None) -> list[dict]:
+MAX_TAGS = 6          # 一天最多几个标签
+MAX_TAG_LEN = 12      # 单个标签最长几字(「实验报告写崩了」这种是 note 不是标签)
+
+
+def _norm_tags(raw) -> "list[str]":
+    """标签清洗(v0.9.99):strip、去空、单条截到 MAX_TAG_LEN、去重、限量。
+
+    标签是**分类抓手**,不是第二段日记 —— 想写一句话请写进 note。
+    mood.json 本来就在 .gitignore / SHIP_NEVER / mydata(pack=False)三处
+    登记着,标签存在同一份文件里,不新增任何落盘与外发通道。
+    """
+    if not raw:
+        return []
+    items = raw if isinstance(raw, list) else [raw]
+    out: "list[str]" = []
+    for t in items:
+        tag = str(t or "").strip().lstrip("#")
+        if not tag:
+            continue
+        tag = tag[:MAX_TAG_LEN]
+        if tag not in out:
+            out.append(tag)
+        if len(out) >= MAX_TAGS:
+            break
+    return out
+
+
+def list_recent(days: int = 30, today: date | None = None,
+                tag: str = "") -> "list[dict]":
+    """回看最近 N 天;给了 tag 就只留打了这个标签的天(本地筛,不外发)。"""
     cutoff = (_today(today) - timedelta(days=max(1, int(days)) - 1)).isoformat()
-    return [e for e in load_entries() if str(e.get("date") or "") >= cutoff]
+    rows = [e for e in load_entries() if str(e.get("date") or "") >= cutoff]
+    want = str(tag or "").strip().lstrip("#")
+    if want:
+        rows = [e for e in rows
+                if any(str(t).strip().lstrip("#") == want
+                       for t in (e.get("tags") or []))]
+    return rows
 
 
 # ------------------------------------------------------------------ 每周回顾
 
-def weekly_review(today: date | None = None, days: int = WEEK_DAYS) -> dict:
-    """这一周你自己记了什么。只回读,不判断 —— 判断归专业的人。"""
+def weekly_review(today: date | None = None, days: int = WEEK_DAYS,
+                  tag: str = "") -> dict:
+    """这一周你自己记了什么。只回读,不判断 —— 判断归专业的人。
+
+    tag(P0.9.99):给了就只在打了这个标签的日子里面回看 —— 「实习那些天
+    状态怎么样」这类问法终于有抓手。筛完后不足 3 条不谈形状的口径照旧。
+    """
     today = _today(today)
+    want = str(tag or "").strip().lstrip("#")
     rows = []
     for e in load_entries():
         try:
@@ -227,6 +268,9 @@ def weekly_review(today: date | None = None, days: int = WEEK_DAYS) -> dict:
         except ValueError:
             continue        # 手工改坏的日期:跳过这一条,不让整份回顾崩掉
         if 0 <= gap < days:
+            if want and not any(str(t).strip().lstrip("#") == want
+                                for t in (e.get("tags") or [])):
+                continue
             rows.append(e)
     rows.sort(key=lambda e: e["date"])
     scored = [e for e in rows if isinstance(e.get("score"), int)]
@@ -335,7 +379,8 @@ def clear_all() -> dict:
 # ------------------------------------------------------------------ 工具入口
 
 def mood(ctx, action: str = "log", score=None, note: str = "", day: str = "",
-         tags=None, days: int = WEEK_DAYS, reason: str = "") -> str:
+         tags=None, days: int = WEEK_DAYS, reason: str = "",
+         tag: str = "") -> str:
     """mood 工具:记一条 / 回读一周 / 看清单 / 导出文本 / 删一条。"""
     action = (action or "log").strip().lower()
     if action == "log":
@@ -348,12 +393,13 @@ def mood(ctx, action: str = "log", score=None, note: str = "", day: str = "",
                     "别分析原因、别建议「想开点」,也别追问细节。)")
         return r["msg"]
     if action == "review":
-        return weekly_review(days=int(days or WEEK_DAYS))["text"]
+        return weekly_review(days=int(days or WEEK_DAYS), tag=tag)["text"]
     if action == "list":
-        rows = list_recent(days=int(days or 30))
+        rows = list_recent(days=int(days or 30), tag=tag)
         if not rows:
-            return f"最近 {days} 天没有情绪记录。想记一句就直接说,不用先问能不能记。"
-        return weekly_review(days=int(days or 30))["text"]
+            head = f"最近 {days} 天" + (f"打了「{tag}」标签的日子" if tag else "没有情绪记录")
+            return (f"{head}没有记录。想记一句就直接说,不用先问能不能记。")
+        return weekly_review(days=int(days or 30), tag=tag)["text"]
     if action == "export":
         text = export_text()
         return text or "还没有任何记录,没有可导出的内容。"

@@ -344,3 +344,42 @@ def test_public_api_exposes_the_mood_panel_wiring(config, tmp_path):
     for name in ("mood_review", "mood_log", "mood_export", "mood_clear", "mood_help"):
         assert callable(getattr(api, name, None)), name
     assert "博雅楼" in api.mood_help()["text"]
+
+
+# ------------------------------------------- 标签回读(P6,v0.9.99)
+
+def test_norm_tags_cleans_and_caps():
+    assert mood._norm_tags([" 实习 ", "#考试", "", "实习", "x" * 30]) == \
+        ["实习", "考试", "x" * 12]          # strip/去#/去重/单条截断
+    assert mood._norm_tags("实习") == ["实习"]          # 标量也收
+    assert mood._norm_tags(None) == []
+    assert len(mood._norm_tags([f"t{i}" for i in range(10)])) == mood.MAX_TAGS
+
+
+def test_log_stores_tags_and_overwrite_replaces(tmp_path):
+    _put("2026-10-01", 3, "忙", tags=["实习", "累"])
+    rows = mood.list_recent(days=7)
+    assert rows[0]["tags"] == ["实习", "累"]
+    # 同天覆盖:tags 整体替换(覆盖语义就是"这天换新的"),不悄悄叠加
+    mood.log(score=2, note="更忙", day="2026-10-01", tags=["实习"])
+    rows = mood.list_recent(days=7)
+    assert rows[0]["tags"] == ["实习"]
+
+
+def test_list_and_review_filter_by_tag(tmp_path):
+    _put("2026-10-01", 2, "实习第一天", tags=["实习"])
+    _put("2026-10-02", 4, "没事", tags=[])
+    _put("2026-10-03", 3, "考试周", tags=["考试"])
+    got = mood.list_recent(days=7, tag="实习")
+    assert [r["date"] for r in got] == ["2026-10-01"]
+    assert mood.list_recent(days=7, tag="#实习")     # 带 # 也能筛到
+    text = mood.weekly_review(days=7, tag="实习")["text"]
+    assert "实习第一天" in text and "考试周" not in text
+
+
+def test_mood_tool_tag_passthrough(tmp_path):
+    _put("2026-10-01", 2, "实习第一天", tags=["实习"])
+    out = mood.mood(None, action="list", days=7, tag="实习")
+    assert "实习第一天" in out
+    out2 = mood.mood(None, action="list", days=7, tag="不存在")
+    assert "没有记录" in out2
