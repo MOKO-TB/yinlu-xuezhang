@@ -151,6 +151,37 @@ def skills_plan_search() -> list[Tool]:
     ]
 
 
+def trace_tool() -> list[Tool]:
+    """运行轨迹导出(v0.9.98,§6 #22 ZCode 调研剩项"可回放的 tool-call 流水")。
+
+    单独一组、挨着 `history_tool()` 装配:同属"会话记录"一族。读者是**报 bug 时
+    把这份文件交给维护者复现的人** —— 没有这个读者,它就不该存在(项目里
+    "只写不读的日志"刚清过一轮,不再生产新的)。
+    """
+    return [
+        Tool(
+            name="export_trace",
+            description=(
+                "把**当前会话**导出成一份可回放的运行轨迹 JSON(工作区根目录,"
+                "「运行轨迹-<时刻>.json」):完整的对话原文 + 每一步工具调用的"
+                "名称/参数/结果/时刻。用户说「导出这次运行的轨迹」「把刚才的"
+                "操作记录给维护者」「我要报个 bug」时用 —— 复现问题只需要这份"
+                "文件,不用再截图。注意:文件里是**原文**(含个人数据与工具输出),"
+                "交出去之前提醒用户自己过一眼;长内容按上限截断并在文件里写明。"
+                "网页版没有本工具(访客不该能导出服务器上的会话)。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string",
+                               "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
+                },
+            },
+            handler=session.export_trace_tool,
+        ),
+    ]
+
+
 def history_tool() -> list[Tool]:
     """跨会话历史检索。单独一组:它挨着 `search_knowledge` 装配,但不属于上面那三件
     的历史顺序 —— 把它们四个并成一个函数会改动 `registry.py` 里已钉住的装配序列。"""

@@ -319,9 +319,12 @@ def sub_tool_registry(registry: list[Tool], spec: SubAgentSpec) -> list[Tool]:
     同时弹好几张,而用户看不到"这是哪一路在问什么"(确认框能贴标签是因为确认框
     本来就写着要做什么动作,提问卡要的是用户思考)。方向:要问由主代理问,
     子代理把"这里有个分叉没定"写进报告带回来。
+
+    `export_trace` 同一批摘掉(v0.9.98):轨迹是**主对话**的会话记录,子代理的
+    ctx 由父 ctx 派生、带着父会话 —— 让它导出,文件里就是父会话,张冠李戴。
     """
     tools = [t for t in registry
-             if t.name not in ("task", "ask_user")
+             if t.name not in ("task", "ask_user", "export_trace")
              and (not spec.read_only or t.read_only)]
     return [dc_replace(t, name=f"{spec.type}·{t.name}") for t in tools]
 

@@ -175,6 +175,89 @@ INTERRUPTED_TOOL_RESULT = ("程序中断:这一步当时没有跑完,也没有�
                            "(这条是恢复历史时补记的,不是工具的真实输出)。")
 
 
+# ------------------------------------------------ 运行轨迹导出(v0.9.98,§6 #22 剩项)
+
+TRACE_CONTENT_LIMIT = 8000   # 单条消息正文进轨迹的上限(工具输出可能非常长)
+TRACE_ARGS_LIMIT = 2000      # 单条工具调用的 arguments 上限
+TRACE_FORMAT = "yinlu-trace"
+TRACE_VERSION = 1
+
+
+def _clip(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"…(截断,原 {len(text)} 字)"
+
+
+def export_trace(messages: list, dest: Path, app_version: str = "") -> dict:
+    """把会话消息导成一份**可回放**的运行轨迹 JSON(§6 #22 ZCode 调研剩项)。
+
+    读者是谁(先答这个问题再动手,不然就是下一份"只写不读"的日志):
+    **用户报 bug 时交给维护者复现的那份文件** —— 里面有完整的 tool-call 流水
+    (谁、什么参数、回了什么、几点),维护者照着能重放出当时的每一步。
+
+    数据从**内存里的 session.messages** 取(它就是留档的同一份事实,连 ts 都带,
+    v0.9.66 起)。长正文与长参数按上限截断并**在文件里写明截了几字** ——
+    绝不静默给一份看起来完整、其实被剪过的轨迹。任何解析意外都按原样字符串放进
+    arguments,绝不为了好看重排一条 tool call。
+    """
+    out: list[dict] = []
+    tool_calls = 0
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        row = {"role": str(m.get("role") or "")}
+        if m.get("ts"):
+            row["ts"] = str(m["ts"])
+        content = m.get("content")
+        if isinstance(content, str) and content:
+            row["content"] = _clip(content, TRACE_CONTENT_LIMIT)
+        calls = m.get("tool_calls") or []
+        if calls:
+            seen_calls = []
+            for c in calls:
+                fn = (c.get("function") or {}) if isinstance(c, dict) else {}
+                args = fn.get("arguments")
+                if isinstance(args, str):
+                    args_text = _clip(args, TRACE_ARGS_LIMIT)
+                else:
+                    try:
+                        args_text = _clip(json.dumps(args, ensure_ascii=False),
+                                          TRACE_ARGS_LIMIT)
+                    except (TypeError, ValueError):
+                        args_text = _clip(str(args), TRACE_ARGS_LIMIT)
+                seen_calls.append({"id": str(c.get("id") or ""),
+                                   "name": str(fn.get("name") or ""),
+                                   "arguments": args_text})
+            row["tool_calls"] = seen_calls
+            tool_calls += len(seen_calls)
+        if m.get("tool_call_id"):
+            row["tool_call_id"] = str(m["tool_call_id"])
+        if m.get("name"):
+            row["name"] = str(m["name"])
+        out.append(row)
+    payload = {
+        "format": TRACE_FORMAT,
+        "version": TRACE_VERSION,
+        "app_version": app_version,
+        "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "note": ("这份文件是会话留档的导出:含对话原文与工具输出(可能带个人数据),"
+                 "分享给别人前请自己过一眼;长内容按上限截断,截过的地方有标记。"),
+        "count": len(out),
+        "tool_calls": tool_calls,
+        "messages": out,
+    }
+    try:
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(payload, ensure_ascii=False, indent=1),
+                        encoding="utf-8")
+    except OSError as e:
+        return {"ok": False, "msg": f"轨迹写不进去:{type(e).__name__}: {e}"}
+    return {"ok": True, "count": len(out), "tool_calls": tool_calls,
+            "path": str(dest), "bytes": dest.stat().st_size}
+
+
 def repair_tool_pairs(msgs: list[dict]) -> tuple[list[dict], int]:
     """把"assistant 喊了工具却没留下结果"的非法序列补齐,返回 (修好的列表, 改动条数)。
 
@@ -473,3 +556,26 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
             workspace=workspace,
         ))
     return summaries
+
+
+def export_trace_tool(ctx, reason: str = "") -> str:
+    """export_trace 工具处理器:把**当前会话**导成轨迹文件(工作区根目录)。
+
+    轨迹从 `ctx.session.messages` 现取 —— 那是留档的同一份事实(v0.9.66 起每条
+    带 ts),不翻留档文件、不解析 JSONL。没挂 session 的形态(网页版白名单也没
+    这只工具)照实说做不到。写在工作区根目录:与「引路学长日历.ics」同一落点
+    口径,不新开一个看不见的目录。
+    """
+    from minicode import __version__
+    sess = getattr(ctx, "session", None)
+    if sess is None or not getattr(sess, "messages", None):
+        return "错误: 现在没有可导出的会话内容(还没说过第一句话)。"
+    dest = Path(ctx.workspace) / \
+        f"运行轨迹-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    r = export_trace(sess.messages, dest, app_version=__version__)
+    if not r.get("ok"):
+        return f"错误: {r.get('msg') or '导出失败'}"
+    return (f"已导出 {r['count']} 条消息(其中工具调用 {r['tool_calls']} 次,"
+            f"{r['bytes'] // 1024} KB)→ {dest.name}。"
+            "**这份文件是对话原文与工具输出,交给别人前请用户自己过一眼**;"
+            "复现问题只需要它,不必再截图。")

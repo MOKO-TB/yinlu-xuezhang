@@ -181,7 +181,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.paths": ("_is_writable", "_local_state_dir", "diagnostics",
                        "STATE_BACKEND"),
     # ---- v0.9.22:托盘 + 关窗确认(整套新模块,漏收 = X 又变成直接退出) ----
-    "minicode.tray": ("install", "close_choice", "read_pref", "write_pref",
+    "minicode.tray": (
+        # v0.9.98:自启「位置变了」探针/修复/启动核对(漏收 = 重装挪位后
+        # 勾看着是开、开机不响,而谁也说不清为什么)
+        "startup_stale", "repair_startup_shortcut", "check_stale_startup",
+        "install", "close_choice", "read_pref", "write_pref",
                       "TrayController", "hide_to_tray", "_ensure_icon",
                       "_ensure_parent",
                       # v0.9.25:桌面提醒(漏收 = 最小化后课前提醒彻底没声)
@@ -223,7 +227,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                          "history_hits", "search_history",
                          # 崩溃/强关留下的悬空 tool_calls:漏收 = 装好的包里恢复一次
                          # 中断过的会话,以后每一轮都被端点 400
-                         "repair_tool_pairs"),
+                         "repair_tool_pairs"
+
+                           # v0.9.98:运行轨迹导出(漏收 = 装好的包里报障拿不出流水)
+                           , "export_trace", "export_trace_tool"),
     # v0.9.40 D1/D2:压缩保头+尾、工具 schema 进估算(漏收 = 装好的包里这两条退化
     # 回"保尾丢头"和"只数消息"的旧尺子,而界面看不出来)
     "minicode.compaction": ("clip_history", "schema_tokens", "HISTORY_HEAD_CAP"),
@@ -296,7 +303,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.tools.catalog_knowledge": ("skills_plan_search", "kb_suggest_tool",
                                          "memory_tool",
                                          # v0.9.96:动手前问一句(漏收 = 模型根本看不到这只工具)
-                                         "ask_user"),
+                                         "ask_user",
+                                         # v0.9.98:运行轨迹导出(漏收 = 报障时拿不出流水)
+                                         "trace_tool"),
     "minicode.tools.catalog_media": ("tools",),
     # v0.9.98:提醒一族从 catalog_campus 搬去 catalog_remind(399 行热点拆分),
     # 漏收的表现是装好的包里提醒/课表/心情/通知/天气整组消失
@@ -447,7 +456,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # v0.9.78:成本闸门(漏收 = config 里的上限在包里没人读,
                        # 跑飞了还是只能等时间限)
                        "TOKEN_LIMIT_NOTE", "session_token_limit"),
-    "minicode.subagents": ("type_spec", "_await", "_timeout_note", "TYPE_KEYS",
+    "minicode.subagents": (
+        # v0.9.98:并行写的文件占用闸(漏收 = 装好的包里两路同写一个文件
+        # 退回"后写覆盖先写",用户还看不见任何报错)
+        "_BatchFileLocks", "_guard_write_tools", "_lock_key",
+        "type_spec", "_await", "_timeout_note", "TYPE_KEYS",
                            "DOMAIN_KEYS",
                            # v0.9.60:批量放开写类型的两根支柱(漏收 = 混合批次
                            # 静默退回"只读才并行",而工具描述还在许诺能并行写)
@@ -504,6 +517,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # v0.9.56:定时任务表接线(漏收 = A4 的周期任务在装好的
                            # 包里永远没人跑,而界面一切正常)
                            "JOB_SPECS", "JOB_HANDLERS", "_run_due_jobs",
+                           # v0.9.98:周期自动备份(漏收 = 装好的包里这一班静默跳过,
+                           # 用户以为在备份,其实从来没有)
+                           "_job_backup", "_rotate_backups", "_BACKUP_PREFIX",
+                           "BACKUP_KEEP",
                            # v0.9.57 A4:两个真任务(漏收 = 周五周日什么都不发生,
                            # 任务表在装好的包里退回装饰品)
                            "_job_weekly_review", "_job_gap_digest",

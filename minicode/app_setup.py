@@ -101,6 +101,7 @@ def build_runner_agent(config: Config, workspace: Path, ui, llm,
     session = Session(system_prompt=build_system_prompt(workspace),
                       log_dir=sessions_dir or SESSIONS_DIR,
                       workspace=workspace)
+    ctx.session = session   # export_trace(v0.9.98):轨迹从活动会话现取,不翻留档文件
     agent = Agent(
         llm=llm,
         registry=registry,

@@ -26,6 +26,10 @@ class ToolContext:
     sandbox: Any | None = None   # minicode.sandbox.SandboxState,由 app_setup 注入
     ui: Any | None = None        # GuiUI/TerminalUI:工具可把图形指令推给界面(如校园地图)
     llm: Any | None = None       # LLMClient:记忆整理(dream)等内部工具需要一次性补全
+    # 本会话的 Session 对象(v0.9.98,export_trace 用):只有主代理的 ctx 带着它;
+    # 子代理的 ctx 由 dc_replace 派生、字段原样保留 —— 但 export_trace 已从子代理
+    # 工具集摘掉(轨迹归主对话,子代理导出父会话是张冠李戴)。
+    session: Any | None = None
 
 
 Handler = Callable[..., str]  # 签名: handler(ctx, **kwargs) -> str

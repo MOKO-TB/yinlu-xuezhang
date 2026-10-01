@@ -1,7 +1,11 @@
 import os
 
 from minicode.llm import AssistantTurn, ToolCall
+import json
+
+from minicode import session as session_mod
 from minicode.session import Session, list_sessions, outbound, prune_sessions, to_markdown
+from minicode.tools.base import Tool
 
 
 def test_roundtrip(tmp_path):
@@ -144,3 +148,93 @@ def test_prune_sessions_never_touches_the_protected_file(tmp_path):
     removed = prune_sessions(tmp_path, keep_last=1, protect={p1})
     assert removed == []
     assert p1.exists() and p2.exists()
+
+
+# ------------------------------------------- 运行轨迹导出(v0.9.98,§6 #22 剩项)
+
+def _trace_messages():
+    return [
+        {"role": "system", "content": "系统提示词", "ts": "2026-10-01 10:00:00"},
+        {"role": "user", "content": "帮我建一个文件", "ts": "2026-10-01 10:00:05"},
+        {"role": "assistant", "content": "好,我用 write_file。",
+         "tool_calls": [{"id": "c1", "function": {
+             "name": "write_file",
+             "arguments": '{"path": "a.txt", "content": "内容"}'}}],
+         "ts": "2026-10-01 10:00:06"},
+        {"role": "tool", "tool_call_id": "c1", "name": "write_file",
+         "content": "已写入 a.txt", "ts": "2026-10-01 10:00:07"},
+        {"role": "assistant", "content": "写好了。", "ts": "2026-10-01 10:00:08"},
+    ]
+
+
+def test_export_trace_writes_replayable_json(tmp_path):
+    dest = tmp_path / "运行轨迹-1.json"
+    r = session_mod.export_trace(_trace_messages(), dest, app_version="0.9.98")
+    assert r["ok"] and r["count"] == 5 and r["tool_calls"] == 1
+    data = json.loads(dest.read_text(encoding="utf-8"))
+    assert data["format"] == session_mod.TRACE_FORMAT
+    assert data["app_version"] == "0.9.98"
+    roles = [m["role"] for m in data["messages"]]
+    assert roles == ["system", "user", "assistant", "tool", "assistant"]
+    call = data["messages"][2]["tool_calls"][0]
+    assert call["name"] == "write_file" and "a.txt" in call["arguments"]
+    assert data["messages"][3]["tool_call_id"] == "c1"
+    assert all("ts" in m for m in data["messages"]), "v0.9.66 的消息级时刻要带进轨迹"
+
+
+def test_export_trace_marks_truncation_instead_of_silently_cutting(tmp_path):
+    long_content = "x" * (session_mod.TRACE_CONTENT_LIMIT + 500)
+    long_args = "y" * (session_mod.TRACE_ARGS_LIMIT + 500)
+    msgs = [{"role": "user", "content": long_content},
+            {"role": "assistant", "tool_calls": [
+                {"id": "c1", "function": {"name": "bash", "arguments": long_args}}]}]
+    dest = tmp_path / "t.json"
+    assert session_mod.export_trace(msgs, dest)["ok"]
+    data = json.loads(dest.read_text(encoding="utf-8"))
+    assert "截断,原" in data["messages"][0]["content"]
+    assert "截断,原" in data["messages"][1]["tool_calls"][0]["arguments"]
+    assert len(data["messages"][0]["content"]) < len(long_content)
+
+
+def test_export_trace_tool_reports_and_warns_about_privacy(tmp_path):
+    """处理器:文件落工作区根,回话里必须带着「原文含个人数据,交人前过一眼」。"""
+    from types import SimpleNamespace
+    from minicode.session import export_trace_tool
+    sess = SimpleNamespace(messages=_trace_messages())
+    ctx = SimpleNamespace(workspace=tmp_path, session=sess)
+    out = export_trace_tool(ctx, reason="报障用")
+    assert "已导出 5 条消息" in out and "过一眼" in out
+    files = list(tmp_path.glob("运行轨迹-*.json"))
+    assert len(files) == 1 and json.loads(files[0].read_text(encoding="utf-8"))["count"] == 5
+
+    # 没有会话/还是空的:如实说,不写半个空文件
+    before = list(tmp_path.glob("运行轨迹-*.json"))
+    empty = SimpleNamespace(workspace=tmp_path, session=SimpleNamespace(messages=[]))
+    assert "没有可导出" in export_trace_tool(empty, reason="")
+    assert "没有可导出" in export_trace_tool(SimpleNamespace(workspace=tmp_path), reason="")
+    assert list(tmp_path.glob("运行轨迹-*.json")) == before, "失败的调用不许落文件"
+
+
+def test_export_trace_excluded_from_subagent_tools():
+    """轨迹是主对话的会话记录:子代理的 ctx 带着父会话,让它导就是张冠李戴。"""
+    from minicode.subagents import sub_tool_registry, SUBAGENT_TYPES
+    from minicode.tools.registry import build_default_registry
+    reg = build_default_registry() + [
+        Tool(name="export_trace", description="", parameters={},
+             handler=lambda ctx, **k: "")]
+    for key in ("explore", "implement"):
+        names = [t.name.rsplit("·", 1)[-1]
+                 for t in sub_tool_registry(reg, SUBAGENT_TYPES[key])]
+        assert "export_trace" not in names
+
+
+def test_session_field_wired_into_runner_ctx(tmp_path):
+    """装配层必须把 Session 挂进 ctx:漏了 = 模型调 export_trace 永远拿"没有可导出"。"""
+    from minicode.config import Config, Provider
+    from minicode.app_setup import build_runner_agent
+    cfg = Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",
+                                     api_key="k", model="m")],
+                 active_provider_id="t")
+    agent, sess = build_runner_agent(cfg, tmp_path, ui=None, llm=None,
+                                     sessions_dir=tmp_path / "s")
+    assert agent.ctx.session is sess
