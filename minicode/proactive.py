@@ -749,13 +749,91 @@ def _job_gap_digest(bridge) -> str:
     return "已推" if ok else "没送出"
 
 
+def _job_backup(bridge) -> str:
+    """周期自动备份(v0.9.98,§6 #17C 剩的「没有定时/增量导出」)。
+
+    把 pack=true 的本机数据(含聊天记录,超过 mydata 的 2 GB 上限就如实报
+    备份没成)按周打成一份迁移包,落到 config.json 的 `backup_dir` ——
+    **没配置就跳过并说清**,绝不自作主张往用户盘上写。复用
+    `mydata.export_package` 同一条路:密钥/教务登录态出不了包那道内层黑名单
+    闸原样生效,`.tmp` 先写后换名的原子性也一样。
+
+    成功与否只进账本与看门狗日志(问学长「定时任务跑没跑」能查到),
+    **不弹通知** —— 备份是背景事,每周弹一条"我备份好了"就是新的打扰;
+    失败也不弹:失败结论同样可查,而"能定时弹的类别必须先进通知开关表"
+    (§3 决策 19),为一条失败提示开新类别不值。
+    """
+    from minicode import mydata as _mydata
+    cfg = getattr(bridge, "config", None)
+    raw = str(getattr(cfg, "backup_dir", "") or "").strip() if cfg is not None else ""
+    if not raw:
+        return "没配置 backup_dir,这次跳过(config.json 里填 backup_dir 才会真备份)"
+    dest_dir = Path(raw).expanduser()
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return f"备份目录建不出来({type(e).__name__}: {e}),这次跳过"
+    dest = dest_dir / f"{_BACKUP_PREFIX}{_day_key()}.zip"   # 同一天重跑覆盖同一份
+    r = _mydata.export_package(dest, include_sessions=True)
+    if not r.get("ok"):
+        return f"备份没成:{r.get('msg') or '原因不明'}"
+    rotate = _rotate_backups(dest_dir)
+    return (f"已备份 {len(r.get('files') or [])} 项 → {dest.name};{rotate}")
+
+
+_BACKUP_PREFIX = "引路学长-自动备份-"
+BACKUP_KEEP = 4     # 保留最近几份;更老的删掉(只删我们自己命名的那一族)
+
+
+def _rotate_backups(dest_dir: Path) -> str:
+    """把备份目录轮转到最近 BACKUP_KEEP 份,返回一句给人看的结论。
+
+    目录是用户配的,里面可能有他自己的东西 —— 只按
+    「前缀 + YYYY-MM-DD + .zip」的**完整形状**匹配(整串 fullmatch,
+    不是前缀 startswith):`引路学长-自动备份-2026-01-01.txt`、
+    `引路学长-自动备份-旧.zip`、别的名字一概不碰。删不掉(被占用/只读)
+    就留着下次再试,绝不为轮转把一次成功的备份标成失败。
+    """
+    ours: list[Path] = []
+    for p in dest_dir.iterdir():
+        if not p.is_file() or not p.name.startswith(_BACKUP_PREFIX):
+            continue
+        body = p.name[len(_BACKUP_PREFIX):p.name.rindex(".zip")] \
+            if p.name.endswith(".zip") else ""
+        if len(body) == 10 and body.count("-") == 2 \
+                and all(x.isdigit() for x in body.split("-")):
+            ours.append(p)
+    ours.sort(key=lambda p: p.name)         # ISO 日期按名字排序就是按时间
+    excess = ours[:-BACKUP_KEEP] if len(ours) > BACKUP_KEEP else []
+    removed = 0
+    for old in excess:
+        try:
+            old.unlink()
+            removed += 1
+        except OSError:
+            pass
+    line = f"保留最近 {BACKUP_KEEP} 份"
+    if removed:
+        line += f",删了 {removed} 份更早的"
+    stuck = len(excess) - removed
+    if stuck:
+        line += f";另有 {stuck} 份想删没删掉(可能被占用)"
+    return line
+
+
 JOB_SPECS: "list[_jobs.JobSpec]" = [
     _jobs.JobSpec("mood_weekly_review", cadence="weekly", weekday=6, hour=20),
-    _jobs.JobSpec("kb_gap_digest", cadence="weekly", weekday=5, hour=18),
+    # v0.9.98 修一处 off-by-one:文档口径一直是「周五 18:00」,这里却登记
+    # weekday=5 —— Python weekday 5 是**周六**,缺口周报从 v0.9.57 起一直
+    # 晚一天跑(测试还把错值钉住了)。周五是 4。
+    _jobs.JobSpec("kb_gap_digest", cadence="weekly", weekday=4, hour=18),
+    # 周期自动备份(v0.9.98,§6 #17C 剩):周六上午 10 点,与两条周报错开。
+    _jobs.JobSpec("data_backup_weekly", cadence="weekly", weekday=5, hour=10),
 ]
 JOB_HANDLERS: "dict[str, object]" = {
     "mood_weekly_review": _job_weekly_review,
     "kb_gap_digest": _job_gap_digest,
+    "data_backup_weekly": _job_backup,
 }
 
 

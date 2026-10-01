@@ -1,6 +1,7 @@
 """主动推荐(proactive)测试:标题清洗 / 列表页解析 / 快照去重 / 校历提醒 / 开关。"""
 import json
 from datetime import date, datetime
+from pathlib import Path
 
 import pytest
 
@@ -973,11 +974,15 @@ FRIDAY_EVE = datetime(2026, 10, 2, 18, 30)     # 2026-10-02 是周五(缺口周�
 
 
 def test_the_two_weekly_jobs_are_registered():
+    """v0.9.98:任务表三班 —— 周日心情周复盘 / 周五缺口周报 / 周六自动备份。
+    缺口周报的 weekday 从 5(周六)修成 4(周五):文档口径一直是周五,
+    代码从 v0.9.57 起却晚一天跑,测试此前把错值钉住了。"""
     from minicode import tray
     specs = {s.id: s for s in proactive.JOB_SPECS}
-    assert set(specs) == {"mood_weekly_review", "kb_gap_digest"}
+    assert set(specs) == {"mood_weekly_review", "kb_gap_digest", "data_backup_weekly"}
     assert specs["mood_weekly_review"].weekday == 6 and specs["mood_weekly_review"].hour == 20
-    assert specs["kb_gap_digest"].weekday == 5 and specs["kb_gap_digest"].hour == 18
+    assert specs["kb_gap_digest"].weekday == 4 and specs["kb_gap_digest"].hour == 18
+    assert specs["data_backup_weekly"].weekday == 5 and specs["data_backup_weekly"].hour == 10
     for job_id in specs:
         assert job_id in proactive.JOB_HANDLERS
     # 新类别必须进 tray 的类别表,否则用户关不掉(与 weather 那根针同一口径)
@@ -1099,3 +1104,88 @@ def test_weekly_review_job_runs_for_real_when_due(monkeypatch, tmp_path):
     # 同一时刻再过一遍心跳:本周已跑,不再到期
     assert proactive._run_due_jobs(bridge, now=now) == []
     assert _jobs.load_state()["mood_weekly_review"]["runs"] == 1
+
+
+# ---------------- v0.9.98:缺口周报的 off-by-one + 周期自动备份 ----------------
+
+def test_gap_digest_is_due_friday_not_saturday(monkeypatch, tmp_path):
+    """off-by-one 的证明:缺口周报周五 18:30 到点就跑,周六同一时刻不是它的班。
+    修之前这条反着红 —— 代码把周六当班,而文档与直觉都是周五。"""
+    from minicode import jobs as _jobs
+    monkeypatch.setattr(_jobs, "state_path", lambda: tmp_path / "jobs-state.json")
+    monkeypatch.setattr(proactive, "JOB_SPECS",
+                        [s for s in proactive.JOB_SPECS if s.id == "kb_gap_digest"])
+    bridge, _ui = _push_bridge()
+    assert proactive._run_due_jobs(bridge, now=FRIDAY_EVE) == ["kb_gap_digest"]
+    saturday_eve = datetime(2026, 10, 3, 18, 30)          # 2026-10-03 是周六
+    assert proactive._run_due_jobs(bridge, now=saturday_eve) == []
+
+
+def test_backup_job_skips_honestly_without_backup_dir(tmp_path):
+    """没配置 backup_dir 就如实说跳过 —— 绝不自作主张往用户盘上写。"""
+    from types import SimpleNamespace
+    bridge = SimpleNamespace(config=SimpleNamespace(backup_dir=""))
+    assert "没配置 backup_dir" in proactive._job_backup(bridge)
+    bridge = SimpleNamespace()                            # 连 config 都没有(测试替身)
+    assert "没配置 backup_dir" in proactive._job_backup(bridge)
+
+
+def test_backup_job_packs_into_configured_dir_and_rotates(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from minicode import mydata as _mydata
+    calls = []
+
+    def fake_export(dest, include_sessions=True):
+        calls.append((str(dest), include_sessions))
+        Path(dest).write_bytes(b"PK\x03\x04-fake")        # 真落一个文件
+        return {"ok": True, "files": [{"key": "a"}, {"key": "b"}]}
+
+    monkeypatch.setattr(_mydata, "export_package", fake_export)
+    bdir = tmp_path / "backups"
+    bridge = SimpleNamespace(config=SimpleNamespace(backup_dir=str(bdir)))
+    out = proactive._job_backup(bridge)
+
+    assert calls and calls[0][1] is True                  # 备份含聊天记录(整包图的是"换电脑全都在")
+    assert "已备份 2 项" in out and "保留最近 4 份" in out
+    assert (bdir / f"{proactive._BACKUP_PREFIX}"
+            f"{date.today().isoformat()}.zip").is_file()
+
+    # 轮转:目录里塞 6 份旧的 + 别人的文件,只有我们命名的那一族被裁到 4 份
+    for d in ("2026-08-01", "2026-08-08", "2026-08-15", "2026-08-22",
+              "2026-08-29", "2026-09-05"):
+        (bdir / f"{proactive._BACKUP_PREFIX}{d}.zip").write_bytes(b"old")
+    (bdir / "引路学长-自动备份-2026-07-01.txt").write_text("不是 zip", encoding="utf-8")
+    (bdir / "我的东西.zip").write_bytes(b"foreign")
+    out2 = proactive._job_backup(bridge)
+    assert "删了 3 份更早的" in out2, out2
+    ours = sorted(p.name for p in bdir.iterdir()
+                  if p.name.startswith(proactive._BACKUP_PREFIX)
+                  and p.suffix == ".zip")
+    assert len(ours) == 4
+    assert (bdir / "引路学长-自动备份-2026-07-01.txt").is_file()   # 形状不对的不碰
+    assert (bdir / "我的东西.zip").is_file()                        # 别人的文件不碰
+
+
+def test_backup_job_reports_export_failure(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from minicode import mydata as _mydata
+    monkeypatch.setattr(_mydata, "export_package",
+                        lambda dest, include_sessions=True: {"ok": False,
+                                                             "msg": "超过 2 GB 上限"})
+    bridge = SimpleNamespace(config=SimpleNamespace(backup_dir=str(tmp_path / "bk")))
+    out = proactive._job_backup(bridge)
+    assert "备份没成" in out and "2 GB" in out
+
+
+def test_backup_job_runs_for_real_when_due(monkeypatch, tmp_path):
+    """接线端到端:周六 10 点后到期真跑、真记账;同一天再过一遍不重复。"""
+    from minicode import jobs as _jobs
+    monkeypatch.setattr(_jobs, "state_path", lambda: tmp_path / "jobs-state.json")
+    monkeypatch.setattr(proactive, "JOB_SPECS",
+                        [s for s in proactive.JOB_SPECS if s.id == "data_backup_weekly"])
+    bridge, _ui = _push_bridge()                          # 没配 config → 如实跳过并记账
+    saturday_morning = datetime(2026, 10, 3, 10, 30)      # 2026-10-03 是周六
+    assert proactive._run_due_jobs(bridge, now=saturday_morning) == ["data_backup_weekly"]
+    row = _jobs.load_state()["data_backup_weekly"]
+    assert row["runs"] == 1 and "没配置 backup_dir" in row["result"]
+    assert proactive._run_due_jobs(bridge, now=saturday_morning) == []

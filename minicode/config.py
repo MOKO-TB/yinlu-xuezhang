@@ -231,6 +231,10 @@ class Config:
     # 回头用起来 —— 同一个词连着搜空就在结果里点一句、命中历史 👎 就给本轮一条
     # 系统侧先验。**关掉它,主循环的请求字节与结果文本都与开之前逐字一致**。
     feedback_recall: bool = True
+    # 周期自动备份目录(v0.9.98,#17C 剩的"没有定时导出"):填了路径,周六上午
+    # 那班任务才会把 pack=true 的本机数据(含聊天记录)打成迁移包放进去,留最近
+    # 4 份;留空 = 不备份(任务到点只跳过并说明,绝不自选目录往用户盘上写)。
+    backup_dir: str = ""
     context_window: int = 131072        # 模型上下文窗口(token),用于压缩触发判断
     compact_at_ratio: float = 0.7       # 估算 token 达到窗口的该比例时触发压缩
     # MCP 服务器原始配置(list[dict],由 minicode.mcp.parse_servers 解析;
@@ -419,6 +423,7 @@ def _config_from_raw(raw: dict) -> Config:
                              raw.get("subagent_models"), dict) else {}).items()
                          if str(v or "").strip()},
         feedback_recall=bool(raw.get("feedback_recall", True)),
+        backup_dir=str(raw.get("backup_dir") or "").strip(),
         context_window=int(raw.get("context_window", 131072)),
         compact_at_ratio=float(raw.get("compact_at_ratio", 0.7)),
         mcp_servers=raw.get("mcp_servers") if isinstance(raw.get("mcp_servers"), list) else [],
@@ -521,6 +526,7 @@ def save_config(path: Path, cfg: Config) -> None:
         # 空 dict 也照样存:用户写过就该在 config.json 里看得见(看不见就会被当成没生效)
         "subagent_models": cfg.subagent_models,
         "feedback_recall": cfg.feedback_recall,
+        "backup_dir": cfg.backup_dir,
         "context_window": cfg.context_window,
         "compact_at_ratio": cfg.compact_at_ratio,
     }
