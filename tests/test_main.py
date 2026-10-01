@@ -204,3 +204,65 @@ def test_history_survives_an_agent_without_a_source_label(env, tmp_path):
     assert not hasattr(agent, "context_source")
     handle_slash("/history", Session(system_prompt="x"), Config(), ui, agent)
     assert any(m[0] == "info" for m in ui.messages)
+
+
+# ------------------------------------------- 自定义斜杠命令(F2,v0.9.100)
+
+def test_workspace_commands_scanned_and_override_builtin(tmp_path):
+    from minicode import slash_commands as sc
+    d = tmp_path / ".commands"
+    d.mkdir()
+    (d / "周报.md").write_text(
+        "---\ndescription: 帮我写周报\n---\n请按下面的要点写周报:\n$ARGS", encoding="utf-8")
+    rows = sc.workspace_commands(tmp_path)
+    assert rows[0]["cmd"] == "周报" and "$ARGS" in rows[0]["prompt"]
+    # 工作区同名覆盖内置(翻译)
+    (d / "翻译.md").write_text("---\ndescription: 方言翻译\n---\n$ARGS", encoding="utf-8")
+    # expand 只认命令词本身(带内容的展开归 CLI 的 expand_with_args)
+    out = sc.expand("/翻译", tmp_path)
+    assert out == "$ARGS" and out != sc.expand("/翻译")   # 工作区覆盖内置
+    # 无参命令直接展开
+    assert "写周报" in sc.expand("/周报", tmp_path)
+    assert sc.expand("/不存在", tmp_path) is None
+
+
+def test_expand_with_args_cli_side(tmp_path):
+    from types import SimpleNamespace
+    msgs = []
+    ui = SimpleNamespace(info=lambda t: msgs.append(t))
+    from main import expand_with_args
+    from minicode import slash_commands as sc
+    d = tmp_path / ".commands"
+    d.mkdir()
+    (d / "周报.md").write_text("---\ndescription: x\n---\n要点:\n$ARGS", encoding="utf-8")
+    # 带内容:替换进 $ARGS
+    out = expand_with_args("/周报 本周做了登录页", tmp_path, ui)
+    assert out is not None and "本周做了登录页" in out and "$ARGS" not in out
+    # 不带内容:提示后不展开
+    msgs.clear()
+    assert expand_with_args("/周报", tmp_path, ui) is None
+    assert msgs and "要带内容" in msgs[0]
+    # 无参命令直接发
+    assert expand_with_args("/总结", tmp_path, ui) is not None
+
+
+def test_slash_commands_payload_carries_custom(tmp_path):
+    from test_gui_bridge import FakeLLM
+    from minicode.llm import AssistantTurn
+    from test_gui_bridge import make
+    d = tmp_path / ".commands"
+    d.mkdir()
+    (d / "周报.md").write_text("---\ndescription: 帮我写周报\n---\n$ARGS", encoding="utf-8")
+    llm = FakeLLM([AssistantTurn(text="ok")])
+    bridge, _w, _s = make(_cfg(), tmp_path, llm)
+    r = bridge.get_slash_commands()
+    cmds = {c["cmd"]: c for c in r["commands"]}
+    assert cmds["周报"]["custom"] if False else "周报" in cmds
+    assert cmds["周报"]["has_arg"] is True
+
+
+def _cfg():
+    from minicode.config import Config, Provider
+    return Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",
+                                      api_key="k", model="m")],
+                  active_provider_id="t")

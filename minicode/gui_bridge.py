@@ -952,12 +952,21 @@ class Bridge:
                 "channels": describe_channels(self.workspace, app_dir=self.app_dir)}
 
     def get_slash_commands(self) -> dict:
-        """对话型 slash 命令表(唯一真相在 minicode.slash_commands,改字不动前端)。"""
-        from minicode.slash_commands import PROMPT_COMMANDS
-        return {"ok": True, "commands": [
-            {"cmd": c["cmd"], "label": c["label"], "desc": c["desc"],
-             "prompt": c["prompt"], "has_arg": "$text" in c["prompt"]}
-            for c in PROMPT_COMMANDS]}
+        """对话型 slash 命令表(唯一真相在 minicode.slash_commands,改字不动前端)。
+
+        工作区自定义命令(F2,v0.9.100)并进同一张表:同名覆盖内置
+        (slash_commands.expand 的顺序),前端零改动 —— 菜单里自动多出条目。
+        """
+        from minicode.slash_commands import PROMPT_COMMANDS, workspace_commands
+        custom = workspace_commands(self.workspace)
+        custom_cmds = {c["cmd"] for c in custom}
+        rows = [{"cmd": c["cmd"], "label": c["label"], "desc": c["desc"],
+                 "prompt": c["prompt"], "has_arg": "$text" in c["prompt"]}
+                for c in PROMPT_COMMANDS if c["cmd"] not in custom_cmds]
+        rows += [{"cmd": c["cmd"], "label": c["label"], "desc": c["desc"],
+                  "prompt": c["prompt"], "has_arg": "$ARGS" in c["prompt"]}
+                 for c in custom]
+        return {"ok": True, "commands": rows}
 
     def export_ics(self) -> dict:
         """课表面板「导出到日历」:生成工作区里的 .ics(课表+待办+校历)。"""

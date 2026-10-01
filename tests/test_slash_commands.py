@@ -42,7 +42,8 @@ def test_no_arg_prompts_are_send_ready():
 
 def test_bridge_maps_table_without_touching_it():
     """桥方法不读 self,也不复制一份文案 —— 直接映射 PROMPT_COMMANDS。"""
-    out = Bridge.get_slash_commands(types.SimpleNamespace())
+    # workspace 指到不存在的目录:custom 空,只剩内置表(v0.9.100 起并入工作区命令)
+    out = Bridge.get_slash_commands(types.SimpleNamespace(workspace="/nonexistent-dir-xyz"))
     assert out["ok"] is True
     got = {c["cmd"]: c for c in out["commands"]}
     assert set(got) == {c["cmd"] for c in sc.PROMPT_COMMANDS}

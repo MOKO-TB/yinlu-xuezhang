@@ -25,6 +25,30 @@ if TYPE_CHECKING:      # 只给注解用:运行期不 import
     from minicode.agent import Agent
 
 
+def expand_with_args(cmd: str, workspace, ui) -> "str | None":
+    """`/命令 [内容]` → 展开后的提示词(F2,CLI 侧)。
+
+    无参命令返回的就是完整提示词(直接发);带 $ARGS 的用命令行里剩余的
+    内容替换($text 的内置命令在 CLI 没有"光标停空处"那回事,同理处理);
+    不认识的命令返回 None(走管理命令那条路)。
+    """
+    from minicode import slash_commands as sc
+    head = cmd.split(None, 1)[0]          # 只拿命令词(后面可能是要带进去的内容)
+    prompt = sc.expand(head, workspace)
+    if prompt is None:
+        return None
+    parts = cmd.split(None, 1)
+    rest = parts[1] if len(parts) > 1 else ""
+    # 两种占位都认:内置命令用 $text,工作区自定义用 $ARGS
+    if sc.ARG_PLACEHOLDER in prompt or sc.ARGS_PLACEHOLDER in prompt:
+        if not rest.strip():
+            ui.info("这条命令要带内容,如:" + head + " <要处理的文字>")
+            return None
+        return prompt.replace(sc.ARGS_PLACEHOLDER, rest).replace(
+            sc.ARG_PLACEHOLDER, rest)
+    return prompt
+
+
 def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                  agent: Agent) -> bool:
     """处理斜杠命令;返回 True 表示要退出程序。"""
@@ -521,6 +545,12 @@ def _repl(config, workspace, ui, agent, session, argv=None) -> None:
                 agent, session, workspace = switched
             continue
         if text.startswith("/"):
+            # F2(v0.9.100):对话型命令(内置五条 + 工作区 .commands/)先查展开
+            # —— 认识就当普通输入发出去(与手打同一条链);不认识才走管理命令。
+            expanded = expand_with_args(text, workspace, ui)
+            if expanded is not None:
+                agent.run_turn(expanded)
+                continue
             if handle_slash(text, session, config, ui, agent):
                 ui.info("再见!")
                 break

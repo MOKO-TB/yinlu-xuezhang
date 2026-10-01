@@ -53,6 +53,57 @@ PROMPT_COMMANDS: list[dict] = [
 ]
 
 ARG_PLACEHOLDER = "$text"
+ARGS_PLACEHOLDER = "$ARGS"   # 工作区自定义命令的占位(.commands/*.md)
+
+
+COMMANDS_DIR = ".commands"   # 工作区自定义命令的落点(每个 .md 一条)
+
+
+def _parse_front(text: str) -> "tuple[dict, str]":
+    """frontmatter(name/description 一段,10 行)。不复用 skills 的私有解析:
+    那是 SKILL.md 的形状(未来要加字段会各自变),这里只认自己这条最简的。"""
+    if text.startswith("---"):
+        import re
+        m = re.match(r"^---{BS}s*{BS}n(.*?){BS}n---{BS}s*{BS}n?(.*)$".replace("{BS}", chr(92)), text, re.S)
+        if m:
+            meta = {}
+            for line in m.group(1).splitlines():
+                if ":" in line:
+                    key, _, value = line.partition(":")
+                    meta[key.strip()] = value.strip()
+            return meta, m.group(2)
+    return {}, text
+
+
+def workspace_commands(workspace) -> "list[dict]":
+    """工作区自定义命令(F2,v0.9.100):`.commands/<名字>.md` = description +
+    提示词模板($ARGS 是用户补的内容)。社团/班级可以预置「周报模板」「请假条」
+    这类高频请求,一条文件一个命令。**同名的自定义覆盖内置表**(项目定制
+    优先);frontmatter 坏的如实标注,不静默丢。"""
+    from pathlib import Path as _Path
+    d = _Path(workspace) / COMMANDS_DIR if workspace else None
+    if d is None or not d.is_dir():
+        return []
+    out = []
+    for entry in sorted(d.glob("*.md")):
+        try:
+            text = entry.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        meta, body = _parse_front(text)
+        body = body.strip()
+        if not body:
+            out.append({"cmd": entry.stem, "label": entry.stem,
+                        "desc": "(frontmatter 坏或缺正文)",
+                        "prompt": "", "custom": True, "broken": True})
+            continue
+        name = str(meta.get("name") or entry.stem).strip() or entry.stem
+        out.append({"cmd": entry.stem,
+                    "label": name,
+                    "desc": str(meta.get("description") or ""),
+                    "prompt": body,
+                    "custom": True, "broken": False})
+    return out
 
 
 def has_arg(cmd: str) -> bool:
@@ -60,13 +111,18 @@ def has_arg(cmd: str) -> bool:
         (c["prompt"] for c in PROMPT_COMMANDS if c["cmd"] == cmd), ""))
 
 
-def expand(cmd: str) -> "str | None":
+def expand(cmd: str, workspace=None) -> "str | None":
     """`/cmd` → 提示词模板;不认识的命令给 None(前端当普通文本处理)。
 
     $text 占位保留在返回值里(带参命令由前端把占位删掉、光标停在该处
     等用户续写);无参命令返回的就是可直接发送的完整提示词。
     """
     text = str(cmd or "").strip().lstrip("/")
+    # 工作区自定义**优先于内置表**(项目定制覆盖默认);broken 的条目不展开
+    if workspace is not None:
+        for c in workspace_commands(workspace):
+            if c["cmd"] == text and not c.get("broken"):
+                return c["prompt"]
     for c in PROMPT_COMMANDS:
         if c["cmd"] == text:
             return c["prompt"]
