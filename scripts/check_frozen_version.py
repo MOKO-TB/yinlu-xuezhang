@@ -179,6 +179,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.health": ("report", "GATE_SCRIPTS", "_verdict",
                         "_check_gates", "_run_gate"),
     "minicode.model_probe": ("list_models", "explain_status", "remember"),
+    # ---- v0.9.100:工具钩子(漏收 = 装好的包里 pre 拦截/post 附行静默消失,
+    # 用户配了钩子以为在审计,其实什么都没跑) ----
+    "minicode.hooks": ("run_hook", "_render", "HOOK_TIMEOUT"),
     # ---- v0.9.22:安装版可用性(数据目录写探针 + 诊断下发) ----
     "minicode.paths": ("_is_writable", "_local_state_dir", "diagnostics",
                        "STATE_BACKEND"),

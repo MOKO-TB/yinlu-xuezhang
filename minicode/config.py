@@ -249,6 +249,12 @@ class Config:
     # 存原文,不反向依赖功能模块。**Key 只允许出现在用户自己的 config.json 里**,
     # 绝不进仓库、绝不进分享包(save_config 的白名单落盘会把 api_key 洗掉)。
     capabilities: dict = field(default_factory=dict)
+    # 工具钩子(F3,v0.9.100):{"pre_tool": "命令", "post_tool": "命令"}。
+    # **只认 config.json 这一条路** —— 钩子是任意命令执行,工作区文件不能
+    # 自证清白(permissions.json 同一条教训)。命令模板占位:{tool}=工具名、
+    # {args_file}/{result_file}=参数/结果的临时 JSON 路径(经文件交付,
+    # 不进命令行);pre 非零退出=拦截该步,post 失败只在结果尾如实附一行。
+    hooks: dict = field(default_factory=dict)
 
     # ---- 活动供应商;base_url/api_key/model 属性保持旧代码零改动 ----
     @property
@@ -430,6 +436,7 @@ def _config_from_raw(raw: dict) -> Config:
         sandbox=raw.get("sandbox") if isinstance(raw.get("sandbox"), dict) else {},
         vision=bool(raw.get("vision", False)),
         capabilities=raw.get("capabilities") if isinstance(raw.get("capabilities"), dict) else {},
+        hooks=raw.get("hooks") if isinstance(raw.get("hooks"), dict) else {},
     )
     # active 缺失/指向不存在的供应商 → 钉到第一个**用户配置**的供应商上。
     # 必须显式写回:Config.provider 在 id 为空时会隐式回退到 providers[0],
@@ -525,6 +532,7 @@ def save_config(path: Path, cfg: Config) -> None:
         "subagent_time_limit_seconds": cfg.subagent_time_limit_seconds,
         # 空 dict 也照样存:用户写过就该在 config.json 里看得见(看不见就会被当成没生效)
         "subagent_models": cfg.subagent_models,
+        "hooks": cfg.hooks,
         "feedback_recall": cfg.feedback_recall,
         "backup_dir": cfg.backup_dir,
         "context_window": cfg.context_window,

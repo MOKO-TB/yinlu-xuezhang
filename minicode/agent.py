@@ -474,6 +474,13 @@ class Agent:
             self._note_project_allow(tool, args, by_project)
 
         self._note_low_rated_prior(tool, args)
+        # pre 钩子(F3,v0.9.100):用户 config 配置的命令级审计;非零退出 = 拦截。
+        # 放在 tool_start 之前 —— 与"参数坏/硬拒绝不出卡片"的口径一致,拒绝
+        # 不该先画一张"正在执行"的卡。
+        pre = self._run_config_hook("pre_tool", tool, args)
+        if pre is not None and pre.get("blocked"):
+            return (f"错误: 该步被工具钩子拦下(pre_tool 非零退出)。"
+                    f"钩子输出:{pre.get('output') or '(无)'}")
         self._snapshot_before_mutation(tool, args)
         self.ui.tool_start(tool, args)
         try:
@@ -483,6 +490,10 @@ class Agent:
         except Exception as e:
             result = f"工具执行出错: {type(e).__name__}: {e}"
         self.ui.tool_done(tool, result)
+        # post 钩子:失败不拦截,在结果尾部如实附一行(一行,不刷屏)
+        post = self._run_config_hook("post_tool", tool, args, result=result)
+        if post is not None and not post.get("ok"):
+            result = result + f"\n(工具钩子 post_tool 失败:{post.get('output') or '原因不明'})"
         result = self._truncate(result)
         result = self._mark_repeat_empty(tool, args, result)
         result = self._py_syntax_feedback(tool, args, result)
@@ -632,6 +643,21 @@ class Agent:
         except OSError:
             return
         self._undo_stack.append({"path": p, "data": data, "display": raw})
+
+    def _run_config_hook(self, kind: str, tool, args: dict,
+                         result: str | None = None) -> "dict | None":
+        """跑用户配置的工具钩子;没配返回 None。钩子只从 config.json 的
+        hooks 字段来 —— 工作区文件长不出钩子(那是任意命令执行口子)。"""
+        from minicode import hooks
+        cfg = getattr(getattr(self, "ctx", None), "config", None)
+        cfg_hooks = getattr(cfg, "hooks", None)
+        if not isinstance(cfg_hooks, dict):
+            return None
+        try:
+            return hooks.run_hook(kind, cfg_hooks, tool.name, args, result)
+        except Exception as e:      # 钩子本身崩了也如实算 pre 拦截/post 失败
+            return {"ok": False, "blocked": kind == "pre_tool",
+                    "output": f"{type(e).__name__}: {e}"}
 
     def _truncate(self, text: str) -> str:
         limit = self.ctx.config.max_output_chars
