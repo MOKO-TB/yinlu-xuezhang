@@ -18,6 +18,28 @@ class SessionSummary:
     n_messages: int
     last_user_text: str
     workspace: str = ""      # 留档里记的工作区(老留档没这个字段,给空串)
+    first_user_text: str = ""  # 第一条用户消息(v0.9.98):自动标题的原料
+
+
+def derive_title(text: str, limit: int = 24) -> str:
+    """从第一条用户消息派生**会话标题**(纯函数,不调模型、零成本)。
+
+    为什么用第一条而不是侧栏原来展示的"最后一条提问":最后一句会漂
+    (会话越长越认不出这段对话本来是干嘛的),第一条是这段会话的"题目"。
+    规矩:取第一行;附件标记行([附件] …)不算题目,跳过取下一行;
+    折叠空白与 Markdown 修饰符;超长截断并带 …;没有可读内容回空串
+    (调用方退回旧文案,不编标题)。
+    """
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("[附件]"):
+            continue
+        clean = re.sub(r"[#*`>_\[\]]+", "", line).strip()
+        clean = " ".join(clean.split())
+        if not clean:
+            continue
+        return clean[:limit] + ("…" if len(clean) > limit else "")
+    return ""
 
 
 class Session:
@@ -532,6 +554,7 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
     for p in files:
         n_messages = 0
         last_user_text = ""
+        first_user_text = ""
         workspace = ""
         started = time.strftime("%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime))
         for line in p.read_text(encoding="utf-8").splitlines():
@@ -549,11 +572,13 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
             if obj.get("role") in ("user", "assistant", "tool"):
                 n_messages += 1
             if obj.get("role") == "user" and isinstance(obj.get("content"), str):
+                if not first_user_text:
+                    first_user_text = obj["content"]   # 只有第一条入账(标题用)
                 last_user_text = obj["content"]
         summaries.append(SessionSummary(
             path=p, time=started, n_messages=n_messages,
             last_user_text=last_user_text.replace("\n", " ")[:60],
-            workspace=workspace,
+            workspace=workspace, first_user_text=first_user_text,
         ))
     return summaries
 

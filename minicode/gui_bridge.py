@@ -41,7 +41,8 @@ from minicode.paths import (APP_DIR, SESSIONS_DIR, diagnostics as paths_diagnost
                             resource_path)
 from minicode.permission import MODE_LABELS, PERMISSION_MODES
 from minicode.sandbox import SandboxState, classify_path, policy_from_raw, policy_to_raw
-from minicode.session import (export_filename as session_export_name,
+from minicode.session import (derive_title,
+                              export_filename as session_export_name,
                               list_sessions,
                               search_logs as search_session_logs,
                               to_markdown as session_to_markdown)
@@ -2833,6 +2834,9 @@ class Bridge:
                 "index": i, "file": s.path.name, "time": s.time,
                 "n_messages": s.n_messages,
                 "last_user_text": s.last_user_text,
+                # v0.9.98:自动标题(第一条提问派生,不调模型);前端优先显示它,
+                # 老留档没有 first_user_text 时是空串,前端退回原样
+                "title": derive_title(s.first_user_text),
                 "current": s.path == cur_path,
                 "workspace": ws_name,
                 "ws_current": in_current,

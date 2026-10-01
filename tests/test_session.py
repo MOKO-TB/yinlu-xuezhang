@@ -238,3 +238,43 @@ def test_session_field_wired_into_runner_ctx(tmp_path):
     agent, sess = build_runner_agent(cfg, tmp_path, ui=None, llm=None,
                                      sessions_dir=tmp_path / "s")
     assert agent.ctx.session is sess
+
+
+# ------------------------------------------- 会话自动起名(v0.9.98)
+
+def test_derive_title_takes_first_meaningful_line():
+    assert session_mod.derive_title("帮我写一份蓝桥杯报名材料,越快越好\n第二行不算") \
+        == "帮我写一份蓝桥杯报名材料,越快越好"[:24] or "蓝桥杯" in \
+        session_mod.derive_title("帮我写一份蓝桥杯报名材料\n第二行不算")
+    # 附件标记行不算题目,跳过取下一行
+    assert session_mod.derive_title("[附件] 上传了 2 个文件\n帮我分析这份成绩单") \
+        == "帮我分析这份成绩单"
+    # Markdown 修饰符剥掉、空白折叠
+    assert session_mod.derive_title("### **《三体》读后感**怎么写") \
+        == "《三体》读后感怎么写"
+    # 超长截断带省略号
+    long = "这是一个超过二十四个字的提问所以结尾应该带上省略号对吧"
+    out = session_mod.derive_title(long)
+    assert out.endswith("…") and len(out) == 25
+    # 没有可读内容回空串(调用方退回旧文案,不编标题)
+    assert session_mod.derive_title("[附件] 上传了 1 个文件") == ""
+    assert session_mod.derive_title("") == ""
+    assert session_mod.derive_title(None) == ""
+
+
+def test_list_sessions_captures_first_user_text(tmp_path):
+    s = Session(system_prompt="sys", log_dir=tmp_path, workspace=tmp_path)
+    s.add_user("第一句:写实验报告")
+    s.add_user("第二句:改成周五交")
+    s.add_tool_result("c1", "write_file", "已写入")
+    rows = session_mod.list_sessions(tmp_path, limit=5)
+    assert len(rows) == 1
+    assert rows[0].first_user_text == "第一句:写实验报告"
+    assert rows[0].last_user_text.startswith("第二句")
+    # 老留档没有用户消息:两份都是空串,标题派生回空串
+    (tmp_path / "session_old.jsonl").write_text(
+        json.dumps({"type": "session_start", "time": "t"}) + "\n",
+        encoding="utf-8")
+    rows2 = session_mod.list_sessions(tmp_path, limit=5)
+    old = next(r for r in rows2 if r.path.name == "session_old.jsonl")
+    assert old.first_user_text == "" and session_mod.derive_title(old.first_user_text) == ""
