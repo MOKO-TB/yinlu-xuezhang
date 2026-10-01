@@ -470,6 +470,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.97:语料新鲜度(漏收 = 提示词里那句"这批语料是几天前抓的"永远不出现,
     # 而它存在的意义就是让模型别把旧语料当"最近")
     "minicode.notices": ("corpus_age", "_corpus_line", "CRAWL_STAMP_FMT",
+                         # 工具回话那一句(漏收 = 提示词里有年龄、回话里却没有,模型
+                         # 拿到本地条目时照样会把旧语料当"最近")
+                         "corpus_note",
                          "notices_prompt_section"),
     # v0.9.39:确认框要能讲清新工具的代价(漏收 = 弹了框但没说图会被发出去/文件落在哪)
     "minicode.explain": ("risk_notes", "permission_why", "action_reason"),

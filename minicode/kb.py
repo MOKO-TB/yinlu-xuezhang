@@ -477,7 +477,12 @@ def search_knowledge(ctx, query: str, top_k: int = 3,
             for h in hits])
     out = format_results(hits, snippet_chars=snippet_chars, meta=meta)
     # 每条命中多了「为什么命中」一行,上限跟着放宽,否则口径行会把最后一条挤掉
-    return out[:max(MAX_CONTENT_LIMIT, snippet_chars * len(hits) + 800 + 80 * max(1, len(hits)))]
+    body = out[:max(MAX_CONTENT_LIMIT, snippet_chars * len(hits) + 800 + 80 * max(1, len(hits)))]
+    # 检索出来的东西**新到什么时候**是这条回话里唯一能拦住"把旧语料当最近"的数字,
+    # 所以摆在「检索口径」前面先被读到;没有归档就连这一行都不出现(corpus_note 返回空串)。
+    from minicode import notices          # 局部导入,与上面 growth 同一条例
+    note = notices.corpus_note(getattr(ctx, "workspace", None))
+    return f"{note}\n{body}" if note else body
 
 
 def kb_stats(dirs: list[Path]) -> list[dict]:

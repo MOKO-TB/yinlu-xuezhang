@@ -158,3 +158,40 @@ def test_no_hit_carries_fallback_hint_and_stays_recognizable():
         id="x", source_file="t.json", title="t", content="c",
         url="", source="")])
     assert kbmod.FALLBACK_HINT not in hit       # 命中不给联网指引
+
+
+def test_search_knowledge_leads_with_the_corpus_cutoff(tmp_path, monkeypatch):
+    """检索回话的第一行是「本地语料截至 …」(§6 #45 的第二半)。
+
+    为什么摆在「检索口径**之前**」:模型正要用这批条目回答"最近/今年"的时候,
+    拦得住它的那个数必须第一个被读到。数字只有一个来源(`notices.corpus_age`);
+    没有归档就整行不出现 —— 宁可不提,也不写一句"这台机器从没抓过"。
+    """
+    import json as _json
+    import shutil
+    import time as _t
+
+    from minicode import notices, paths
+
+    _make_kb(tmp_path)
+    monkeypatch.setattr(paths, "APP_DIR", tmp_path / "app")   # 命中登记别落进真数据目录
+    monkeypatch.setattr(kbmod, "kb_dirs", lambda workspace: [tmp_path / "kb"])
+
+    class _Ctx:
+        workspace = tmp_path
+
+    when = _t.strftime(notices.CRAWL_STAMP_FMT, _t.localtime(_t.time() - 2 * 86400))
+    d = tmp_path / "crawled" / "www.gzasc.edu.cn"
+    d.mkdir(parents=True)
+    (d / "index.json").write_text(_json.dumps(
+        {"site": "http://www.gzasc.edu.cn/", "crawled_at": when}, ensure_ascii=False),
+        encoding="utf-8")
+
+    out = kbmod.search_knowledge(_Ctx(), "奖学金")
+    assert out.splitlines()[0] == (f"本地语料截至 {when}(2 天前,来自 www.gzasc.edu.cn,"
+                                   "共 1 个站点有归档)—— 比这个时刻更新的事,本地库里没有。")
+    assert "检索口径" in out and "国家励志奖学金" in out
+
+    shutil.rmtree(tmp_path / "crawled")
+    out2 = kbmod.search_knowledge(_Ctx(), "奖学金")
+    assert "本地语料截至" not in out2 and "国家励志奖学金" in out2

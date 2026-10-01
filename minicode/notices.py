@@ -66,15 +66,19 @@ def campus_notices(ctx, action: str = "latest", limit: int = 10) -> str:
     if action not in ("latest", "cached"):
         return f"错误: 未知 action '{action}'。可用:latest(现拉官网,默认)/cached(只读看门狗快照,不联网)"
 
+    # ctx 可能是 None(测试与子代理那条路就是这么调的),没有工作区就没有可核对的归档。
+    note = corpus_note(getattr(ctx, "workspace", None))
     state = proactive.load_state()
     if action == "cached":
         snap = _snapshot_lines()
         if snap is None:
             return ("快照里还没有任何通知(看门狗没跑过或没抓到过)。"
-                    "用 action=latest 现场拉一次官网试试。")
+                    "用 action=latest 现场拉一次官网试试。"
+                    + (f"\n{note}" if note else ""))
         rows, when = snap
         return (f"看门狗在 {when} 抓到的官网通知标题(**快照,不是现在**;无日期无正文,"
-                "要详情用 web_crawl 抓对应链接或让我现拉 latest):\n" + "\n".join(rows))
+                "要详情用 web_crawl 抓对应链接或让我现拉 latest):\n" + "\n".join(rows)
+                + (f"\n{note}" if note else ""))
 
     # latest:逐源现拉,一个源挂了只跳过它(与看门狗 check_once 同一口径)
     items: list[dict] = []
@@ -114,11 +118,13 @@ def campus_notices(ctx, action: str = "latest", limit: int = 10) -> str:
     why = "断网或官网改版" if fail_sources else "没配置任何通知源"
     if snap is None:
         return (f"现在拉不到官网通知({why}),看门狗快照里也没有 —— 如实告诉同学"
-                "「这次查不到,稍后再试」,绝不要凭印象编「最近发生的事」。")
+                "「这次查不到,稍后再试」,绝不要凭印象编「最近发生的事」。"
+                + (f"\n{note}" if note else ""))
     rows, when = snap
     return (f"现在拉不到官网通知({why})。这是看门狗在 {when} 抓到的标题快照"
             "(**不是现在的实时列表**;无日期无正文):\n" + "\n".join(rows)
-            + "\n要详情用 web_crawl 抓对应链接;回答时说清「这是上次抓到的」。")
+            + "\n要详情用 web_crawl 抓对应链接;回答时说清「这是上次抓到的」。"
+            + (f"\n{note}" if note else ""))
 
 
 CRAWLED_DIR_NAME = "crawled"
@@ -170,6 +176,21 @@ def corpus_age(workspace) -> dict | None:
     then = time.mktime(time.strptime(best[0], CRAWL_STAMP_FMT))
     return {"at": best[0], "host": best[1], "sites": sites,
             "days": max(0, int((time.time() - then) // 86400))}
+
+
+def corpus_note(workspace) -> str:
+    """**工具回话**里那一句「本地这批语料截至什么时候」(与提示词那句是两个场合)。
+
+    提示词那句(`_corpus_line`)是开局就说、说一次;这一句是在模型**正在用本地数据
+    回答的那一刻**提醒它:手上的天花板就是这个时刻,再新的东西这里没有。
+    没有归档(或没有工作区)就返回空串 —— 回话里一个字都不加,
+    写一句「这台机器从没抓过」是替用户下结论。
+    """
+    age = corpus_age(workspace)
+    if age is None:
+        return ""
+    return (f"本地语料截至 {age['at']}({age['days']} 天前,来自 {age['host']},"
+            f"共 {age['sites']} 个站点有归档)—— 比这个时刻更新的事,本地库里没有。")
 
 
 def _corpus_line(workspace) -> str:

@@ -5,6 +5,7 @@
 """
 import json
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -320,3 +321,63 @@ def test_the_writer_and_the_reader_use_the_same_stamp_format():
     assert 'time.strftime("' in src, "crawl.py 写 index.json 的时刻语句变了,这条针要跟改"
     written = re.search(r'time\.strftime\("([^"]+)"\)', src).group(1)
     assert written == notices.CRAWL_STAMP_FMT, (written, notices.CRAWL_STAMP_FMT)
+
+
+# ------------------------ 语料年龄接进工具回话(§6 #45,v0.9.97 的下一刀)
+
+
+class _Ctx:
+    """只带 workspace 的假 ctx:回话那句要的就这么多个性。"""
+
+    def __init__(self, workspace):
+        self.workspace = workspace
+
+
+def _archive_days_ago(workspace, days: int) -> str:
+    when = time.strftime(notices.CRAWL_STAMP_FMT,
+                         time.localtime(time.time() - days * 86400))
+    _archive(workspace, "www.gzasc.edu.cn", when)
+    return when
+
+
+def test_snapshot_paths_carry_the_corpus_cutoff(monkeypatch, tmp_path):
+    """三条"只剩本地数据"的路都要报出截止时刻:cached、现拉失败退快照、现拉失败没快照。"""
+    when = _archive_days_ago(tmp_path, 5)
+    state = _write_state(last_check=1700000000.0)
+    state["seen"] = {"https://www.gzasc.edu.cn/jwc/xwdt/tzgg.htm": {
+        "titles": ["关于期末考试安排的通知"], "updated_at": "2026-09-25 12:00:00"}}
+    monkeypatch.setattr(proactive, "load_state", lambda: state)
+
+    def boom(url, timeout=12.0):
+        raise RuntimeError("断网")
+
+    monkeypatch.setattr(proactive, "fetch_latest", boom)
+    for out in (notices.campus_notices(_Ctx(tmp_path)),                 # 退快照
+                notices.campus_notices(_Ctx(tmp_path), action="cached")):  # 只读快照
+        assert when in out and "5 天前" in out, out
+        assert "比这个时刻更新的事" in out
+    # 快照也没有:仍然给得出本地截止时刻,让模型能说"我手上最新的是这天"
+    monkeypatch.setattr(proactive, "load_state", lambda: _write_state())
+    assert when in notices.campus_notices(_Ctx(tmp_path))
+
+
+def test_live_pull_does_not_carry_the_corpus_cutoff(monkeypatch, tmp_path):
+    """现拉成功的回话**不带**那句:拉到的就是现在的,挂一个语料年龄只会让人以为它在说结果旧。"""
+    _archive_days_ago(tmp_path, 5)
+    monkeypatch.setattr(proactive, "load_state", lambda: _write_state())
+    monkeypatch.setattr(proactive, "fetch_latest", lambda url, timeout=12.0: [
+        {"date": "2026-09-26", "title": "关于期中教学检查的通知",
+         "url": "https://www.gzasc.edu.cn/jwc/info/1/1.htm"}])
+    out = notices.campus_notices(_Ctx(tmp_path))
+    assert "关于期中教学检查的通知" in out
+    assert "本地语料截至" not in out and "最近一次抓取" not in out
+
+
+def test_no_archive_means_no_cutoff_claim(monkeypatch, tmp_path):
+    """没归档:一个字都不加。写一句「这台机器从没抓过」是替用户下结论。"""
+    monkeypatch.setattr(proactive, "load_state", lambda: _write_state())
+    out = notices.campus_notices(_Ctx(tmp_path), action="cached")
+    assert "还没有任何通知" in out
+    assert "本地语料截至" not in out and "从没" not in out
+    # ctx 为 None(测试与子代理那条路)也不许崩
+    assert "还没有任何通知" in notices.campus_notices(None, action="cached")
