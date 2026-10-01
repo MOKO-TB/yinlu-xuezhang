@@ -295,6 +295,12 @@ def worktree_tools() -> list[Tool]:
                 },
             },
             handler=wt.worktree_tool,
+            # 刻意只读(v0.9.99 拍板,§6 #45 那笔"全表唯一写盘却免确认"的疑案):
+            # handler 只跑 `git worktree list --porcelain` / `git status --porcelain`
+            # 两条查事实的命令,自己一个字节都不写;真正建副本的是它**建议**的那条
+            # `git worktree add` —— 那条走 bash 的确认框,两条口径并不打架。
+            # 这也是它该进只读子代理工具集的原因:audit 档查"现在有几份副本、
+            # 各自干净不干净"是正经的只读侦察。
             read_only=True,
         ),
     ]

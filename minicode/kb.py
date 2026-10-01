@@ -482,7 +482,42 @@ def search_knowledge(ctx, query: str, top_k: int = 3,
     # 所以摆在「检索口径」前面先被读到;没有归档就连这一行都不出现(corpus_note 返回空串)。
     from minicode import notices          # 局部导入,与上面 growth 同一条例
     note = notices.corpus_note(getattr(ctx, "workspace", None))
-    return f"{note}\n{body}" if note else body
+    # 差评账上卡(P1,v0.9.99):被点过 👎 的条目**标注不重排** —— 检索顺序是
+    # 行为面,降权等真实使用给出证据再说。口径照 kb_appraisal 的 docstring:
+    # 差评是"引用过这条的那次回答被点了 👎",不是"这条知识是错的",话要这么
+    # 教模型,不能让它把标注读成"这条别用"。
+    warn = _appraisal_note(hits)
+    parts = [p for p in (note, body, warn) if p]
+    return "\n".join(parts)
+
+
+def _appraisal_note(hits: list) -> str:
+    """本次命中条目里带差评账的,拼一段给模型看的提醒;没有就空串。"""
+    from minicode import growth
+    try:
+        rows = growth.kb_appraisal(days=30)
+    except Exception:
+        return ""            # 账读不出来就当没有:标注是锦上添花,不能拖垮检索
+    downs = {r["id"]: r for r in rows if r.get("down")}
+    if not downs or not hits:
+        return ""
+    lines = []
+    for h in hits:
+        entry = h.entry if hasattr(h, "entry") else h
+        hid = str(getattr(entry, "id", ""))
+        row = downs.get(hid)
+        if not row:
+            continue
+        title = str(getattr(entry, "title", "") or hid)[:40]
+        lines.append(f"- 《{title}》(id {hid}):引用它的回答近 30 天被点过 "
+                     f"{row['down']} 次 👎(该条被引用 {row['uses']} 次)")
+    if not lines:
+        return ""
+    return ("\n⚠ 差评提示(引用前多核对,不是这条不能用):以下本次命中的条目"
+            "带着差评记录 —— 差评是对**当时那次回答**的(可能因为答得不全、过时或"
+            "问法没接住),不是对知识本身的判决。引用它们时:①注明来源与日期让用户"
+            "可核实;②与官方渠道(如 campus_notices 现拉)互相印证后再下结论:\n"
+            + "\n".join(lines))
 
 
 def kb_stats(dirs: list[Path]) -> list[dict]:

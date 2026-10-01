@@ -40,6 +40,9 @@ def test_read_only_flags():
         # 开一份 Git 工作副本会在仓库旁边建目录并动 git —— 它是**写类**动作,
         # 而注册表目前标的是 read_only=True(全表唯一一个写盘却免确认的工具)。
         # 这条口径可疑,已记 HANDOFF §6 等拍板;这里先照**实测值**钉住,不改行为。
+        # v0.9.99 拍板:worktree handler 只跑 worktree list / status 两条只读
+        # git 命令,零写入;建副本是它"建议"的命令,走 bash 确认框(见
+        # catalog_files.worktree_tools 的注释)。"写盘免确认"的疑案就此销案。
         "worktree": True,
         "py_script": False,          # 内置运行时执行脚本:能读写文件,要确认
         "glob": True,

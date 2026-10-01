@@ -209,3 +209,51 @@ def test_search_knowledge_leads_with_the_corpus_cutoff(tmp_path, monkeypatch):
     shutil.rmtree(tmp_path / "crawled")
     out2 = kbmod.search_knowledge(_Ctx(), "奖学金")
     assert "本地语料截至" not in out2 and "国家励志奖学金" in out2
+
+
+# ------------------------------------------- 差评账上卡(P1,v0.9.99)
+
+def _seed_down_feedback(entry_id, downs=1, uses=1):
+    """往(被隔离的)反馈账本塞一条带 kb_ids 的差评记录。"""
+    import time as _t
+    from minicode import growth, paths
+    p = paths.APP_DIR / growth.FEEDBACK_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "ts": _t.strftime("%Y-%m-%d %H:%M:%S"), "rating": -1,
+            "kb_ids": [entry_id], "question": "q", "answer": "a"}) + "\n",
+          )
+
+
+def test_appraisal_note_flags_down_rated_hit(ctx, tmp_path, monkeypatch):
+    _make_kb(tmp_path)
+    monkeypatch.setattr(kbmod, "kb_dirs", lambda ws: [tmp_path / "kb"])
+    _seed_down_feedback("N001")                      # 国家励志奖学金那条
+    out = kbmod.search_knowledge(ctx, "国家励志奖学金")
+    assert "差评提示" in out
+    assert "N001" in out and "👎" in out
+    assert "不是对知识本身的判决" in out              # 口径必须教对
+    assert out.index("差评提示") > out.index("国家励志奖学金申请通知")
+
+
+def test_appraisal_note_absent_without_downs(ctx, tmp_path, monkeypatch):
+    _make_kb(tmp_path)
+    monkeypatch.setattr(kbmod, "kb_dirs", lambda ws: [tmp_path / "kb"])
+    out = kbmod.search_knowledge(ctx, "国家励志奖学金")
+    assert "差评提示" not in out                      # 没差评一个字不多
+    # 命中但差评在别的条目上:同样不出现
+    _seed_down_feedback("N999")
+    assert "差评提示" not in kbmod.search_knowledge(ctx, "国家励志奖学金")
+
+
+def test_appraisal_note_survives_broken_ledger(ctx, tmp_path, monkeypatch):
+    """账本坏了当没有:标注是锦上添花,绝不拖垮检索。"""
+    _make_kb(tmp_path)
+    monkeypatch.setattr(kbmod, "kb_dirs", lambda ws: [tmp_path / "kb"])
+    from minicode import growth, paths
+    p = paths.APP_DIR / growth.FEEDBACK_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("{半截 json\n", encoding="utf-8")
+    out = kbmod.search_knowledge(ctx, "国家励志奖学金")
+    assert "国家励志奖学金申请通知" in out and "差评提示" not in out
