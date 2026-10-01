@@ -22,6 +22,28 @@ def _isolated_credentials(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_app_data(tmp_path, monkeypatch):
+    """成长账本三份(kb-gaps / kb-hits / message-feedback)与一切 app_path()
+    落点统一钉到临时目录(R1,v0.9.99)。
+
+    这三个账本本来靠各测试文件自带的 APP_DIR 夹具隔离,但只要**一个**文件
+    漏挂(此前的 test_library 两个用例、test_kb 整文件),每次全量就往
+    **真实**账本写夹具问法 —— 真实账本 68 条里 100% 是测试噪声,缺口周报
+    的数字全废。这道总闸与下面两个 autouse 同一条哲学:不指望每个用例
+    自己记得。模块级再 patch 同一属性的,后 patch 的生效(monkeypatch
+    各自独立回滚),所以与 test_growth 等既有夹具不打架。
+    """
+    from minicode import paths as paths_mod
+    from minicode import growth as growth_mod
+    app_dir = tmp_path / "app"
+    app_dir.mkdir(exist_ok=True)   # 有些追加写(如 web-usage.log)不做父目录补建
+    monkeypatch.setattr(paths_mod, "APP_DIR", app_dir)
+    growth_mod._SEEN_GAPS.clear()
+    yield
+    growth_mod._SEEN_GAPS.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolated_workspace_state(tmp_path, monkeypatch):
     """工作区记忆(workspaces.json)默认落在程序目录 —— 与凭据文件同一个坑。
 

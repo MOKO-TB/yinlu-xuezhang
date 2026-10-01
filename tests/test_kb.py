@@ -1,8 +1,22 @@
 import json
 
+import pytest
+
 from minicode import kb as kbmod
 from minicode.kb import (format_results, kb_prompt_section, kb_stats,
                          load_kb, search)
+
+@pytest.fixture(autouse=True)
+def _isolated_app_dir(tmp_path, monkeypatch):
+    """growth 的账本落在 APP_DIR:本文件的搜书/检索用例没逐一隔离,
+    统一在此钉住(R1,v0.9.99)—— 否则每次全量都往真实缺口账本写夹具问法。"""
+    from minicode import paths
+    monkeypatch.setattr(paths, "APP_DIR", tmp_path / "app")
+    from minicode import growth as _growth
+    _growth._SEEN_GAPS.clear()
+    yield
+    _growth._SEEN_GAPS.clear()
+
 
 
 def _make_kb(tmp_path):

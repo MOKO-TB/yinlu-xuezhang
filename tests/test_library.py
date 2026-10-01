@@ -127,14 +127,20 @@ def test_kind_filter(tmp_path):
     assert library.search(tmp_path, "三体", kind="ebook")
 
 
-def test_handler_output_has_loc_and_source(tmp_path):
+def test_handler_output_has_loc_and_source(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)     # R1(v0.9.99):命中不记账,但隔离要成套
     _make_db(tmp_path)
     out = library.library_search(_ctx(tmp_path), "活着")
     assert "活着" in out and "索书号" in out and "馆藏地" in out
     assert "OPAC" in out
 
 
-def test_handler_no_hit_message(tmp_path):
+def test_handler_no_hit_message(tmp_path, monkeypatch):
+    # R1(v0.9.99):这条例外没隔离,每跑一次全量就往**真实**缺口账本写一条
+    # 「不存在的书名XYZ」—— 与 test_growth/test_feedback 的 autouse 同一条规矩
+    _isolate(monkeypatch, tmp_path)
+    from minicode import growth as _growth
+    _growth._SEEN_GAPS.clear()
     _make_db(tmp_path)
     out = library.library_search(_ctx(tmp_path), "不存在的书名XYZ")
     assert "没有匹配" in out
