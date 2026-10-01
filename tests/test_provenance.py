@@ -337,7 +337,7 @@ def test_injection_log_rolls_at_cap(tmp_path, monkeypatch):
     """v0.9.66:排查现场要留,但别无限长 —— 超 cap 只留最近 500 行。"""
     from minicode import provenance, paths
     monkeypatch.setattr(paths, "APP_DIR", tmp_path / "app")
-    (tmp_path / "app").mkdir(parents=True)     # 生产里 APP_DIR 恒存在;写入器不建目录
+    (tmp_path / "app").mkdir(exist_ok=True,parents=True)     # 生产里 APP_DIR 恒存在;写入器不建目录
     monkeypatch.setattr(provenance, "INJECTION_LOG_CAP_LINES", 10)
     for i in range(15):
         provenance.log_escalation("外部内容升级门", "bash",

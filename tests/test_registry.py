@@ -14,7 +14,8 @@ def test_registry_contents():
                      "browser_close", "browser_status", "page_parse",
                      "mcp",
                      "use_skill", "plan", "ask_user",
-                     "search_knowledge", "export_trace", "search_history",
+                     "search_knowledge", "export_trace",
+                     "export_feedback", "search_history",
                      "ocr_image", "render_chart", "generate_image",
                      "campus_calendar", "calendar_edit", "gpa_calc",
                      "scores",
@@ -65,6 +66,7 @@ def test_read_only_flags():
         "search_knowledge": True,
         # 会话导成可回放的轨迹 JSON:往工作区**写一份文件**,且内容是对话原文 —— 要确认
         "export_trace": False,
+        "export_feedback": False,
         # 翻本机历史会话:只读,且只出用户/助手正文,不下发绝对路径
         "search_history": True,
         # 拍错题识别:不写文件,但 vision 后端会把图发给模型 —— 外发由 trust="external" 管

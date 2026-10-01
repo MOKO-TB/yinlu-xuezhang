@@ -40,7 +40,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "feedback_recall",
                         # v0.9.40 D2:回合步数上限(漏收 = 配置文件里的数字没人读)
                         "max_steps"),
-    "minicode.gui_bridge": ("test_model", "fetch_models", "get_provider_presets",
+    "minicode.gui_bridge": ("test_model", "fetch_models",
                             "export_session", "search_sessions",
                             "rate_message", "get_countdowns",
                             "_provider_credentials",
