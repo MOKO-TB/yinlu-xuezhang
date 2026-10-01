@@ -26,6 +26,7 @@ from urllib.parse import unquote, urlparse
 from minicode.config import CONFIG_PATH, Config
 from minicode.llm import LLMClient
 from minicode.paths import app_path, resource_path
+from minicode.session import prune_sessions
 from minicode.sandbox import SandboxState, policy_from_raw
 from minicode.web_profile import PublicFacade, WebBridge
 from minicode.web_ui import WebUI
@@ -177,6 +178,12 @@ class WebApp:
         self.daily = DailyCounter(daily_cap, path=daily_path)
         self.max_visitors = max(1, int(max_visitors))
         self.llm_factory = llm_factory or LLMClient      # 测试可注入假模型
+        # 访客留档保留数(P4,v0.9.99):读 config.session_keep_last —— 语义与
+        # 主人那边**一致但各管各的**:每访客各自留最近 N 份,不是整站 N 份
+        # (整站口径会被一个活跃访客挤掉别人的历史)。默认 0 = 全保留,
+        # 与主人侧同一条「一个数讲得清」的规矩;清理只在启动时做一次,
+        # 跑着的时候绝不动访客的留档(与 app_setup.apply_retention 同口径)。
+        self.keep_last = max(0, int(getattr(config, "session_keep_last", 0) or 0))
 
         self._visitors: dict[str, Visitor] = {}
         self._lock = threading.Lock()
@@ -186,6 +193,25 @@ class WebApp:
         self._log_lock = threading.Lock()
         self._log_path = app_path("web-usage.log")
         self._log_since_trim = 0
+
+    def apply_retention(self) -> "list[tuple[str, int]]":
+        """启动时按 keep_last 清一遍**现有**访客目录的旧留档(P4,v0.9.99)。
+
+        此时没有任何访客在跑,所以 **protect 不传** —— 传了"保护全部"就等于
+        一个都不删,与这段代码的目的自相矛盾;刚建好的目录 glob 不到文件,
+        prune_sessions 自己会空跑。逐目录报告 (访客id, 删了几份);
+        keep_last=0 时不做任何事(0 = 全保留,主人侧同一条规矩)。
+        """
+        if self.keep_last <= 0 or not self.sessions_root.is_dir():
+            return []
+        out = []
+        for d in sorted(self.sessions_root.iterdir()):
+            if not d.is_dir():
+                continue
+            removed = prune_sessions(d, self.keep_last)
+            if removed:
+                out.append((d.name, len(removed)))
+        return out
 
     # ------------------------------------------------------------ 访客
 
@@ -551,6 +577,9 @@ def create_server(config: Config, workspace: Path, host: str = "0.0.0.0",
                   port: int = DEFAULT_PORT, **opts) -> ThreadingHTTPServer:
     """建好服务但不起(测试用 port=0 拿随机端口)。"""
     app = WebApp(config, workspace, **opts)
+    removed = app.apply_retention()      # P4:启动时按 keep_last 清现有访客旧留档
+    for vid, n in removed:
+        print(f"[web] 访客 {vid[:8]}… 清掉 {n} 份旧留档(keep_last={app.keep_last})")
     handler = type("BoundHandler", (Handler,), {"app": app})
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

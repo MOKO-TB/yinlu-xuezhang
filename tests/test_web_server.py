@@ -5,6 +5,7 @@
 """
 import http.client
 import json
+import os
 import threading
 import time
 
@@ -13,7 +14,7 @@ import pytest
 from minicode.config import Config, Provider
 from minicode.llm import AssistantTurn
 from minicode.web_profile import EXCLUDED_TOOLS, PUBLIC_TOOLS
-from minicode.web_server import DailyCounter, RateLimiter, create_server
+from minicode.web_server import DailyCounter, RateLimiter, WebApp, create_server
 
 
 # ---------------------------------------------------------------- 夹具
@@ -517,3 +518,64 @@ def test_usage_log_is_trimmed(server, tmp_path, monkeypatch):
     lines = app._log_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) <= 5
     assert lines[-1].endswith("问题11")          # 最新那行在
+
+
+# ------------------------------------------- 访客留档保留(P4,v0.9.99)
+
+def test_apply_retention_keeps_last_n_per_visitor(tmp_path, config):
+    """每访客各自留最近 N 份;protect 全量 = 此刻没有人在跑,只删老账。"""
+    from minicode.session import Session
+    root = tmp_path / "web-sessions"
+    for vid, n in ("AAA", 5), ("BBB", 2):
+        d = root / vid
+        d.mkdir(parents=True)
+        for i in range(n):
+            s = Session(system_prompt="s", log_dir=d, workspace=tmp_path)
+            s.add_user(f"访客 {vid} 第 {i} 句")
+        # 把 mtime 拨开,保证排序稳定
+        files = sorted(d.glob("session_*.jsonl"))
+        for j, f in enumerate(files):
+            os.utime(f, (time.time() - (n - j) * 100, time.time() - (n - j) * 100))
+    cfg = Config(providers=config.providers, active_provider_id=config.active_provider_id,
+                 session_keep_last=2)
+    app = WebApp(cfg, tmp_path, sessions_root=root, frontend_dir=tmp_path)
+    removed = app.apply_retention()
+    by = dict(removed)
+    # 没删的目录不上报(BBB 本来就只有 2 份,0 删除不占一行)
+    assert by["AAA"] == 3 and by.get("BBB", 0) == 0, "各自留 2 份"
+    left = sorted(p.name for p in (root / "AAA").glob("session_*.jsonl"))
+    assert len(left) == 2
+    assert any("第 4 句" in f.read_text(encoding="utf-8") for f in (root / "AAA").glob("*.jsonl"))
+
+
+def test_apply_retention_noop_without_keep_last(tmp_path, config):
+    root = tmp_path / "web-sessions"
+    d = root / "AAA"
+    d.mkdir(parents=True)
+    (d / "session_x.jsonl").write_text("{}", encoding="utf-8")
+    app = WebApp(config, tmp_path, sessions_root=root, frontend_dir=tmp_path)
+    assert app.keep_last == 0
+    assert app.apply_retention() == []
+    assert (d / "session_x.jsonl").exists()
+
+
+def test_create_server_runs_retention(tmp_path, config, capsys):
+    """接线:create_server 建服务时真跑一遍,并打出清理报告。"""
+    from minicode.session import Session
+    root = tmp_path / "web-sessions" / "AAA"
+    root.mkdir(parents=True)
+    for i in range(4):
+        s = Session(system_prompt="s", log_dir=root, workspace=tmp_path)
+        s.add_user(f"第 {i} 句")
+    cfg = Config(providers=config.providers, active_provider_id=config.active_provider_id,
+                 session_keep_last=1)
+    server = create_server(cfg, tmp_path, host="127.0.0.1", port=0,
+                           sessions_root=tmp_path / "web-sessions",
+                           frontend_dir=tmp_path)
+    try:
+        assert server.web_app.keep_last == 1
+        out = capsys.readouterr().out
+        assert "清掉 3 份旧留档" in out
+        assert len(list(root.glob("session_*.jsonl"))) == 1
+    finally:
+        server.server_close()
