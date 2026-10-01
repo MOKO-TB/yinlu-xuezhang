@@ -299,6 +299,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.tools.registry": ("build_default_registry",),
     "minicode.tools.catalog_files": ("tools",),
     "minicode.tools.fs": ("repo_outline", "write_file", "edit_file"),
+    # v0.9.98:worktree 只读工具(漏收 = 模型看不到这只工具,"再开一份工作"
+    # 只剩嘴上说)
+    "minicode.tools.catalog_files": ("tools", "perms_tools", "worktree_tools"),
+    "minicode.worktree": ("worktree_facts", "suggest", "parse_worktree_list",
+                          "build_add_command", "suggest_copy_path",
+                          "worktree_tool"),
     "minicode.tools.catalog_web": ("tools",),
     "minicode.tools.catalog_knowledge": ("skills_plan_search", "kb_suggest_tool",
                                          "memory_tool",

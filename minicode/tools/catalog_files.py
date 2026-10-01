@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-from minicode import permspec
+from minicode import permspec, worktree as wt
 from minicode.tools import fs, search, shell
 from minicode.tools.base import Tool
 
@@ -257,5 +257,44 @@ def perms_tools() -> list[Tool]:
                 },
             },
             handler=permspec.permissions_trust,
+        ),
+    ]
+
+
+def worktree_tools() -> list[Tool]:
+    """Git 工作副本(v0.9.98,roadmap-git-worktree隔离 W1):只报事实与建议,
+    建副本本身必须走 bash 那条确认框 —— 本工具绝不自己建/删目录。"""
+    return [
+        Tool(
+            name="worktree",
+            description=(
+                "Git 工作副本(隔离工作区):同一个仓库要同时做两件事、两边互不踩"
+                "文件时,在仓库同级开一份 `<项目>__<分支>/` 工作副本。"
+                "action=list(默认)报现状:现在这份是不是 git 仓库、有哪几份副本、"
+                "各在哪个分支、有没有未提交改动(逐行都有 git 现查的事实撑着);"
+                "action=suggest 给 branch(如 login-fix)算出落点与**要执行的命令**:"
+                "命令必须走 bash 执行(会弹确认框,绝不偷偷建目录),建好后告诉用户"
+                "点顶栏「📁 工作区」把它选成工作区。三条口径照实说:①副本是普通"
+                "工作区 —— 沙箱与项目白名单对它一视同仁,白名单默认**不生效要重批**"
+                "(隔离出来的目录不继承原目录的授权);②长期记忆跟工作区走,"
+                "课表/待办/心情是全局一份;③本工具只读,**删除副本永远不做**"
+                "(那是别人正在改的东西)。不是 git 仓库时照实说,不硬凑。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "suggest"],
+                               "description": "list=现状(默认,查当前工作区);"
+                                              "suggest=给 branch 算落点与命令"},
+                    "branch": {"type": "string",
+                               "description": "suggest 用:副本对应的分支名(如 login-fix)"},
+                    "path": {"type": "string",
+                             "description": "可选:仓库路径;不填=当前工作区"},
+                    "exists": {"type": "boolean",
+                               "description": "suggest 用:分支已存在时传 true,改成直接检出而不是新建"},
+                },
+            },
+            handler=wt.worktree_tool,
+            read_only=True,
         ),
     ]

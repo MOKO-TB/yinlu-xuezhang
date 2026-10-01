@@ -1,4 +1,4 @@
-"""内置工具注册表:53 个工具的(v0.9.98 实测)**装配顺序**在这里定,内容按领域拆在 catalog_*.py。
+"""内置工具注册表:54 个工具的(v0.9.98 实测)**装配顺序**在这里定,内容按领域拆在 catalog_*.py。
 
 v0.9.39 #84 之前这里是 987 行、40 个 `Tool(...)` 挤在一个函数里 —— 加一个工具
 要在一片同构的字面量里找位置,而这个文件几乎每一轮都要碰。拆完每份目录只装
@@ -24,10 +24,12 @@ from minicode.tools.base import Tool
 
 
 def build_default_registry() -> list[Tool]:
-    """53 个内置工具(子代理的 `task` 由 `app_setup` 装配时再接一个)。"""
+    """54 个内置工具(子代理的 `task` 由 `app_setup` 装配时再接一个)。"""
     return [
         *catalog_files.tools(),
         *catalog_files.perms_tools(),
+        # v0.9.98:git 工作副本(隔离工作区 W1),挨着项目权限那组
+        *catalog_files.worktree_tools(),
         *catalog_web.tools(),
         *catalog_web.mcp_admin_tool(),
         *catalog_knowledge.skills_plan_search(),
