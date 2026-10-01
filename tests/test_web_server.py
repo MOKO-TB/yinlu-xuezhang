@@ -208,7 +208,7 @@ def test_owner_only_methods_refused(server):
     client = Client(server)
     make_frontend_ready(client)
     for name in ("get_providers", "save_providers", "set_provider",
-                 "test_model", "fetch_models", "get_provider_presets",
+                 "test_model", "fetch_models",
                  "set_session_model", "export_session",
                  "get_token_usage",
                  "get_skills", "get_skill_body", "get_skill_channels", "add_skill",

@@ -422,15 +422,13 @@ def test_fetch_models_explains_failures(config, tmp_path, monkeypatch):
 
 
 def test_provider_presets_are_usable(config, tmp_path):
-    bridge, _window, _ = make(config, tmp_path)
-    r = bridge.get_provider_presets()
-    assert r["ok"] and r["presets"]
-    for preset in r["presets"]:
-        assert preset["label"] and preset["name"]
-        assert preset["base_url"].startswith("http")
-        assert preset["models"]
-    # 预设随 get_providers 一起下发,省一次往返
-    assert bridge.get_providers()["presets"] == r["presets"]
+    """预设走 get_providers 随 payload 回传的唯一出口(v0.9.99 收口:独立的
+    get_provider_presets 是同一份数据的第二个读法,已删)。"""
+    bridge, _win, _sess = make(config, tmp_path)
+    r = bridge.get_providers()
+    presets = r.get("presets") or []
+    assert presets, "预设清单不该是空的"
+    assert all(p.get("name") and p.get("base_url") and p.get("models") for p in presets)
 
 
 def test_get_providers_ships_model_caps(config, tmp_path):

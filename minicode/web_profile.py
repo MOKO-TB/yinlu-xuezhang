@@ -258,7 +258,6 @@ class PublicFacade:
             "set_provider": lambda **k: _refuse("网页版不提供密钥管理"),
             "test_model": lambda **k: _refuse("网页版不提供密钥管理"),
             "fetch_models": lambda **k: _refuse("网页版不提供密钥管理"),
-            "get_provider_presets": lambda **k: _refuse("网页版不提供密钥管理"),
             "set_session_model": lambda **k: _refuse("网页版不开放模型切换"),
             # 导出会在服务器上落文件(访客看不见也管不着),不开放
             "export_session": lambda **k: _refuse("网页版不开放会话导出"),

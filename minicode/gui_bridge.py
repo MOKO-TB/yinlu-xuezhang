@@ -19,8 +19,8 @@ from minicode import workspace as ws
 from minicode.activate import take_pending_panel as _take_pending_panel
 from minicode.app_setup import build_runner_agent, mcp_log
 from minicode.attachments import (
-    UPLOAD_DIR, Attachment, build_content, display_text, is_image, mime_for,
-    parse_attachment_note, preview_data_url, save_attachments,
+    UPLOAD_DIR, Attachment, build_content, data_url, display_text, is_image,
+    mime_for, parse_attachment_note, preview_data_url, save_attachments,
     save_dropped_bytes,
 )
 from minicode.campus import frontend_payload as campus_map_data
@@ -94,6 +94,10 @@ class PublicApi:
 
     def pick_attachments(self) -> dict:
         return self._b.pick_attachments()
+
+    def attachment_full(self, path: str) -> dict:
+        """灯箱打开时按需取原图(v0.9.97)。纯数据方法:回 data URL,不回本地路径。"""
+        return self._b.attachment_full(path)
 
     def workspace_search_files(self, query: str = "", limit: int = 20) -> dict:
         """输入框 @ 引用:工作区内按名字搜文件(只读,相对路径)。"""
@@ -296,10 +300,6 @@ class PublicApi:
                      api_key: str = "") -> dict:
         """模型管理「从服务获取」:拉服务端的模型列表(GET /models)。"""
         return self._b.fetch_models(provider_id, base_url, api_key)
-
-    def get_provider_presets(self) -> dict:
-        """模型管理「常用供应商」预设清单。"""
-        return self._b.get_provider_presets()
 
     def export_session(self) -> dict:
         """把当前会话导出成 Markdown 文件。"""
@@ -1442,11 +1442,6 @@ class Bridge:
 
     # ------------------------------------------------------------ 模型测试 / 拉取
 
-    def get_provider_presets(self) -> dict:
-        """「常用供应商」预设:一键把地址与常见模型名填进表单。"""
-        from minicode.config import PROVIDER_PRESETS
-        return {"ok": True, "presets": PROVIDER_PRESETS}
-
     def _provider_credentials(self, provider_id: str, base_url: str = "",
                               api_key: str = "") -> tuple[str, str]:
         """取"要拿去请求的那个地址与密钥"。
@@ -1849,6 +1844,37 @@ class Bridge:
         if att.kind == "image":
             item["preview"] = preview_data_url(self.workspace / att.path)
         return item
+
+    # 原图查看的字节上限:base64 要过一遍桥(再好的机器,几十 MB 的 JSON 也会卡
+    # 界面一下)。手机照片/截图都在几 MB 量级,25 MB 基本罩得住真实使用;
+    # 超了就说人话拒掉,前端留在预览帧,绝不静默给一张压过的冒充原图。
+    ATTACHMENT_FULL_MAX_BYTES = 25 * 1024 * 1024
+
+    def attachment_full(self, path: str) -> dict:
+        """灯箱打开时按需取**原图**的 data URL(v0.9.97)。
+
+        消息清单里附件只带 320px 的预览帧(attachments.preview_data_url),
+        放大就糊;但原图不该跟着每一条消息反复过桥 —— 所以走按需:前端点开
+        灯箱才来要这一次。返回的是**图片内容**(data URL),不是本地路径 ——
+        `Attachment.to_dict` 的口径是 local 绝对路径不出桥,这里不破例。
+        只收工作区内真实存在的图片文件,与 _parse_attachments 同一条边界。
+        """
+        rel = str(path or "").strip()
+        kind, p = classify_path(self.workspace, rel)
+        if kind != "inside" or not p.is_file():
+            return {"ok": False, "msg": "文件不在工作区,原图看不了"}
+        if not is_image(p):
+            return {"ok": False, "msg": "不是图片文件"}
+        size = p.stat().st_size
+        if size > self.ATTACHMENT_FULL_MAX_BYTES:
+            return {"ok": False,
+                    "msg": f"原图 {size / 1048576:.0f} MB,超过查看上限 "
+                           f"{self.ATTACHMENT_FULL_MAX_BYTES // 1048576} MB"}
+        try:
+            data = p.read_bytes()
+        except OSError as e:
+            return {"ok": False, "msg": f"读不出来:{e}"}
+        return {"ok": True, "data": data_url(data, mime_for(p))}
 
     def _parse_attachments(self, raw) -> list[Attachment]:
         """解析前端传来的附件清单;只接受工作区内真实存在的文件(防越界读取)。"""
