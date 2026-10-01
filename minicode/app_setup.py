@@ -129,3 +129,27 @@ def create_agent(config: Config, workspace: Path, ui,
         mcp_tools=mcp.build_tools(), sandbox=sandbox)
     agent.mcp = mcp          # 退出时 close_all(),别留下孤儿进程
     return agent, session
+
+
+def apply_retention(config: Config, ui, current: "Path | None" = None,
+                    sessions_dir: Path = SESSIONS_DIR) -> list[str]:
+    """启动时按 `config.session_keep_last` 删旧留档,并把「删了几个」说给界面。
+
+    **为什么要有这一个函数**:v0.9.66 那一笔把 `session.prune_sessions()`、配置字段、
+    README 与 `config.example.json` 里那句「启动时按时间删旧的」全写齐了,测试也写了 5 条,
+    **唯独一个调用者都没写**(`git log -S prune_sessions` 只有那一笔)。函数本身是对的,
+    所以每一条测试都绿,而真机上 `sessions/` 只会一直变多 —— 这是"文档写了、代码写了、
+    没人接线"这一类里最难发现的一种,因为红的全是别人的想象,没有一处现实。
+
+    收成一处有两个目的:①CLI 与 GUI 说同一句话,不各抄一份话术;②调用点从 0 变成
+    "两个入口都调这一处",由 `tests/test_retention.py` 扫源码钉住 —— 扫的是**调用点存在**。
+
+    `current` 是这次启动接着用的那份留档:它永远不进删除名单,哪怕时钟被手改过。
+    """
+    from minicode.session import prune_sessions
+    removed = prune_sessions(sessions_dir, config.session_keep_last,
+                             protect={current} if current else None)
+    if removed and ui is not None:
+        ui.info(f"按 session_keep_last={config.session_keep_last} 删掉 {len(removed)} 份"
+                f"旧会话留档({sessions_dir})—— 当前接着用的这份没动。")
+    return removed

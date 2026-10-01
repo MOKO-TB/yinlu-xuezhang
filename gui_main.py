@@ -13,6 +13,7 @@ import webview
 from minicode import APP_NAME
 from minicode import tray
 from minicode import workspace as ws
+from minicode.app_setup import apply_retention
 from minicode.config import ensure_config
 from minicode.gui_bridge import create_app
 from minicode.paths import app_path, resource_path
@@ -196,6 +197,9 @@ def main() -> None:
     # 默认工作区(= exe 目录,也就是改造前的写死值)
     workspace = ws.startup_workspace(app_path())
     bridge, ui, agent, _session = create_app(config, workspace)
+    # 留档保留策略(v0.9.66 写了函数与测试,却从没接上启动路径;这里与 CLI 同一个函数,
+    # 说的也是同一句话)。清理只在启动做一次,跑着的时候绝不动用户的留档。
+    apply_retention(config, ui, current=bridge.session.log_path)
     # 前端是打包内置资源(_MEIPASS);缺失时在窗口内给出明确错误而不是 404
     frontend = resource_path("frontend", "index.html")
     api = bridge.public_api()  # 门面:只暴露方法,防自动化客户端遍历内部对象

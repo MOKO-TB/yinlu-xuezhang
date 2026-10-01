@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from minicode.app_setup import create_agent
+from minicode.app_setup import apply_retention, create_agent
 from minicode.config import load_config
 from minicode import model_probe
 from minicode.paths import SESSIONS_DIR
@@ -468,6 +468,8 @@ def main() -> None:
     _warn_library_health(workspace, ui)
 
     agent, session = create_agent(config, workspace, ui)
+    # 留档保留策略:配置里有这个数才动手,默认 0 = 一个都不删(话术与 GUI 走同一个函数)
+    apply_retention(config, ui, current=session.log_path)
 
     try:
         _repl(config, workspace, ui, agent, session, argv=rest_argv)
