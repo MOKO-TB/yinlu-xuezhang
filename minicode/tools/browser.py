@@ -220,7 +220,19 @@ def browser_fill(ctx: ToolContext, fields: dict, submit: bool = False,
     return "\n".join(lines)
 
 
-def browser_close(ctx: ToolContext, reason: str = "") -> str:
+def browser_close(ctx: ToolContext, target: str = "", reason: str = "") -> str:
+    if target:
+        # v0.9.98:按编号关别人的(或任意一个)标签页 —— 编号来自 browser_status
+        # 的清单。没有这个编号就照实说,不静默装成关掉了。
+        r = br.close_tab(str(target).strip())
+        if r is None:
+            return (f"错误:没有编号为 [{target}] 的标签页"
+                    f"(browser_status 能看到现在的清单)。")
+        if r.get("adopted"):
+            return (f"已脱手 [{target}](那是用户自己开着的页,不替用户关,"
+                    f"浏览器里仍然开着)。")
+        return (f"已关闭 [{target}] 的标签页。如果那一路还在用浏览器,"
+                f"它的下一步会报错并自己重开页面。")
     try:
         closed = br.close_current()
     except Exception as exc:
@@ -232,6 +244,19 @@ def browser_close(ctx: ToolContext, reason: str = "") -> str:
 
 def browser_status(ctx: ToolContext, reason: str = "") -> str:
     info = br.health()
-    if info["ok"]:
-        return (f"浏览器能力可用（{info['mode']}，{info['browser']}）：{info['detail']}")
-    return f"浏览器能力不可用：{info['detail']}"
+    if not info["ok"]:
+        return f"浏览器能力不可用：{info['detail']}"
+    lines = [f"浏览器能力可用（{info['mode']}，{info['browser']}）：{info['detail']}"]
+    # v0.9.98:标签页清单 —— 以前「线程隔离」意味着用户(和模型)看不见
+    # 一共开了几页、各在看什么。每一行都由真实会话撑起,没有就明说没有。
+    tabs = br.list_tabs()
+    if not tabs:
+        lines.append("没有打开的标签页。")
+        return "\n".join(lines)
+    lines.append(f"打开的标签页 {len(tabs)} 个(编号用于 browser_close 的 target):")
+    for t in tabs:
+        mark = " ←当前" if t["current"] else ""
+        own = "(用户自己的页,只能脱手不能关)" if t["adopted"] else ""
+        title = t["title"] or "(无标题)"
+        lines.append(f"  [{t['key']}] {title} · {t['url'][:60]} · {t['mode']}{mark}{own}")
+    return "\n".join(lines)

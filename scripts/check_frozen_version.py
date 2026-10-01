@@ -542,7 +542,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # ---- v0.9.23:按帧读取 + 可见窗口(教务课表走的就是这几个能力) ----
     "minicode.browser": ("adopt_page", "page_frames", "eval_in_frame",
                          "read_frames", "ensure_visible", "_endpoint_port",
-                         "FRAME_MAX_CHARS"),
+                         "FRAME_MAX_CHARS",
+                         # v0.9.98:标签页可见可管(漏收 = browser_status 退回
+                         # 只报"能不能用",开了几页、各看什么又变成黑箱)
+                         "list_tabs", "close_tab"),
     # ---- v0.9.24:MCP 三种传输(stdio 之外只有网址的服务器也连得上) ----
     # v0.9.62:校历补录助手(漏收 = 「贴通知录考试周」在包里做不到,
     # 考试周数据继续空置,A5 考试闭环继续卡着)

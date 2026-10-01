@@ -7,6 +7,7 @@ scripts/e2e_browser.py。
 import base64
 import json
 import threading
+import time
 import weakref
 
 import pytest
@@ -1115,3 +1116,73 @@ def test_ensure_visible_refuses_to_yank_a_running_task_window(isolated_state):
         br.ensure_visible()
     assert "无窗口" in str(e.value)
     assert br._STATE.conn is not None, "报错时不该顺手把同伴的浏览器关掉"
+
+
+# ------------------------------------------- 标签页可见可管(v0.9.98,§6 #8①)
+
+def _fake_state(monkeypatch, tabs):
+    """把模块级 _STATE 换成编好页码的替身:sweep 读 owner(owner=None 直接回收,
+    这里给活引用),_session_key 用真线程号(其中一路标 current)。"""
+    from minicode import browser as br
+
+    def mk(key, url, title, adopted=False):
+        return br.PageSession(
+            conn=None, target_id=key, cdp_session=key,
+            browser="edge", mode="launch", url=url, title=title,
+            opened_at=time.time(), owner=weakref.ref(threading.current_thread()),
+            adopted=adopted)
+
+    st = br._State()
+    for row in tabs:
+        k, url, title = row[0], row[1], row[2]
+        adopted = row[3] if len(row) > 3 else False
+        st.sessions[k] = mk(k, url, title, adopted)
+    monkeypatch.setattr(br, "_STATE", st)
+    monkeypatch.setattr(br, "_sweep_dead_sessions_locked", lambda: None)
+    return br
+
+
+def test_list_tabs_rows_are_real_and_mark_current(monkeypatch):
+    from minicode import browser as _br0
+    br = _fake_state(monkeypatch, [
+        (_br0._session_key(), "https://a.example.com", "A 页"),   # 当前线程自己的键
+        ("browser:222", "https://b.example.com", "B 页", True),
+    ])
+    rows = br.list_tabs()
+    assert [r["current"] for r in rows] == [True, False], "只标当前线程那一行"
+    assert rows[1]["adopted"] is True
+    assert rows[0]["age_s"] >= 0
+
+
+def test_close_tab_honest_miss_and_adopted_release(monkeypatch):
+    br = _fake_state(monkeypatch, [
+        ("browser:111", "https://a", "A"),
+        ("browser:222", "https://b", "B", True),
+    ])
+    closed = []
+    monkeypatch.setattr(br, "_close_session_locked",
+                        lambda k, s: closed.append((k, s.adopted)))
+    assert br.close_tab("browser:111") == {"ok": True, "adopted": False}
+    # 接管的页:走同一条 close,但 adopted 标出来(工具层据此说「只脱手不关」)
+    assert br.close_tab("browser:222") == {"ok": True, "adopted": True}
+    assert closed == [("browser:111", False), ("browser:222", True)]
+    assert br.close_tab("browser:999") is None, "没有的编号返回 None,工具层照实说"
+
+
+def test_status_lists_tabs_and_close_by_target(monkeypatch):
+    br = _fake_state(monkeypatch, [
+        ("browser:111", "https://a.example.com/page", "A 页"),
+    ])
+    monkeypatch.setattr(br, "health", lambda: {
+        "ok": True, "mode": "launch", "browser": "edge", "detail": "已连接(1 个标签页)"})
+    st = bt.browser_status(None)
+    assert "打开的标签页 1 个" in st and "[browser:111]" in st and "A 页" in st
+
+    # 关:按编号;没有的编号如实报错
+    monkeypatch.setattr(br, "close_tab", lambda k: {"ok": True, "adopted": False})
+    assert "已关闭 [browser:111]" in bt.browser_close(None, target="browser:111")
+    monkeypatch.setattr(br, "close_tab", lambda k: None)
+    assert "没有编号为" in bt.browser_close(None, target="browser:404")
+    # 不带 target = 老行为(关当前线程的)
+    monkeypatch.setattr(br, "close_current", lambda: False)
+    assert "无需关闭" in bt.browser_close(None)

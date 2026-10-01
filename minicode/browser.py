@@ -1195,6 +1195,43 @@ def close_current() -> bool:
         return True
 
 
+def list_tabs() -> list[dict]:
+    """所有还活着的标签页(v0.9.98,§6 #8①:标签页第一次「可见可管」)。
+
+    每行都由 `_STATE.sessions` 里的真实会话撑起来 —— 死线程的先 sweep 掉,
+    不给"看着还开着其实早回收了"的行。`key` 就是管理用的编号
+    (browser_close target=编号);`current` 标出**打这条命令的线程**自己的页。
+    """
+    with _LOCK:
+        _sweep_dead_sessions_locked()
+        cur = _session_key()
+        return [{"key": key,
+                 "current": key == cur,
+                 "url": sess.url, "title": sess.title,
+                 "mode": sess.mode, "browser": sess.browser,
+                 "adopted": sess.adopted,
+                 "age_s": int(time.time() - sess.opened_at)}
+                for key, sess in _STATE.sessions.items()]
+
+
+def close_tab(key: str) -> "dict | None":
+    """按键关掉一份标签页(管理动作;当前线程自己的仍走 close_current)。
+
+    返回 {"ok": True, "adopted": …};没有这个键(已回收/写错)返回 None ——
+    调用方要照实说"没有这一个",不静默装成关掉了。接管的页(adopted)只脱手
+    不关闭,与收工(shutdown)同一条口径:**绝不替用户关他自己的标签页**。
+    被关的那一路如果还在用浏览器,它的下一步会照常报错并自己重开页面。
+    """
+    with _LOCK:
+        _sweep_dead_sessions_locked()
+        sess = _STATE.sessions.get(str(key or ""))
+        if sess is None:
+            return None
+        adopted = sess.adopted
+        _close_session_locked(str(key), sess)
+        return {"ok": True, "adopted": adopted}
+
+
 def shutdown() -> None:
     """收工:关掉我们自己起的浏览器实例(attach 到用户浏览器的只断连接)。"""
     with _LOCK:

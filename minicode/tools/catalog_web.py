@@ -219,10 +219,12 @@ def tools() -> list[Tool]:
         ),
         Tool(
             name="browser_close",
-            description="关闭当前页面(浏览器里的标签页一并关掉)。这一轮的页面看完了就顺手关掉,别让浏览器堆一屏标签。",
+            description="关闭标签页。不带 target = 关当前页面(这一轮的页面看完了就顺手关掉,别让浏览器堆一屏标签);target 传 browser_status 清单里的编号 = 关那一个(可管别的会话/子代理开的页;用户自己开着的页只会脱手不会被关)。",
             parameters={
                 "type": "object",
                 "properties": {
+                    "target": {"type": "string",
+                               "description": "可选:browser_status 清单里的标签页编号(如 browser:14028);不填=关当前页面"},
                     "reason": {"type": "string", "description": "可选:一句中文说明"},
                 },
             },
@@ -231,7 +233,7 @@ def tools() -> list[Tool]:
         ),
         Tool(
             name="browser_status",
-            description="检查浏览器能力是否可用(能不能连上浏览器、走哪种方式)。browser_open 报错时用它自查。",
+            description="检查浏览器能力是否可用(能不能连上浏览器、走哪种方式),并列出现在开着哪些标签页(标题/网址/归属,带编号)。browser_open 报错时用它自查;用户问「浏览器开了什么」也用它。",
             parameters={
                 "type": "object",
                 "properties": {
