@@ -151,7 +151,6 @@ def test_missing_lib_reports_top_level_package(tmp_path):
 
 
 def test_use_skill_prepends_warning_when_deps_missing(ctx, tmp_path, monkeypatch):
-    from minicode.tools.base import Tool
     d = tmp_path / "skills" / "dep-skill"
     d.mkdir(parents=True)
     (d / "SKILL.md").write_text(
