@@ -1,7 +1,6 @@
 """会话自动起名的**接线**测试(v0.9.98):_push_sessions 的 payload 必须带
 title 字段。单独成文件 —— test_gui_bridge.py 此刻有并行会话的未提交改动,
 不往那一 file 里加内容(规矩:不碰别人正在做的东西)。"""
-import pytest
 
 from minicode.llm import AssistantTurn
 from test_gui_bridge import FakeLLM, make, wait_until
