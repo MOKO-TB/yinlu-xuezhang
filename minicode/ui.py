@@ -21,8 +21,8 @@ from minicode.tools.base import Tool
 
 SLASH_COMMANDS = ["/help", "/clear", "/model", "/history", "/resume",
                   "/undo", "/compact", "/sandbox", "/memory", "/remember",
-                  "/dream", "/skills", "/kb", "/plan", "/library", "/usage",
-                  "/browser", "/exit"]
+                  "/dream", "/skills", "/kb", "/plan", "/library", "/health",
+                  "/usage", "/browser", "/exit"]
 
 REFRESH_INTERVAL = 0.12     # 流式 Markdown 刷新节流
 DIFF_MAX_LINES = 40
@@ -340,6 +340,8 @@ class TerminalUI:
             "  /help         显示本帮助\n"
             "  /clear        清空当前会话上下文\n"
             "  /model        查看当前使用的模型(GUI 顶部标识可添加/切换模型)\n"
+            "  /health       一键体检:本机各项状态(数据目录/模型/权限/馆藏/MCP;\n"
+            "                深检加 --deep 走 python -m minicode.health)\n"
             "  /usage [1|7|30] 查看 token 用量统计(默认近 7 天)\n"
             "  /workspace [路径|default] 查看/切换工作区(Agent 在哪个文件夹里干活)\n"
             "  /browser      查看浏览器能力(能不能开网页/截图,连的是哪个浏览器)\n"

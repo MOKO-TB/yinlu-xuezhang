@@ -118,6 +118,16 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                     + f"{total} 条\n" + "\n".join(
                         f"  • {s['file']}: {s['count']} 条" for s in stats)
                     + "\n  提问相关话题时,Agent 会用 search_knowledge 检索并给出来源网址。")
+    elif name == "/health":
+        from minicode import health as health_mod
+        from minicode import mcp as mcp_mod
+        rep = health_mod.report(
+            workspace=workspace, config=config,
+            # P3(v0.9.99):MCP 汇总与 GUI 同一份真相(mcp.summary_rows);
+            # 管理器在跑就带活状态,不在跑只按配置报 —— 不再永远"没查成"。
+            mcp_rows=mcp_mod.summary_rows(config, getattr(agent, "mcp", None)),
+            repo=False)
+        ui.info(health_mod.render_text(rep))
     elif name == "/usage":
         from minicode import usage as usage_mod
         days = int(arg) if arg.isdigit() and int(arg) in (1, 7, 30) else 7

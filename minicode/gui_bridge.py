@@ -29,7 +29,7 @@ from minicode.config import (BUILTIN_PROVIDER_ID, CONFIG_PATH,
                              API_KEY_PLACEHOLDERS, save_config)
 from minicode.gui_ui import GuiUI
 from minicode.kb import kb_dirs, kb_stats as kb_stats_fn
-from minicode.mcp import connect_servers, parse_servers
+from minicode.mcp import connect_servers, parse_servers, summary_rows
 from minicode.memory import (
     dream, dream_all, global_memory_path, load_from as mem_load_file,
     memory_path as mem_path, save_entry,
@@ -778,38 +778,13 @@ class Bridge:
         }
 
     def _mcp_summary(self) -> list[dict]:
-        """侧栏 MCP 健康行 + get_info 的数据:**配置是唯一事实,活状态补上去**。
+        """侧栏 MCP 健康行 + get_info 的数据(P3,v0.9.99 起是转发)。
 
-        README 一直承诺「侧栏底部会显示 MCP 服务器名(工具数)」,但 v0.9.70
-        核实前端其实一处都没消费这个字段 —— 这里把形状补成「配置了的都在,
-        连没连上说清楚」:连上的带工具数,没连上的写状态,由前端照着画。
+        形状与判定在 `mcp.summary_rows` 一处 —— 终端 /health 与这里消费
+        同一份,不再各抄一份配置合并逻辑。
         """
-        cfg_servers = [s for s in (self.config.mcp_servers or [])
-                       if isinstance(s, dict)]
-        if not cfg_servers:
-            return []
         mcp = self._mcp or getattr(self.agent, "mcp", None)
-        live: dict = {}
-        if mcp is not None:
-            for c in mcp.clients:
-                live[str(c.cfg.sid)] = c
-        out: list[dict] = []
-        for s in cfg_servers:
-            sid = str((s.get("id") or s.get("name") or "")).strip()
-            c = live.get(sid)
-            out.append({
-                "id": sid,
-                "label": str((c.cfg.label if c else "")
-                             or s.get("description") or sid) or sid,
-                "enabled": bool(s.get("enabled", True)),
-                "transport": str(s.get("transport") or "stdio"),
-                "connected": bool(c),
-                "server": str((c.server_info or {}).get("name") or "") if c else "",
-                "n_tools": len(c.list_tools()) if c else 0,
-                # 对端声明的能力与学长实际接了哪几项(没连上就没这句可说)
-                "caps": c.caps_line() if c else "",
-            })
-        return out
+        return summary_rows(self.config, mcp)
 
     # ------------------------------------- 对话里自助管理 MCP(v0.9.61)
 

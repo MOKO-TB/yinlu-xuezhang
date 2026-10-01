@@ -866,6 +866,40 @@ def tool_name_for(sid: str, remote: str, taken: set[str]) -> str:
 
 # --------------------------------------------------------------------- 管理器
 
+def summary_rows(config, manager=None) -> "list[dict]":
+    """MCP 侧栏/体检共用的汇总行(P3,v0.9.99):**配置是唯一事实,活状态补上去**。
+
+    原来这份逻辑只在 Bridge._mcp_summary(需要活的管理器),终端的 /health
+    拿不到它 —— 体检那行永远写「没查成」。抽到这里:Bridge 传自己的 manager,
+    CLI 传 agent.mcp(都没有就只按配置报),两处消费者同一份形状,不再各抄。
+    """
+    cfg_servers = [s for s in (getattr(config, "mcp_servers", None) or [])
+                   if isinstance(s, dict)]
+    if not cfg_servers:
+        return []
+    live: dict = {}
+    if manager is not None:
+        for c in manager.clients:
+            live[str(c.cfg.sid)] = c
+    out: "list[dict]" = []
+    for s in cfg_servers:
+        sid = str((s.get("id") or s.get("name") or "")).strip()
+        c = live.get(sid)
+        out.append({
+            "id": sid,
+            "label": str((c.cfg.label if c else "")
+                         or s.get("description") or sid) or sid,
+            "enabled": bool(s.get("enabled", True)),
+            "transport": str(s.get("transport") or "stdio"),
+            "connected": bool(c),
+            "server": str((c.server_info or {}).get("name") or "") if c else "",
+            "n_tools": len(c.list_tools()) if c else 0,
+            # 对端声明的能力与学长实际接了哪几项(没连上就没这句可说)
+            "caps": c.caps_line() if c else "",
+        })
+    return out
+
+
 class McpManager:
     """管理所有 MCP 服务器,并产出可直接并入注册表的 Tool 列表。"""
 
