@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from minicode import asking, growth, kb, memory, planning, session, skills
+from minicode import asking, feedback_report, growth, kb, memory, planning, session, skills
 from minicode.tools.base import Tool
 
 
@@ -178,6 +178,31 @@ def trace_tool() -> list[Tool]:
                 },
             },
             handler=session.export_trace_tool,
+        ),
+        Tool(
+            name="export_feedback",
+            description=(
+                "把这台机器的运行现场缝成一份**反馈包**(工作区根目录"
+                "「反馈-<时刻>.json」):体检表(数据目录/模型配置/权限/馆藏等"
+                "各项状态)、最近 7 天检索没接住的问法 top10、技能使用统计。"
+                "用户说「生成反馈文件」「我要反馈个问题」「把运行情况发给维护者」"
+                "时用;报问题只需要这一个文件。用户描述的问题现象写进 note 一起带上。"
+                "include_trace=true 才把**当前会话轨迹**(含对话原文)内嵌进去 —— "
+                "默认不带,问过用户再带。文件含匿名提问记录,发出去前提醒用户过一眼。"
+                "网页版没有本工具(访客不能打包服务器的运行状态)。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "note": {"type": "string",
+                             "description": "用户描述的问题现象/建议,原话或整理后的一段话"},
+                    "include_trace": {"type": "boolean",
+                                      "description": "是否内嵌当前会话轨迹(含对话原文);先问过用户再传 true"},
+                    "reason": {"type": "string",
+                               "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
+                },
+            },
+            handler=feedback_report.export_feedback_tool,
         ),
     ]
 

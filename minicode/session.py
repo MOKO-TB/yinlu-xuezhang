@@ -223,6 +223,23 @@ def export_trace(messages: list, dest: Path, app_version: str = "") -> dict:
     绝不静默给一份看起来完整、其实被剪过的轨迹。任何解析意外都按原样字符串放进
     arguments,绝不为了好看重排一条 tool call。
     """
+    payload, out, tool_calls = trace_payload(messages, app_version=app_version)
+    try:
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(payload, ensure_ascii=False, indent=1),
+                        encoding="utf-8")
+    except OSError as e:
+        return {"ok": False, "msg": f"轨迹写不进去:{type(e).__name__}: {e}"}
+    return {"ok": True, "count": len(out), "tool_calls": tool_calls,
+            "path": str(dest), "bytes": dest.stat().st_size}
+
+
+def trace_payload(messages: list, app_version: str = "") -> "tuple[dict, list, int]":
+    """轨迹的**数据构造**(与写盘分离,v0.9.99):export_trace 落文件用,
+    feedback_report(R2)把同一份结构内嵌进反馈包用 —— 一份事实两处消费,
+    不是两份实现。返回 (payload, 消息行, 工具调用数)。
+    """
     out: list[dict] = []
     tool_calls = 0
     for m in messages:
@@ -269,15 +286,7 @@ def export_trace(messages: list, dest: Path, app_version: str = "") -> dict:
         "tool_calls": tool_calls,
         "messages": out,
     }
-    try:
-        dest = Path(dest)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(json.dumps(payload, ensure_ascii=False, indent=1),
-                        encoding="utf-8")
-    except OSError as e:
-        return {"ok": False, "msg": f"轨迹写不进去:{type(e).__name__}: {e}"}
-    return {"ok": True, "count": len(out), "tool_calls": tool_calls,
-            "path": str(dest), "bytes": dest.stat().st_size}
+    return payload, out, tool_calls
 
 
 def repair_tool_pairs(msgs: list[dict]) -> tuple[list[dict], int]:
