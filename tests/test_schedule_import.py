@@ -194,7 +194,7 @@ def test_read_returns_parsed_grid_and_writes_nothing():
     assert r["ok"] and r["stage"] == "ready"
     assert r["summary"]["entries"] == 8
     assert "8 条课" in r["msg"] and "不会写任何文件" in r["msg"]
-    assert paths.APP_DIR.exists() is False or schedule.load() is None
+    assert schedule.load() is None and not (paths.APP_DIR / "schedule.json").exists(),         "预览阶段一个字都不写(R1 总闸会预建 APP_DIR 目录,目录存在不算写)"
 
 
 def test_read_without_table_says_so_and_points_at_the_menu():

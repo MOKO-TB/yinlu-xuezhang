@@ -209,7 +209,8 @@ def test_page_parse_returns_structured_json(fake_frames):
     assert "没替你存" not in out
     assert fake.seen_js[0] == site_parse.TABLE_JS          # 通吃全表的那段 JS
     assert fake.seen_url_like == ["example.edu"]
-    assert schedule.load() is None and not paths.APP_DIR.exists(), "只读工具写了盘"
+    # 只读工具写了盘的判定本质是"没写出数据文件"(R1 总闸会预建 APP_DIR 目录)
+    assert schedule.load() is None and not (paths.APP_DIR / "schedule.json").exists(),         "只读工具写了盘"
 
 
 def test_page_parse_says_it_did_not_store_a_non_timetable(fake_frames):
