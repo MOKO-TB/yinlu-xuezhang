@@ -130,7 +130,8 @@ def test_registry_is_assembly_only():
         "registry.py 里又出现 Tool(...) 字面量 —— 热点搬回来了"
     assert len(src.splitlines()) <= 60, \
         f"registry.py 又长到 {len(src.splitlines())} 行,它只该管装配顺序"
-    assert len(CATALOGS) == 6, f"目录模块不是 6 份:{[p.name for p in CATALOGS]}"
+    # v0.9.98:catalog_remind 从 catalog_campus 拆出来,6 份 → 7 份
+    assert len(CATALOGS) == 7, f"目录模块不是 7 份:{[p.name for p in CATALOGS]}"
 
 
 def test_no_catalog_is_a_new_hotspot():

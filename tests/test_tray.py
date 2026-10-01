@@ -1271,8 +1271,9 @@ def test_desktop_notify_kind_enum_matches_notify_kinds():
     描述与参数里出现过的类别集合必须逐类等于 NOTIFY_KINDS。"""
     import re
     from pathlib import Path
-    from minicode.tools import catalog_campus
-    src = Path(catalog_campus.__file__).read_text(encoding="utf-8")
+    # v0.9.98:desktop_notify 的定义随提醒一族搬进了 catalog_remind
+    from minicode.tools import catalog_remind
+    src = Path(catalog_remind.__file__).read_text(encoding="utf-8")
     block = src[src.index('name="desktop_notify"'):]
     block = block[:block.index("handler=tray.desktop_notify")]
     mentioned = set()

@@ -298,7 +298,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                                          # v0.9.96:动手前问一句(漏收 = 模型根本看不到这只工具)
                                          "ask_user"),
     "minicode.tools.catalog_media": ("tools",),
-    "minicode.tools.catalog_campus": ("calendar_gpa", "remind_tools"),
+    # v0.9.98:提醒一族从 catalog_campus 搬去 catalog_remind(399 行热点拆分),
+    # 漏收的表现是装好的包里提醒/课表/心情/通知/天气整组消失
+    "minicode.tools.catalog_campus": ("calendar_gpa",),
+    "minicode.tools.catalog_remind": ("remind_tools",),
     "minicode.tools.catalog_places": ("library_tools", "map_tools"),
     "minicode.model_catalog": ("_context_breakdown", "vision_forced"),
     # ---- v0.9.17:截止提醒 ----

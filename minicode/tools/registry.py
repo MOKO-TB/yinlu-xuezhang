@@ -17,6 +17,7 @@ from minicode.tools import (
     catalog_knowledge,
     catalog_media,
     catalog_campus,
+    catalog_remind,
     catalog_places,
 )
 from minicode.tools.base import Tool
@@ -36,6 +37,6 @@ def build_default_registry() -> list[Tool]:
         *catalog_knowledge.kb_suggest_tool(),
         *catalog_places.library_tools(),
         *catalog_knowledge.memory_tool(),
-        *catalog_campus.remind_tools(),
+        *catalog_remind.remind_tools(),
         *catalog_places.map_tools(),
     ]
