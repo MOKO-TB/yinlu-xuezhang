@@ -189,7 +189,7 @@ def test_search_knowledge_leads_with_the_corpus_cutoff(tmp_path, monkeypatch):
 
     out = kbmod.search_knowledge(_Ctx(), "奖学金")
     assert out.splitlines()[0] == (f"本地语料截至 {when}(2 天前,来自 www.gzasc.edu.cn,"
-                                   "共 1 个站点有归档)—— 比这个时刻更新的事,本地库里没有。")
+                                   "共 1 个站点有归档) —— 比这个时刻更新的事,本地库里没有。")
     assert "检索口径" in out and "国家励志奖学金" in out
 
     shutil.rmtree(tmp_path / "crawled")

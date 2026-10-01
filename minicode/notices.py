@@ -128,10 +128,25 @@ def campus_notices(ctx, action: str = "latest", limit: int = 10) -> str:
 
 
 CRAWLED_DIR_NAME = "crawled"
-# 抓取时刻的格式,**写的那一头在 `tools/crawl.py:495`** —— 两处各写一份字面量,
-# 改了写侧忘了改读侧的表现不是报错,是"永远读不出归档时间"(_corpus_line 从此不出现)。
-# 所以有一条针扫两边逐字相同,见 tests/test_notices.py。
+# 抓取时刻**有两家写侧,各写各的格式**:
+#   `minicode/tools/crawl.py:495`(学校官网栏目)→ `%Y-%m-%d %H:%M`
+#   `scripts/library_opac/archive.py:164`(馆藏 OPAC 全量快照)→ `%Y-%m-%d %H:%M:%S`
+# 读侧只认一种的后果不是报错,是"更新的那份归档被当成没有时刻"直接跳掉 ——
+# 2026-10-01 在本机真数据上撞到:OPAC 是 09-13 12:35:54,官网是 09-12 14:33,
+# 结果"最近一次抓取"报的是次新的那一次。数字看起来完全正常,这就是它危险的地方。
+# 两条针钉住:`CRAWL_STAMP_FORMATS` 必须收着两家写侧各自的格式,显示口径统一 `CRAWL_STAMP_FMT`。
 CRAWL_STAMP_FMT = "%Y-%m-%d %H:%M"
+CRAWL_STAMP_FORMATS = (CRAWL_STAMP_FMT, "%Y-%m-%d %H:%M:%S")
+
+
+def _stamp_key(stamp: str) -> float | None:
+    """把归档里的时刻解析成可比较的秒;两种已登记的写法之外一律认不出(返回 None)。"""
+    for fmt in CRAWL_STAMP_FORMATS:
+        try:
+            return time.mktime(time.strptime(stamp, fmt))
+        except ValueError:
+            continue
+    return None
 
 
 def corpus_age(workspace) -> dict | None:
@@ -143,15 +158,18 @@ def corpus_age(workspace) -> dict | None:
 
     只认 `index.json` 里那次抓取亲手写下的 `crawled_at`,**不拿文件 mtime 猜** ——
     仓库/归档文件被 clone、checkout、拷贝一遍时间就全变了,那是个看着可信的假数字。
-    没有归档、或归档里没有这个字段,一律返回 None(没有记录就说没有记录)。
+    两种已登记的写法(`_stamp_key`)都认;认不出的归档**不参与比较、也不算进 sites**,
+    而是单独报个数(`unreadable`)—— 悄悄丢掉一份归档的表现是"最近一次抓取"报成次新的那次,
+    没有任何地方会红。没有归档、或全都没有可用时刻,返回 None(没有记录就说没有记录)。
     """
     if workspace is None:
         return None
     root = Path(workspace) / CRAWLED_DIR_NAME
     if not root.is_dir():
         return None
-    best: tuple[str, str] | None = None        # (可比较的时刻, 原文时刻)
-    sites = 0
+    best: tuple[float, str, str] | None = None   # (时刻秒, 显示用的原文, 站点目录名)
+    sites = 0        # 读得出抓取时刻的归档数
+    unreadable = 0   # 归档在、但里面那个时刻读不出来(没写/写法不认识)
     try:
         dirs = sorted(p for p in root.iterdir() if p.is_dir())
     except OSError:
@@ -160,22 +178,30 @@ def corpus_age(workspace) -> dict | None:
         idx = d / "index.json"
         if not idx.is_file():
             continue
-        sites += 1
         try:
             stamp = str(json.loads(idx.read_text(encoding="utf-8")).get("crawled_at") or "")
         except (OSError, ValueError):
+            unreadable += 1
             continue
-        try:
-            time.strptime(stamp, CRAWL_STAMP_FMT)
-        except ValueError:
-            continue                            # 格式不对的时刻不参与比较,也不拿来报数
-        if best is None or stamp > best[0]:
-            best = (stamp, d.name)
+        key = _stamp_key(stamp)
+        if key is None:
+            unreadable += 1
+            continue
+        sites += 1
+        if best is None or key > best[0]:
+            best = (key, stamp, d.name)
     if best is None:
         return None
-    then = time.mktime(time.strptime(best[0], CRAWL_STAMP_FMT))
-    return {"at": best[0], "host": best[1], "sites": sites,
-            "days": max(0, int((time.time() - then) // 86400))}
+    return {"at": time.strftime(CRAWL_STAMP_FMT, time.localtime(best[0])),
+            "raw": best[1], "host": best[2], "sites": sites, "unreadable": unreadable,
+            "days": max(0, int((time.time() - best[0]) // 86400))}
+
+
+def _unreadable_tail(age: dict) -> str:
+    """有几份归档没写下可用时刻 —— 单独说一句,不含糊进「最近一次」里。"""
+    if not age.get("unreadable"):
+        return ""
+    return f"(另有 {age['unreadable']} 个归档没记下能读的抓取时刻,不算在内)"
 
 
 def corpus_note(workspace) -> str:
@@ -190,7 +216,8 @@ def corpus_note(workspace) -> str:
     if age is None:
         return ""
     return (f"本地语料截至 {age['at']}({age['days']} 天前,来自 {age['host']},"
-            f"共 {age['sites']} 个站点有归档)—— 比这个时刻更新的事,本地库里没有。")
+            f"共 {age['sites']} 个站点有归档){_unreadable_tail(age)} —— "
+            "比这个时刻更新的事,本地库里没有。")
 
 
 def _corpus_line(workspace) -> str:
@@ -199,7 +226,7 @@ def _corpus_line(workspace) -> str:
     if age is None:
         return ""
     return (f"- 本机这批爬虫语料最近一次抓取是 **{age['at']}({age['days']} 天前,"
-            f"来自 {age['host']})**,共 {age['sites']} 个站点有归档。"
+            f"来自 {age['host']})**,共 {age['sites']} 个站点有归档{_unreadable_tail(age)}。"
             "这个数只用来判断「本地答案能说到多新」:抓取再近也不改变上一条规矩 —— "
             "时效类问题仍然要 campus_notices 现拉。\n")
 

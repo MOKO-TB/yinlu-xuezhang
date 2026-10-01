@@ -470,6 +470,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.97:语料新鲜度(漏收 = 提示词里那句"这批语料是几天前抓的"永远不出现,
     # 而它存在的意义就是让模型别把旧语料当"最近")
     "minicode.notices": ("corpus_age", "_corpus_line", "CRAWL_STAMP_FMT",
+                         # 两种写侧格式与解析那一步(漏收 = 装好的包里只认一种写法,
+                         # 更新的那份归档被悄悄跳掉,"最近一次抓取"报成次新的)
+                         "CRAWL_STAMP_FORMATS", "_stamp_key", "_unreadable_tail",
                          # 工具回话那一句(漏收 = 提示词里有年龄、回话里却没有,模型
                          # 拿到本地条目时照样会把旧语料当"最近")
                          "corpus_note",

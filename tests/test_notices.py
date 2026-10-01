@@ -313,14 +313,44 @@ def test_prompt_stays_silent_when_there_is_nothing_to_report(tmp_path):
 
 
 def test_the_writer_and_the_reader_use_the_same_stamp_format():
-    """写侧(crawl.py)与读侧(notices.CRAWL_STAMP_FMT)必须同一个格式。
+    """**两家**写侧各自的格式都必须收在读侧的 `CRAWL_STAMP_FORMATS` 里。
 
-    漂了的后果不是报错,是"这一句永远不出现" —— 面板与提示词都看不出少了什么。
+    漂了的后果不是报错,是"更新的那份归档被当成没有时刻"跳掉 —— 于是"最近一次抓取"
+    报的是次新的那一次,数字看着完全正常(2026-10-01 在本机真数据上撞到过一次:
+    OPAC 快照带秒、官网栏目不带秒)。
     """
-    src = (ROOT / "minicode" / "tools" / "crawl.py").read_text(encoding="utf-8")
-    assert 'time.strftime("' in src, "crawl.py 写 index.json 的时刻语句变了,这条针要跟改"
-    written = re.search(r'time\.strftime\("([^"]+)"\)', src).group(1)
-    assert written == notices.CRAWL_STAMP_FMT, (written, notices.CRAWL_STAMP_FMT)
+    crawl_src = (ROOT / "minicode" / "tools" / "crawl.py").read_text(encoding="utf-8")
+    assert 'time.strftime("' in crawl_src, "crawl.py 写 index.json 的时刻语句变了,这条针要跟改"
+    school_fmt = re.search(r'time\.strftime\("([^"]+)"\)', crawl_src).group(1)
+    opac_src = (ROOT / "scripts" / "library_opac" / "archive.py").read_text(encoding="utf-8")
+    assert '"crawled_at": time.strftime("' in opac_src, "OPAC 快照那侧的时刻语句变了,这条针要跟改"
+    opac_fmt = re.search(r'"crawled_at": time\.strftime\("([^"]+)"\)', opac_src).group(1)
+    assert school_fmt in notices.CRAWL_STAMP_FORMATS, (school_fmt,)
+    assert opac_fmt in notices.CRAWL_STAMP_FORMATS, (opac_fmt,)
+    assert notices.CRAWL_STAMP_FMT in notices.CRAWL_STAMP_FORMATS   # 显示口径也认得出
+
+
+def test_the_stamp_with_seconds_is_not_dropped(tmp_path):
+    """带秒的那份归档更新时必须报它,显示统一到分钟 —— 这是本机真数据撞到的形状。"""
+    _archive(tmp_path, "www.gzasc.edu.cn", "2026-09-12 14:33")
+    _archive(tmp_path, "mfindgzyykj.libsp.cn", "2026-09-13 12:35:54")
+    age = notices.corpus_age(tmp_path)
+    assert age["at"] == "2026-09-13 12:35", age           # 不是次新的 09-12
+    assert age["host"] == "mfindgzyykj.libsp.cn"
+    assert age["sites"] == 2 and age["unreadable"] == 0
+
+
+def test_archives_without_a_readable_stamp_are_reported_separately(tmp_path):
+    """读不出时刻的归档不混进「最近一次」,但要单独报个数:悄悄丢掉才是今天这个 bug 的形状。"""
+    _archive(tmp_path, "www.gzasc.edu.cn", "2026-09-12 14:33")
+    _archive(tmp_path, "a.example", "不是个时刻")
+    _archive(tmp_path, "b.example", None)
+    age = notices.corpus_age(tmp_path)
+    assert age["sites"] == 1 and age["unreadable"] == 2
+    assert age["at"] == "2026-09-12 14:33"
+    note = notices.corpus_note(tmp_path)
+    assert "另有 2 个归档没记下能读的抓取时刻" in note
+    assert "另有" in notices.notices_prompt_section(tmp_path)   # 提示词那句同样不说糊
 
 
 # ------------------------ 语料年龄接进工具回话(§6 #45,v0.9.97 的下一刀)
