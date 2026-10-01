@@ -92,6 +92,10 @@ class Entry:
     pattern: str = ""
     note: str = ""
     restart: bool = False
+    # W2(v0.9.99):数据归属 —— "workspace"=每个工作区各一份(切换工作区看到的是
+    # 那边的),"global"=全局一份(课表/成绩这类校园数据,与代码仓库无关)。
+    # 空串 = 不适用(留档/日志/缓存没有"归属"一说)。面板逐行带出,写明而不靠猜。
+    scope: str = ""
 
 
 TABLE: tuple[Entry, ...] = (
@@ -99,16 +103,20 @@ TABLE: tuple[Entry, ...] = (
     Entry("sessions", "聊天记录", PERSONAL, True, kind="family", pattern="*.jsonl",
           note="每一次对话的留档;包太大可以在导出时不勾它"),
     Entry("memory/MEMORY.md", "长期记忆(跨项目)", PERSONAL, True, root="home",
+          scope="global",
           note="学长记住的你的偏好,换机器靠它才不用重新介绍自己"),
     Entry("schedule.json", "我的课表", PERSONAL, True, restart=True,
+          scope="global",
           note="导入教务或手填的课表"),
     Entry("schedule.prev.json", "上一版课表", PERSONAL, False,
-          note="只为「换回上一版」存在,换机器用不上"),
+          note="只为「换回上一版」存在,换机器用不上", scope="global"),
     Entry("scores.json", "成绩存档", PERSONAL, True,
+          scope="global",
           note="从教务导入的正式成绩,绩点从这里算"),
     Entry("skill-usage.jsonl", "技能使用账", PERSONAL, False,
           note="每次调技能记一条;哪些技能真有人用,从这里看"),
     Entry("period-times.json", "本机作息表", PERSONAL, True, restart=True,
+          scope="global",
           note="每节上下课钟点,空档看板按它算"),
     Entry("reminders.json", "待办与截止日期", PERSONAL, True, restart=True,
           note="「提醒我 X 号交材料」记在这里"),
@@ -136,6 +144,7 @@ TABLE: tuple[Entry, ...] = (
     Entry("config.json", "模型与权限配置", PREF, True, restart=True,
           note="导出前会洗掉里面的 API Key,新机器要重填一次"),
     Entry("workspaces.json", "工作区列表", PREF, True, restart=True,
+          scope="global",
           note="里面是本机绝对路径,新机器认不出来时重选一次目录就行"),
     Entry("notify-pref.json", "桌面提醒开关", PREF, True, restart=True,
           note="七类提醒各自开在哪一档"),
@@ -332,6 +341,7 @@ def inventory(workspace: str = "") -> dict:
             items.append({
                 "key": entry.key,
                 "label": entry.label,
+                "scope": entry.scope,
                 "path": str(base),
                 "exists": exists,
                 "bytes": nbytes,

@@ -346,7 +346,9 @@ def test_import_pick_writes_nothing(tmp_path):
     dest = _make_pack(tmp_path, "p.zip", {"app/schedule.json": '{"rows":[]}'})
     picked = mydata.import_pick(dest)
     assert picked["ok"] and picked["counts"]["written"] == 1
-    assert not paths.app_path().exists()          # 预览阶段一个字都不写
+    # 预览阶段一个字都不写(目录本身允许存在:测试总闸会预建 tmp/app)
+    assert not list(paths.app_path().glob("**/*")) or all(
+        p.name in ("web-usage.log",) for p in paths.app_path().glob("**/*"))
     assert mydata.import_apply(picked["nonce"])["written"] == 1
 
 
@@ -691,3 +693,27 @@ def test_public_web_build_hides_the_data_button():
     """对外模式连入口都不该有:面板列的是服务器自己机器上的文件路径。"""
     js = (ROOT / "frontend" / "bridge-web.js").read_text(encoding="utf-8")
     assert "#btnMyData" in js, "对外模式没把「数据」按钮藏起来"
+
+
+# ------------------------------------------- 数据归属标注(W2,v0.9.99)
+
+def test_inventory_rows_carry_scope(tmp_path, monkeypatch):
+    """面板逐行带 scope:课表/成绩/作息表=全局一份(校园数据与仓库无关),
+    面板把它写出来,不让用户猜『开了工作副本后课表会不会跟过去』。"""
+    from minicode import mydata
+    monkeypatch.setattr(mydata.paths, "APP_DIR", tmp_path / "app")
+    rows = mydata.inventory(workspace=str(tmp_path))
+    all_items = [it for g in rows.get("groups", []) for it in g.get("items", [])]
+    by_key = {it["key"]: it for it in all_items}
+    assert by_key["schedule.json"]["scope"] == "global"
+    assert by_key["scores.json"]["scope"] == "global"
+    assert by_key["sessions"]["scope"] == ""          # 留档没有归属一说
+
+
+def test_scope_marks_are_complete_for_campus_data():
+    """声明完整性:凡校园类个人数据必须标 global,漏标=面板上那一行不显示归属。"""
+    from minicode import mydata
+    for e in mydata.TABLE:
+        if e.key in ("schedule.json", "schedule.prev.json", "scores.json",
+                     "period-times.json", "workspaces.json", "memory/MEMORY.md"):
+            assert e.scope == "global", (e.key, e.scope)

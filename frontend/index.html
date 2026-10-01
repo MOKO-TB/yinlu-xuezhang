@@ -5211,6 +5211,7 @@ function mdRow(it) {
     ? "" : ` · ${it.count} 项`;
   return `<div class="md-row${it.exists ? "" : " absent"}">
       <div class="md-nm">${esc(it.label)}${it.note ? `<em>${esc(it.note)}</em>` : ""}</div>
+      <div class="md-scope">${it.scope === "global" ? "全局一份(所有工作区共用)" : it.scope === "workspace" ? "每个工作区各一份" : ""}</div>
       <span class="md-sz">${it.exists ? esc(it.size) + cnt : "还没生成过"}</span>
       <span class="md-tag${it.pack ? "" : " no"}">${it.pack ? "进包" : "不进包"}</span>
     </div>`;
