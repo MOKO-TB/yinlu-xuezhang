@@ -29,6 +29,34 @@ from minicode.tools.base import ToolContext
 from minicode.tools.registry import build_default_registry
 
 
+AGENTS_CHAR_LIMIT = 4000   # 工作区指令文件的注入截断(与 memory 4000 同量级)
+AGENTS_FILES = ("AGENTS.md", ".agents.md")   # Codex/ZCode/Claude Code 同款约定
+
+
+def agents_prompt_section(workspace: Path) -> str:
+    """工作区根的 AGENTS.md 指令文件,自动进系统提示词(F1,v0.9.100)。
+
+    Codex/ZCode/Claude Code 都有这个约定:仓库里放一份给 agent 的指令
+    (项目约定、代码风格、禁区),agent 每轮自动读。这里是同一份约定的
+    本地落法 —— **工作区根**的两个名字按序找,存在才注入;文件是用户
+    手写的,原样注入、截断到 4000 字并写明,绝不替用户改写。子代理也带
+    (它就是"这个项目的规矩",对派出去干活的那一路同样有效)。
+    """
+    for name in AGENTS_FILES:
+        f = Path(workspace) / name
+        try:
+            text = f.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if not text:
+            continue
+        head = ("# 项目指令(工作区 " + name + ",用户手写,优先级高于你的默认习惯)")
+        if len(text) > AGENTS_CHAR_LIMIT:
+            text = text[:AGENTS_CHAR_LIMIT] + "\n(项目指令过长已截断,请让用户拆薄)"
+        return f"\n{head}\n\n{text}\n"
+    return ""
+
+
 def build_system_prompt(workspace: Path, for_subagent: bool = False) -> str:
     template = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
     prompt = (template
@@ -54,7 +82,8 @@ def build_system_prompt(workspace: Path, for_subagent: bool = False) -> str:
             + library_prompt_section(workspace)
             + library_guide_prompt_section(workspace)
             + (mood_prompt_section() if not for_subagent else "")
-            + (memory_prompt_section(workspace) if not for_subagent else ""))
+            + (memory_prompt_section(workspace) if not for_subagent else "")
+            + agents_prompt_section(workspace))
 
 
 def _mcp_log(ui):

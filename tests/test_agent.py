@@ -992,3 +992,28 @@ def test_compaction_invalidates_the_floor_it_just_used(config, ctx):
     agent.run_turn("第一问")
     agent.run_turn("第二问")
     assert agent.context_source() == "estimated", "压缩之后还拿旧的实测数当底线"
+
+
+# ------------------------------------------- 工作区 AGENTS.md 注入(F1,v0.9.100)
+
+def test_agents_md_injected_when_present(tmp_path):
+    from minicode.app_setup import agents_prompt_section, build_system_prompt
+    (tmp_path / "AGENTS.md").write_text("# 我的规矩\n- 回答先给结论\n", encoding="utf-8")
+    out = agents_prompt_section(tmp_path)
+    assert "项目指令" in out and "先给结论" in out
+    # 子代理也带(项目指令对派出去干活的那一路同样有效)
+    assert "项目指令" in build_system_prompt(tmp_path, for_subagent=True)
+
+
+def test_agents_md_absent_means_empty_and_dot_name_fallback(tmp_path):
+    from minicode.app_setup import agents_prompt_section
+    assert agents_prompt_section(tmp_path) == ""      # 没有文件一个字不加
+    (tmp_path / ".agents.md").write_text("备选名字的指令", encoding="utf-8")
+    assert "备选名字" in agents_prompt_section(tmp_path)
+
+
+def test_agents_md_truncated_with_marker(tmp_path):
+    from minicode.app_setup import AGENTS_CHAR_LIMIT, agents_prompt_section
+    (tmp_path / "AGENTS.md").write_text("长" * (AGENTS_CHAR_LIMIT + 500), encoding="utf-8")
+    out = agents_prompt_section(tmp_path)
+    assert "已截断" in out and len(out) < AGENTS_CHAR_LIMIT + 200
