@@ -487,3 +487,64 @@ def _real_browser_health() -> dict:
 def _real_startup() -> dict:
     from minicode import tray
     return tray.startup_status()
+
+
+def render_text(rep: dict) -> str:
+    """把一张体检表打成**终端**看的文字版(面板画的是同一个 dict)。
+
+    为什么要有这一段:`python -m minicode.health` 走的是"同学说不清、维护者隔着一段
+    文字看"那条路 —— 那边没有窗口也没有输入框,只能靠一段可粘贴的输出。
+    这里不重写任何判定:一行行取 `report()` 里的原文,`badge`/`detail`/`fix` 是什么就
+    打什么;界面上那颗「问学长怎么修」的按钮在终端点不动,所以把**它要填的那句话**
+    原样念出来,让拿着这段文字的人自己发得出去。
+    """
+    rows_all = [r for g in rep.get("groups") or [] for r in (g.get("rows") or [])]
+    head = (f"🩺 一键体检 · {rep.get('verdict') or '(没算出结论)'}"
+            f" · 统计于 {rep.get('checked_at') or '(没拿到时刻)'}")
+    out = [head]
+    if not rep.get("deep"):
+        out.append("   (浅检:只问本机内存与文件;要问网络与外部进程加 --deep)")
+    for g in rep.get("groups") or []:
+        rows = g.get("rows") or []
+        if not rows:
+            continue        # 整组没出现(装好的包没有 repo 组)—— 不摆一个空标题糊字数
+        out.append(f"{g.get('icon') or ''} {g.get('label')}")
+        for r in rows:
+            out.append(f"  [{r.get('badge')}] {r.get('label')} — "
+                       f"{r.get('detail') or '(这一项没给说明)'}")
+            if r.get("fix"):
+                out.append(f"      怎么修:{r['fix']}")
+            act = r.get("action") or {}
+            if act.get("kind") == "ask":
+                out.append(f"      (界面里点「{act.get('label')}」会把这句填进输入框:"
+                           f"{act.get('text')})")
+    if not rows_all:
+        out.append("(一张表都没算出来)")
+    return "\n".join(out)
+
+
+def main(argv=None) -> int:
+    """`python -m minicode.health [--deep] [--json]` —— 不开窗口也能拿到那张表。
+
+    退出码只有一件事可看:**有没有「有问题」这一档**(bad)。1 不代表"坏了三件事",
+    只代表"至少一行被判定为有问题";`没查成`(unknown)不算失败 —— 无头模式里没有活的
+    权限门与 MCP 连接,那两行本来就该写"没查成",把它们算成失败等于逼着维护者去修
+    一个不存在的问题。
+    """
+    args = list(sys.argv[1:] if argv is None else argv)
+    deep = "--deep" in args
+    as_json = "--json" in args
+    from minicode.config import load_config
+    from minicode.workspace import startup_workspace
+    rep = report(workspace=startup_workspace(Path.cwd()), config=load_config(),
+                 deep=deep)
+    if as_json:
+        import json
+        print(json.dumps(rep, ensure_ascii=False, indent=2))
+    else:
+        print(render_text(rep))
+    return 1 if rep.get("summary", {}).get(BAD) else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

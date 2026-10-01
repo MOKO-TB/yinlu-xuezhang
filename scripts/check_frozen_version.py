@@ -175,6 +175,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # BADGE / GROUPS 也钉住:前端那行徽章字与分组标题只认后端给的这两份,
     # 模块要是被改窄了(比如 BADGE 少一个状态),面板会画出一行没有徽章的空格子。
     "minicode.health": ("report", "BADGE", "GROUPS", "GATE_SCRIPTS", "_verdict",
+                        # 无窗口出口(漏收 = 报障时那条 `python -m minicode.health`
+                        # 根本不存在,维护者只能让同学自己描述"哪儿不对")
+                        "render_text", "main",
                         "_check_gates", "_run_gate"),
     "minicode.model_probe": ("list_models", "explain_status", "remember"),
     # ---- v0.9.22:安装版可用性(数据目录写探针 + 诊断下发) ----

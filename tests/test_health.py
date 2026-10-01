@@ -524,3 +524,55 @@ def test_injection_row_is_in_the_local_group():
         "readable": True, "events": 0, "gates": [], "last_at": ""}), group="local")
         if r["key"] == "injection")
     assert row["group"] == "local"
+
+
+# ------------------------------------------------ 无窗口出口(python -m minicode.health)
+
+
+def test_render_text_covers_every_row_verbatim():
+    """文字版不许漏行、也不许重写判定 —— 面板与终端读的是同一份 dict。"""
+    rep = make(project=FakeSpec(rules=[{"tool": "bash", "pattern": "git "}], trusted=True),
+               mcp_rows=[{"id": "m1", "label": "本机地图", "enabled": True,
+                          "transport": "stdio", "connected": True, "server": "map",
+                          "n_tools": 3}])
+    text = health.render_text(rep)
+    for r in rows_of(rep):
+        assert f"[{r['badge']}] {r['label']}" in text, r["label"]
+        assert (r["detail"] or "(这一项没给说明)")[:24] in text, r["label"]
+    assert rep["verdict"] in text and "统计于" in text
+    # 浅检必须说清"没问网络",否则读的人会以为深检也跑过了
+    assert "--deep" in text
+
+
+def test_render_text_reads_the_fix_and_reads_back_the_ask_button():
+    """界面上点不动的按钮,在终端里把它**要填的那句话**原样念出来。"""
+    row = by_key(make(project=None), "permission")
+    text = health.render_text(make(project=None))
+    assert "没递进来" in text
+    assert row["badge"] == health.BADGE["unknown"]
+    assert "[没查成] 权限与项目白名单" in text          # 不伪装成"正常"
+
+
+def test_headless_table_says_what_it_could_not_check():
+    """无头模式没有活的权限门与 MCP 管理器:那两行必须是"没查成",不是"没问题"。"""
+    rep = make(project=None, mcp_rows=None)
+    for key in ("permission", "mcp"):
+        assert by_key(rep, key)["status"] == health.UNKNOWN, key
+    assert "没查成" in rep["verdict"] and "不等于没问题" in rep["verdict"]
+
+
+def test_headless_exit_code_only_counts_bad(monkeypatch, capsys):
+    """退出码只认「有问题」这一档:unknown 算失败会逼维护者去修一个不存在的问题。"""
+    def fake_report(**kw):
+        return {"verdict": "8 项里有 1 项没查成", "checked_at": "10:00:00", "deep": False,
+                "groups": [{"key": "local", "label": "本机状态", "icon": "🖥",
+                            "rows": [{"key": "m", "label": "某项", "status": st,
+                                      "badge": health.BADGE[st], "detail": "d",
+                                      "fix": "", "action": None}]}],
+                "summary": {health.BAD: n_bad, health.UNKNOWN: 1,
+                            health.OK: 0, health.WARN: 0, health.SKIP: 0}}
+    monkeypatch.setattr(health, "report", fake_report)
+    for st, n_bad, want in ((health.UNKNOWN, 0, 0), (health.BAD, 1, 1)):
+        assert health.main([]) == want, st
+    out = capsys.readouterr().out
+    assert "🩺 一键体检" in out and "[有问题]" in out
