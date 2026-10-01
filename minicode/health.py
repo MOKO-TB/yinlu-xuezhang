@@ -534,15 +534,28 @@ def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     deep = "--deep" in args
     as_json = "--json" in args
-    from minicode.config import load_config
     from minicode.workspace import startup_workspace
-    rep = report(workspace=startup_workspace(Path.cwd()), config=load_config(),
-                 deep=deep)
+    # 拿配置这一段**绝不能让进程退出**:`load_config()` 的"没配好就提示退出"是给 CLI
+    # 启动用的,而体检最该跑的场景恰恰就是"这台机器配坏了/还没配"。所以先看文件在不在
+    # (不在就不调它 —— 它会把 example 复制成 config.json,只读的诊断不该顺手写盘),
+    # 再把 SystemExit 吞下来交给表里那一行去说。
+    config = None
+    try:
+        from minicode.config import CONFIG_PATH, load_config
+        if Path(CONFIG_PATH).exists():
+            config = load_config()
+    except SystemExit:
+        config = None
+    rep = report(workspace=startup_workspace(Path.cwd()), config=config, deep=deep)
     if as_json:
         import json
         print(json.dumps(rep, ensure_ascii=False, indent=2))
-    else:
-        print(render_text(rep))
+        return 1 if rep.get("summary", {}).get(BAD) else 0
+    text = render_text(rep)
+    if config is None:
+        text += ("\n   (这一轮没拿到可用的 config.json —— 这不是错误:没配好、还没配的机器"
+                 "正是体检最该跑的时候,「模型配置」那一行会照实写「没查成」。)")
+    print(text)
     return 1 if rep.get("summary", {}).get(BAD) else 0
 
 

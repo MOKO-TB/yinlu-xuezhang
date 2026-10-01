@@ -561,8 +561,16 @@ def test_headless_table_says_what_it_could_not_check():
     assert "没查成" in rep["verdict"] and "不等于没问题" in rep["verdict"]
 
 
-def test_headless_exit_code_only_counts_bad(monkeypatch, capsys):
-    """退出码只认「有问题」这一档:unknown 算失败会逼维护者去修一个不存在的问题。"""
+def test_headless_exit_code_only_counts_bad(monkeypatch, capsys, tmp_path):
+    """退出码只认「有问题」这一档:unknown 算失败会逼维护者去修一个不存在的问题。
+
+    `CONFIG_PATH` 一并钉到不存在的文件:这条测试要的是**代码的逻辑**,不是"这台机器
+    此刻有没有 config.json"。上一版没钉它,于是单跑绿、全量跑红(前面的测试把 APP_DIR
+    挪走了,`load_config()` 在那里 `sys.exit`)—— 正是本仓库骂过的那种依赖环境的假绿。
+    """
+    import minicode.config as cfgmod
+    monkeypatch.setattr(cfgmod, "CONFIG_PATH", tmp_path / "no" / "config.json")
+
     def fake_report(**kw):
         return {"verdict": "8 项里有 1 项没查成", "checked_at": "10:00:00", "deep": False,
                 "groups": [{"key": "local", "label": "本机状态", "icon": "🖥",
@@ -576,3 +584,32 @@ def test_headless_exit_code_only_counts_bad(monkeypatch, capsys):
         assert health.main([]) == want, st
     out = capsys.readouterr().out
     assert "🩺 一键体检" in out and "[有问题]" in out
+
+
+def test_headless_run_never_exits_when_config_is_missing(monkeypatch, capsys, tmp_path):
+    """没配好、还没配的机器**正是体检最该跑的时候** —— 绝不能半路 sys.exit。
+
+    `config.load_config()` 的口径是「没配好就提示退出」,而它在文件不存在时还会把
+    example 复制成 config.json。只读的诊断命令带着这两件事就变成:同学按你说的跑了
+    `python -m minicode.health`,程序自己退出了,还悄悄建了一个文件。
+    """
+    import minicode.config as cfgmod
+    cfg_path = tmp_path / "no" / "config.json"
+    monkeypatch.setattr(cfgmod, "CONFIG_PATH", cfg_path)
+    seen: dict = {}
+
+    def fake_report(**kw):
+        seen.update(kw)
+        return {"verdict": "1 项检查都没问题", "checked_at": "10:00:00", "deep": False,
+                "groups": [{"key": "local", "label": "本机状态", "icon": "🖥",
+                            "rows": [{"key": "modelcfg", "label": "模型配置",
+                                      "status": health.OK, "badge": health.BADGE[health.OK],
+                                      "detail": "d", "fix": "", "action": None}]}],
+                "summary": {health.BAD: 0, health.UNKNOWN: 0, health.OK: 1,
+                            health.WARN: 0, health.SKIP: 0}}
+
+    monkeypatch.setattr(health, "report", fake_report)
+    assert health.main([]) == 0            # 不是 SystemExit,而是把表打出来
+    assert seen["config"] is None          # 没配置就是没配置,不拿半成品糊上去
+    assert not cfg_path.exists(), "只读的诊断不许顺手创建 config.json"
+    assert "没拿到可用的 config.json" in capsys.readouterr().out
