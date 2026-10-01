@@ -56,13 +56,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # v0.9.23:教务课表导入 + 首次运行向导
                             "schedule_import_open", "schedule_import_read",
                             "schedule_import_model", "schedule_import_confirm",
-                            "schedule_import_clear", "schedule_import_status",
+                            # 2026-10-01:两根 *_import_status 的针跟着删了 —— 方法本身
+                            # 是死代码(前端一次都没调,而开面板就把状态清空),详见 §6 #45
+                            "schedule_import_clear",
                             "_jw_flow", "get_onboarding", "dismiss_onboarding",
                             # v0.9.59:成绩导入三步向导(漏收 = 面板按钮点了没反应,
                             # 或读到了成绩却永远写不进 scores.json)
                             "scores_import_open", "scores_import_read",
                             "scores_import_model", "scores_import_confirm",
-                            "scores_import_clear", "scores_import_status",
+                            "scores_import_clear",
                             "_scores_flow",
                             # v0.9.24:计划面板数据源(只读 + 派发文案)
                             "get_plan",

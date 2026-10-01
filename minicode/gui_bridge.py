@@ -168,9 +168,11 @@ class PublicApi:
         """教务导入收尾:关窗口并清掉那份独立 profile 的登录态。"""
         return self._b.schedule_import_clear()
 
-    def schedule_import_status(self) -> dict:
-        """有没有刚读到、还没确认的课表。"""
-        return self._b.schedule_import_status()
+    # 2026-10-01 删掉 `schedule_import_status` / `scores_import_status` 这一对门面方法:
+    # 前端一次都没调过(全文件 0 命中),而 `*_import_open` 每次开面板都把 `_jw_result` /
+    # `_scores_result` 清空 —— 也就是说它们**结构上**永远只能回 pending=False。
+    # 留着的表现是"docstring 承诺了面板开关会问一次,而没人问",这不是缺根线,是假承诺。
+    # 想真做(读到没确认的那份跨面板活着 + 开面板提示「还等你确认 / 丢弃」)先看 §6 #45。
 
     def scores_import_open(self) -> dict:
         """成绩导入第 1 步:打开看得见的登录页(登录由人做)。"""
@@ -191,10 +193,6 @@ class PublicApi:
     def scores_import_clear(self) -> dict:
         """成绩导入收尾:关窗口并清掉那份独立 profile 的登录态。"""
         return self._b.scores_import_clear()
-
-    def scores_import_status(self) -> dict:
-        """有没有刚读到、还没确认的成绩。"""
-        return self._b.scores_import_status()
 
     def schedule_undo(self) -> dict:
         """课表面板「换回上一版」(名字避开输入框那个已有的 undo)。"""
@@ -2177,10 +2175,6 @@ class Bridge:
         except Exception as exc:
             return {"ok": False, "msg": f"清理登录态失败:{type(exc).__name__}: {exc}"}
 
-    def schedule_import_status(self) -> dict:
-        """面板开关时问一次:学长手上有没有刚读到、还没确认的课表。"""
-        return {"ok": True, "pending": bool(getattr(self, "_jw_result", None))}
-
     # ------------------------------------------- 教务成绩导入(v0.9.59 H 件)
     # 三步与课表导入同构,差别只在:读的是成绩表(表头认列)、确认不需要补填
     # 学期起点、落盘的是 scores.json。同一个浏览器窗口可以两用 ——
@@ -2256,10 +2250,6 @@ class Bridge:
             return schedule_import.clear_login_state()
         except Exception as exc:
             return {"ok": False, "msg": f"清理登录态失败:{type(exc).__name__}: {exc}"}
-
-    def scores_import_status(self) -> dict:
-        """面板开关时问一次:学长手上有没有刚读到、还没确认的成绩。"""
-        return {"ok": True, "pending": bool(getattr(self, "_scores_result", None))}
 
     def schedule_undo(self) -> dict:
         """课表换回上一版(save/clear 时留的那份备份)。

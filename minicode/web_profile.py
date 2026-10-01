@@ -283,7 +283,7 @@ class PublicFacade:
         _reason = "网页版不开放教务课表导入(需要本机浏览器窗口,请用桌面版)"
         self._handlers.update({n: (lambda **k: _refuse(_reason)) for n in (
             "schedule_import_open", "schedule_import_read", "schedule_import_model",
-            "schedule_import_confirm", "schedule_import_clear", "schedule_import_status")})
+            "schedule_import_confirm", "schedule_import_clear")})
         # 「我的数据」列的是**服务器本机**的文件清单,导出/导入还会在服务器上写读文件:
         # 对访客既没意义又泄露路径,整组明确拒绝(桌面版才有这个面板)。
         _md_reason = "网页版不开放「我的数据」(列的是服务器本机的文件,迁移请用桌面版)"

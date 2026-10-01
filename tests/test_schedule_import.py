@@ -342,7 +342,7 @@ def test_public_api_delegates_the_wizard_with_string_params():
             return call
 
     names = ["schedule_import_open", "schedule_import_read", "schedule_import_model",
-             "schedule_import_confirm", "schedule_import_clear", "schedule_import_status"]
+             "schedule_import_confirm", "schedule_import_clear"]
     b = Recorder()
     api = PublicApi(b)
     sigs = {n: list(inspect.signature(getattr(PublicApi, n), eval_str=True)

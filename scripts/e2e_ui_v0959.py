@@ -75,7 +75,6 @@ window.pywebview = {
       window.__E2E_CALLS__.push(["scores_import_clear"]);
       return Promise.resolve({ok: true, msg: "已清理"});
     },
-    scores_import_status: () => Promise.resolve({ok: true, pending: false}),
     schedule_import_open: () => {
       window.__E2E_CALLS__.push(["schedule_import_open"]);
       return Promise.resolve({ok: true, stage: "need_login", url: "x", title: "教务系统"});
