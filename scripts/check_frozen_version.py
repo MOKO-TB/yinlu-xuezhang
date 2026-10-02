@@ -261,6 +261,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                          # 跨会话记忆:模型侧工具与 CLI /find 共用这一份取数,
                          # 漏收 = 装好的包里学长仍然记不住上次聊过什么
                          "history_hits", "search_history",
+                         # v0.9.105 「第几问」这个坐标的算法只有一份(漏收 = 装好的包里
+                         # 编辑重发与 /rewind 各数一遍,数错一格退的就是别人那几问的文件)
+                         "user_message_at",
+                         # v0.9.105 「第几问」这个坐标的算法只有一份(漏收 = 装好的包里
+                         # 编辑重发与 /rewind 各数一遍,数错一格退的就是别人那几问的文件)
+                         "user_message_at",
                          # 崩溃/强关留下的悬空 tool_calls:漏收 = 装好的包里恢复一次
                          # 中断过的会话,以后每一轮都被端点 400
                          "repair_tool_pairs"
@@ -510,6 +516,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "extra_prompt", "hit_line", "skills_of", "Match"),
     # v0.9.39:一轮总时限是真的在拦东西(漏收 = 配置文件里的数字没人读)
     "minicode.agent": ("run_turn", "turn_time_limited",
+                       # v0.9.105 /rewind 点头前那一屏:预览与动手共用一份筛选
+                       # (漏 rollback_preview = 命令行只能盲退;漏 _rollback_scope =
+                       # 两处各筛一遍,总有一天预览说 2 处而实际退 1 处)
+                       "rollback_preview", "_rollback_scope", "_rollback_arg",
+                       # v0.9.105 /rewind 点头前那一屏:预览与动手共用一份筛选
+                       # (漏 rollback_preview = 命令行只能盲退;漏 _rollback_scope =
+                       # 两处各筛一遍,总有一天预览说 2 处而实际退 1 处)
+                       "rollback_preview", "_rollback_scope", "_rollback_arg",
                        # v0.9.97:量窗口那把尺子的实测下限(漏收 = 装好的包里压缩又回到
                        # 只按字符估,英文/代码多的会话会一路撞到真实窗口才压)
                        "_context_pair", "context_source", "REAL_FLOOR_WINDOW",

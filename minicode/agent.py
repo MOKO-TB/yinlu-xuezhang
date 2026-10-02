@@ -579,6 +579,49 @@ class Agent:
         return (f"已全部回退 {n} 处:{listed}。" if n else "没有一处退成功。") + tail + (
             " 命令与外部程序改的不在账里。" if n else "")
 
+    def _rollback_arg(self, ordinal) -> "dict | None":
+        """编号合法性:错了回那个错误 dict,能用回 None。preview 与动手共用一把尺。"""
+        if isinstance(ordinal, bool) or not str(ordinal).strip().lstrip("-").isdigit():
+            return {"ok": False, "reverted": [],
+                    "msg": f"错误:ordinal 只接受第几问(整数),收到 {ordinal!r}。"}
+        if int(str(ordinal).strip()) < 1:
+            return {"ok": False, "reverted": [],
+                    "msg": "错误:第几问要从 1 开始数。"}
+        return None
+
+    def _rollback_scope(self, want: int) -> "tuple[list[dict], list[dict]]":
+        """(第 want 问及之后改过的记录, 其中属于别的纪元的)。
+
+        这份筛选只有一处:`rollback_preview`(给人看的那一屏)与
+        `rollback_to_ordinal`(真动手)必须说同一个数 —— 两处各筛一遍,
+        总有一天一处在预览里说"2 处",另一处退完说"没东西可退"。
+        """
+        in_scope = [r for r in self._undo_stack if r.get("turn", 0) >= want]
+        return in_scope, [r for r in in_scope
+                          if r.get("epoch", self._epoch) != self._epoch]
+
+    def rollback_preview(self, ordinal) -> dict:
+        """"退到第 N 问之前"会退掉哪些文件 —— 只算,**一个字节都不动**。
+
+        存在的理由:动手面前得让人看见要动什么(设计稿 §四.3 那条规矩在
+        命令行 /rewind 上的落地)。这里不复制筛选逻辑,只读 `_rollback_scope`。
+        """
+        bad = self._rollback_arg(ordinal)
+        if bad:
+            return {"ok": False, "count": 0, "paths": [], "stale": 0,
+                    "msg": bad["msg"]}
+        want = int(str(ordinal).strip())
+        in_scope, stale = self._rollback_scope(want)
+        paths = [self._change_display(r["path"]) for r in
+                 sorted(in_scope, key=lambda r: -r["seq"])]
+        return {"ok": True, "ordinal": want, "count": len(in_scope),
+                "paths": paths[:5], "more": max(0, len(paths) - 5),
+                "stale": len(stale),
+                "kinds": [(("新建" if r["data"] is None else "改")) for r in
+                          sorted(in_scope, key=lambda r: -r["seq"])][:5],
+                "msg": (f"第 {want} 问之后没有我用写文件工具改过的东西"
+                        "(命令与外部程序改的一直不在这份账里)。" if not in_scope else "")}
+
     def rollback_to_ordinal(self, ordinal) -> dict:
         """R3:把「第 ordinal 问之后我改过的文件」全部退回,给编辑重发用。
 
@@ -590,19 +633,16 @@ class Agent:
         退的顺序与 `undo_all` 一致(最新→最旧),同一文件退到最早那份前像;
         只动 write_file / edit_file 那本账 —— 命令改的从来不在里面,这句必须说出口。
         """
-        if isinstance(ordinal, bool) or not str(ordinal).strip().lstrip("-").isdigit():
-            return {"ok": False, "reverted": [],
-                    "msg": f"错误:ordinal 只接受第几问(整数),收到 {ordinal!r}。"}
+        bad = self._rollback_arg(ordinal)
+        if bad:
+            return bad
         want = int(str(ordinal).strip())
-        if want < 1:
-            return {"ok": False, "reverted": [],
-                    "msg": "错误:第几问要从 1 开始数。"}
-        in_scope = [r for r in self._undo_stack if r.get("turn", 0) >= want]
+        in_scope, _stale = self._rollback_scope(want)
         if not in_scope:
             return {"ok": True, "reverted": [], "kept": len(self._undo_stack),
                     "msg": f"第 {want} 问之后没有我用写文件工具改过的东西"
                            "(命令与外部程序改的一直不在这份账里)。"}
-        stale = [r for r in in_scope if r.get("epoch", self._epoch) != self._epoch]
+        stale = self._rollback_scope(want)[1]
         if stale:
             return {"ok": False, "reverted": [], "stale": len(stale),
                     "msg": (f"这中间压过一次历史:第 {want} 问的位置已经对不上了,"

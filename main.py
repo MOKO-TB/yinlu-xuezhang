@@ -183,6 +183,67 @@ def _instructions_text(workspace) -> str:
     return "\n".join(lines)
 
 
+REWIND_SCOPES = ("files", "talk", "both")
+REWIND_USAGE = ('用法: /rewind <第几问> [files|talk|both] —— 退到那一问**之前**'
+                "(默认 both:文件与对话一起退;留档不删,想找回原会话用 /resume)")
+
+
+def _rewind_command(agent, session, ui, rest: list) -> None:
+    """`/rewind`:检查点。R3 那套坐标与纪元闸早就在了,可它只有「编辑重发」一条路能碰到。
+
+    同学说的是"回到我问那句之前",不是"改那句重问" —— 同一套机制,两种意图,
+    只接了一条就等于那条机制只有一半人用得上。
+
+    命令行没有界面那份 `expect`(原文比对),所以这里**把找到的那一问原样摆出来**给人核对:
+    数错号一眼就能看出来,而"压过历史之后号对不上"那种看不出来的,由 `rollback_to_ordinal`
+    自己拒绝。顺序与 R3 一致:**先退文件再截对话** —— 截断会改掉回合坐标。
+    """
+    from rich.markup import escape      # 那一问的原文里什么都有,方括号不许被当标签吃掉
+
+    head = (rest[0].strip() if rest else "")
+    scope = (rest[1].strip().lower() if len(rest) > 1 else "both")
+    if scope not in REWIND_SCOPES:
+        ui.info(f"没这个范围「{scope}」。可用:files(只退文件)/ talk(只截对话)/ both。\n"
+                + REWIND_USAGE)
+        return
+    from minicode.session import user_message_at
+    idx, msg = user_message_at(session.messages, head)
+    if msg is None:
+        ui.info(f"第 {head} 问不在当前上下文里(一共没这么多问,或已被压缩折进摘要)。"
+                "文件与对话都没动。")
+        return
+    n = int(head)
+    shown = " ".join(str(msg.get("content") or "").split())[:80]
+    drop = len(session.messages) - idx
+    prev = agent.rollback_preview(n)
+    lines = [f"第 {n} 问你说的是:「{shown}」"]
+    if scope in ("both", "files"):
+        if not prev["ok"]:
+            ui.info(prev["msg"])
+            return
+        if prev["stale"]:
+            ui.info(f"这中间压过一次历史:第 {n} 问的位置已经对不上了,有 {prev['stale']} 处改动"
+                    "我不敢按号退 —— **文件与对话都没动**。要退就用「任务监控 → 本轮改动」"
+                    "逐处退(那里退具体某一处,不需要编号)。")
+            return
+        lines.append((f"  文件:退 {prev['count']} 处 ——"
+                      + "、".join(f"{k} {p}" for k, p in zip(prev["kinds"], prev["paths"]))
+                      + (f" 等 {prev['count']} 处" if prev["more"] else "") + " ")
+                     if prev["count"] else f"  文件:{prev['msg']}")
+    if scope in ("both", "talk"):
+        lines.append(f"  对话:那一条与其后共 {drop} 条离开上下文"
+                     "(留档 sessions/ 不删,想看回来过的内容用 /resume 或界面上翻)")
+    lines.append("  注:命令与外部程序改的文件从来不在账里,这一档退不到它们。")
+    if not ui.confirm_destructive("\n".join(lines), f"退到第 {n} 问之前?"):
+        ui.info("已取消:文件与对话都没动。")
+        return
+    if scope in ("both", "files"):
+        ui.info(escape(agent.rollback_to_ordinal(n).get("msg") or ""))
+    if scope in ("both", "talk"):
+        session.replace_messages(session.messages[:idx])
+        ui.info(f"对话已退回第 {n} 问之前(去掉 {drop} 条;留档没删)。")
+
+
 def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                  agent: Agent) -> bool:
     """处理斜杠命令;返回 True 表示要退出程序。"""
@@ -399,6 +460,8 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
         _undo_command(agent, ui, parts[1:])
     elif name == "/instructions":
         ui.info(_instructions_text(workspace))
+    elif name == "/rewind":
+        _rewind_command(agent, session, ui, parts[1:])
     elif name == "/compact":
         agent.compact_now()
     elif name == "/permission":

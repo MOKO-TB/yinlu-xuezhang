@@ -138,7 +138,7 @@ python main.py --workspace "D:\我的资料"   # 指定工作区启动(路径不
 ```
 
 CLI 命令:`/help` `/clear` `/model`(供应商列表)`/history` `/resume [<n>]` `/find [<关键词>]`(搜自己的历史会话)`/undo`(清单;`diff <编号>` 看改动、`<编号>`·`last`·`all` 才动手,动手都要点头)`/compact`
-`/sandbox` `/permission [档位]`(四档权限 + 项目白名单生不生效)`/think [档位]`(思考档位)`/instructions`(这一轮读到了哪几层指令:内置 + 用户级 + 项目级,各几行、有没有被截)`/workspace [路径|default]` `/memory` `/remember` `/dream` `/skills` `/kb`(知识库统计)`/plan`
+`/sandbox` `/permission [档位]`(四档权限 + 项目白名单生不生效)`/think [档位]`(思考档位)`/instructions`(这一轮读到了哪几层指令:内置 + 用户级 + 项目级,各几行、有没有被截)`/rewind <第几问> [files|talk|both]`(退到那一问之前:文件与对话一起退,默认 both;留档不删)`/workspace [路径|default]` `/memory` `/remember` `/dream` `/skills` `/kb`(知识库统计)`/plan`
 `/library [书名]`(不带参数=馆藏库状态;带书名=直接在 133 万条书目里搜,与 `library_search` 工具同一个 handler)`/style [normal|guide]`(回复风格,guide=讲解模式)、`/usage [1|7|30]`(token 用量)`/browser`(浏览器能力状态)`/exit`;
 `Ctrl+C` 中断当前回合。
 

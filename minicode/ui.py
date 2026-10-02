@@ -25,7 +25,8 @@ from minicode.tools.base import Tool
 # 帮助文本仍是各条带说明的那一份,由 tests/test_main.py 的静态闸核"每条都有说明行"。
 SLASH_COMMANDS = ["/help", "/clear", "/model", "/history", "/resume", "/find",
                   "/undo", "/compact", "/sandbox", "/permission", "/think",
-                  "/instructions", "/memory", "/remember", "/dream", "/plan",
+                  "/instructions", "/rewind", "/memory", "/remember", "/dream",
+                  "/plan",
                   "/skills", "/kb", "/library", "/style", "/usage", "/browser",
                   "/workspace", "/exit", "/quit"]
 
@@ -392,6 +393,8 @@ class TerminalUI:
             "  /permission [档位] 查看/切换权限档位(confirm/accept_edits/accept_all/full;不带参数时同时报出项目白名单的生不生效)\n"
             "  /think [档位]     查看/切换思考档位(default/off/low/high/max,按模型能力)\n"
             "  /instructions 这一轮的指令层:内置 + 用户级/项目级各读到几行、来自哪份文件\n"
+            "  /rewind <第几问> [files|talk|both] 退到那一问之前:文件与对话一起退"
+            "(默认 both;留档不删,想找回原会话用 /resume)\n"
             "  /memory [user] 查看长期记忆(默认本项目;user=用户级)\n"
             "  /remember <内容> 记一条用户级偏好(跨项目)\n"
             "  /dream [project|user|all] 整理记忆:去重合并(自动备份)\n"

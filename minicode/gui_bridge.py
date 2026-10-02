@@ -46,7 +46,8 @@ from minicode.session import (derive_title,
                               export_filename as session_export_name,
                               list_sessions,
                               search_logs as search_session_logs,
-                              to_markdown as session_to_markdown)
+                              to_markdown as session_to_markdown,
+                              user_message_at)
 from minicode.skills import load_skills, skill_dirs
 from minicode.suggestions import build_suggestions, collect_user_texts, continue_chips
 from minicode.tools.base import Tool
@@ -2159,16 +2160,10 @@ class Bridge:
         return {"ok": True, "session": key, "file": new_path.name}
 
     def _find_user_message(self, ordinal: int) -> tuple[int, str]:
-        """返回第 ordinal(1 起)条用户消息的 (原始下标, 内容);找不到返回 (-1, "")。"""
-        if ordinal < 1:
-            return -1, ""
-        count = 0
-        for i, m in enumerate(self.session.messages):
-            if m.get("role") == "user":
-                count += 1
-                if count == ordinal:
-                    return i, display_text(m.get("content"))
-        return -1, ""
+        """第 ordinal 条用户消息的 (下标, 内容)。数法在 `session.user_message_at`
+        里只有一份 —— 编辑重发、分叉、CLI 的 /rewind 共用它,不各数一遍。"""
+        idx, msg = user_message_at(self.session.messages, ordinal)
+        return idx, (display_text(msg.get("content")) if msg else "")
 
     def get_suggestions(self) -> dict:
         """首页两行 chips:「试试这些」按近期聊天打分,「接着做」读计划与待办的真状态。

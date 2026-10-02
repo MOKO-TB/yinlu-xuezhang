@@ -30,6 +30,7 @@ class FakeUI:
         self.messages: list[tuple[str, str]] = []
         self.answer = True              # confirm_destructive 的答复(默认点头)
         self.asks: list[str] = []       # 每次都问了什么(动手面有没有问过)
+        self.previews: list[str] = []   # 问之前摆出来的那一屏内容
 
     def info(self, text): self.messages.append(("info", text))
     def error(self, text): self.messages.append(("error", text))
@@ -37,6 +38,7 @@ class FakeUI:
 
     def confirm_destructive(self, detail, question="确定?"):
         self.asks.append(question)
+        self.previews.append(detail)      # 点头之前那一屏:断言它才断言到"看得见什么"
         return self.answer
 
 
@@ -88,6 +90,7 @@ SILENT_COMMANDS = ("/clear", "/compact")   # 只改状态,不往 UI 打消息
     # v0.9.103 ①R4:/undo 长成了一族,每一条都要能跑(空栈时不许伸手要点头)
     "/undo list", "/undo last", "/undo 1", "/undo diff 1", "/undo diff",
     "/undo all", "/undo 乱写", "/instructions",
+    "/rewind 1", "/rewind 1 talk", "/rewind 9", "/rewind 1 全部",
 ])
 def test_slash_commands_do_not_crash(env, cmd):
     """重构 handle_slash 时漏传 workspace,曾让 /memory /plan /skills /kb 直接 NameError。"""
@@ -456,6 +459,120 @@ def test_cli_undo_stale_seq_asks_for_no_nod(written):
     assert ui.asks == []
     assert "什么都没退" in out
     assert doc.read_text(encoding="utf-8") == "v2"
+
+
+# ---------------------------------------- /rewind:退到第 N 问之前(v0.9.105)
+#
+# 与 GUI 的「编辑重发 + 退回文件」共用同一套坐标(R3)与同一份筛选
+# (`Agent._rollback_scope`),所以这里断的是**命令行这一侧的编排**:
+# 先退文件再截对话、退不成就不截、不点头什么都不动。
+
+
+def _two_questions(config, ctx):
+    """两问、两版:第 2 问把 doc.txt 从 v1 改成 v2。"""
+    from test_agent import FakeLLM, FakeUI as AgentUI, _write_turn, make_agent
+    from minicode.llm import AssistantTurn
+    llm = FakeLLM([
+        _write_turn("doc.txt", "v1", "c1"), AssistantTurn(text="d1"),
+        _write_turn("doc.txt", "v2", "c2"), AssistantTurn(text="d2"),
+    ])
+    agent = make_agent(config, ctx, llm, AgentUI())
+    agent.run_turn("第一问:写个初稿")
+    agent.run_turn("第二问:改成 v2")
+    return agent
+
+
+def test_rewind_rolls_files_and_transcript_after_the_nod(config, ctx):
+    agent = _two_questions(config, ctx)
+    doc = ctx.workspace / "doc.txt"
+    before = len(agent.session.messages)
+    assert doc.read_text(encoding="utf-8") == "v2"
+    ui = FakeUI()
+    handle_slash("/rewind 2", agent.session, config, ui, agent)
+    assert ui.asks == ["退到第 2 问之前?"], ui.asks
+    asked = "\n".join(ui.previews)
+    assert "第二问:改成 v2" in asked, "点头之前必须看见那一问是什么"
+    assert "退 1 处" in asked and "doc.txt" in asked
+    assert "命令与外部程序改的文件从来不在账里" in asked, "边界要在点头前说,不是退完才说"
+    assert doc.read_text(encoding="utf-8") == "v1"
+    assert len(agent.session.messages) < before      # 对话也截了
+
+
+def test_rewind_without_the_nod_leaves_both_alone(config, ctx):
+    agent = _two_questions(config, ctx)
+    doc = ctx.workspace / "doc.txt"
+    before = len(agent.session.messages)
+    ui = FakeUI()
+    ui.answer = False
+    handle_slash("/rewind 2", agent.session, config, ui, agent)
+    assert ui.asks == ["退到第 2 问之前?"]
+    assert doc.read_text(encoding="utf-8") == "v2"
+    assert len(agent.session.messages) == before
+    assert "都没动" in " ".join(t for _k, t in ui.messages)
+
+
+def test_rewind_files_only_keeps_the_transcript(config, ctx):
+    agent = _two_questions(config, ctx)
+    doc = ctx.workspace / "doc.txt"
+    before = len(agent.session.messages)
+    handle_slash("/rewind 2 files", agent.session, config, FakeUI(), agent)
+    assert doc.read_text(encoding="utf-8") == "v1"
+    assert len(agent.session.messages) == before, "只退文件就不该顺手截对话"
+
+
+def test_rewind_talk_only_leaves_the_files_on_disk(config, ctx):
+    """只截对话时文件**照旧留着** —— 这格要能单独选,不然"我想留着代码重聊"做不到。"""
+    agent = _two_questions(config, ctx)
+    doc = ctx.workspace / "doc.txt"
+    before = len(agent.session.messages)
+    handle_slash("/rewind 2 talk", agent.session, config, FakeUI(), agent)
+    assert doc.read_text(encoding="utf-8") == "v2"
+    assert len(agent.session.messages) < before
+
+
+def test_rewind_after_a_compaction_refuses_and_truncates_nothing(config, ctx):
+    """纪元对不上时**两半都不做**:截了对话而文件退不了,是最坏的一半。"""
+    agent = _two_questions(config, ctx)
+    agent._epoch += 1                      # 模拟"中间又压过一次历史"
+    doc = ctx.workspace / "doc.txt"
+    before = len(agent.session.messages)
+    ui = FakeUI()
+    handle_slash("/rewind 2", agent.session, config, ui, agent)
+    assert ui.asks == [], "对不上号时连确认都不该问 —— 问了一年要人点头的假事"
+    assert doc.read_text(encoding="utf-8") == "v2"
+    assert len(agent.session.messages) == before
+    assert "我不敢按号退" in " ".join(t for _k, t in ui.messages)
+
+
+def test_rewind_names_a_number_that_is_not_there(config, ctx):
+    agent = _two_questions(config, ctx)
+    doc = ctx.workspace / "doc.txt"
+    ui = FakeUI()
+    handle_slash("/rewind 9", agent.session, config, ui, agent)
+    assert ui.asks == []
+    assert "不在当前上下文里" in " ".join(t for _k, t in ui.messages)
+    assert doc.read_text(encoding="utf-8") == "v2"
+
+
+def test_rewind_rejects_an_unknown_scope_with_the_menu(config, ctx):
+    agent = _two_questions(config, ctx)
+    ui = FakeUI()
+    handle_slash("/rewind 2 全部", agent.session, config, ui, agent)
+    out = " ".join(t for _k, t in ui.messages)
+    assert "没这个范围" in out and "files" in out and "talk" in out
+    assert ui.asks == []
+
+
+def test_rollback_preview_and_the_real_rollback_never_disagree(config, ctx):
+    """预览说几处,动手就退几处 —— 两处各筛一遍总有一天一处骗人。"""
+    agent = _two_questions(config, ctx)
+    prev = agent.rollback_preview(2)
+    assert prev["ok"] and prev["count"] == 1 and prev["paths"] == ["doc.txt"]
+    assert agent.rollback_to_ordinal(2)["msg"].count("doc.txt") == 1
+    # 编号合法性也是同一把尺:preview 不许比动手宽松
+    assert agent.rollback_preview(0)["ok"] is False
+    assert agent.rollback_preview("x")["ok"] is False
+    assert agent.rollback_preview(True)["ok"] is False
 
 
 # ---------------- ④L3 的终端形态:这一轮到底读到了哪几层指令(v0.9.103)

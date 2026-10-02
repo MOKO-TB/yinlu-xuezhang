@@ -212,6 +212,28 @@ TRACE_FORMAT = "yinlu-trace"
 TRACE_VERSION = 1
 
 
+def user_message_at(messages: list[dict], ordinal) -> "tuple[int, dict | None]":
+    """第 ordinal(1 起)条用户消息的 (原始下标, 那条消息);找不到回 (-1, None)。
+
+    「第几问」这个坐标的算法**只有一份**:编辑重发、分叉、命令行 /rewind 都从这里数。
+    各写一份的话,总有一天一处把工具回执里那句 user 也数进去、另一处不数 ——
+    数错一格的后果不是错一句话,是退错文件(R3 那道纪元闸就是为这个装的)。
+    编号合法性也在这里统一管:非整数 / <1 / bool 一律算找不到。
+    """
+    if isinstance(ordinal, bool) or not str(ordinal or "").strip().lstrip("-").isdigit():
+        return -1, None
+    want = int(str(ordinal).strip())
+    if want < 1:
+        return -1, None
+    count = 0
+    for i, m in enumerate(messages or []):
+        if m.get("role") == "user":
+            count += 1
+            if count == want:
+                return i, m
+    return -1, None
+
+
 def _clip(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
