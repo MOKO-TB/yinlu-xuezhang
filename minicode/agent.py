@@ -75,6 +75,10 @@ class Agent:
         # 身上这份 system prompt 是哪一天建的。system prompt 里烧着日期与"今天/明天
         # 的课",而本应用是托盘常驻的 —— 记下建它的那天,回合开头一比对就知道过没过期。
         self._prompt_date = date.today()
+        # D1 加的"指令文件/技能清单指纹"同样要在这里落一次底:None = 还没比过,
+        # 第一回合只记账不重建(见 _refresh_clock 那句理由)。漏了这行不是"少刷一次",
+        # 是每一路新会话的第一条消息直接 AttributeError —— 整个回合崩掉。
+        self._prompt_sig = None
         self.mcp = None            # app_setup 注入:McpManager,退出时关停
 
     def close(self) -> None:
@@ -222,12 +226,23 @@ class Agent:
         today = date.today()
         from minicode.app_setup import (build_system_prompt,
                                         instruction_signature)
-        sig = (today, instruction_signature(self.ctx.workspace))
-        if sig == self._prompt_sig:
+        fp = instruction_signature(self.ctx.workspace)
+        if self._prompt_sig is None:
+            # 建 Agent 时这份提示词刚由 build_system_prompt 拼好,第一遍把指纹记下来就收工:
+            # 往下走会重写一遍内容一模一样的 system,还会冒出一句「指令文件或技能清单有变化,
+            # 已重新载入」—— 那是没发生过的事。**但日期本身已经过期时不能跳过**,
+            # 否则零点后才建的会话会一直拿着昨天的日子。
+            self._prompt_sig = fp
+            if today == self._prompt_date:
+                return
+        # 两个事实分开比,别写成"元组 == 字符串":那样永远不相等,于是每一步都重建
+        # system、每一步都说一句已重新载入 —— 既把 KV Cache 前缀破光(这套按日重建
+        # 的全部理由就是为了别破),又每句都在骗人。
+        elif today == self._prompt_date and fp == self._prompt_sig:
             return
-        crossed_day = sig[0] != self._prompt_date
+        crossed_day = today != self._prompt_date
         self._prompt_date = today
-        self._prompt_sig = sig[1]
+        self._prompt_sig = fp
         if self.session.refresh_system_prompt(build_system_prompt(self.ctx.workspace)):
             # D1(v0.9.102):重建条件从"跨天"推广为"跨天或指令/技能清单变了"
             # —— 内容变了才破 KV Cache,没变照旧稳定命中。

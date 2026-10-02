@@ -1343,3 +1343,44 @@ def test_diff_line_cap_reports_more(config, ctx, tmp_path):
     d = ag.undo_diff(_seq_of(ag, 0))
     assert d["ok"] and len(d["lines"]) <= ag.DIFF_LINE_LIMIT
     assert d["more"] > 0
+
+
+# --------------------------- D1 提示词指纹的两个底(v0.9.102 补的坑,有测试才敢算验过)
+
+def _infos(ui):
+    return getattr(ui, "infos", [])
+
+
+def test_new_session_first_turn_never_claims_a_reload(config, ctx):
+    """`_prompt_sig` 不立底 = 每条新会话的第一句话就 AttributeError,整个回合崩掉。
+
+    这不是假想的严重度:040e72e 那笔把读它的代码提交了、没提交建它的那一行,
+    全量当场红 168 项。第二件事同样重要 —— 第一遍只记账,**不能**冒出一句
+    「指令文件有变化」,那是没发生过的事。
+    """
+    llm = FakeLLM([AssistantTurn(text="一"), AssistantTurn(text="二")])
+    ui = FakeUI()
+    ag = make_agent(config, ctx, llm, ui)
+    assert ag._prompt_sig is None                 # 构造时立了底,不是漏了
+    ag.run_turn("你好")
+    assert ag._prompt_sig is not None
+    assert not [t for t in _infos(ui) if "重新载入" in t or "已跨天" in t]
+
+
+def test_changing_agents_md_reloads_once_and_says_so(config, ctx, tmp_path, monkeypatch):
+    from minicode import app_setup
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(app_setup, "app_path", lambda *p: home.joinpath(*p))
+    llm = FakeLLM([AssistantTurn(text="一"), AssistantTurn(text="二"),
+                   AssistantTurn(text="三")])
+    ui = FakeUI()
+    ag = make_agent(config, ctx, llm, ui)
+    ag.run_turn("第一句")                          # 这一遍只记指纹
+    (tmp_path / "AGENTS.md").write_text("新加的规矩 MARKER-D1", encoding="utf-8")
+    ag.run_turn("第二句")                          # 内容真变了才重建、才说一声
+    said = [t for t in _infos(ui) if "重新载入" in t]
+    assert len(said) == 1, _infos(ui)
+    assert "MARKER-D1" in ag.session.messages[0]["content"]
+    ag.run_turn("第三句")                          # 没再变就不该再吵第二次
+    assert len([t for t in _infos(ui) if "重新载入" in t]) == 1
