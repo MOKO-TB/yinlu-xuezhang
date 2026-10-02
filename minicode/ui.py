@@ -19,9 +19,15 @@ from minicode import __version__
 from minicode.config import Config
 from minicode.tools.base import Tool
 
-SLASH_COMMANDS = ["/help", "/clear", "/model", "/history", "/resume",
-                  "/undo", "/compact", "/sandbox", "/memory", "/remember",
-                  "/dream", "/skills", "/kb", "/plan", "/library", "/usage", "/browser", "/exit"]
+# 终端里"给人看的命令表"这一份唯一真相(v0.9.103):补全、未知命令提示、
+# `main.SLASH_NAMES` 三处都从它派生。以前这三处各抄一份,于是 /find /permission
+# /think /workspace 能打却补不出来 —— 补全表落后了四条没人知道。
+# 帮助文本仍是各条带说明的那一份,由 tests/test_main.py 的静态闸核"每条都有说明行"。
+SLASH_COMMANDS = ["/help", "/clear", "/model", "/history", "/resume", "/find",
+                  "/undo", "/compact", "/sandbox", "/permission", "/think",
+                  "/instructions", "/memory", "/remember", "/dream", "/plan",
+                  "/skills", "/kb", "/library", "/usage", "/browser",
+                  "/workspace", "/exit", "/quit"]
 
 REFRESH_INTERVAL = 0.12     # 流式 Markdown 刷新节流
 DIFF_MAX_LINES = 40
@@ -173,6 +179,35 @@ class TerminalUI:
             if ans in ("n", "no", ""):
                 return "no"
             self.console.print("[dim]请输入 y、n 或 a[/dim]")
+
+    # ------------------------------------------------------------ 动手面的点头
+
+    def confirm_destructive(self, detail: str, question: str = "确定?") -> bool:
+        """人在命令行里主动发起的**改磁盘**动作(退文件)也要先点头。
+
+        与 `confirm_tool` 同一条规矩:拿不到交互输入(管道、Ctrl+C、非 TTY)
+        一律按**拒绝**处理 —— "没答"不等于"同意",在动手面上尤其不等于。
+        `detail` 是磁盘上的内容拼出来的(文件路径、diff 行),里面任何方括号
+        都不许被当成 rich 标签,所以走 `Text` 不走 markup。
+        """
+        self.console.print()
+        self.console.print(Panel(
+            Text(detail),
+            title="[yellow]⚠ 这一步会改磁盘上的文件[/yellow]",
+            border_style="yellow",
+        ))
+        while True:
+            try:
+                ans = self.console.input(
+                    f"{question} [bold](y)是[/bold] / [bold](n)否[/bold]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                self.console.print("[dim]没有可用的交互输入,已按拒绝处理。[/dim]")
+                return False
+            if ans in ("y", "yes"):
+                return True
+            if ans in ("n", "no", ""):
+                return False
+            self.console.print("[dim]请输入 y 或 n[/dim]")
 
     # ------------------------------------------------------------ 提问卡(终端形态)
 
@@ -346,15 +381,21 @@ class TerminalUI:
             "  /history      查看上下文消息数与 token 估算\n"
             "  /resume [<n>] 查看/恢复历史会话\n"
             "  /find <关键词> 在自己的历史会话留档里搜(与模型侧 search_history 同一份)\n"
-            "  /undo         撤销最近一次文件改动(可连续;bash 改动不在跟踪范围)\n"
+            "  /undo         列出本轮我改过的文件(逐处编号;命令改的不在这份账里)\n"
+            "  /undo diff <编号> 只看某一处的前像 vs 磁盘现值\n"
+            "  /undo <编号>  退那一处 · /undo last 退最近一步 · /undo all 一路退回本轮开始前"
+            "(三种都要点头)\n"
             "  /compact      立即压缩上下文(平时到达阈值会自动压缩)\n"
             "  /sandbox [on|off] 查看/临时切换沙箱(持久化改 config.json)\n"
             "  /permission [档位] 查看/切换权限档位(confirm/accept_edits/accept_all/full;不带参数时同时报出项目白名单的生不生效)\n"
             "  /think [档位]     查看/切换思考档位(default/off/low/high/max,按模型能力)\n"
+            "  /instructions 这一轮的指令层:内置 + 用户级/项目级各读到几行、来自哪份文件\n"
             "  /memory [user] 查看长期记忆(默认本项目;user=用户级)\n"
             "  /remember <内容> 记一条用户级偏好(跨项目)\n"
             "  /dream [project|user|all] 整理记忆:去重合并(自动备份)\n"
+            "  /plan         看当前计划(plans/plan.md;带验收判据的那几步会一起显示)\n"
             "  /skills       查看可用技能(SKILL.md)\n"
+            "  /kb           查看本地知识库条数(提问相关话题时会自动检索)\n"
             "  /exit         退出(或 Ctrl+D)\n"
             "\n[bold]说明[/bold]\n"
             "  Ctrl+C  中断当前回合\n"

@@ -158,6 +158,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 跨进程看不见),而这一屏最容易骗人的就是"没读到"被画成"没有任务"。
     "minicode.board": ("aggregate", "row", "_row", "ROW_LIMIT", "SESSION_SCAN",
                        "STATES", "BOUNDARY_NOTE"),
+    # v0.9.103 ①R4:终端那侧的动手面。漏 confirm_destructive = 包里的 CLI 退文件前
+    # 一声不问(磁盘上的东西直接被换掉);漏 SLASH_COMMANDS = 补全与"未知命令"那句
+    # 仍是各抄一份的旧版,新命令 /instructions 打得出前半截却不补全。
+    "minicode.ui": ("confirm_destructive", "SLASH_COMMANDS", "help_text",
+                    "confirm_tool", "ask_user"),
     "minicode.monitor": ("read_pref", "write_pref", "pref_path", "SECTIONS",
                          "DEFAULTS", "PREF_FILE", "_clean_folded"),
     # v0.9.37:实时耗时表(漏 live_rows = 时间线一行时刻都没有;漏 live_abandon =

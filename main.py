@@ -19,7 +19,7 @@ from minicode.paths import SESSIONS_DIR
 from minicode import workspace as ws
 from minicode.session import (HISTORY_SCAN_FILES, Session, history_hits,
                               list_sessions)
-from minicode.ui import TerminalUI
+from minicode.ui import SLASH_COMMANDS, TerminalUI
 
 if TYPE_CHECKING:      # 只给注解用:运行期不 import
     from minicode.agent import Agent
@@ -47,6 +47,140 @@ def expand_with_args(cmd: str, workspace, ui) -> "str | None":
         return prompt.replace(sc.ARGS_PLACEHOLDER, rest).replace(
             sc.ARG_PLACEHOLDER, rest)
     return prompt
+
+
+UNDO_USAGE = ("只看:/undo 列清单 · /undo diff <编号> 看某一处的「改之前 vs 磁盘上现在」\n"
+              "动手:/undo <编号> 退那一处 · /undo last 退最近一步 · /undo all 一路退回本轮开始前"
+              "(三种都要点头)")
+
+
+def _undo_row(rec: dict) -> str:
+    """清单里的一行 —— 三个旗各说一件真事,不写就等于让人拿对不上的账做决定。"""
+    flags = []
+    if rec["drift"]:
+        flags.append("我改过之后它还被别的工具动过")
+    if rec["newer"]:
+        flags.append(f"这一处上面还有 {rec['newer']} 处没退")
+    if rec["stale"]:
+        flags.append("压过历史之前那一轮记的(逐处退照旧,按第几问退不行)")
+    return (f"  [{rec['seq']}] {rec['kind']} {rec['path']}"
+            f"({rec['at']},退下去={rec['verb']})"
+            + (" ⚠ " + ";".join(flags) if flags else ""))
+
+
+def _undo_list_text(agent) -> str:
+    rep = agent.undo_records()
+    if not rep["items"]:
+        return rep["hint"]
+    head = f"本轮改动 {rep['total']} 处(最新在前"
+    if rep["more"]:
+        head += f",这里只列 {len(rep['items'])} 处,另有 {rep['more']} 处"
+    head += "):"
+    return "\n".join([head] + [_undo_row(it) for it in rep["items"]]
+                     + [rep["note"], UNDO_USAGE])
+
+
+def _undo_diff_text(agent, seq, full: bool = False) -> tuple:
+    """(能不能算, 给人看的那段)。不能算的原因原样传出去,不换成一句「没有变化」。"""
+    d = agent.undo_diff(seq)
+    if not d["ok"]:
+        return False, d["msg"]
+    if d["same"]:
+        return True, (f"{d['path']}:两侧一样 —— 这一处现在和改之前没差别"
+                      "(改回去了,或被别的工具又改成了原样)。")
+    text = (f"{d['path']}({d['kind']}):+{d['added']} 行 / −{d['removed']} 行\n"
+            + d["note"])
+    if not full:
+        return True, text + f"\n要看整段:/undo diff {seq}"
+    lines = [text] + list(d["lines"])
+    if d["more"]:
+        lines.append(f"(另有 {d['more']} 行没显示 —— 这一处比一屏长,自己打开文件看。)")
+    return True, "\n".join(lines)
+
+
+def _undo_command(agent, ui, rest: list) -> None:
+    """/undo 的一族(设计稿 §四.3:回退是动手面,要点头)。
+
+    无参数**只列不动手**:老行为是直接退最近一步且一声不问,而退下去会真改磁盘 ——
+    GUI 那侧早就是「先看这一处改了什么,再点退回去」,命令行没有理由更松。
+    """
+    from rich.markup import escape      # 磁盘上拼出来的文字,方括号不许当标签吃掉
+
+    head = (rest[0].lower() if rest else "")
+    if not head or head in ("list", "ls"):
+        ui.info(escape(_undo_list_text(agent)))
+        return
+    if head == "diff":
+        if len(rest) < 2:
+            ui.info("看哪一处?编号见 /undo   (例:/undo diff 3)")
+            return
+        _ok, text = _undo_diff_text(agent, rest[1], full=True)
+        ui.info(escape(text))
+        return
+    if head == "all":
+        rep = agent.undo_records()
+        if not rep["items"]:
+            ui.info(rep["hint"])
+            return
+        detail = (f"要把这 {rep['total']} 处一路退回本轮开始前的样子"
+                  "(最新→最旧,同一处退到最早那份前像):\n"
+                  + "\n".join(_undo_row(it) for it in rep["items"])
+                  + "\n" + rep["note"])
+        if not ui.confirm_destructive(detail, "全部回退?"):
+            ui.info("已取消:磁盘一个字没动。")
+            return
+        ui.info(escape(agent.undo_all()))
+        return
+    last = head in ("last", "-1")
+    if last:
+        rep = agent.undo_records()
+        if not rep["items"]:
+            ui.info(rep["hint"])
+            return
+        seq = rep["items"][0]["seq"]
+    elif head.isdigit():
+        seq = head
+    else:
+        ui.info("没这条命令。" + UNDO_USAGE)
+        return
+    # 点头之前先摆出这一处的规模与漂移:让人是看着事实说"退",不是手滑到底
+    ok, preview = _undo_diff_text(agent, seq)
+    if not ok:
+        ui.info(escape(preview + "\n(什么都没退 —— 上面是为什么算不出。)"))
+        return
+    row = next((it for it in agent.undo_records()["items"]
+                if str(it["seq"]) == str(seq)), None)
+    if not ui.confirm_destructive((_undo_row(row) + "\n" if row else "") + preview,
+                                  "退回这一步?"):
+        ui.info("已取消:磁盘一个字没动。")
+        return
+    ui.info(escape(agent.undo() if last else agent.undo(seq)))
+
+
+def _instructions_text(workspace) -> str:
+    """L3 的终端形态:报「读到没读到、几行、来自哪份、有没有被截」。
+
+    报不了「我之所以这么做是因为你第 N 条」—— 那是把模型的自述当因果证据。
+    """
+    from minicode.app_setup import (AGENTS_CHAR_LIMIT, INSTRUCTION_GUARD,
+                                    USER_AGENTS_NAME, app_path,
+                                    instruction_layers, project_agents_path)
+    layers = instruction_layers(workspace)
+    lines = ["这一轮提示词里的指令层:内置那一份 + 下面这些"]
+    if not layers:
+        lines.append("  用户级、项目级都没读到 —— 现在只有内置那一份。")
+        lines.append(f"  想给自己定规矩:在 {app_path(USER_AGENTS_NAME)} 写一份(跨项目生效),"
+                     f"或在工作区根放 {USER_AGENTS_NAME}(只对这个项目;也能用 /init 起草)")
+    for it in layers:
+        where = (app_path(USER_AGENTS_NAME) if it["scope"] == "用户级"
+                 else project_agents_path(workspace))
+        cut = (f"(超过 {AGENTS_CHAR_LIMIT} 字,只注入了前面那一截,后面没进提示词)"
+               if it["truncated"] else "")
+        lines.append(f"  • {it['scope']} {it['name']}:"
+                     f"{it['lines']} 行 / {it['chars']} 字{cut}")
+        lines.append(f"    {where}")
+    lines.append("  " + INSTRUCTION_GUARD)
+    return "\n".join(lines)
 
 
 def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
@@ -248,7 +382,9 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                 ui.info("\n".join(blocks))
                 ui.info("接着聊那次:GUI 在侧栏搜索框点开,CLI 用 /resume <序号>。")
     elif name == "/undo":
-        ui.info(agent.undo())
+        _undo_command(agent, ui, parts[1:])
+    elif name == "/instructions":
+        ui.info(_instructions_text(workspace))
     elif name == "/compact":
         agent.compact_now()
     elif name == "/permission":
@@ -305,18 +441,14 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
             lines.append("切换: /think <档位>(GUI 在输入框下方按钮)")
             ui.info("\n".join(lines))
     else:
-            ui.error(f"未知命令 {name}。可用: /help /clear /model /history "
-                     f"/resume /find /undo /compact /sandbox /permission /think "
-                     f"/memory /remember /dream /plan /skills /kb /library "
-                     f"/usage /browser /exit")
+            ui.error(f"未知命令 {name}。可用: " + " ".join(SLASH_COMMANDS))
     return False
 
 
-SLASH_NAMES = {"/help", "/clear", "/model", "/history", "/resume", "/find",
-               "/undo", "/compact", "/sandbox", "/memory", "/remember",
-               "/dream", "/skills", "/kb", "/plan", "/library", "/usage",
-               "/browser", "/workspace", "/permission", "/think",
-               "/exit", "/quit"}
+# 命令表只有一份(`minicode/ui.py::SLASH_COMMANDS`):这一行是它的别名,不是第二张表。
+# 以前这里手抄一遍,于是补全、未知命令提示、MSYS 还原三处各长各的 ——
+# /workspace 能跑却不在提示里,/find /permission /think 能跑却补不出来。
+SLASH_NAMES = frozenset(SLASH_COMMANDS)
 # Git Bash(MSYS)会把 "/cmd" 形式的参数转成 Git 安装目录下的路径,
 # 如 "D:/git/Git/history" 或 "C:/Program Files/Git/history"
 _MSYSED_COMMAND = re.compile(r"(?i)^[A-Z]:[\\/].*git[\\/]([^\\/]+)$")
