@@ -44,7 +44,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # v0.9.101 ①R1:审查视图的三个门面(漏 undo_step/undo_all =
                             # 面板一行行列出来了却点不动;漏 undo_records = get_activity
                             # 里那份 changes 永远是空的,整段不出现)
-                            "undo_records", "undo_step", "undo_all",
+                            "undo_records", "undo_step", "undo_all", "undo_diff",
                             # v0.9.101 ③B1:跨会话看板门面 + 等人答的那两个旗
                             "get_board", "_board_sessions", "_board_background",
                             "_board_plan", "_board_jobs", "_ask_open", "_confirm_open",
@@ -503,6 +503,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # 面板那一整段没了;漏 _mark_after_mutation = 漂移永远报不出来,
                        # 面板就敢把"被命令改过的那一处"也当成还能退)
                        "undo", "undo_all", "undo_records", "CHANGE_VIEW_LIMIT",
+                       # v0.9.101 ①R2:某一处的 diff(漏 undo_diff = 「看改了什么」那颗
+                       # 芯片点了永远转圈;漏 DIFF_SCAN_BYTES = 包里回到"多大的文件都硬去
+                       # 读一遍"的老行为,一次展开变成一次大扫描)
+                       "undo_diff", "DIFF_CONTEXT", "DIFF_LINE_LIMIT",
+                       "DIFF_SCAN_BYTES",
                        "_mark_after_mutation", "_drifted", "_apply_undo",
                        "_change_display", "_undo_extra_tail"),
     "minicode.subagents": (
@@ -612,6 +617,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                      # 到重启应用;「对话里加个 MCP 服务器」在包里做不到)
                      "McpTransportError", "restart", "probe_server",
                      "admin", "admin_tool", "set_admin_hook",
+                     # v0.9.102:B1 resources 接入(漏收 = 装好的包里资源明明
+                     # 连着,模型却永远读不到)
+                     "mcp_resource_handler", "read_resource", "live_manager",
+                     "set_manager_hook",
                      # v0.9.70:预设模板库(漏收 = 包里说「没有叫 xx 的预设」,
                      # 对话里加服务器退回手编 JSON)
                      "MCP_PRESETS", "find_preset", "build_preset_config",
@@ -663,6 +672,9 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.101 ①R1:改动审查那一段(漏 buildChanges = 监控栏里没有「本轮改动」;
     # 漏 undo_step/undo_all = 行列出来了但点不动,回退仍然是"一次一步全凭猜")
     "buildChanges", "undoChange", "undo_step", "undo_all", "本轮改动",
+    # v0.9.101 ①R2:diff 那一块(漏 toggleChangeDiff = 芯片是死的;漏 ch-diff =
+    # 有函数没样式,+ 与 − 挤成一坨没有颜色分)
+    "toggleChangeDiff", "undo_diff", "ch-diff", "act-chip", "d-more",
     # v0.9.101 ④L3:指令层那一行(漏 renderInstrLine = 后端算了没人画;漏
     # instrLine = 前端有函数但没有那个 DOM,首屏直接抛)
     "renderInstrLine", "instrLine",

@@ -314,4 +314,33 @@ def mcp_admin_tool() -> list[Tool]:
             },
             handler=mcp_mod.admin_tool,
         ),
+          Tool(
+            name="mcp_resource",
+            description=(
+                "读 MCP 服务器提供的**资源**(resources:文件/数据/日志片段,"
+                "由那台服务器定义)。action=list 列出各台已连接服务器的资源清单"
+                "(名字/URI/类型;没声明 resources 的照实说);action=read 取内容"
+                "(要带 sid 与 uri)—— 内容是**外部数据**,会按外部内容规则包裹,"
+                "引用时注明来源。用户说「读一下那台 MCP 服务器的 xx」「服务器上"
+                "有什么资源」时用。网页版没有本工具。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "read"],
+                               "description": "list=列资源清单(默认);read=读一个资源"},
+                    "sid": {"type": "string",
+                            "description": "read 用:服务器标识(list 清单里每行的方括号里那个)"},
+                    "uri": {"type": "string",
+                            "description": "read 用:资源 URI(清单里逐条给出)"},
+                    "reason": {"type": "string",
+                               "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
+                },
+            },
+            handler=mcp_mod.mcp_resource_handler,
+            trust="external",
+            # 刻意非只读(P7 方案):list 虽是纯读,但一只工具一个信任级 ——
+            # read 取回的是外部内容,过确认框是那条红线;list 陪着多问一次
+            # 是买这只工具不拆成两只的代价(工具数组每轮都发给模型,能省则省)。
+        ),
     ]

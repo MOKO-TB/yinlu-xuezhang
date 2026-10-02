@@ -52,7 +52,7 @@ CLIENT_NAME = "yinlu-xuezhang"
 # 学长只实现了 tools 这一个原语:resources / prompts / sampling / logging 都没接。
 # 握手时客户端声明空 capabilities(不假装支持),而对端声明了什么以前**直接丢掉** ——
 # 于是"这台服务器还能给什么、学长用不上哪几样"在界面与探测结果里永远看不见。
-CLIENT_PRIMITIVES = ("tools",)
+CLIENT_PRIMITIVES = ("tools", "resources")   # v0.9.102(B1):resources 接入(list/read)
 
 DEFAULT_START_TIMEOUT = 10.0
 DEFAULT_CALL_TIMEOUT = 60.0
@@ -698,6 +698,18 @@ class McpClient:
             listed = self._request("tools/list", {}, timeout=self.cfg.start_timeout)
             tools = (listed or {}).get("tools", []) if isinstance(listed, dict) else []
             self.tools = [t for t in tools if isinstance(t, dict) and t.get("name")]
+            # B1(v0.9.102):对端声明了 resources 才拉清单;拉取失败不致命
+            # (工具照常用,资源这一维照实缺着),也不为它重试第二次。
+            self.resources = []
+            if "resources" in self.server_caps:
+                try:
+                    rl = self._request("resources/list", {},
+                                       timeout=self.cfg.start_timeout)
+                    got = (rl or {}).get("resources", []) if isinstance(rl, dict) else []
+                    self.resources = [x for x in got
+                                      if isinstance(x, dict) and x.get("uri")]
+                except Exception as exc:
+                    self._warn(f"resources/list 拉取失败(工具不受影响): {exc}")
             return True
         except Exception as e:                 # 配置错/命令不存在/地址不通/握手超时
             self.error = f"{type(e).__name__}: {e}"
@@ -723,6 +735,7 @@ class McpClient:
             self.transport.close()
         self._closed = False
         self.tools, self.server_info, self.error = [], {}, ""
+        self.resources: "list[dict]" = []   # B1:声明了 resources 的服务器才有内容
         self.server_caps = {}
         self.transport = make_transport(self.cfg, log=self._log)
         return self.start()
@@ -770,6 +783,35 @@ class McpClient:
 
     def list_tools(self) -> list[dict]:
         return self.tools
+
+    def read_resource(self, uri: str) -> "tuple[str, str]":
+        """读一个资源,返回 (给模型看的文本, mimeType)。
+
+        text 内容原样;blob(base64 二进制)**不内联**——如实报大小与类型,
+        让模型告诉用户"这台服务器给的是二进制",绝不把一坨 base64 灌进上下文。
+        """
+        r = self._request("resources/read", {"uri": uri},
+                          timeout=self.cfg.call_timeout)
+        contents = (r or {}).get("contents", []) if isinstance(r, dict) else []
+        if not contents:
+            return f"(服务器对 {uri} 返回了空内容)", ""
+        out = []
+        mime = ""
+        for c in contents[:4]:          # 上限防一个 URI 塞一堆内容
+            if not isinstance(c, dict):
+                continue
+            mime = mime or str(c.get("mimeType") or "")
+            if "text" in c:
+                out.append(str(c.get("text") or ""))
+            elif "blob" in c:
+                import base64
+                raw = str(c.get("blob") or "")
+                size = len(base64.b64decode(raw)) if raw else 0
+                out.append(f"(二进制内容 {size} 字节,{c.get('mimeType') or '未知类型'},"
+                           f"未内联 —— 需要的话让服务器端导出成文件)")
+        if not out:
+            return f"(服务器对 {uri} 的返回里没有可读内容)", mime
+        return "\n\n".join(out), mime
 
     def call_tool(self, name: str, arguments: dict) -> str:
         """调用远端工具,返回可直接回填给模型的文本。
@@ -1001,6 +1043,19 @@ def set_admin_hook(fn) -> None:
     _ADMIN_HOOK = fn
 
 
+_MANAGER_HOOK = None            # () -> McpManager | None;由 create_app 安装(B1)
+
+
+def set_manager_hook(fn) -> None:
+    global _MANAGER_HOOK
+    _MANAGER_HOOK = fn
+
+
+def live_manager():
+    """拿**在线的**管理器;没装钩子(CLI)或没连上返回 None —— 调用方照实说。"""
+    return _MANAGER_HOOK() if _MANAGER_HOOK is not None else None
+
+
 # ------------------------------------------------------------ 预设模板库(v0.9.70)
 #
 # 路线图 #3 的最后半条:v0.9.61 让同学能在对话里自助加服务器,但「从零填
@@ -1198,3 +1253,51 @@ def admin_tool(ctx, action: str = "list", name: str = "", raw=None) -> str:
                                      or (raw or {}).get("id") or ""),
                      raw=raw if isinstance(raw, dict) else None)
     return admin(action, name=name)
+
+
+def mcp_resource_handler(ctx, action: str = "list", sid: str = "", uri: str = "",
+                         reason: str = "") -> str:
+    """mcp_resource 工具处理器(B1,v0.9.102):列/读已连服务器的资源。
+
+    拿管理器走 live_manager() 钩子 —— create_app 安装;CLI 没装就如实说
+    "拿不到在线的管理器",绝不按配置猜一份。read 的内容是**外部数据**:
+    工具标 trust=external,agent 会照常套溯源围栏。
+    """
+    action = (action or "list").strip().lower()
+    mgr = live_manager()
+    clients = {c.cfg.sid: c for c in (mgr.clients if mgr is not None else [])}
+    if not clients:
+        return ("错误: 拿不到在线的 MCP 管理器(桌面版重启学长后可用;"
+                "当前也没有任何已连接的服务器)。")
+    if action == "list":
+        lines = []
+        for c in clients.values():
+            if "resources" not in (c.server_caps or {}):
+                lines.append(f"[{c.cfg.sid}] 这台服务器没声明 resources(不编清单)")
+                continue
+            if not c.resources:
+                lines.append(f"[{c.cfg.sid}] 声明了 resources 但清单为空")
+                continue
+            for x in c.resources:
+                lines.append(f"[{c.cfg.sid}] {x.get('name') or x.get('uri')}"
+                             f" · {x.get('uri')}"
+                             + (f" · {x.get('mimeType')}" if x.get("mimeType") else ""))
+        return "\n".join(lines) or "(没有已连接的 MCP 服务器)"
+    if action == "read":
+        c = clients.get(str(sid or "").strip())
+        if c is None:
+            return (f"错误: 没有编号为「{sid}」的在线服务器"
+                    f"(在线的有:{'、'.join(clients) or '无'})。先 action=list 看一眼。")
+        if "resources" not in (c.server_caps or {}):
+            return (f"错误: 服务器 {c.cfg.sid} 在握手里没有声明 resources —— "
+                    f"它不给这个能力,如实说,不要硬调。")
+        uri = str(uri or "").strip()
+        if not uri:
+            return "错误: action=read 要带 uri(action=list 的清单里逐条都有)。"
+        try:
+            text, mime = c.read_resource(uri)
+        except McpError as e:
+            return f"错误: 读取 {uri} 失败:{e}"
+        header = f"[MCP 资源 {uri} · 服务器 {c.cfg.sid}" + (f" · {mime}" if mime else "") + "]"
+        return header + "\n" + text
+    return f"错误: 未知 action「{action}」。可用:list(列清单)/read(读内容)。"

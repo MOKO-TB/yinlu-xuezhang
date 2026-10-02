@@ -40,6 +40,8 @@ ORDER = [
     "browser_status", "page_parse",
     # v0.9.61:MCP 自助管理,挨着它服务的外接家族(web/浏览器)
     "mcp",
+    # v0.9.102:MCP resources(read 过确认框)
+    "mcp_resource",
     "use_skill", "plan", "ask_user", "search_knowledge",
     # v0.9.98:运行轨迹导出,挨着历史检索;v0.9.99:反馈包(同一族)
     "export_trace", "export_feedback", "search_history",
@@ -100,7 +102,7 @@ def test_order_pin_is_not_stale():
     v0.9.96 加 `ask_user` 时它的位置就钉在 `plan` 后面 —— 模型每轮拿到的 tools 数组
     是这个顺序,挪位置等于改行为面,所以新工具插在谁后面都要在这里写明。
     """
-    assert len(ORDER) == len(set(ORDER)) == 55
+    assert len(ORDER) == len(set(ORDER)) == 56
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

@@ -63,6 +63,29 @@ def main() -> None:
                         "serverInfo": {"name": "fake-mcp", "version": "0.0.1"}})
         elif method == "tools/list":
             reply(rid, {"tools": TOOLS})
+        elif method == "resources/list":
+            # B1(v0.9.102):一份文本资源 + 一份二进制资源 —— read 的两条路都要有真数据
+            reply(rid, {"resources": [
+                {"uri": "fake://notes.txt", "name": "笔记",
+                 "description": "一份文本资源", "mimeType": "text/plain"},
+                {"uri": "fake://logo.png", "name": "图标",
+                 "description": "一份二进制资源", "mimeType": "image/png"},
+            ]})
+        elif method == "resources/read":
+            uri = (msg.get("params") or {}).get("uri", "")
+            if uri == "fake://notes.txt":
+                reply(rid, {"contents": [{"uri": uri, "mimeType": "text/plain",
+                                          "text": "这是假服务器的笔记正文"}]})
+            elif uri == "fake://logo.png":
+                reply(rid, {"contents": [{"uri": uri, "mimeType": "image/png",
+                                          "blob": "aGVsbG8="}]})   # hello
+            else:
+                sys.stdout.write(json.dumps(
+                    {"jsonrpc": "2.0", "id": rid,
+                     "error": {"code": -32602, "message": f"未知资源 {uri}"}},
+                    ensure_ascii=False) + "\n"
+)
+                sys.stdout.flush()
         elif method == "tools/call":
             params = msg.get("params") or {}
             name = params.get("name")
