@@ -69,6 +69,11 @@ class Agent:
         self._real_prompt: tuple[int, int] | None = None
         self._undo_stack: list[dict] = []
         self._undo_seq = 0         # 快照的稳定编号:摘掉中间一条不会让别的错位
+        # 「这一处改动是在第几问之后做的」——编辑重发要按这个回退文件(R3)。
+        # `_epoch` 管的是另一件事:压过一次历史后前面的提问被折进摘要,序号整体前移,
+        # 老记录上那个号就不再对得上任何东西 —— 纪元不同的记录一律不许按号回退。
+        self._turn_ordinal = 0
+        self._epoch = 0
         self._undo_open = None     # 等这次真落盘之后补"改后指纹"的那条 seq
         self._narration = ""       # 本轮模型写的说明文字:权限确认框里当"为什么要做"的兜底
         self._pending_prior = ""   # B1:下一步 search_knowledge 命中历史差评时的那句系统侧先验
@@ -101,6 +106,10 @@ class Agent:
         self.gate.new_turn()
         if add_user:
             self.session.add_user(user_input, content)
+        # 这一回合是第几问(1 起)。`add_user=False`(重新生成)时那句提问本来就在,
+        # 数出来的还是它的序号 —— 两种入口拿到同一个坐标。
+        self._turn_ordinal = sum(1 for m in self.session.messages
+                                 if m.get("role") == "user")
 
         # 一轮总时限:只圈"这一轮一共转了多少次",不圈单条命令(那是沙箱的
         # timeout_seconds)也不圈单次请求(那是 request_timeout_seconds)。
@@ -407,6 +416,8 @@ class Agent:
                 "at": time.strftime("%H:%M:%S", time.localtime(rec["at"])),
                 "newer": sum(1 for r in self._undo_stack
                              if r["seq"] > rec["seq"] and r["path"] == rec["path"]),
+                "turn": rec.get("turn", 0),
+                "stale": rec.get("epoch", self._epoch) != self._epoch,
                 "drift": self._drifted(rec),
             })
         more = max(0, len(items) - self.CHANGE_VIEW_LIMIT)
@@ -416,8 +427,9 @@ class Agent:
                 # 改出来的东西压根不在快照里,点了"全部回退"也退不掉它们。
                 "note": ("只列我用 write_file / edit_file 改的文件;"
                          "命令(bash / py_script)与外部程序改的不在这里,也退不掉。"),
-                "hint": ("没有可退的改动 —— 这份栈在 /clear、换会话、压缩历史时会清空,"
-                         "所以这里空着是真的空,不是还没加载。")}
+                "hint": ("没有可退的改动 —— 这份栈在 /clear 与换会话时会清空;"
+                         "压缩历史不清它(文件确实还被改着),但压过一次之后"
+                         "「第几问」这个坐标就不准了,逐处回退照旧可用。")}
 
     # diff 那一屏的量:上下文 2 行、最多 200 行、超过 512 KB 不比(与语法自检同一上限口径 ——
     # 再大的文件不是"手写改动"的场景,硬比只会把一次刷新变成一次大扫描)
@@ -564,6 +576,55 @@ class Agent:
         return (f"已全部回退 {n} 处:{listed}。" if n else "没有一处退成功。") + tail + (
             " 命令与外部程序改的不在账里。" if n else "")
 
+    def rollback_to_ordinal(self, ordinal) -> dict:
+        """R3:把「第 ordinal 问之后我改过的文件」全部退回,给编辑重发用。
+
+        为什么需要纪元这一道闸:回合坐标是"第几问",而压缩会把前面的提问折进摘要 ——
+        同一个"第 3 问"在压缩后指的是另一句话。拿错的号去退文件,退的可能是别人那几问
+        的成果,而且这是**动手面**,错了不是一句错话而是丢东西。所以宁可拒绝:
+        让界面改用「本轮改动」那一栏逐处退(那里退的是具体某一处,不需要坐标)。
+
+        退的顺序与 `undo_all` 一致(最新→最旧),同一文件退到最早那份前像;
+        只动 write_file / edit_file 那本账 —— 命令改的从来不在里面,这句必须说出口。
+        """
+        if isinstance(ordinal, bool) or not str(ordinal).strip().lstrip("-").isdigit():
+            return {"ok": False, "reverted": [],
+                    "msg": f"错误:ordinal 只接受第几问(整数),收到 {ordinal!r}。"}
+        want = int(str(ordinal).strip())
+        if want < 1:
+            return {"ok": False, "reverted": [],
+                    "msg": "错误:第几问要从 1 开始数。"}
+        in_scope = [r for r in self._undo_stack if r.get("turn", 0) >= want]
+        if not in_scope:
+            return {"ok": True, "reverted": [], "kept": len(self._undo_stack),
+                    "msg": f"第 {want} 问之后没有我用写文件工具改过的东西"
+                           "(命令与外部程序改的一直不在这份账里)。"}
+        stale = [r for r in in_scope if r.get("epoch", self._epoch) != self._epoch]
+        if stale:
+            return {"ok": False, "reverted": [], "stale": len(stale),
+                    "msg": (f"这中间压过一次历史:第 {want} 问的位置已经对不上了,"
+                            f"有 {len(stale)} 处改动我不敢按号退 —— 一个字都没动。"
+                            "要退就用「任务监控 → 本轮改动」逐处退(那里退具体某一处,不需要编号)。")}
+        done, failed = [], []
+        for rec in sorted(in_scope, key=lambda r: -r["seq"]):
+            if rec not in self._undo_stack:
+                continue
+            self._undo_stack.remove(rec)
+            out = self._apply_undo(rec)
+            if out.get("failed"):
+                self._undo_stack.append(rec)
+                failed.append(out["path"])
+            else:
+                done.append(out["path"])
+        names = "、".join(done[:5]) + (f" 等 {len(done)} 处" if len(done) > 5 else "")
+        tail = (f"另有 {len(failed)} 处写不回去(仍在栈里:{'、'.join(failed[:3])})。"
+                if failed else "")
+        return {"ok": bool(done), "reverted": done, "failed": failed,
+                "kept": len(self._undo_stack),
+                "msg": (f"工作区已退回第 {want} 问之前:{names}。" if done
+                        else "一处都没退成。") + tail
+                + (" 命令与外部程序改的没被退(不在账里)。" if done else "")}
+
     # ------------------------------------------------------------ 压缩
 
     # 实测下限能用多久:同一轮里消息只会多出几条(工具结果 + 助手那句话)。
@@ -626,6 +687,8 @@ class Agent:
                 self.ui.info("没有可压缩的早期对话。")
             return False
         self.session.replace_messages(new_msgs)
+        # 前面的用户消息被折进摘要了 —— 快照上记的"第几问"从此对不上,别再拿它回退。
+        self._epoch += 1
         self.ui.compacted(before, len(new_msgs))
         return True
 
@@ -850,7 +913,8 @@ class Agent:
             return
         self._undo_seq += 1
         self._undo_stack.append({"seq": self._undo_seq, "path": p, "data": data,
-                                 "display": raw, "at": time.time(), "post": None})
+                                 "display": raw, "at": time.time(), "post": None,
+                                 "turn": self._turn_ordinal, "epoch": self._epoch})
         # 这一条还没兑现:工具可能因为参数错/权限失败而根本没落盘。落盘成功后由
         # `_mark_after_mutation` 补上"改后指纹"(见那里的理由),没成功就把这条摘掉 ——
         # 清单里留一条退不动的改动,比少列一条更容易骗人。

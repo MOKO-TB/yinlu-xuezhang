@@ -511,6 +511,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # 读一遍"的老行为,一次展开变成一次大扫描)
                        "undo_diff", "DIFF_CONTEXT", "DIFF_LINE_LIMIT",
                        "DIFF_SCAN_BYTES",
+                       # v0.9.103 ①R3:编辑重发连着退文件(漏 rollback_to_ordinal =
+                       # 桥调不到就永远不退;漏 _epoch/_turn_ordinal = 回合坐标不记账,
+                       # 压过一次历史后敢按号退别人的文件 —— 那是动手面,不是一句错话)
+                       "rollback_to_ordinal", "_epoch", "_turn_ordinal",
                        "_mark_after_mutation", "_drifted", "_apply_undo",
                        "_change_display", "_undo_extra_tail"),
     "minicode.subagents": (
@@ -678,6 +682,9 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.101 ①R2:diff 那一块(漏 toggleChangeDiff = 芯片是死的;漏 ch-diff =
     # 有函数没样式,+ 与 − 挤成一坨没有颜色分)
     "toggleChangeDiff", "undo_diff", "ch-diff", "act-chip", "d-more",
+    # v0.9.103 ①R3:编辑重发那一句确认(漏这两个标签 = 按钮又变回含糊的「确定/取消」,
+    # 用户不知道按下去会退文件;漏 appCancelCb = 取消那一支什么都不做,只重发这条路就断了)
+    "退回文件并重发", "保留文件,只重发", "appCancelCb", "undo_records",
     # v0.9.101 ④L3:指令层那一行(漏 renderInstrLine = 后端算了没人画;漏
     # instrLine = 前端有函数但没有那个 DOM,首屏直接抛)
     "renderInstrLine", "instrLine",

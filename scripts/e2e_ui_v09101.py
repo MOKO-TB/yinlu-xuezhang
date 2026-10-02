@@ -88,6 +88,14 @@ window.__BOARD__ = {
       {state: "done", title: "定时任务「周复盘」", sub: "上次 10-01 20:03 · 结论 已推",
        action: {type: "ask", text: "说一下「周复盘」上次跑出了什么"},
        source: "定时任务"}]}};
+window.__CHANGES__ = { ok: true, total: 3, more: 0, note: __NOTE__, hint: "",
+  items: [
+    {seq: 12, path: "src/app.py", kind: "改", verb: "恢复", at: "10:20:31",
+     newer: 0, drift: false, turn: 2, stale: false},
+    {seq: 9, path: "notes/new.md", kind: "新建", verb: "删除", at: "10:18:02",
+     newer: 0, drift: false, turn: 2, stale: false},
+    {seq: 4, path: "old/keep.py", kind: "改", verb: "恢复", at: "10:11:40",
+     newer: 0, drift: false, turn: 1, stale: false}] };
 window.__INSTR__ = {ok: true, line: "内置 + 用户级(2 行) + 项目级(3 行)", layers: [
   {scope: "用户级", name: "AGENTS.md", lines: 2, chars: 41, truncated: false},
   {scope: "项目级", name: "AGENTS.md", lines: 3, chars: 60, truncated: true}]};
@@ -140,6 +148,14 @@ const base = {
       note: "左边这份是我最后一次改它之前的内容,右边是磁盘上的现在这份。"
             + "这一处在我改过之后还被别的工具动过,所以这份 diff 里含别人的改动。",
       lines: ["@@ -10,2 +10,3 @@", "-old line", "+new line", "+another", " ctx line"]});
+  },
+  undo_records: () => {
+    window.__CALLS__.push(["undo_records"]);
+    return Promise.resolve(window.__CHANGES__);
+  },
+  edit_resend: (ord, text, expect, revert) => {
+    window.__CALLS__.push(["edit_resend", ord, text, !!revert]);
+    return Promise.resolve({ok: true, reverted: revert ? ["src/app.py"] : []});
   },
   undo_step: (seq) => {
     window.__CALLS__.push(["undo_step", seq]);
@@ -202,6 +218,57 @@ def main() -> int:
 
         def calls(name):
             return [c for c in page.evaluate("window.__CALLS__") if c and c[0] == name]
+
+        # ---- 0. 编辑重发:文件退不退要问一句,而且两个出口都能走通(R3) ----
+        page.evaluate("() => { addUserMsg('第一问问法'); addUserMsg('第二问问法'); }")
+        page.evaluate("() => { startEdit(2, '第二问问法'); "
+                      "document.getElementById('input').value = '换个问法再发'; }")
+        page.evaluate("() => send()")
+        page.wait_for_selector("#appConfirmOverlay.show", timeout=5000)
+        ask = page.inner_text("#appConfirmMsg")
+        check("2 处" in ask and "src/app.py" in ask and "notes/new.md" in ask,
+              f"问句报的是「这一问之后改过几处」与文件名(实测「{ask[:56]}…」)")
+        check("old/keep.py" not in ask,
+              "更早那一问(第 1 问)自己改的文件不混进来回退范围")
+        check(page.inner_text("#btnAppOk").strip() == "退回文件并重发"
+              and page.inner_text("#btnAppCancel").strip() == "保留文件,只重发",
+              "两个按钮各说各的结局(不是含糊的「确定/取消」)")
+        page.click("#btnAppOk")
+        page.wait_for_function(
+            "() => window.__CALLS__.some(c => c[0] === 'edit_resend')", timeout=5000)
+        check(calls("edit_resend")[-1][1] == 2 and calls("edit_resend")[-1][3] is True,
+              "点「退回文件并重发」:编辑的是第 2 问、传的是 revert_files=true")
+        check(page.evaluate("() => document.getElementById('toasts').textContent")
+              .count("已退回 1 处") == 1,
+              "退了几处由后端回话决定,前端不自己数")
+
+        # 第二条出口:保留文件只重发
+        page.evaluate("() => { startEdit(2, '第二问问法'); "
+                      "document.getElementById('input').value = '第三种问法'; }")
+        page.evaluate("() => send()")
+        page.wait_for_selector("#appConfirmOverlay.show", timeout=5000)
+        page.click("#btnAppCancel")
+        page.wait_for_function(
+            "() => window.__CALLS__.filter(c => c[0] === 'edit_resend').length >= 2",
+            timeout=5000)
+        check(calls("edit_resend")[-1][3] is False,
+              "点「保留文件,只重发」传 false —— 取消这一支不该什么都不做")
+
+        # 没改过文件:一次确认都不弹,直接重发
+        page.evaluate("() => { window.__CHANGES__ = {ok: true, items: [], total: 0,"
+                      " more: 0, note: '', hint: ''}; }")
+        page.evaluate("() => { startEdit(2, '第二问问法'); "
+                      "document.getElementById('input').value = '第四种问法'; }")
+        page.evaluate("() => send()")
+        page.wait_for_function(
+            "() => window.__CALLS__.filter(c => c[0] === 'edit_resend').length >= 3",
+            timeout=5000)
+        check(page.evaluate("() => !document.getElementById('appConfirmOverlay')"
+                            ".classList.contains('show')"),
+              "那一问之后没改过文件就不弹确认(不问一个没有选项的问题)")
+        check(calls("edit_resend")[-1][3] is False, "直接重发时 revert 是 false")
+        page.evaluate("() => { window.__CHANGES__ = {ok: true, total: 3, more: 0,"
+                      " note: 'x', hint: '', items: []}; }")
 
         # ---- 1. 指令层那一行:逐字是桥给的句子,空就整行不出现 ----
         page.wait_for_function(

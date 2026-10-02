@@ -1153,3 +1153,51 @@ def test_board_open_card_flag_lives_only_while_waiting(config, tmp_path):
     assert got["flag"] == "_ask_open"
     bridge.confirm_tool(_tool("bash"), {"command": "echo hi"})
     assert got["flag"] == "_confirm_open"
+
+
+def test_edit_resend_can_roll_the_workspace_back_too(config, tmp_path):
+    """R3 端到端:编辑第一问重发 → 那一问之后改过的文件退回,再重发。
+
+    断的两件事:①退文件发生在**截断之前**(退完还能说清退的是哪几问);
+    ②不退就是默认 —— 不传 revert_files 时行为与今天完全一致。
+    """
+    import json
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="write_file",
+            arguments=json.dumps({"path": "note.md", "content": "第一版"}))]),
+        AssistantTurn(text="写好了"),
+        AssistantTurn(text="重来就好"),
+    ])
+    bridge, window, _ = make(config, tmp_path, llm)
+    bridge.send_task("帮我写个笔记")
+    assert wait_until(lambda: any(e["type"] == "confirm_request" for e in window.events))
+    bridge.confirm_reply("always")
+    assert wait_until(lambda: not bridge._busy)
+    assert (tmp_path / "note.md").exists()
+
+    r = bridge.edit_resend(1, "帮我写个笔记(改口径)", revert_files=True)
+    assert r.get("ok") is not False, r
+    assert r.get("reverted") == ["note.md"], r
+    assert not (tmp_path / "note.md").exists(), "新建的那一处退回 = 删掉它"
+    assert wait_until(lambda: not bridge._busy)
+
+
+def test_edit_resend_without_the_flag_keeps_files(config, tmp_path):
+    import json
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="write_file",
+            arguments=json.dumps({"path": "keep.md", "content": "留着"}))]),
+        AssistantTurn(text="写好了"),
+        AssistantTurn(text="重来就好"),
+    ])
+    bridge, window, _ = make(config, tmp_path, llm)
+    bridge.send_task("写一个文件")
+    assert wait_until(lambda: any(e["type"] == "confirm_request" for e in window.events))
+    bridge.confirm_reply("always")
+    assert wait_until(lambda: not bridge._busy)
+
+    bridge.edit_resend(1, "换个说法")          # 默认不退
+    assert (tmp_path / "keep.md").read_text(encoding="utf-8") == "留着"
+    assert "reverted" not in bridge.edit_resend(1, "再换一次")

@@ -1397,3 +1397,95 @@ def test_changing_agents_md_reloads_once_and_says_so(config, ctx, tmp_path, monk
     assert "MARKER-D1" in ag.session.messages[0]["content"]
     ag.run_turn("第三句")                          # 没再变就不该再吵第二次
     assert len([t for t in _infos(ui) if "重新载入" in t]) == 1
+
+
+# ---------------------------------------- 编辑重发连着回退工作区(v0.9.103 ①R3)
+
+def test_rollback_reverts_only_what_came_after_that_question(config, ctx, tmp_path):
+    llm = FakeLLM([
+        _write_turn("a.txt", "A1", "c1"), AssistantTurn(text="一答"),
+        _write_turn("b.txt", "B1", "c2"), AssistantTurn(text="二答"),
+        _write_turn("a.txt", "A2", "c3"), AssistantTurn(text="三答"),
+    ])
+    ag = make_agent(config, ctx, llm, FakeUI())
+    ag.run_turn("第一问")      # 写 a.txt(新建)
+    ag.run_turn("第二问")      # 写 b.txt(新建)
+    ag.run_turn("第三问")      # 改 a.txt
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "A2"
+
+    r = ag.rollback_to_ordinal(3)        # 退到第三问之前
+    assert r["ok"] and r["reverted"] == ["a.txt"]
+    # 退的是"第三问之前"那一版:A1 还在(它是第一问的产物,不属于本次要退的范围)
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "A1"
+    assert (tmp_path / "b.txt").read_text(encoding="utf-8") == "B1"   # 第二问的成果不牵连
+    assert ag.undo_records()["total"] == 2      # 退掉的从栈里摘走,没退的原样留着
+
+
+def test_rollback_reports_that_command_changes_are_not_covered(config, ctx, tmp_path):
+    """退完那句必须说"命令改的没被退":否则用户以为整轮回到了起点(§四.1)。"""
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="bash",
+            arguments=json.dumps({"command": "echo 命令产物 > out.txt"}))]),
+        AssistantTurn(text="一答"),
+        _write_turn("w.txt", "W1", "c2"), AssistantTurn(text="二答"),
+    ])
+    ag = make_agent(config, ctx, llm, FakeUI())
+    ag.run_turn("第一问")
+    ag.run_turn("第二问")
+    r = ag.rollback_to_ordinal(2)
+    assert r["ok"] and "命令" in r["msg"]
+    assert (tmp_path / "out.txt").exists(), "命令写的文件不该被动过(也不在账里)"
+
+
+def test_rollback_before_any_write_is_an_explicit_noop(config, ctx):
+    ag = make_agent(config, ctx, FakeLLM([AssistantTurn(text="在的")]), FakeUI())
+    ag.run_turn("你好")
+    r = ag.rollback_to_ordinal(1)
+    assert r["ok"] and r["reverted"] == [] and "没有我用写文件工具改过的东西" in r["msg"]
+
+
+def test_rollback_refuses_when_compaction_moved_the_ordinals(config, ctx, tmp_path):
+    """压缩会把前面的提问折进摘要,"第 N 问"从此指另一句话。
+
+    号错了退的是**别人那几问的成果**,而且是动手面 —— 所以这里必须拒绝、一个字都不动,
+    并把该走的路说清楚(逐处退不需要坐标)。
+    """
+    config.context_window = 100
+    config.compact_at_ratio = 0.01
+    llm = FakeLLM([
+        AssistantTurn(text="(此前对话的摘要)同学问了选课。"),
+        _write_turn("keep.txt", "K1", "c1"), AssistantTurn(text="写好了"),
+    ])
+    ag = make_agent(config, ctx, llm, FakeUI())
+    for i in range(3):
+        ag.session.add_user(f"旧问题{i}")
+        ag.session.add_assistant(AssistantTurn(text=f"旧回答{i}"))
+    ag.run_turn("写个文件")           # 这一问里先压缩、再写文件
+    epoch_before = ag._epoch
+    assert epoch_before >= 1, "压缩成功就该把纪元推前,否则这道闸形同虚设"
+    turn_of_write = ag.undo_records()["items"][0]["turn"]
+    ag._epoch += 1                    # 模拟"又压过一次"(纪元与记录不再相同)
+    r = ag.rollback_to_ordinal(turn_of_write)
+    assert r["ok"] is False and r.get("stale") == 1
+    assert (tmp_path / "keep.txt").read_text(encoding="utf-8") == "K1", "拒绝时一个字都不该动"
+    assert "本轮改动" in r["msg"]      # 指出那条不需要坐标的路
+
+
+def test_undo_records_carry_the_turn_coordinate(config, ctx, tmp_path):
+    llm = FakeLLM([_write_turn("t.txt", "T1", "c1"), AssistantTurn(text="一答"),
+                   _write_turn("t.txt", "T2", "c2"), AssistantTurn(text="二答")])
+    ag = make_agent(config, ctx, llm, FakeUI())
+    ag.run_turn("第一问")
+    ag.run_turn("第二问")
+    items = ag.undo_records()["items"]
+    assert [it["turn"] for it in items] == [2, 1]     # 最新在前,各属于自己那一问
+    assert all(it["stale"] is False for it in items)
+
+
+def test_rollback_bad_ordinal_is_an_error_not_a_wipe(config, ctx, tmp_path):
+    ag = _two_writes(config, ctx, tmp_path)
+    for bad in ("", "第一问", 0, -3, True):
+        r = ag.rollback_to_ordinal(bad)
+        assert r["ok"] is False, bad
+    assert ag.undo_records()["total"] == 2        # 参数错了不许退任何东西

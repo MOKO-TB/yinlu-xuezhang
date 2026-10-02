@@ -413,9 +413,15 @@ class PublicFacade:
     def _compact_now(self) -> dict:
         return self._b.compact_now()
 
-    def _edit_resend(self, ordinal: int = 0, new_text: str = "", expect: str = "") -> dict:
+    def _edit_resend(self, ordinal: int = 0, new_text: str = "", expect: str = "",
+                     revert_files: bool = False) -> dict:
+        """网页版**不接受退文件**:那一动的是服务器工作区里的文件,不是访客的。
+
+        参数照收但一律当 False(而不是回一条拒绝让前端当报错弹)—— 编辑重发本身
+        对访客是正常功能,只有"顺手回滚工作区"这一半对外关闭。
+        """
         self._clear_stop_flag()
-        return self._b.edit_resend(ordinal, new_text, expect)
+        return self._b.edit_resend(ordinal, new_text, expect, False)
 
     def _confirm_reply(self, choice: str = "no") -> dict:
         # 对外模式没有确认流程,前端也不该弹;吞掉即可

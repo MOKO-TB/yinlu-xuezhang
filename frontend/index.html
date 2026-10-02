@@ -3662,10 +3662,18 @@ $("btnExport").addEventListener("click", () => {
 
 /* ---------------- 通用确认弹窗(替代浏览器原生 confirm) ---------------- */
 let appConfirmCb = null;
-function appConfirm(msg, onOk, title) {
+let appCancelCb = null;
+// opts:{okLabel, cancelLabel, onCancel} —— 三个出口的场合(退文件重发 / 只重发 / 什么都不做)
+// 两个按钮不够用,但不想为此再开一张 overlay:标签与取消那一支的回调都从外面传进来。
+// 不传就是原来的样子(确定 / 取消,取消什么都不做),老调用点一个字不用改。
+function appConfirm(msg, onOk, title, opts) {
+  const o = opts || {};
   $("appConfirmTitle").textContent = title || "确认操作";
   $("appConfirmMsg").textContent = msg;
+  $("btnAppOk").textContent = o.okLabel || "确定";
+  $("btnAppCancel").textContent = o.cancelLabel || "取消";
   appConfirmCb = onOk;
+  appCancelCb = o.onCancel || null;
   $("appConfirmOverlay").classList.add("show");
 }
 $("btnAppOk").addEventListener("click", () => {
@@ -3676,6 +3684,8 @@ $("btnAppOk").addEventListener("click", () => {
 $("btnAppCancel").addEventListener("click", () => {
   $("appConfirmOverlay").classList.remove("show");
   appConfirmCb = null;
+  const cb = appCancelCb; appCancelCb = null;
+  if (cb) cb();
 });
 
 /* ---------------- 关窗去向(v0.9.22:托盘 + 不再询问) ----------------
@@ -4700,15 +4710,34 @@ function send() {
   if ((!text && !atts.length) || busy) return;
   if (editing) {
     const { ord, text: expect } = editing;
-    cancelEdit(false);
-    $("input").value = "";
-    $("input").style.height = "auto";
-    pywebview.api.edit_resend(ord, text, expect).then(r => {
-      if (!r.ok) { toast(r.msg, true); $("input").value = text; return; }
-      truncateDomFrom(ord);
-      userSeq = ord - 1;
-      addUserMsg(text);
-    });
+    const go = (revert) => {
+      cancelEdit(false);
+      $("input").value = "";
+      $("input").style.height = "auto";
+      pywebview.api.edit_resend(ord, text, expect, revert).then(r => {
+        if (!r.ok) { toast(r.msg, true); $("input").value = text; return; }
+        if (r.reverted && r.reverted.length) {
+          toast(`已退回 ${r.reverted.length} 处文件改动(命令改的不在账里)`);
+        }
+        truncateDomFrom(ord);
+        userSeq = ord - 1;
+        addUserMsg(text);
+      });
+    };
+    // 退文件是动手面:只有这一问之后确实改过东西才问一句,没改过就直接重发、不打扰人。
+    if (!pywebview.api.undo_records) { go(false); return; }
+    pywebview.api.undo_records().then(ch => {
+      const mine = ((ch && ch.items) || []).filter(it => (it.turn || 0) >= ord);
+      if (!mine.length) { go(false); return; }
+      const names = mine.slice(0, 4).map(it => it.path).join("、")
+        + (mine.length > 4 ? ` 等 ${mine.length} 处` : "");
+      appConfirm(`这一问之后学长改过 ${mine.length} 处(${names})。`
+        + `「退回」会把它们改回当时的样子(新建的那一处就是删掉);`
+        + "命令与外部程序改的从来不在账里,退不掉。",
+        () => go(true), "重发这一问:文件怎么办?",
+        { okLabel: "退回文件并重发", cancelLabel: "保留文件,只重发",
+          onCancel: () => go(false) });
+    }).catch(() => go(false));
     return;
   }
   $("input").value = "";

@@ -112,8 +112,10 @@ class PublicApi:
         """记一条长期记忆(只转发:存哪、怎么存都在桥里)。"""
         return self._b.remember(text, scope)
 
-    def edit_resend(self, ordinal: int, new_text: str, expect: str = "") -> dict:
-        return self._b.edit_resend(ordinal, new_text, expect)
+    def edit_resend(self, ordinal: int, new_text: str, expect: str = "",
+                    revert_files: bool = False) -> dict:
+        """编辑重发;`revert_files=True` 才一起退回那一问之后改过的文件(前端点过头)。"""
+        return self._b.edit_resend(ordinal, new_text, expect, bool(revert_files))
 
     def fork_session(self, ordinal: int) -> dict:
         return self._b.fork_session(ordinal)
@@ -239,6 +241,13 @@ class PublicApi:
     def undo_diff(self, seq=None) -> dict:
         """审查视图「看改了什么」:点开某一处才要的那一份 diff(后端算,前端不拼文案)。"""
         return self._b.undo_diff(seq)
+
+    def undo_records(self) -> dict:
+        """「本轮改动」整份清单:编辑重发前要按回合号数一下"这一问之后改过几处"。
+
+        只读;绝对路径不在载荷里(后端给的就是相对工作区那份)。
+        """
+        return self._b.undo_records()
 
     def undo_all(self) -> dict:
         """审查视图「全部回退」:一路退回本轮开始前(命令改的不在这份账里)。"""
@@ -2085,10 +2094,15 @@ class Bridge:
             "user": len(mem_load_file(global_memory_path())),
         }
 
-    def edit_resend(self, ordinal: int, new_text: str, expect: str = "") -> dict:
+    def edit_resend(self, ordinal: int, new_text: str, expect: str = "",
+                    revert_files: bool = False) -> dict:
         """编辑重发:截断到第 ordinal 条用户消息(含),校验原文一致后以新文本重发。
 
         expect 传前端记录的原消息文本,防止上下文压缩/变更后序号错位截断到别的消息。
+
+        `revert_files`(R3,v0.9.103)= 一起把「第 N 问之后学长改过的文件」退回。
+        默认 False:退文件是动手面,只有前端已经用 appConfirm 点过头才传 True。
+        退的动作在**截断之前**做 —— 截断会把回合坐标改掉,先截后方就说不清退的是哪几问。
         """
         if self._busy:
             return {"ok": False, "msg": "有任务正在进行中"}
@@ -2100,8 +2114,20 @@ class Bridge:
             return {"ok": False, "msg": "该消息已不在当前上下文(可能已被压缩),无法编辑重发"}
         if expect and content != expect:
             return {"ok": False, "msg": "消息内容已变化,请刷新后重试"}
+        reverted = []
+        if revert_files:
+            # 先退文件再截对话:截断会改掉"第几问"这个坐标,反过来做就说不清退的是哪几问。
+            back = self.agent.rollback_to_ordinal(int(ordinal))
+            reverted = back.get("reverted") or []
+            self.ui.push("info", text=back.get("msg") or "")
+            if not back.get("ok") and back.get("stale"):
+                # 号对不上时**不截断也不重发**:那是同一枚硬币的两面,退不了就别假装退过了
+                return {"ok": False, "msg": back.get("msg") or "工作区没能退回,编辑重发先不做了"}
         self.session.replace_messages(self.session.messages[:idx])
-        return self.send_task(new_text)
+        out = self.send_task(new_text)
+        if isinstance(out, dict) and reverted:
+            out["reverted"] = reverted
+        return out
 
     def fork_session(self, ordinal: int) -> dict:
         """会话分支(C4,v0.9.102):保留到第 ordinal 问(含),从这里开一份新会话。
