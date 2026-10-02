@@ -50,6 +50,17 @@ PROMPT_COMMANDS: list[dict] = [
         "prompt": "请把下面这段话改得更简短,保留全部关键信息"
                   "(时间、地点、数字、截止日期):\n\n$text",
     },
+    {
+        "cmd": "init",
+        "label": "生成 AGENTS.md",
+        "desc": "扫工作区起草项目指令文件,先看草稿再写盘",
+        "prompt": "请为当前工作区起草一份 AGENTS.md(Codex/ZCode 同款的项目指令文件,"
+                  "你每一轮都会自动读到它):先用 repo_outline 扫一遍目录结构,再看 "
+                  "README、配置与入口文件,写清「这个项目是什么、目录约定、怎么跑测试、"
+                  "代码与文档风格、绝对不要做的事」。工作区根已有 AGENTS.md 就先读旧文件、"
+                  "在它基础上补充而不是整份覆盖。**先把完整草稿给我看,我同意后"
+                  "再用 write_file 写到工作区根**。",
+    },
 ]
 
 ARG_PLACEHOLDER = "$text"
