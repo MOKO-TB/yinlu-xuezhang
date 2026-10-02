@@ -6048,7 +6048,7 @@ function buildChanges(parent, data) {
     mid.appendChild(actEl("act-t", (item.kind === "新建" ? "✚ " : "✎ ") + item.path));
     const bits = [item.kind + "于 " + item.at];
     if (item.newer) bits.push("这之后还有 " + item.newer + " 处没退");
-    if (item.drift) bits.push("我改过之后它又被别的工具动过");
+    if (item.drift) bits.push("我改过之后还被别的工具动过");
     mid.appendChild(actEl("act-s", bits.join(" · ")));
     row.appendChild(actEl({ cls: "act-dot" }));
     row.appendChild(mid);
@@ -6072,7 +6072,7 @@ function undoChange(item) {
   if (!api || !api.undo_step) { toast("逐文件回退只在桌面版有"); return; }
   const warn = [];
   if (item.newer) warn.push(`这一处之后还有 ${item.newer} 处改动没退,退它会让磁盘回到更早的那份`);
-  if (item.drift) warn.push("这一处在被改过之后还让别的工具动过,那部分也会一起没掉");
+  if (item.drift) warn.push("这一处我改过之后还被别的工具动过,那部分也会一起没掉");
   appConfirm(`回退这一处:${item.path} —— 将${item.verb === "删除"
     ? "删掉这个新建的文件" : "恢复成它改动前的内容"}。`
     + (warn.length ? "注意:" + warn.join(";") + "。" : ""),

@@ -516,6 +516,7 @@ python scripts/e2e_bg_jobs.py               # 后台命令端到端(真进程:�
 python scripts/e2e_ui_v0991.py        # 前端:长命令跑到一半,「此刻」那一行真写着它跑到哪了(真 Chromium 7 项,载荷出自真 GuiUI 而不是手填)
 python scripts/e2e_ui_v0996.py        # 前端:动手前问一句那张卡(真 Chromium 31 项,卡片上每个字都出自后端、回传的是用户点的 label 原话、没等到回答也要收卡)
 python scripts/e2e_ui_v0997.py        # 前端:顶栏「🧠 记忆」现在能记一条(真 Chromium 21 项,那行计数必须是桥返回的数 —— 前端自己 +1 就红)
+python scripts/e2e_ui_v09101.py       # 前端:本轮改动逐处回退 + 跨会话看板 + 指令层那一行(真 Chromium 36 项:回退只敲那一行的 seq、drift 与 newer 两句警告要在点头之前念出来、空清单整段不出现、看板三态计数与「没读到」都出自桥、没真动作的行一次都不敲桥)
 python scripts/e2e_ui_v0993.py        # 前端:并行子代理的每一步挂在「任务监控」的父行下面(真 Chromium 13 项,载荷出自真 GuiUI + 真 Session)
 python scripts/e2e_fake_server.py       # CLI 端到端冒烟(假服务器,不花 token)
 python scripts/e2e_frozen.py            # 打包后验证:CLI 全链路 + GUI 启动
