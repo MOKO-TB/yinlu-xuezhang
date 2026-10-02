@@ -32,6 +32,8 @@ PIN = {
     # v0.9.92:study-prep 让多科复习配合 plan 工具的依赖图与「🗂 计划」面板
     # (工具真实存在,确认过加进清单)
     "plan",
+    # v0.9.102:repo-wiki 的生成流程以 repo_outline 起步(工具真实存在,确认过加进清单)
+    "repo_outline",
 }
 
 _SNAKE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
