@@ -619,3 +619,30 @@ def test_parallel_catalog_reads_all_get_their_own_result(tmp_path, monkeypatch):
     for th in threads:
         th.join(timeout=120)
     assert not errors, errors
+
+
+# ------------------------------------------- 2 字查询前缀索引(W1,v0.9.105)
+
+def test_two_char_query_finds_prefix_titles(tmp_path):
+    """2 字查询先走书名前缀索引:「人工」命中《人工智能导论》,
+    不用 LIKE 全表扫(1.3 s 那段只在真落空时付)。"""
+    _make_db(tmp_path)
+    out = library.search(tmp_path, "人工")
+    assert any(r["title"] == "人工智能导论" for r in out)
+
+
+def test_two_char_query_falls_back_to_like_containment(tmp_path):
+    """前缀落空(关键词在标题中间)仍走 LIKE 兜底 —— 包含式命中不回退。"""
+    _make_db(tmp_path)
+    out = library.search(tmp_path, "三观")     # 许三观卖血记:含「三观」但不以其开头
+    assert any(r["title"] == "许三观卖血记" for r in out)
+
+
+def test_prefix_rows_ranking_uses_the_same_ruler(tmp_path):
+    """前缀路径沿用 _rank_sql:前缀命中排在前(「活着」两册都以其开头)。"""
+    _make_db(tmp_path)
+    rows = library._prefix_rows(library.conn(library.db_path(tmp_path)),
+                                "活着", 10, "all", None)
+    assert len(rows) == 2 and all(r["title"] == "活着" for r in rows)
+    ranked = library._rank_vals("活着")
+    assert ranked[1] == "活着%" and ranked[2] == "%活着%"

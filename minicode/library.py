@@ -268,6 +268,30 @@ def _fts_rows(c: sqlite3.Connection, variant: str, top_k: int,
     return rows
 
 
+def _prefix_rows(c: sqlite3.Connection, variant: str, top_k: int,
+                 kind: str, errors: list[str] | None = None) -> list[sqlite3.Row]:
+    """2 字查询的索引路(W1,v0.9.105):书名**前缀**走 idx_books_title,毫秒级。
+
+    为什么只有前缀:连接是 mode=ro(馆藏库按只读开,library.conn),运行时
+    建不了新索引;2 字查询在 trigram(≥3 字)与 B-tree(仅前缀)之间,先走
+    前缀这条免费的路,包含式命中仍由 LIKE 全表兜(那 1.3 s 只在落空时付)。
+    完整修法要把 unicode61 分词进管线重建(harvest.py + 重出 1.3 GB 库),
+    运行时做不到 —— 稿内 §6 #12 的另一半仍挂在数据侧。
+    """
+    esc = variant.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    if not esc:
+        return []
+    try:
+        return _read(c,
+                     SEL + "WHERE (b.title >= ?1 AND b.title < ?1 || ?2)"
+                     + _kind_clause(kind) + _rank_sql(3),
+                     tuple([variant, "￿", variant,
+                            esc + "%", "%" + esc + "%", top_k]))
+    except sqlite3.Error as exc:
+        _note_error(errors, exc)
+        return []
+
+
 def _like_rows(c: sqlite3.Connection, variant: str, top_k: int,
                kind: str, errors: list[str] | None = None) -> list[sqlite3.Row]:
     """LIKE 兜底(书名/作者/出版社/分类号/索书号)。
@@ -315,8 +339,11 @@ def search(workspace: Path | None, query: str, top_k: int = DEFAULT_TOP_K,
     rows: list[sqlite3.Row] = []
     for v in variants:
         if len(v) < 3:
-            # 1-2 字 FTS5 trigram 建不出索引,这个变体只能走 LIKE
-            rows = _like_rows(c, v, top_k, kind, errors)
+            # 1-2 字 FTS5 trigram 建不出索引:先走书名前缀索引(毫秒级),
+            # 落空再 LIKE 全表兜(1.3 s 的那笔钱只在真落空时付)
+            rows = _prefix_rows(c, v, top_k, kind, errors)
+            if not rows:
+                rows = _like_rows(c, v, top_k, kind, errors)
         else:
             rows = _fts_rows(c, v, top_k, kind, errors)
             if rows and len(rows) < top_k:
