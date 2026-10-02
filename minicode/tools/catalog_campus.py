@@ -42,18 +42,14 @@ def calendar_gpa() -> list[Tool]:
             name="calendar_edit",
             description=(
                 "校历维护助手(补录 + 删除 + 修订):把用户贴来的教务处通知/校历文字里"
-                "抽出的**日期候选**校验后入库 kb/school-calendar.json。全部两步走,"
-                "**先 preview 生成核对单**(每条带通知原文引用与可信度,删除/修订列"
-                "条目全文),完整念给用户、得到明确同意;**再 commit 才写文件**。"
-                "新增:action=preview → commit,entries 给候选(每条必须带 quote ——"
-                "通知原文里支撑这个日期的那一句,没有引用的日期就是编的);"
-                "删除:action=remove_preview → remove_commit,targets 给选择器"
-                "({id} 或 {name+start},核对单里能看到),改写前自动备份到 kb/history"
-                "(备份写不进去就不动数据);修订:action=revise_preview → revise_commit,"
-                "targets 选**一条** + patch 给要改的字段(必须带 reason 一句为什么改;"
-                "kind 写错、end 早于 start、改后撞名都直接拒绝不静默;修订轨迹记进"
-                "条目备注)。kind 用 holiday/exam/term/deadline/event;可信度按来源定,"
-                "拿不准就 B-待核实。入库后考试倒计时/考前提醒等既有机制自动生效。"
+                "抽出的**日期候选**校验后入库 kb/school-calendar.json。全部两步走:"
+                "action=preview 系列生成核对单(每条带通知原文引用与可信度,删除/修订"
+                "列条目全文),完整念给用户、得到明确同意,action=commit 系列才写文件。"
+                "三条硬边界:entries 每条必须带 quote——通知原文里支撑这个日期的那一句,"
+                "没有引用的日期就是编的;改写前自动备份到 kb/history(备份写不进去就"
+                "不动数据);kind 写错、end 早于 start、改后撞名直接拒绝不静默。"
+                "kind 用 holiday/exam/term/deadline/event;可信度按来源定,拿不准就"
+                "B-待核实。入库后考试倒计时/考前提醒等既有机制自动生效。"
             ),
             parameters={
                 "type": "object",
