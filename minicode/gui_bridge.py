@@ -2120,7 +2120,7 @@ class Bridge:
         from minicode.session import fork_log_file
         got = fork_log_file(src, idx + 1, self.sessions_dir, self.workspace)
         if got is None:
-            return {"ok": False, "msg": f"分叉失败:源留档读不到"}
+            return {"ok": False, "msg": "分叉失败:源留档读不到"}
         new_path, kept = got
         runner = self.open_session(load_path=new_path)
         key = runner.key
