@@ -63,22 +63,69 @@ CREDENTIALS_PATH = Path.home() / ".yinluxs" / "credentials.json"
 # 三者都没有时留空:应用照常启动,只是内置模型不可用(界面会提示未配置)。
 BUILTIN_API_KEY_ENV = "YINLUXS_BUILTIN_API_KEY"
 LOCAL_SECRETS_NAME = "config.local.json"
+# S1(v0.9.105,M3.1 中期解法):内置 Key 的家从"工作区里的 config.local.json"
+# 迁到凭据目录 —— 围栏只是文字约定,物理离开才是硬防线。旧文件仍可读
+# (兼容老开发机与装在只读位置的包),但**读到就一次性迁出并抹掉旧字段**;
+# 打包进 _MEIPASS 的那份只读、永不回写。
+BUILTIN_KEY_FILE = CREDENTIALS_PATH.parent / "builtin_key.json"
+
+
+def _read_key_field(path: Path) -> str:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if isinstance(raw, dict):
+        return str(raw.get("builtin_api_key") or "").strip()
+    return ""
+
+
+def _migrate_out(path: Path, key: str, *, writable: bool = True) -> None:
+    """把旧家的 Key 搬进凭据目录,核对无误后从旧文件抹掉该字段。
+
+    三条不破坏:新文件写不进(只读盘/目录建不出)就**原样留着旧文件**;
+    旧文件里除 builtin_api_key 外的字段(_comment 等)原样保留;
+    打包进 _MEIPASS 的那份只读,writable=False 永不回写。
+    """
+    try:
+        BUILTIN_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        BUILTIN_KEY_FILE.write_text(
+            json.dumps({"builtin_api_key": key}, ensure_ascii=False, indent=1),
+            encoding="utf-8")
+    except OSError:
+        return                                   # 新家写不进:旧家原样,下次再迁
+    if _read_key_field(BUILTIN_KEY_FILE) != key:
+        return                                   # 没核对上:绝不动旧文件
+    if not writable:
+        return                                   # 包内只读份:永不回写
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and "builtin_api_key" in raw:
+            raw.pop("builtin_api_key")
+            path.write_text(json.dumps(raw, ensure_ascii=False, indent=1),
+                            encoding="utf-8")
+    except (OSError, json.JSONDecodeError):
+        pass                                     # 抹不掉不报错:新家已生效,旧文件下次再说
 
 
 def _builtin_api_key() -> str:
-    """解析内置校园模型的 API Key;仓库里只留占位空值。"""
+    """解析内置校园模型的 API Key;仓库里只留占位空值。
+
+    顺序:环境变量(测试/CI/打包机注入)→ 凭据目录新家 → 旧家
+    (config.local.json:app 目录 + _MEIPASS;读到即迁出)。
+    """
     env = os.environ.get(BUILTIN_API_KEY_ENV, "").strip()
     if env:
         return env
-    for path in (app_path(LOCAL_SECRETS_NAME), resource_path(LOCAL_SECRETS_NAME)):
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(raw, dict):
-            key = str(raw.get("builtin_api_key") or "").strip()
-            if key:
-                return key
+    key = _read_key_field(BUILTIN_KEY_FILE)
+    if key:
+        return key
+    for path, writable in ((app_path(LOCAL_SECRETS_NAME), True),
+                           (resource_path(LOCAL_SECRETS_NAME), False)):
+        key = _read_key_field(path)
+        if key:
+            _migrate_out(path, key, writable=writable)
+            return key
     return ""
 
 

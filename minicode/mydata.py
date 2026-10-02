@@ -224,6 +224,8 @@ def deny_reason(path: Path) -> str:
         return "API Key 存放处:密钥永不进包"
     if "config.local.json" in parts:
         return "内置模型 Key:密钥永不进包"
+    if "builtin_key.json" in parts:
+        return "内置模型 Key(v0.9.105 迁出的新家):密钥永不进包"
     if "browser-profile" in parts:
         return "教务登录态 cookie:登录态永不进包"
     return ""

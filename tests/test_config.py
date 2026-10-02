@@ -2,6 +2,8 @@ import json
 
 import pytest
 
+from pathlib import Path
+
 from minicode import config as config_mod
 from minicode.config import (BUILTIN_PROVIDER, BUILTIN_PROVIDER_ID, Config,
                              Provider, ensure_config, load_config, save_config)
@@ -212,3 +214,92 @@ def test_builtin_endpoint_never_written_to_config_file(tmp_path, cred):
     again = load_config(p)
     assert again.provider.id == BUILTIN_PROVIDER_ID
     assert again.provider.base_url == BUILTIN_PROVIDER.base_url
+
+
+# ------------------------------------------- S1:内置 Key 迁出工作区(v0.9.105)
+
+def test_builtin_key_migrates_out_and_scrubs_legacy(tmp_path, monkeypatch):
+    """旧家(app 目录=开发态工作区根)读到 Key:搬进凭据目录、旧文件抹字段
+    保留其他字段、之后新家优先。"""
+    import json as _json
+    legacy = tmp_path / "app" / "config.local.json"
+    monkeypatch.delenv(config_mod.BUILTIN_API_KEY_ENV, raising=False)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(_json.dumps(
+        {"_comment": "说明", "builtin_api_key": "sk-dev-key"}), encoding="utf-8")
+    home = tmp_path / "home" / ".yinluxs"
+    monkeypatch.setattr(config_mod, "BUILTIN_KEY_FILE", home / "builtin_key.json")
+    monkeypatch.setattr(config_mod, "app_path",
+                        lambda *a: tmp_path / "app" / Path(*a))
+    monkeypatch.setattr(config_mod, "resource_path",
+                        lambda *a: tmp_path / "meipass" / Path(*a))
+    key = config_mod._builtin_api_key()
+    assert key == "sk-dev-key"
+    new_home = home / "builtin_key.json"
+    assert _json.loads(new_home.read_text(encoding="utf-8"))["builtin_api_key"] == "sk-dev-key"
+    legacy_after = _json.loads(legacy.read_text(encoding="utf-8"))
+    assert "builtin_api_key" not in legacy_after, "旧文件里的 Key 必须被抹掉"
+    assert legacy_after["_comment"] == "说明", "其他字段原样保留"
+    # 第二次读:直接走新家(旧文件已没有 Key)
+    assert config_mod._builtin_api_key() == "sk-dev-key"
+
+
+def test_builtin_key_migration_write_failure_keeps_legacy(tmp_path, monkeypatch):
+    """新家写不进(只读盘):旧文件原样,Key 照常解析 —— 绝不两边都丢。"""
+    import json as _json
+    legacy = tmp_path / "app" / "config.local.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(_json.dumps({"builtin_api_key": "sk-old"}), encoding="utf-8")
+    readonly = tmp_path / "ro" / "builtin_key.json"
+    monkeypatch.delenv(config_mod.BUILTIN_API_KEY_ENV, raising=False)
+    readonly.parent.mkdir(parents=True)
+    readonly.write_text("", encoding="utf-8")
+    readonly.chmod(0o444)
+    monkeypatch.setattr(config_mod, "BUILTIN_KEY_FILE", readonly)
+    monkeypatch.setattr(config_mod, "app_path",
+                        lambda *a: tmp_path / "app" / Path(*a))
+    monkeypatch.setattr(config_mod, "resource_path",
+                        lambda *a: tmp_path / "meipass" / Path(*a))
+    try:
+        assert config_mod._builtin_api_key() == "sk-old"
+        assert _json.loads(legacy.read_text(encoding="utf-8"))["builtin_api_key"] == "sk-old"
+    finally:
+        readonly.chmod(0o666)
+
+
+def test_builtin_key_env_wins_over_everything(tmp_path, monkeypatch):
+    monkeypatch.setenv(config_mod.BUILTIN_API_KEY_ENV, "sk-env")
+    monkeypatch.setattr(config_mod, "BUILTIN_KEY_FILE",
+                        tmp_path / "no" / "builtin_key.json")
+    monkeypatch.setattr(config_mod, "app_path",
+                        lambda *a: tmp_path / "app" / Path(*a))
+    monkeypatch.setattr(config_mod, "resource_path",
+                        lambda *a: tmp_path / "meipass" / Path(*a))
+    assert config_mod._builtin_api_key() == "sk-env"
+
+
+def test_new_home_wins_over_legacy(tmp_path, monkeypatch):
+    import json as _json
+    home = tmp_path / "home" / ".yinluxs"
+    monkeypatch.delenv(config_mod.BUILTIN_API_KEY_ENV, raising=False)
+    home.mkdir(parents=True)
+    (home / "builtin_key.json").write_text(
+        _json.dumps({"builtin_api_key": "sk-new"}), encoding="utf-8")
+    legacy = tmp_path / "app" / "config.local.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(_json.dumps({"builtin_api_key": "sk-old"}), encoding="utf-8")
+    monkeypatch.setattr(config_mod, "BUILTIN_KEY_FILE", home / "builtin_key.json")
+    monkeypatch.setattr(config_mod, "app_path",
+                        lambda *a: tmp_path / "app" / Path(*a))
+    monkeypatch.setattr(config_mod, "resource_path",
+                        lambda *a: tmp_path / "meipass" / Path(*a))
+    assert config_mod._builtin_api_key() == "sk-new"
+    # 新家优先:旧文件不被动(不迁移不抹除)
+    assert _json.loads(legacy.read_text(encoding="utf-8"))["builtin_api_key"] == "sk-old"
+
+
+def test_deny_reason_covers_builtin_key_home():
+    from minicode.mydata import deny_reason
+    import pathlib
+    r = deny_reason(pathlib.Path.home() / ".yinluxs" / "builtin_key.json")
+    assert "密钥永不进包" in r
