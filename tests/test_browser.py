@@ -1186,3 +1186,62 @@ def test_status_lists_tabs_and_close_by_target(monkeypatch):
     # 不带 target = 老行为(关当前线程的)
     monkeypatch.setattr(br, "close_current", lambda: False)
     assert "无需关闭" in bt.browser_close(None)
+
+
+# ------------------------------------------- attach 域名授权(S2,v0.9.105)
+
+def test_origin_allowed_semantics():
+    assert br._origin_allowed("https://jw.example.edu/xk", []) is True   # 空=不限
+    assert br._origin_allowed("https://jw.example.edu/xk",
+                              ["example.edu"]) is True
+    assert br._origin_allowed("https://jw.example.edu/xk",
+                              ["jw.example.edu"]) is True
+    assert br._origin_allowed("https://www.example.edu/",
+                              ["example.edu"]) is True          # www 前缀归一
+    assert br._origin_allowed("https://evil-example.edu/",
+                              ["example.edu"]) is False         # 子域串骗不过
+    assert br._origin_allowed("https://other.com/", ["example.edu"]) is False
+    assert br._origin_allowed("not-a-url", ["example.edu"]) is False
+
+
+def test_open_page_blocks_disallowed_origin_at_attach(monkeypatch):
+    """attach 模式下非名单域名:导航前拒绝,且不留一个开着的页面。"""
+    from minicode import browser as brm
+
+    class FakeSess:
+        mode = "attach"
+        browser = "edge"
+
+    closed = []
+    monkeypatch.setattr(brm, "_ensure_session", lambda **kw: FakeSess())
+    monkeypatch.setattr(brm, "close_current", lambda: closed.append(1))
+    with pytest.raises(brm.BrowserError) as ei:
+        brm.open_page("https://evil.com/page",
+                      allowed_attach_origins=["example.edu"])
+    assert "授权名单" in str(ei.value) and closed == [1]
+    # 名单内:往下走(导航会被下一步 _cmd 调到,这里只验不再抛授权错)
+    monkeypatch.setattr(brm, "_cmd", lambda *a, **k: {})
+    monkeypatch.setattr(brm, "_wait_loaded", lambda *a, **k: (True, 0, "complete"))
+    monkeypatch.setattr(brm, "evaluate", lambda *a, **k: "")
+    monkeypatch.setattr(brm, "_truncate", lambda t, n: ("", False))
+    ok = brm.open_page("https://jw.example.edu/page",
+                       allowed_attach_origins=["example.edu"])
+    assert ok["mode"] == "attach"
+
+
+def test_launch_mode_ignores_allowlist(monkeypatch):
+    """launch 是自家独立实例,没有用户登录态 —— 名单不约束它。"""
+    from minicode import browser as brm
+
+    class FakeSess:
+        mode = "launch"
+        browser = "edge"
+
+    monkeypatch.setattr(brm, "_ensure_session", lambda **kw: FakeSess())
+    monkeypatch.setattr(brm, "_cmd", lambda *a, **k: {})
+    monkeypatch.setattr(brm, "_wait_loaded", lambda *a, **k: (True, 0, "complete"))
+    monkeypatch.setattr(brm, "evaluate", lambda *a, **k: "")
+    monkeypatch.setattr(brm, "_truncate", lambda t, n: ("", False))
+    monkeypatch.setattr(brm, "close_current", lambda: pytest.fail("launch 不该被名单拦"))
+    ok = brm.open_page("https://evil.com/", allowed_attach_origins=["example.edu"])
+    assert ok["mode"] == "launch"

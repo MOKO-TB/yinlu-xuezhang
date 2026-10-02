@@ -306,6 +306,11 @@ class Config:
     # 回复风格(Z1,v0.9.104):normal=直接帮做(默认);guide=讲解模式 —— 不代做,
     # 拆步骤引导同学自己完成(适合学习场景)。只影响提示词段,不影响任何工具与门。
     reply_style: str = "normal"
+    # 浏览器 attach 域名授权(S2,v0.9.105,§6 #8③):非空时,attach 模式只许
+    # 访问这些域名(其余域名要么换 launch 独立实例,要么把域名加进来)——
+    # attach 带的是用户浏览器的全部登录态,不能因为一次 browser_open 就整库可见。
+    # 空 = 不限制(老行为)。只在 config.json 配置,工作区文件给不了这个授权。
+    allowed_attach_origins: list = field(default_factory=list)
 
     # ---- 活动供应商;base_url/api_key/model 属性保持旧代码零改动 ----
     @property
@@ -489,6 +494,9 @@ def _config_from_raw(raw: dict) -> Config:
         capabilities=raw.get("capabilities") if isinstance(raw.get("capabilities"), dict) else {},
         hooks=raw.get("hooks") if isinstance(raw.get("hooks"), dict) else {},
         reply_style=str(raw.get("reply_style") or "normal").strip().lower(),
+        allowed_attach_origins=[str(x).strip() for x in
+                                (raw.get("allowed_attach_origins") or [])
+                                if str(x).strip()],
     )
     # active 缺失/指向不存在的供应商 → 钉到第一个**用户配置**的供应商上。
     # 必须显式写回:Config.provider 在 id 为空时会隐式回退到 providers[0],
@@ -586,6 +594,7 @@ def save_config(path: Path, cfg: Config) -> None:
         "subagent_models": cfg.subagent_models,
         "hooks": cfg.hooks,
         "reply_style": cfg.reply_style,
+        "allowed_attach_origins": cfg.allowed_attach_origins,
         "feedback_recall": cfg.feedback_recall,
         "backup_dir": cfg.backup_dir,
         "context_window": cfg.context_window,

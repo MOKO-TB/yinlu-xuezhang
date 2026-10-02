@@ -58,7 +58,10 @@ def browser_open(ctx: ToolContext, url: str, wait_ms: int = br.DEFAULT_WAIT_MS,
                  reason: str = "") -> str:
     try:
         info = br.open_page(url, wait_ms=wait_ms, wait_for=wait_for,
-                            max_chars=max_chars, mode=mode, headless=headless)
+                            max_chars=max_chars, mode=mode, headless=headless,
+                            allowed_attach_origins=list(getattr(
+                                getattr(ctx, "config", None),
+                                "allowed_attach_origins", None) or []))
     except br.BrowserUnavailable as exc:
         return _unavailable(exc)
     except Exception as exc:

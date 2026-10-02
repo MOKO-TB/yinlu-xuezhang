@@ -703,14 +703,47 @@ def _wait_loaded(sess: PageSession, *, wait_ms: int, wait_for: str = "") -> tupl
         time.sleep(0.15)
 
 
+def _origin_allowed(url: str, allowed: "list[str] | None") -> bool:
+    """S2(v0.9.105):attach 会话的域名授权判定。
+
+    allowed 为空 = 不限制(老行为);非空时 URL 的 host(去 www. 前缀)必须
+    与名单中某项相等或是其子域 —— `example.com` 放行 `www.example.com` 与
+    `api.example.com`,反向不放行。判定只认 host,不认 path(整站授权)。
+    """
+    if not allowed:
+        return True
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    if not host:
+        return False
+    for entry in allowed:
+        e = str(entry).strip().lower().removeprefix("www.").removeprefix("https://").removeprefix("http://").rstrip("/")
+        if not e:
+            continue
+        if host == e or host.endswith("." + e):
+            return True
+    return False
+
+
 def open_page(url: str, *, wait_ms: int = DEFAULT_WAIT_MS, wait_for: str = "",
               max_chars: int = DEFAULT_MAX_CHARS, mode: str = "auto",
-              headless: bool = True) -> dict:
+              headless: bool = True,
+              allowed_attach_origins: "list[str] | None" = None) -> dict:
     """打开一个网址并返回标题 + 正文文本(JS 渲染后的 DOM)。"""
     target = check_url(url)
     wait_ms = max(0, min(int(wait_ms), MAX_WAIT_MS))
     max_chars = max(200, min(int(max_chars), MAX_CHARS))
     sess = _ensure_session(mode=mode, headless=headless)
+    # S2(v0.9.105):attach 带的是用户浏览器的全部登录态 —— 配了授权名单时,
+    # 非名单域名在导航前就拒绝(名单空 = 不限制,老行为)。launch 是我们自己的
+    # 独立实例,不受名单约束。这是**开页入口的一层闸**,不是沙箱:页内跳转
+    # 另开页面仍会再过这道,页内 JS 的跳转管不住 —— 边界如实说。
+    if sess.mode == "attach" and not _origin_allowed(target, allowed_attach_origins):
+        close_current()
+        raise BrowserError(
+            f"域名 {target} 不在 attach 授权名单里(allowed_attach_origins)。"
+            "attach 用的是你浏览器的全部登录态,名单外不放行;"
+            "把域名加进 config.json 的 allowed_attach_origins,或用默认的独立实例。")
     nav = _cmd("Page.navigate", {"url": target}, session=sess, timeout=30)
     if nav.get("errorText"):
         raise BrowserError(f"浏览器拒绝导航到 {target}:{nav['errorText']}")
