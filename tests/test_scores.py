@@ -179,3 +179,61 @@ def test_scores_flow_model_fallback_parses_text():
 def test_scores_flow_is_still_an_import_flow():
     """复用而不是另起炉灶:浏览器舞蹈(open_login/_anchor/page)都是 ImportFlow 那一套。"""
     assert issubclass(ScoresFlow, ImportFlow)
+
+
+# ------------------------------------------- 成绩趋势(W3,v0.9.105)
+
+def _seed_semesters(monkeypatch, rows):
+    from minicode import scores as sc
+    monkeypatch.setattr(sc, "load", lambda: {"rows": rows, "source": "教务导入",
+                                             "updated_at": "2026-10-03 10:00"})
+
+
+def test_trend_two_semesters_draws_chart(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from minicode import scores as sc
+    out_path = []
+    monkey_charts = SimpleNamespace(chart_file=lambda ctx, kind, data, **kw:
+                                    (out_path.append((kind, data, kw.get("title")))
+                                     or f"已画 {kind} → {kw.get('title')}"))
+    rows = [
+        {"name": "高等数学", "score": "90", "credit": "5", "semester": "2023-2024-1"},
+        {"name": "大学英语", "score": "80", "credit": "3", "semester": "2023-2024-1"},
+        {"name": "数据结构", "score": "85", "credit": "4", "semester": "2024-2025-1"},
+        {"name": "体育", "score": "优", "credit": "1", "semester": "2024-2025-1"},
+        {"name": "讲座", "score": "合格", "credit": "", "semester": "2024-2025-1"},
+    ]
+    _seed_semesters(monkeypatch, rows)
+    ctx = SimpleNamespace(workspace=tmp_path)
+    import minicode.charts as _charts_mod
+    real = _charts_mod.chart_file
+    _charts_mod.chart_file = monkey_charts.chart_file
+    try:
+        out = sc.trend(ctx)
+    finally:
+        _charts_mod.chart_file = real
+    assert "2023-2024-1: 86.25" in out          # (90*5+80*3)/8
+    assert "2024-2025-1: 87.0" in out           # (85*4+95*1)/5,讲座无学分跳过
+    assert "1 行缺学分或成绩无效已跳过" in out
+    assert "以学校教务处绩点算法为准" in out
+    assert out_path and out_path[0][0] == "line" and len(out_path[0][1]) == 2
+
+
+def test_trend_single_semester_honest(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from minicode import scores as sc
+    _seed_semesters(monkeypatch, [
+        {"name": "高等数学", "score": "90", "credit": "5", "semester": "2023-2024-1"}])
+    out = sc.trend(SimpleNamespace(workspace=tmp_path))
+    assert "画不出趋势" in out and "90.0" in out
+
+
+def test_trend_no_archive_points_to_import():
+    from minicode import scores as sc
+    orig = sc.load
+    sc.load = lambda: None
+    try:
+        out = sc.trend(None)
+        assert "还没有成绩存档" in out
+    finally:
+        sc.load = orig

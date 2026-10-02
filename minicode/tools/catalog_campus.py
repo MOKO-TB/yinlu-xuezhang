@@ -113,7 +113,8 @@ def calendar_gpa() -> list[Tool]:
                 "成绩存档(本机 scores.json,从教务导入的正式成绩)。用户问「我绩点多少」"
                 "「加权平均多少」「哪门课拖了绩点」时:action=gpa 直接按存档算(两种常见"
                 "算法 + 「以学校教务处绩点算法为准」口径),不用再让用户贴一遍成绩;"
-                "action=view 看存档明细;action=clear 清空(要用户明确说清才做)。"
+                "action=view 看存档明细;action=trend 按学期算加权平均分并画趋势图"
+                "(≥2 学期才有趋势,单学期如实说);action=clear 清空(要用户明确说清才做)。"
                 "导入成绩走「📅 课表」面板的「从教务导入成绩」三步向导 —— "
                 "**工具不导入**:登录必须由用户本人在弹出的浏览器里完成,工具做不到也不该做。"
                 "存档里没有的成绩不要编;不及格/缺考的折算按学校规定,如实说算不准。(本工具刻意非只读:action=clear 会删整份存档,每一次都要过确认框。)"
@@ -121,8 +122,9 @@ def calendar_gpa() -> list[Tool]:
             parameters={
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["view", "gpa", "clear"],
-                               "description": "view=看存档(默认);gpa=按存档算绩点;clear=清空存档"},
+                    "action": {"type": "string", "enum": ["view", "gpa", "trend", "clear"],
+                               "description": "view=看存档(默认);gpa=按存档算绩点;"
+                                              "trend=按学期加权平均分(≥2 学期画折线图);clear=清空存档"},
                     "reason": {"type": "string",
                                "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
                 },

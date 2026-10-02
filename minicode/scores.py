@@ -251,6 +251,64 @@ def parse_scores_with_model(text: str, complete) -> dict:
 
 # ---------------------------------------------------------------- 工具处理器
 
+def trend(ctx=None) -> str:
+    """按学期算加权平均分,≥2 个学期时画成折线图(W3,v0.9.105)。
+
+    折算与加权沿用 gpa 那一套(等级 95/85/75/65,缺学分/非数字的行跳过并
+    如实报数);学期顺序按存档里的出现顺序 —— 教务导出本来就是时间序。
+    画图走 render_chart 同一条路,零新依赖,SVG 落工作区 charts/。
+    """
+    from minicode import gpa
+    data = load()
+    if not data:
+        return ("还没有成绩存档。要导入:点「📅 课表」面板的「从教务导入成绩」"
+                "(登录由同学本人在弹出的浏览器里完成)。")
+    groups: "dict[str, list]" = {}
+    order: "list[str]" = []
+    for r in (data.get("rows") or []):
+        if not isinstance(r, dict):
+            continue
+        sem = str(r.get("semester") or "").strip() or "未标注学期"
+        if sem not in groups:
+            groups[sem] = []
+            order.append(sem)
+        groups[sem].append(r)
+    points, skipped = [], 0
+    for sem in order:
+        total_credit, weighted = 0.0, 0.0
+        for r in groups[sem]:
+            score = gpa._as_score(str(r.get("score") or "").strip())
+            try:
+                credit = float(str(r.get("credit") or "").strip())
+            except (TypeError, ValueError):
+                credit = None
+            if score is None or not credit or credit <= 0:
+                skipped += 1
+                continue
+            total_credit += credit
+            weighted += score * credit
+        if total_credit > 0:
+            points.append({"label": sem,
+                           "value": round(weighted / total_credit, 2)})
+    head = (f"按学期加权平均分(等级按 {gpa.GRADE_MAP} 折算,"
+            f"以学校教务处绩点算法为准)"
+            + (f";{skipped} 行缺学分或成绩无效已跳过" if skipped else "") + ":")
+    lines = [f"- {p['label']}: {p['value']}" for p in points]
+    if len(points) < 2:
+        if not points:
+            return head + "\n(没有可算的行:成绩与学分都要有效才参与加权。)"
+        return (head + "\n" + "\n".join(lines)
+                + "\n只有一个学期有有效成绩,画不出趋势 —— 导入更多学期后再来。")
+    if ctx is None:
+        return head + "\n" + "\n".join(lines)
+    from minicode import charts
+    out = charts.chart_file(ctx, "line", points,
+                            title="成绩趋势(按学期加权平均分)",
+                            source="scores.json · 以学校教务处绩点算法为准",
+                            name="成绩趋势")
+    return head + "\n" + "\n".join(lines) + "\n\n" + out
+
+
 def scores_tool(ctx, action: str = "view") -> str:
     """scores 工具:看存档 / 从存档算绩点 / 清空。导入走面板三步向导,不归工具管。"""
     action = (action or "view").strip().lower()
@@ -262,8 +320,11 @@ def scores_tool(ctx, action: str = "view") -> str:
         if not courses:
             return "还没有成绩存档,先用「📅 课表」面板的「从教务导入成绩」导一次。"
         return gpa.gpa_calc(None, courses=courses)
+    if action == "trend":
+        return trend(ctx)
     if action == "clear":
         return clear()
     return ("错误: 未知 action。可用: view(看存档)/gpa(按存档算绩点,"
-            "两种常见算法 + 「以学校教务处为准」口径)/clear(清空存档)。"
+            "两种常见算法 + 「以学校教务处为准」口径)/trend(按学期加权平均分,"
+            "≥2 学期画折线图)/clear(清空存档)。"
             "导入成绩走「📅 课表」面板的「从教务导入成绩」三步向导。")
