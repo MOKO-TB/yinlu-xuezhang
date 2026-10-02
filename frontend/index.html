@@ -2854,7 +2854,8 @@ function addUserMsg(text, atts) {
   wrap.innerHTML = `<div class="col"><div class="bubble"></div>
     <div class="atts"></div>
     <div class="acts"><button class="cp" title="复制">⧉</button>
-    <button class="ed" title="编辑重发">✎</button></div></div>`;
+    <button class="ed" title="编辑重发">✎</button>
+    <button class="fk" title="从这里分叉:保留到此为止的对话,开一份新会话换个思路走">⑂</button></div></div>`;
   wrap.querySelector(".bubble").textContent = text;
   const attBox = wrap.querySelector(".atts");
   (atts || []).forEach(a => {
@@ -2880,6 +2881,14 @@ function addUserMsg(text, atts) {
   });
   bindCopy(wrap.querySelector(".cp"), () => text);
   wrap.querySelector(".ed").addEventListener("click", () => startEdit(ord, text));
+  wrap.querySelector(".fk").addEventListener("click", () => {
+    if (busy) { toast("任务进行中,分叉要等它停", true); return; }
+    appConfirm(`从第 ${ord} 问分叉出新会话?(保留之前的对话,原会话原样保留)`,
+      () => pywebview.api.fork_session(ord).then(r => {
+        if (!r || r.ok === false) { toast((r && r.msg) || "分叉失败", true); }
+        // 成功走 resumed 事件:后端已切到新会话并推送整份历史
+      }));
+  });
   chat.appendChild(wrap);
   nearBottom = true; toBottom();
   rebuildChatRail();      // 每来一问,导航条加一枚刻度(p6)
