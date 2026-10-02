@@ -1,4 +1,4 @@
-# 跨会话任务看板（对标 Qoder 的 My Quests 全局板 / ZCode 的 goal 模式）· ③B1 已落地(v0.9.101),B2/B3 仍未开工
+# 跨会话任务看板（对标 Qoder 的 My Quests 全局板 / ZCode 的 goal 模式）· ③B1 已落地(v0.9.101)、B2 由 f8ab113 接走,B3 仍未开工
 
 > 基线:`D:\game\mini-code` v0.9.99(`dab012c`)。先出方案等拍板再动手。
 > **本文有一处现状本轮没读到确出处**（running 标记从哪来，见 §二.4），已就地标出，
@@ -124,5 +124,6 @@ Qoder 把这一层做成 **My Quests 看板**（Running / Action Required / Comp
   `scripts/e2e_ui_v0939_p3.py` 那份真点击清单,而看板不是"面板入口"那一族(它是状态)。
 - **两个读侧补充**:`shell.bg_facts()`(原来只有给人看的 `line()`)与 `JobSpec.label`
   (看板那一行不能写 `mood_weekly_review`)。
-- **B2(跨工作区分组)与 B3(从看板派活)没做**,按稿继续等;归属那一句复用 `mydata.TABLE`
-  的 plan 也没启用 —— B1 第一版没有跨工作区维度。
+- **B2 已由并行会话做掉(f8ab113,2026-10-02)**:行带 `workspace`、界面按工作区分组,
+  归属那份仍取 `mydata.TABLE` 的 scope(稿 §三.B2 定的就是这条,没另判一遍)。
+  **B3(从看板派活)仍不做** —— 两个会话同时要人点头时谁先弹,按 §三.B3 继续等真实反馈。

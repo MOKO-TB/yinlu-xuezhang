@@ -1246,3 +1246,100 @@ def test_subagent_still_gets_project_layer(tmp_path):
     from minicode.app_setup import build_system_prompt
     (tmp_path / "AGENTS.md").write_text("项目 MARKER", encoding="utf-8")
     assert "MARKER" in build_system_prompt(tmp_path, for_subagent=True)
+
+
+# ------------------------------------------------ 某一处改动的 diff(v0.9.101 ①R2)
+
+def _seq_of(agent, nth=0):
+    return agent.undo_records()["items"][nth]["seq"]
+
+
+def test_diff_compares_preimage_with_disk_now(config, ctx, tmp_path):
+    llm = FakeLLM([
+        _write_turn("d.txt", "line1\nline2\n", "c1"), AssistantTurn(text="ok"),
+        _write_turn("d.txt", "line1\nCHANGED\n", "c2"), AssistantTurn(text="ok")])
+    ag = make_agent(config, ctx, llm, FakeUI())
+    ag.run_turn("一")
+    ag.run_turn("二")
+    d = ag.undo_diff(_seq_of(ag, 0))        # 最新那一处:前像 = 第一版
+    assert d["ok"] and d["kind"] == "改"
+    assert d["path"] == "d.txt"             # 相对路径,绝对路径不出桥
+    joined = "\n".join(d["lines"])
+    assert "-line2" in joined and "+CHANGED" in joined
+    assert d["added"] == 1 and d["removed"] == 1
+    assert "最后一次改它之前" in d["note"] or "我改之前" in joined + d["note"]
+    assert d["same"] is False
+
+
+def test_diff_of_new_file_is_all_additions(config, ctx, tmp_path):
+    ag = _two_writes(config, ctx, tmp_path, second="v2-longer")
+    created = [it for it in ag.undo_records()["items"] if it["kind"] == "新建"][0]
+    d = ag.undo_diff(created["seq"])
+    assert d["ok"] and d["kind"] == "新建" and d["removed"] == 0
+
+
+def test_diff_flags_that_others_changed_it_too(config, ctx, tmp_path):
+    """快照之后被命令改过 → note 必须说这份 diff 里含别人的改动,不让人拿它对答案。"""
+    ag = _two_writes(config, ctx, tmp_path, second="v2")
+    (tmp_path / "doc.txt").write_text("命令行又写进去的一段更长内容\n", encoding="utf-8")
+    seq = _seq_of(ag, 0)
+    d = ag.undo_diff(seq)
+    assert d["ok"] and d["drift"] is True and "含别人的改动" in d["note"]
+
+
+def test_diff_says_identical_when_reverted(config, ctx, tmp_path):
+    ag = _two_writes(config, ctx, tmp_path, second="v1")   # 第二次写回同样内容
+    d = ag.undo_diff(_seq_of(ag, 0))
+    assert d["ok"] and d["same"] is True and d["added"] == 0
+
+
+def test_diff_on_deleted_file_reports_removals(config, ctx, tmp_path):
+    ag = _two_writes(config, ctx, tmp_path, second="v2-longer")
+    (tmp_path / "doc.txt").unlink()
+    d = ag.undo_diff(_seq_of(ag, 0))
+    assert d["ok"] and d["kind"] == "已删除" and d["removed"] >= 1
+
+
+def test_binary_and_oversize_say_cannot_compute(config, ctx, tmp_path):
+    """算不出就说算不出 —— 给一份"看起来没有变化"的空 diff 比承认算不出更坏。"""
+    (tmp_path / "b.bin").write_bytes(b"\xff\xfe\x00binary")
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="write_file",
+            arguments=json.dumps({"path": "b.bin", "content": "text now"}))]),
+        AssistantTurn(text="ok")])
+    ag = make_agent(config, ctx, llm, FakeUI())
+    ag.run_turn("写")
+    d = ag.undo_diff(_seq_of(ag, 0))
+    assert d["ok"] is False and "UTF-8" in d["msg"]
+
+    big = tmp_path / "big.txt"
+    big.write_text("x" * (ag.DIFF_SCAN_BYTES + 10), encoding="utf-8")
+    llm2 = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c2", name="write_file",
+            arguments=json.dumps({"path": "big.txt", "content": "small now"}))]),
+        AssistantTurn(text="ok")])
+    ag2 = make_agent(config, ctx, llm2, FakeUI())
+    ag2.run_turn("改大的")
+    d2 = ag2.undo_diff(_seq_of(ag2, 0))
+    assert d2["ok"] is False and "KB" in d2["msg"]
+
+
+def test_diff_unknown_seq_says_stale(config, ctx, tmp_path):
+    ag = _two_writes(config, ctx, tmp_path)
+    d = ag.undo_diff(4242)
+    assert d["ok"] is False and "过期" in d["msg"]
+
+
+def test_diff_line_cap_reports_more(config, ctx, tmp_path):
+    body = "\n".join(f"line {i}" for i in range(400))
+    llm = FakeLLM([
+        _write_turn("many.txt", "旧的一份\n", "c1"), AssistantTurn(text="ok"),
+        _write_turn("many.txt", body, "c2"), AssistantTurn(text="ok")])
+    ag = make_agent(config, ctx, llm, FakeUI())
+    ag.run_turn("一")
+    ag.run_turn("二")
+    d = ag.undo_diff(_seq_of(ag, 0))
+    assert d["ok"] and len(d["lines"]) <= ag.DIFF_LINE_LIMIT
+    assert d["more"] > 0

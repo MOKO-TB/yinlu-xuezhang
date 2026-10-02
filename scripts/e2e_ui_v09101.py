@@ -133,6 +133,14 @@ const base = {
   read_clipboard: () => Promise.resolve({text: "", image: false, source: "empty"}),
   reveal_file: (p) => { window.__CALLS__.push(["reveal_file", p]);
                        return Promise.resolve({ok: true}); },
+  undo_diff: (seq) => {
+    window.__CALLS__.push(["undo_diff", seq]);
+    return Promise.resolve({ok: true, path: "src/app.py", kind: "改",
+      added: 2, removed: 1, drift: true, same: false, more: 7,
+      note: "左边这份是我最后一次改它之前的内容,右边是磁盘上的现在这份。"
+            + "这一处在我改过之后还被别的工具动过,所以这份 diff 里含别人的改动。",
+      lines: ["@@ -10,2 +10,3 @@", "-old line", "+new line", "+another", " ctx line"]});
+  },
   undo_step: (seq) => {
     window.__CALLS__.push(["undo_step", seq]);
     return Promise.resolve({ok: true, msg: "已撤销:src/app.py 已恢复为改动前的内容"});
@@ -239,6 +247,32 @@ def main() -> int:
         allrow = next((t for t in all_texts if "全部回退" in t), "")
         check("全部回退 5 处" in allrow, "最后那行「全部回退 5 处」的数也是桥给的")
 
+        # ---- 2b. 「看改了什么」:展开的是后端算好的 diff,且不动手 ----
+        chip = sect.locator(".act-row").first.locator(".act-chip")
+        check(chip.inner_text() == "看改了什么", "每一行那颗芯片默认写「看改了什么」")
+        chip.click()
+        page.wait_for_function(
+            "() => window.__CALLS__.some(c => c[0] === 'undo_diff')", timeout=5000)
+        holder = sect.locator(".ch-diff").first
+        check(holder.is_visible(), "点芯片之后 diff 块露出来了")
+        head_line = holder.locator(".d-note").inner_text()
+        check("+2" in head_line and "-1" in head_line.replace("−", "-")
+              and "还被别的工具动过" in head_line,
+              f"diff 抬头那行是后端算的数与那句提醒(实测「{head_line[:52]}…」)")
+        adds = holder.locator(".d-add")
+        dels = holder.locator(".d-del")
+        check(adds.count() == 2 and dels.count() == 1,
+              f"+ 的两行进 d-add、− 的一行进 d-del(实测 {adds.count()}/{dels.count()})")
+        check("另有 7 行 diff 没列出" in holder.locator(".d-more").inner_text(),
+              "被截掉的行数写在明面上,不假装是完整 diff")
+        check(not calls("undo_step") and not calls("undo_all"),
+              "看改动这一步一次回退都没敲 —— 展开与动手是两件事")
+        chip.click()
+        page.wait_for_timeout(200)
+        check(not holder.is_visible(), "再点一次就收起(展开态记在行自己身上,不敲桥)")
+        check(calls("undo_diff")[-1][1] == 12,
+              "展开时敲的是这一行的 seq(不是第一条)")
+
         # ---- 3. 点一行:确认框里带代价,点头才敲对那一条 ----
         get_before = len(calls("get_activity"))
         rows.nth(0).click()
@@ -259,7 +293,7 @@ def main() -> int:
         check(calls("undo_step")[-1][1] == 12,
               f"敲的是这一行的 seq=12(实测 {calls('undo_step')[-1][1]})")
         page.wait_for_function(
-            f"() => document.getElementById('toasts').textContent.includes('已撤销')",
+            "() => document.getElementById('toasts').textContent.includes('已撤销')",
             timeout=5000)
         check(len(calls("get_activity")) > get_before,
               "退完之后重新拉一次活动数据 —— 清单不留在前端缓存里")

@@ -1,5 +1,4 @@
 """计划模式测试:写入/读取/更新/解析/校验 + 面板状态与「一键派发」指令。"""
-import types
 
 from minicode import planning as pl
 

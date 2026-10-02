@@ -145,6 +145,32 @@ def agents_prompt_section(workspace) -> str:
     return f"\n{head}{_instruction_body(found)}\n"
 
 
+def instruction_signature(workspace) -> str:
+    """指令文件与技能清单的**内容指纹**(D1,v0.9.102)。
+
+    `_refresh_clock` 拿它判断"要不要重建提示词":跨天**或**指纹变了才重建
+    —— 内容变了才破 KV Cache,没变照旧稳定命中(与"一天至多破一次"同一条
+    口径的推广)。指纹只碰几个小文件的字节与技能名清单,每回合一次,便宜。
+    """
+    import hashlib
+    h = hashlib.sha1()
+    paths = [app_path(USER_AGENTS_NAME)]
+    pj = project_agents_path(workspace)
+    if pj is not None:
+        paths.append(pj)
+    for f in paths:
+        try:
+            h.update(f.read_bytes())
+        except OSError:
+            h.update(b"<missing>")
+    try:
+        names = "|".join(sorted(x.name for x in load_skills(skill_dirs(workspace))))
+        h.update(names.encode("utf-8"))
+    except Exception:
+        h.update(b"<skills-unreadable>")
+    return h.hexdigest()
+
+
 def instructions_prompt_section(workspace) -> str:
     """两级指令文件拼成提示词尾部那两段:用户级在前、项目级在后(越近越靠后)。"""
     return user_agents_prompt_section() + agents_prompt_section(workspace)

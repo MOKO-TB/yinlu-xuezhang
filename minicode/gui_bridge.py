@@ -233,6 +233,10 @@ class PublicApi:
         """审查视图「回退这一处」:只退清单上那一条,比它更新的改动原样留着。"""
         return self._b.undo_step(seq)
 
+    def undo_diff(self, seq=None) -> dict:
+        """审查视图「看改了什么」:点开某一处才要的那一份 diff(后端算,前端不拼文案)。"""
+        return self._b.undo_diff(seq)
+
     def undo_all(self) -> dict:
         """审查视图「全部回退」:一路退回本轮开始前(命令改的不在这份账里)。"""
         return self._b.undo_all()
@@ -2497,6 +2501,17 @@ class Bridge:
         msg = self.agent.undo(seq)
         self.ui.push("info", text=msg)
         return {"ok": msg.startswith("已撤销"), "msg": msg}
+
+    def undo_diff(self, seq=None) -> dict:
+        """某一处的 diff(R2):前像对磁盘现值,**算都在后端算**。
+
+        刻意不在 `get_activity` 里顺带算 —— 那等于每次刷新都把所有改过的文件重读一遍;
+        这一处是点开才要的那一份,按需取。
+        """
+        try:
+            return self.agent.undo_diff(seq)
+        except Exception as exc:
+            return {"ok": False, "msg": f"读不出这一处的 diff:{type(exc).__name__}: {exc}"}
 
     def undo_all(self) -> dict:
         """一路退回本轮开始前。命令(bash/py_script)改的不在账里,退不到 —— 这话在后端那句回话里。"""

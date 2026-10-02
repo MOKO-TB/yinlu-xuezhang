@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import ast
+import difflib
 import json
 import time
 from datetime import date
@@ -219,12 +220,21 @@ class Agent:
         绝不会被换掉提示词(后台会话运行器各建各的 Agent,各查各自的)。
         """
         today = date.today()
-        if today == self._prompt_date:
+        from minicode.app_setup import (build_system_prompt,
+                                        instruction_signature)
+        sig = (today, instruction_signature(self.ctx.workspace))
+        if sig == self._prompt_sig:
             return
+        crossed_day = sig[0] != self._prompt_date
         self._prompt_date = today
-        from minicode.app_setup import build_system_prompt  # 延迟导入:app_setup 顶层 import 本模块
+        self._prompt_sig = sig[1]
         if self.session.refresh_system_prompt(build_system_prompt(self.ctx.workspace)):
-            self.ui.info("已跨天,日期与课表已刷新")
+            # D1(v0.9.102):重建条件从"跨天"推广为"跨天或指令/技能清单变了"
+            # —— 内容变了才破 KV Cache,没变照旧稳定命中。
+            if crossed_day:
+                self.ui.info("已跨天,日期与课表已刷新")
+            else:
+                self.ui.info("指令文件或技能清单有变化,已重新载入")
 
     def _messages_for_request(self) -> list[dict]:
         """这一次请求要发的消息 = 留档那份(先过一遍工具调用配对)+(必要时)一条
@@ -393,6 +403,71 @@ class Agent:
                          "命令(bash / py_script)与外部程序改的不在这里,也退不掉。"),
                 "hint": ("没有可退的改动 —— 这份栈在 /clear、换会话、压缩历史时会清空,"
                          "所以这里空着是真的空,不是还没加载。")}
+
+    # diff 那一屏的量:上下文 2 行、最多 200 行、超过 512 KB 不比(与语法自检同一上限口径 ——
+    # 再大的文件不是"手写改动"的场景,硬比只会把一次刷新变成一次大扫描)
+    DIFF_CONTEXT = 2
+    DIFF_LINE_LIMIT = 200
+    DIFF_SCAN_BYTES = 512 * 1024
+
+    def undo_diff(self, seq) -> dict:
+        """某一处改动的 diff:栈里那份**前像** 对 **磁盘现值**。
+
+        为什么两侧都摆出来而不是"我以为改完会长什么样":快照只认 write_file / edit_file,
+        中间 bash / py_script 也可能动过同一个文件 —— 所以右边必须是现在这一刻读到的那份,
+        读不到就说读不到。`drift` 为真时那句话说在前头,不让人拿一份对不上的 diff 做决定。
+
+        算不出来的几种情况一律 `ok: False` 带原因(二进制 / 太大 / 新建的又没了):
+        给一份"看起来没有变化"的空 diff,比承认算不出更坏。
+        """
+        if isinstance(seq, bool) or not str(seq).strip().lstrip("-").isdigit():
+            return {"ok": False, "msg": f"seq 只接受清单里的编号,收到 {seq!r}。"}
+        want = int(str(seq).strip())
+        rec = next((r for r in self._undo_stack if r["seq"] == want), None)
+        if rec is None:
+            return {"ok": False,
+                    "msg": "清单可能已过期:这一处不在栈里了(退过、或栈被 /clear 与压缩清空过)。"}
+        p: Path = rec["path"]
+        name = self._change_display(p)
+        before, after = rec["data"], None
+        try:
+            after = p.read_bytes() if p.exists() else None
+        except OSError as e:
+            return {"ok": False, "msg": f"{name} 现在读不出来({type(e).__name__}),没法比。"}
+        if before is None and after is None:
+            return {"ok": False,
+                    "msg": f"{name} 是我新建的,而现在它不在磁盘上 —— 没有可比的两侧。"}
+        too_big = [x for x in (before, after) if x and len(x) > self.DIFF_SCAN_BYTES]
+        if too_big:
+            return {"ok": False,
+                    "msg": (f"{name} 有一侧超过 {self.DIFF_SCAN_BYTES // 1024} KB"
+                            "(这份大小不像手写的改动),不比 diff;要看得自己打开文件。")}
+        try:
+            b_txt = (before or b"").decode("utf-8").splitlines()
+            a_txt = (after or b"").decode("utf-8").splitlines()
+        except UnicodeDecodeError:
+            return {"ok": False,
+                    "msg": f"{name} 不是 UTF-8 文本(二进制或别的编码),算不出 diff。"}
+        body = list(difflib.unified_diff(
+            b_txt, a_txt, fromfile=f"{name}(我改之前)", tofile=f"{name}(磁盘上现在)",
+            lineterm="", n=self.DIFF_CONTEXT))
+        # 数加/减行数用**全量**(那是这一处的真实规模),给界面的行才截 ——
+        # 截了还报"共 +N −M"才是假话,但把 N/M 也一起截小同样是假话。
+        added = sum(1 for ln in body if ln.startswith("+") and not ln.startswith("+++"))
+        removed = sum(1 for ln in body if ln.startswith("-") and not ln.startswith("---"))
+        shown = [ln for ln in body if not ln.startswith(("---", "+++"))]
+        drifted = self._drifted(rec)
+        kind = ("新建" if before is None else
+                "已删除" if after is None else "改")
+        note = ("左边这份是我最后一次改它之前的内容,右边是磁盘上的现在这份。"
+                + ("这一处在我改过之后还被别的工具动过,所以这份 diff 里含别人的改动。"
+                   if drifted else ""))
+        return {"ok": True, "path": name, "kind": kind,
+                "added": added, "removed": removed,
+                "lines": shown[:self.DIFF_LINE_LIMIT],
+                "more": max(0, len(shown) - self.DIFF_LINE_LIMIT),
+                "drift": drifted, "note": note,
+                "same": not added and not removed}
 
     def _apply_undo(self, rec: dict) -> dict:
         """把一条快照落回磁盘:新建过的删掉,改过的写回前像。返回这处的事实与话术。"""
