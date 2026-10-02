@@ -70,6 +70,34 @@ def note_verify_run(ctx: ToolContext, command: str, code: int | None,
                  "at": time.strftime("%H:%M:%S"),
                  "tail": " ".join(str(output or "").split())[-300:]})
     del runs[:-VERIFY_RUNS_LIMIT]
+    if code is not None:
+        _mark_plan_verify(ctx, cmd, code)      # V2(v0.9.102):结论写进计划文件
+
+
+def _mark_plan_verify(ctx: ToolContext, command: str, code: int) -> None:
+    """V2:这次 bash 命中某步的验收判据 → 把 ✓/✗ + 时刻写进该步的**备注**。
+
+    计划文件是唯一落盘处,对话里的计划卡与右侧监控段读的都是它 ——
+    一次执行,三处同步,不另设第二份状态。整段兜异常:备注写不进去
+    绝不能影响 bash 那条回话(它自己已经带着退出码与输出尾了)。
+    """
+    try:
+        plan = _load_plan(ctx)
+        if plan is None:
+            return
+        hit = next((s for s in plan["steps"]
+                    if " ".join(verify_of(s["title"] + " " + s["detail"]).split()) == command),
+                   None)
+        if hit is None:
+            return                   # 普通命令,不碰任何一步
+        mark = ("verify ✓ " + time.strftime("%H:%M:%S") if code == 0
+                else f"verify ✗ {time.strftime('%H:%M:%S')}(退出码 {code})")
+        old_note = re.sub(r"verify [✓✗][^|;]*[|;]?\s*", "",
+                          str(hit.get("note") or "")).strip()
+        hit["note"] = (mark + (" | " + old_note if old_note else ""))[:300]
+        _write_plan(ctx, plan)
+    except Exception:
+        pass
 
 
 def find_verify_run(ctx: ToolContext, command: str) -> dict | None:

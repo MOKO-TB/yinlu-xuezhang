@@ -1,4 +1,7 @@
 """计划模式测试:写入/读取/更新/解析/校验 + 面板状态与「一键派发」指令。"""
+import types
+
+from minicode import planning as pl
 
 from minicode.planning import (blocked_steps, dispatch_end, dispatch_start,
                                dispatch_text, notify_plan,
@@ -621,3 +624,52 @@ def test_scheduling_view_lists_verify_steps(tmp_path):
                 {"title": "C"}])
     out = plan(ctx, "read")
     assert "带验收判据" in out and "pytest -q a.py" in out
+
+
+# ------------------------------------------- 验收真跑进计划文件(V2,v0.9.102)
+
+def _plan_with_verify(tmp_path, verify="python -m pytest tests/x.py"):
+    ctx = ToolContext(workspace=tmp_path, config=None)
+    out = pl.plan(ctx, action="write", goal="做 x", steps=[
+        {"title": "写模块", "detail": f"实现功能 verify: {verify}"},
+        {"title": "收尾", "detail": "整理输出"}])
+    assert "错误" not in out
+    return ctx
+
+
+def test_verify_run_marks_note_green(tmp_path):
+    """跑完判据那条命令 → 该步备注写入 verify ✓ + 时刻;计划文件/卡/监控
+    三处读同一份 plan.md,自动同步。"""
+    import re as _re
+    verify = "python -m pytest tests/x.py"
+    ctx = _plan_with_verify(tmp_path, verify)
+    pl.note_verify_run(ctx, verify, code=0, output="1 passed")
+    text = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    assert "verify ✓" in text
+    assert _re.search(r"verify ✓ \d{2}:\d{2}:\d{2}", text)
+
+
+def test_verify_run_marks_note_red_with_exit_code(tmp_path):
+    verify = "python -m pytest tests/x.py"
+    ctx = _plan_with_verify(tmp_path, verify)
+    pl.note_verify_run(ctx, verify, code=1, output="1 failed")
+    text = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    assert "verify ✗" in text and "退出码 1" in text
+
+
+def test_unrelated_command_touches_no_step(tmp_path):
+    """普通命令不碰任何一步 —— 不是每条 bash 都往计划里写。"""
+    ctx = _plan_with_verify(tmp_path)
+    before = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    pl.note_verify_run(ctx, "echo 别的命令", code=0, output="")
+    assert (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8") == before
+
+
+def test_second_run_replaces_old_mark_not_piles(tmp_path):
+    """同一步跑两次:新标记替换旧标记,备注不越堆越长。"""
+    verify = "python -m pytest tests/x.py"
+    ctx = _plan_with_verify(tmp_path, verify)
+    pl.note_verify_run(ctx, verify, code=1, output="fail")
+    pl.note_verify_run(ctx, verify, code=0, output="pass")
+    text = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
+    assert text.count("verify ✓") == 1 and "verify ✗" not in text
