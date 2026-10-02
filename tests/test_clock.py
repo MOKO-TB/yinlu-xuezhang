@@ -49,7 +49,7 @@ def rebuilds(monkeypatch):
     """
     calls: list[str] = []
 
-    def fake(workspace=None):
+    def fake(workspace=None, **kwargs):   # v0.9.104:refresh 现在会传 reply_style
         calls.append(date.today().isoformat())
         return f"新提示词 {date.today().isoformat()}"
 
