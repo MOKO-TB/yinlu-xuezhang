@@ -58,6 +58,9 @@ def aggregate(sources: dict, *, scan: int = SESSION_SCAN) -> dict:
         for r in got:
             if isinstance(r, dict) and r.get("state") in STATES:
                 r.setdefault("source", name)
+                # B2(v0.9.102):行可带 ws(哪个工作区/副本);来源没给的按"全局"记
+                # —— 全局一份的数据(定时任务这类)不属于任何副本,不该被算两遍。
+                r.setdefault("ws", "全局")
                 rows.append(r)
     groups, dropped = {}, {}
     for state in STATES:

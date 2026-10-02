@@ -452,6 +452,21 @@ try {
                     font-size:11px; padding:0; margin-right:12px; text-decoration:underline; }
   /* 变动比对(v0.9.24):覆盖前把差摆出来,三种颜色一眼分得清 */
   .jw-diff{ margin-top:8px; padding-top:6px; border-top:1px dashed var(--line); }
+  /* 「本轮改动」那一行展开的 diff(R2)。刻意不复用上面 .jw-diff 那套:那是教务导入的
+     比对块,两处共一份样式,改教务那边会悄悄改掉审查视图。 */
+  .act-chg{ margin-bottom:2px; }
+  .act-chip{ background:none; border:1px solid var(--line-soft); color:var(--text-2);
+             border-radius:999px; font-size:10.5px; padding:1px 7px; cursor:pointer; }
+  .act-chip:hover{ color:var(--primary-text); border-color:var(--primary); }
+  .ch-diff{ margin:0 0 4px 14px; padding:6px; border-radius:8px;
+            background:var(--glass-soft); font-family:var(--mono, ui-monospace, monospace); }
+  .ch-diff .d-note{ font-size:10.5px; color:var(--text-3); margin-bottom:4px;
+                    font-family:inherit; }
+  .ch-diff .d-line{ font-size:10.5px; white-space:pre-wrap; word-break:break-all;
+                    padding:1px 4px; border-radius:4px; }
+  .ch-diff .d-add{ background:rgba(46,160,67,.13); }
+  .ch-diff .d-del{ background:rgba(210,60,60,.12); }
+  .ch-diff .d-more{ font-size:10.5px; color:var(--text-3); margin-top:3px; }
   .jw-diff .d-sum{ font-size:11.5px; font-weight:700; color:var(--text-1); margin-bottom:4px; }
   .jw-diff .d-line{ font-size:11px; padding:2px 6px; margin-bottom:2px; border-radius:5px;
                     line-height:1.6; }
@@ -6042,6 +6057,7 @@ function buildChanges(parent, data) {
   if (!items.length) return 0;              // 这一轮没写文件就别摆一段"暂无"
   parent.appendChild(actEl("act-s", ch.note));
   for (const item of items) {
+    const box = actEl({ cls: "act-chg" });
     const row = actEl({ cls: "act-row" });
     row.dataset.k = "change:" + item.seq;
     const mid = actEl({ cls: "act-m" });
@@ -6052,11 +6068,22 @@ function buildChanges(parent, data) {
     mid.appendChild(actEl("act-s", bits.join(" · ")));
     row.appendChild(actEl({ cls: "act-dot" }));
     row.appendChild(mid);
+    const chip = actEl({ tag: "button", cls: "act-chip" }, "看改了什么");
+    chip.title = "比较「我改之前」与「磁盘上现在」这两份(点开才去读盘,不每次都算)";
+    const holder = actEl({ cls: "ch-diff" });
+    holder.hidden = true;
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();          // 展开 diff 不是回退 —— 两件事不能共用一次点击
+      toggleChangeDiff(item, holder, chip);
+    });
+    row.appendChild(chip);
     row.appendChild(actEl("act-badge", item.verb));
     row.title = "回退这一处:" + (item.verb === "删除"
       ? "删掉这个新建的文件" : "恢复成它改动前的内容");
     row.addEventListener("click", () => undoChange(item));
-    parent.appendChild(row);
+    box.appendChild(row);
+    box.appendChild(holder);
+    parent.appendChild(box);
   }
   if (ch.more) parent.appendChild(actEl("act-more", `另有 ${ch.more} 处没列出(共 ${ch.total} 处)`));
   const all = actEl({ cls: "act-row" }, `全部回退 ${ch.total} 处(一路退回本轮开始前)`);
@@ -6064,6 +6091,47 @@ function buildChanges(parent, data) {
   all.addEventListener("click", undoAllChanges);
   parent.appendChild(all);
   return items.length;
+}
+
+// diff 的行、颜色、"算不出"那句原因,**全部来自后端**:前端只负责把 +/- 分个行,
+// 不自己拼"改了什么"的文案(两处各拼一份就是两份真相,而两份都摆在用户眼前)。
+async function toggleChangeDiff(item, holder, chip) {
+  if (holder.dataset.open === "1") {
+    holder.hidden = true; holder.dataset.open = ""; chip.textContent = "看改了什么";
+    return;
+  }
+  holder.textContent = ""; holder.hidden = false; holder.dataset.open = "1";
+  chip.textContent = "收起";
+  const api = activityApi();
+  if (!api || !api.undo_diff) {
+    holder.appendChild(actEl("d-line", "这个环境不给看改动(逐文件回退只在桌面版有)"));
+    return;
+  }
+  holder.appendChild(actEl("d-line", "在读这两份…"));
+  let d;
+  try {
+    d = await api.undo_diff(item.seq);
+  } catch (e) {
+    d = { ok: false, msg: "读失败:" + String(e).slice(0, 60) };
+  }
+  holder.textContent = "";
+  if (!d || !d.ok) {
+    // 算不出就说算不出,不给一份"看起来没有变化"的空 diff
+    holder.appendChild(actEl("d-line", (d && d.msg) || "读不出来"));
+    return;
+  }
+  holder.appendChild(actEl("d-note",
+    `${d.kind} · +${d.added} −${d.removed} · ${d.note}`));
+  if (d.same) {
+    holder.appendChild(actEl("d-line", "两侧一模一样 —— 这一处现在没有内容差异"
+      + "(可能改完又被改回来了)"));
+  }
+  for (const ln of d.lines || []) {
+    const cls = ln.startsWith("+") ? "d-line d-add"
+      : ln.startsWith("-") ? "d-line d-del" : "d-line";
+    holder.appendChild(actEl(cls, ln));
+  }
+  if (d.more) holder.appendChild(actEl("d-more", `另有 ${d.more} 行 diff 没列出`));
 }
 
 // 回退是动手面:点头之前把"退下去会连带影响什么"念出来(与提问卡同一口径,不静默动手)
@@ -7611,7 +7679,17 @@ async function loadBoard() {
     if (!rows.length) continue;              // 空的态不摆"暂无"占位撑版面
     body.appendChild(boardEl("act-cap",
       one[1] + "(" + ((d.counts || {})[one[0]] || 0) + ")"));
-    for (const r of rows) { body.appendChild(boardRow(r)); shown++; }
+    // B2(v0.9.102):同一态里出现多个工作区才插组头(单一工作区不添噪);
+    // 组头不是新增账,只是把每行自带的 ws 标签在渲染时分了组
+    const wss = [...new Set(rows.map(r => r.ws || "全局"))];
+    let prevWs = null;
+    for (const r of rows) {
+      if (wss.length > 1 && r.ws !== prevWs) {
+        body.appendChild(boardEl("act-ws", "🗂 " + (r.ws || "全局")));
+        prevWs = r.ws;
+      }
+      body.appendChild(boardRow(r)); shown++;
+    }
     const more = (d.more || {})[one[0]] || 0;
     if (more) body.appendChild(boardEl("act-more", `另有 ${more} 条没列出`));
   }

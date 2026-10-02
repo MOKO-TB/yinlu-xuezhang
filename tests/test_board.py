@@ -74,3 +74,29 @@ def test_titles_are_clipped_not_dropped():
     d = board.aggregate({"会话": _src(board.row("running", "长" * 200))})
     got = d["groups"]["running"][0]
     assert len(got["title"]) == 80 and got["title"].startswith("长")
+
+
+# ------------------------------------------- 跨工作区维度(B2,v0.9.102)
+
+def test_rows_default_to_global_and_passthrough_respected():
+    """来源没标 ws 的行按「全局」记(定时任务这类全局一份的账,不该被算进任何
+    副本);来源明确标了的,原样透传。"""
+    out = board.aggregate({"定时任务": lambda: [board.row(
+        "done", "定时任务「x」", "上次 2026-10-01")]})
+    assert out["groups"]["done"][0]["ws"] == "全局"
+    out2 = board.aggregate({"会话": lambda: [dict(board.row(
+        "running", "改登录页", ""), ws="demo__fix")]})
+    assert out2["groups"]["running"][0]["ws"] == "demo__fix"
+
+
+def test_ws_grouping_data_ready_for_frontend():
+    """前端按「同一态内 ws 去重 >1 才插组头」渲染;这里验的是数据面:
+    多工作区混跑时两种 ws 都在,单工作区时只有一种。"""
+    rows = [dict(board.row("running", "A"), ws="repo__a"),
+            dict(board.row("running", "B"), ws="repo__b"),
+            dict(board.row("running", "C"), ws="repo__a")]
+    out = board.aggregate({"会话": lambda: rows})
+    g = out["groups"]["running"]
+    assert {r["ws"] for r in g} == {"repo__a", "repo__b"}
+    single = board.aggregate({"会话": lambda: [rows[0]]})
+    assert {r["ws"] for r in single["groups"]["running"]} == {"repo__a"}

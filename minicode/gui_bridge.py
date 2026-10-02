@@ -1118,6 +1118,13 @@ class Bridge:
                                 "计划": self._board_plan,
                                 "定时任务": self._board_jobs})
 
+    def _ws_label(self, path) -> str:
+        """B2(v0.9.102):这一行活儿发生在哪个工作区(显示名口径与侧栏同源)。"""
+        from minicode import workspace as ws
+        if not path:
+            return "未记录"
+        return ws.display_name(path, self.app_dir) or "当前工作区"
+
     def _board_sessions(self) -> list[dict]:
         from minicode import board
         running = {str(r.log_path) for r in self.running_sessions() if r.log_path}
@@ -1126,10 +1133,12 @@ class Bridge:
                                             limit=board.SESSION_SCAN), start=1):
             if str(s.path) not in running:
                 continue          # 拿不到确证就不列 —— 宁可少列,也不谎报"在跑"
-            rows.append(board.row(
+            r = board.row(
                 "running", derive_title(s.first_user_text) or s.path.name,
                 f"{s.n_messages} 条 · {s.time} · 侧栏第 {i} 个",
-                action={"type": "session", "index": i}, source="会话"))
+                action={"type": "session", "index": i}, source="会话")
+            r["ws"] = self._ws_label(s.workspace)
+            rows.append(r)
         if self._ask_open or self._confirm_open:
             rows.append(board.row(
                 "waiting", "学长在等你答",
@@ -1154,6 +1163,8 @@ class Bridge:
                     f"已结束,退出码 {j['exit_code']} · 输出 {j['chars']} 字",
                     action={"type": "ask", "text": f"看一下后台命令 {j['id']} 的输出"},
                     source="后台命令"))
+        for r in rows:
+            r["ws"] = self._ws_label(self.workspace)
         return rows
 
     def _board_plan(self) -> list[dict]:
@@ -1188,6 +1199,8 @@ class Bridge:
                                   f"{st['done']}/{st['total']} 步",
                                   action={"type": "panel", "panel": "plan"},
                                   source="计划"))
+        for r in rows:
+            r["ws"] = self._ws_label(self.workspace)
         return rows
 
     def _board_jobs(self) -> list[dict]:
