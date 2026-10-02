@@ -86,7 +86,7 @@ def test_tour_shows_for_key_configured_users():
     """盲区修复:内置校园模型开箱即用的人,首启向导永远不弹 —— 导览是他们第一面。"""
     p = onboarding.payload(key_configured=True, paths={"app_dir": "D:/x"})
     assert p["show"] is False and p["tour_show"] is True
-    assert len(p["tour_steps"]) == 3
+    assert len(p["tour_steps"]) == 4      # v0.9.104:第④步补进阶功能(看板/分叉/验收/AGENTS.md)
 
 
 def test_tour_waits_while_first_run_is_showing():
