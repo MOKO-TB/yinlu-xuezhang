@@ -49,7 +49,7 @@ DOMAINS: dict[str, DomainSpec] = {
          "程序", "源码", "仓库", "分支", "提交", "合并冲突", "git", "github",
          "gitee", "python", "java", "编译", "语法", "重构", "单元测试", "测试用例",
          "跑测试", "依赖", "环境配置", "接口", "部署"),
-        ("code-review", "python-testing", "git-commit"),
+        ("code-review", "python-testing", "git-commit", "repo-wiki"),
         ("bash", "read_file", "edit_file", "write_file", "grep", "glob"),
         "不猜代码行为:没读过的文件不说它写了什么;改完要真跑验证命令并把输出贴进报告。",
     ),

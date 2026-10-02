@@ -41,6 +41,9 @@ def test_every_repo_skill_is_claimed_by_a_domain():
     """
     have = _real_skill_names()
     claimed = {s for spec in router.DOMAINS.values() for s in spec.skills}
+    # v0.9.102 显式豁免:skill-creator 是**主代理专属**——「把重复流程沉淀成技能」
+    # 这件事不该下放给子代理(它们跑在静默通道里,新技能写出去也没人过目)。
+    claimed |= {"skill-creator"}
     orphan = sorted(have - claimed)
     assert not orphan, f"这些技能没有档位认领:{orphan}"
     ghost = sorted(claimed - have)
