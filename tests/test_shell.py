@@ -297,3 +297,77 @@ def test_background_run_is_not_a_verified_record(ctx):
     assert "后台" in out or "job" in out.lower()
     assert not [r for r in getattr(ctx, "verify_runs", [])
                 if "bg-verify" in r["command"]]
+
+
+# --------------------------- 后台任务与验收账(v0.9.102 之后补的那条锁死)
+
+def _wait_bg(job, seconds: float = 20.0) -> bool:
+    import time as _t
+    end = _t.monotonic() + seconds
+    while job.running and _t.monotonic() < end:
+        _t.sleep(0.15)
+    return not job.running
+
+
+def _runs_of(ctx, command):
+    want = " ".join(str(command).split())
+    return [r for r in getattr(ctx, "verify_runs", []) if r["command"] == want]
+
+
+def test_finished_background_run_enters_the_verify_ledger(ctx):
+    """`MAX_TIMEOUT` 是 300 秒,跑全量测试这类验收只能走后台;不补这一笔就等于
+    「凡是跑得慢的验收都不许标 done」—— 那道闸拦的是没验过,不该把验过的也拦掉。"""
+    long_cmd = "echo " + "x" * 140 + " 收尾"     # 比 _BgJob.command 的 120 字盖还长
+    out = shell.bash(ctx, long_cmd, background=True)
+    assert "后台" in out
+    job = shell._bg_jobs[shell._bg_list_snapshot()[-1]]
+    assert _wait_bg(job), "后台命令没在时限内跑完,这条测试的环境有问题"
+    assert not _runs_of(ctx, long_cmd), "还在跑的时候不能进账"
+    shell.bg_brief_for_model(ctx)               # 模型下一步请求前的那一次播报
+    runs = _runs_of(ctx, long_cmd)
+    assert len(runs) == 1, "跑完的那一刻该有一条账"
+    assert runs[0]["code"] == 0
+    # 用的是**原条命令**:拿截成 120 字那份去比,判据永远对不上
+    assert runs[0]["command"] == " ".join(long_cmd.split())
+
+
+def test_background_run_is_recorded_only_once(ctx):
+    shell.bash(ctx, "echo once-only", background=True)
+    jid = shell._bg_list_snapshot()[-1]
+    job = shell._bg_jobs[jid]
+    assert _wait_bg(job)
+    shell.bg_brief_for_model(ctx)
+    shell.bash_status(ctx, id=jid)              # 主动查也算一次"它知道了"
+    shell.bg_brief_for_model(ctx)
+    assert len(_runs_of(ctx, "echo once-only")) == 1
+
+
+def test_no_ctx_means_no_ledger_write(ctx):
+    """老调用形状(不传 ctx)照旧能播报,只是不碰账 —— 五处既有测试就是那样调的。"""
+    shell.bash(ctx, "echo no-ctx", background=True)
+    job = shell._bg_jobs[shell._bg_list_snapshot()[-1]]
+    assert _wait_bg(job)
+    assert shell.bg_brief_for_model() != ""
+    assert not _runs_of(ctx, "echo no-ctx")
+
+
+def test_background_verify_unblocks_the_plan_gate(ctx, tmp_path):
+    """把三条线接在一起验:V1 的硬闸 + 后台补账 + V2 写进 plan.md 的那一行。
+
+    这是那条锁死的端到端形状:判据是"跑一遍要超过 300 秒的东西"时,唯一的跑法是
+    background=true,而它跑完必须能让那一步标得上 done,否则硬闸就把慢验收锁死了。
+    """
+    from minicode import planning
+    planning.plan(ctx, "write", goal="慢验收", steps=[
+        {"title": "第一件事"},
+        {"title": "跑一遍全量", "verify": "echo 慢一点的验收"}])
+    refused = planning.plan(ctx, "update", step=2, status="done")
+    assert "没有它跑完的记录" in refused and "background=true" in refused
+    shell.bash(ctx, "echo 慢一点的验收", background=True)
+    job = shell._bg_jobs[shell._bg_list_snapshot()[-1]]
+    assert _wait_bg(job)
+    shell.bg_brief_for_model(ctx)
+    ok = planning.plan(ctx, "update", step=2, status="done")
+    assert "已标记第 2 步为 done" in ok, ok
+    note = planning.plan_state(tmp_path)["steps"][1]["note"]
+    assert note.startswith("verify ✓") or "verify ✓" in note, note

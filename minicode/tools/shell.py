@@ -305,6 +305,10 @@ class _BgJob:
         self.id = job_id
         self.proc = proc
         self.command = " ".join(str(command).split())[:120]
+        # `command` 那份是**给人看的一行**(截到 120 字);验收账要对的是**原条命令**
+        # —— 计划里写的判据不会被截,拿截过的去比就永远对不上。
+        self.raw = " ".join(str(command).split())
+        self.recorded = False       # 跑完那一刻有没有已经补进验收账(只补一次)
         self.env_note = env_note
         self.started = time.monotonic()
         self.chunks: list[str] = []
@@ -474,11 +478,14 @@ def bash_status(ctx: ToolContext, id: str = "", tail: int = BG_TAIL_DEFAULT) -> 
         job, err = _bg_job_or_error(id)
         if job is None:
             return err
+        _bg_note_verify(ctx, job)     # 模型主动来查的那一刻就是"它知道跑完了"
         n = max(0, min(int(tail or BG_TAIL_DEFAULT), BG_TAIL_MAX))
         return (f"{job.line()}\n"
                 f"--- 输出尾部(最后 {n} 字)---\n{job.tail(n)}{job.env_note}")
     with _bg_lock:
         jobs = list(_bg_jobs.values())
+    for j in jobs:
+        _bg_note_verify(ctx, j)
     if not jobs:
         return ("还没有后台任务。`bash` 传 background=true 就会放后台跑,"
                 "适合全量测试/装依赖/构建这类超过 300 秒的活儿。")
@@ -505,6 +512,26 @@ def _bg_list_snapshot() -> list[str]:
         return list(_bg_jobs)
 
 
+def _bg_note_verify(ctx, job) -> None:
+    """后台任务**跑完的那一刻**补进验收账 —— 与前台同一把尺,同一条"只认退出码"的规矩。
+
+    为什么非补不可:前台硬上限是 `MAX_TIMEOUT`(300 秒),而"跑一遍全量测试"这种
+    验收判据天生比它长,只能走 `background=true`。计划里的硬闸(V1)只认那本账 ——
+    不补这一笔就等于「凡是跑得慢的验收都不许标 done」,而那道闸要拦的是
+    "没验过就说做完了",不该顺手把"验过了"一起拦掉。
+    没结束(拿不到退出码)的一律不记,与前台"超时不进账"同一句理由;`recorded`
+    让它只记一次;补账失败绝不把状态播报带崩。
+    """
+    if ctx is None or job.running or job.recorded or job.exit_code is None:
+        return
+    job.recorded = True
+    try:
+        from minicode import planning
+        planning.note_verify_run(ctx, job.raw, job.exit_code, job.tail(400))
+    except Exception:
+        pass
+
+
 def bg_facts() -> list[dict]:
     """后台命令的结构化事实(跨会话看板用它列「在跑」,不再拼一次人话)。
 
@@ -517,8 +544,7 @@ def bg_facts() -> list[dict]:
              "exit_code": j.exit_code, "chars": j.kept,
              "elapsed": int(time.monotonic() - j.started)} for j in jobs]
 
-
-def bg_brief_for_model() -> str:
+def bg_brief_for_model(ctx=None) -> str:
     """本机后台任务的现状一行,给**本次请求**用;没有任务时返回空串。
 
     为什么要这一行:后台任务的处境是"模型容易忘记去查"——它派完活就往下做,
@@ -532,12 +558,18 @@ def bg_brief_for_model() -> str:
 
     播几次:还在跑的每一步都播(状态在变);跑完的**只播一次**(`announced` 记账),
     免得一条旧任务的死讯每步都跟模型说一遍。
+
+    `ctx` 传进来时才顺手做一件事:把**刚跑完**的那一条补进验收账(见
+    `_bg_note_verify`)。为什么不等到模型去调 `bash_status`:那一步模型可能压根不查,
+    而它要标 done 的那一步就在下一句 —— 账迟到一步,硬闸就把它挡在门外了。
     """
     with _bg_lock:
         picked = [j for j in _bg_jobs.values() if j.running or not j.announced]
         for j in picked:
             if not j.running:
                 j.announced = True
+    for j in picked:
+        _bg_note_verify(ctx, j)      # 锁外补账:那一步要读 plans/plan.md
     if not picked:
         return ""
     lines = "\n".join("- " + j.line() for j in picked)

@@ -560,7 +560,8 @@ def test_done_accepted_after_real_run(tmp_path):
     r = plan(ctx, "update", step=2, status="done")
     assert "已标记第 2 步为 done" in r
     note = plan_state(tmp_path)["steps"][1]["note"]
-    assert "验收已过" in note and "退出码 0" in note
+    # 备注是 V2 在"跑完那一刻"写的那一行(闸门不重复写一句,否则两处各一份真相)
+    assert note.startswith("verify ✓"), note
 
 
 def test_failed_run_blocks_done_with_code_and_tail(tmp_path):

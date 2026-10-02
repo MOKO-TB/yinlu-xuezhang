@@ -316,7 +316,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 而 bash_status 的人话文本还在,最容易写成"两边各数一遍");
     # v0.9.101 ②V1:note_verify_run 的调用点在这里(漏收 = 验收账本永远空,
     # 带判据的步骤从此标不上 done)。
-    "minicode.tools.shell": ("bg_facts", "py_script", "_py_runtime_command",
+    # v0.9.102 之后补:后台跑完那一刻补进验收账(漏 _bg_note_verify = 慢验收永远
+    # 标不了 done;漏 raw = 拿截成 120 字那份去比对判据,永远对不上)
+    "minicode.tools.shell": ("bg_facts", "_bg_note_verify", "raw", "recorded",
+                             "py_script", "_py_runtime_command",
     # v0.9.84:后台命令(漏收 = `bash background=true` 在装好的包里静默变回同步等,
     # 长任务照样 300 秒被砍,而工具描述还在教模型用后台)
     "bash_status", "bash_kill", "_BgJob", "_bg_start", "_bg_kill_tree",

@@ -56,8 +56,9 @@ def note_verify_run(ctx: ToolContext, command: str, code: int | None,
     """把一次**跑完了的** bash 命令记进这本内存账 —— 它是"这一步真被验证过"的唯一凭据。
 
     为什么放在 bash 而不是 plan 里:验收命令跑的就是用户自己也能敲的那条路,
-    权限门、沙箱、超时全都原样生效(V1 不给验收开任何捷径)。后台任务与超时的
-    那一次不进账 —— 它们没有"退出码是几"这个结论,进了账就等于给"跑过了"开门。
+    权限门、沙箱、超时全都原样生效(V1 不给验收开任何捷径)。两条入口都记账:
+    前台跑完那一刻,以及**后台任务被 poll 到结束的那一刻**(`shell._bg_note_verify`)。
+    还没结束的和超时的不记 —— 它们没有"退出码是几"这个结论,记进去等于给"跑过了"开门。
     不落盘:输出留在会话里已经是历史,再抄一份进 KV 前缀只会白占上下文。
     """
     cmd = " ".join(str(command or "").split())
@@ -513,7 +514,8 @@ def _plan_read(ctx: ToolContext) -> str:
 def _verify_gate(ctx: ToolContext, target: dict) -> str:
     """带判据的步骤想过 done 只有一条路:那一轮真跑过那条命令,且退出码是 0。
 
-    通过时把"何时跑的"写进备注 —— 结论只有这一处真跑过,三个视图都读同一份状态。
+    只管判,**不写状态**:结论那一行(`verify ✓ 时刻`)由 `note_verify_run` 在跑完那一刻
+    落进 plan.md —— 那是唯一落盘处,计划卡与监控段读的都是它。
     """
     verify = target.get("verify") or ""
     if not verify:
@@ -523,13 +525,16 @@ def _verify_gate(ctx: ToolContext, target: dict) -> str:
     if run is None:
         return (f"错误:第 {n} 步自带验收命令 `{verify}`,而这一轮没有它跑完的记录。"
                 "先用 bash 原样跑一遍这条命令(整条一字不差),跑过之后我再收 done;"
-                "确实不打算跑,就标 failed 写清原因,或改计划把这条判据去掉 —— "
-                "别在没有凭据的情况下把它标成完成。")
+                "预计跑过 300 秒就传 background=true 放后台,它跑完的那一刻这一步"
+                "自己会认出来(不必你回来补一句);确实不打算跑,就标 failed 写清原因,"
+                "或改计划把这条判据去掉 —— 别在没有凭据的情况下把它标成完成。")
     if run["code"] != 0:
         return (f"错误:第 {n} 步的验收没通过(退出码 {run['code']},跑于 {run['at']});"
                 f"输出尾部:{run['tail'] or '(无输出)'}。我没有把它标成完成。"
                 "修好再原样跑一次,或标 failed 说清原因 —— 悄悄改回 pending 也算没做。")
-    target["note"] = f"验收已过({run['at']},退出码 0):{verify}"
+    # 备注不在这里写:V2 的 note_verify_run 在跑完那一刻就把 `verify ✓ 时刻` 落进了
+    # plan.md(那是这份结论唯一的落盘处)。这里再写一遍就是两处各写一句真相 ——
+    # 实测过一次覆盖:闸门那句"验收已过"把 V2 那句"verify ✓"顶掉了。
     return ""
 
 

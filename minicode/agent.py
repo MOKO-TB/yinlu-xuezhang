@@ -278,7 +278,7 @@ class Agent:
         # 任务表天生为空,所以访客也看不到主人的运行痕迹。
         try:
             from minicode.tools.shell import bg_brief_for_model
-            brief = bg_brief_for_model()
+            brief = bg_brief_for_model(self.ctx)
         except Exception:
             brief = ""                      # 注入失败绝不能拖垮这次请求
         if brief:

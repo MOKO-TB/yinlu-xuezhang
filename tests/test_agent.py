@@ -801,12 +801,22 @@ def test_session_token_limit_counts_across_turns_of_same_session(config, ctx):
 # ------------------------------------------- 后台命令状态搭在请求上(v0.9.85)
 
 class _StubJob:
-    """喂 `_messages_for_request` 用的假任务:已结束、还没播报过。"""
+    """喂 `_messages_for_request` 用的假任务:已结束、还没播报过。
+
+    字段跟着真 `_BgJob` 走(多出来的 `raw`/`recorded`/`exit_code` 是验收补账要读的)——
+    故意不做容错:真类加字段而桩不加,这条测试就该红,而不是被 getattr 悄悄兜住。
+    """
 
     def __init__(self, jid: str = "j9"):
         self.id = jid
         self.running = False
         self.announced = False
+        self.raw = "pytest -q"
+        self.recorded = False
+        self.exit_code = 0
+
+    def tail(self, n: int = 400) -> str:
+        return "1 passed"
 
     def line(self) -> str:
         return "j9 已结束,退出码 0 · 已输出 12 字 · pytest -q"
@@ -823,6 +833,9 @@ def test_bg_brief_rides_the_request_not_the_transcript(config, ctx, monkeypatch)
     assert "j9 已结束,退出码 0" in msgs[-1]["content"]
     assert len(agent.session.messages) == before, "写进留档 = 之后每一步都重复带着"
     assert msgs[0]["content"] == "sys", "塞进系统提示词会把 KV Cache 前缀打断"
+    # 播报的同一刻补进验收账(慢验收走后台就靠这一步;账在 ctx 上,不进留档)
+    assert [r["command"] for r in getattr(ctx, "verify_runs", [])] == ["pytest -q"]
+    assert len(agent.session.messages) == before, "补账也不许顺手往留档写东西"
 
 
 def test_no_bg_jobs_adds_nothing_to_the_request(config, ctx, monkeypatch):
