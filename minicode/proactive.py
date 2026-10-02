@@ -676,7 +676,7 @@ def _push_due(bridge, now=None) -> bool:
     """待办到点:`reminder` 记的事只要写了钟点,也走这条细轮询,和上课一个节奏。
 
     类别仍用 `reminders` 而不是新起一个 `due` —— 用户 `desktop_notify` 里能开关的
-    那七类是既有事实,凭空多一类他关不掉(set_notify 认不出新 kind),而"到点催"
+    `tray.NOTIFY_KINDS` 那张表是既有事实,凭空多一类他关不掉(set_notify 认不出新 kind),而"到点催"
     和"临期催"本来就是一回事,只是精确程度不同。
     """
     try:

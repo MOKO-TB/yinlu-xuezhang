@@ -24,8 +24,9 @@ from minicode import permspec
 from minicode.sandbox import (
     ASK as SB_ASK, BLOCKED, KNOWN_LIMITS, OUTSIDE,
     REJECT as SB_REJECT, SECRET, check_command, classify_for_write,
-    classify_path, command_hits_credential, command_hits_network,
-    command_touches_outside_path, script_hits,
+    classify_path, command_hits_credential, command_hits_git,
+    command_hits_network, command_touches_outside_path, git_write_hit,
+    script_hits,
 )
 from minicode.tools.base import Tool
 
@@ -202,6 +203,26 @@ class PermissionGate:
         kind = self._path_kind(name, args.get("path"))
         if kind and kind[0] == OUTSIDE:
             self.sandbox.approve_path(kind[1], session=session)
+
+    # ------------------------------------------------------------ `.git` 一层
+
+    def _git_hit(self, name: str, args: dict):
+        """这次**写**是不是落在仓库的 `.git` 里 —— 工具参数一路,命令文案一路。
+
+        只认写:读 `.git/HEAD`、看提交历史是正常需求,拦下来只会让人学会关掉整道门。
+        命中就回给人看的那一段(路径或命令片段),没命中回 None。
+        """
+        if self.sandbox is None:
+            return None
+        workspace = Path(self.sandbox.workspace)
+        raw = args.get("path")
+        if isinstance(raw, str) and raw.strip():
+            hit = git_write_hit(workspace, raw)
+            if hit is not None:
+                return hit
+        if name == "bash":
+            return command_hits_git(str(args.get("command", "")))
+        return None
 
     # ------------------------------------------------------------ 升级门判定
 
@@ -419,6 +440,17 @@ class PermissionGate:
 
         if tool.read_only:
             return ALLOW
+        # `.git` 一层:往 `.git/hooks/` 写一行脚本 = 给以后每次 git 操作装一个本机
+        # 自动入口。这一条特意排在档位判断**之前**,所以 accept_edits / accept_all /
+        # full 都放不过它,项目白名单与「本轮总是允许」也够不着(那两条都在下面才生效)。
+        # 只读不算:看提交历史、读 HEAD 是正常需求,拦了只会把日常用法变吵。
+        git_hit = self._git_hit(name, args)
+        if git_hit is not None:
+            self._note(f"⚠ 这一步动的是仓库的 `.git`(命中:{git_hit})—— 那里放的不是代码,"
+                       "是仓库历史与**每次提交/合并都会自动执行的钩子**。写进去等于给以后每次 "
+                       "git 操作装一个自动入口,权限档位、项目白名单、「本轮总是允许」都不替它"
+                       "背书。不是你要的请点拒绝。")
+            return ASK
         # 外部内容升级门:优先级高于权限档位(与沙箱红线同一心智模型)。
         # 只在**本回合接触过外部内容**后生效,没接触时行为与基线逐字节一致。
         if self._touched_external:

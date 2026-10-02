@@ -165,6 +165,78 @@ def _has_credential_dir(p: Path) -> bool:
     return bool(parts & set(CREDENTIAL_DIRS))
 
 
+# ---------------------------------------------------------------- `.git` 这一层
+# `.git` 里放的不是代码,是仓库历史 + **每次 git 操作都会自动执行的钩子脚本**。
+# 写成 `.git/hooks/pre-commit` 就等于给以后每一次提交装一个本机自动入口:任何一段
+# 网页/README 里的话("先加个提交前检查吧")都能把它骗出来,而且它从此一直在那儿。
+# 所以这一层与凭据文件同一心智模型 —— **不参与权限档位、不被项目白名单批、也不因
+# 「本轮总是允许」而连续静默放行**,每一步都当场点头。
+# 只认路径里**整段**叫 `.git` 的组件:`.github/workflows/ci.yml`、`.gitignore`
+# 都是正常文件,一律不误伤。
+GIT_DIR_NAME = ".git"
+
+# 命令/脚本文案里的 `.git` 路径组件。要求它后面紧跟分隔符或到此为止,
+# 所以 `.gitignore` / `.gitattributes` 这类正常文件不会被卷进来。
+GIT_PATH_TOKEN = re.compile(r"(?<![\w.])\.git(?![\w.-])", re.IGNORECASE)
+
+
+def is_git_internal(path) -> bool:
+    """解析后的路径是否落在某个 `.git` 里面(或就是那份 `.git` —— worktree/submodule
+    用它存一个 `gitdir:` 指针,改它等于把整个工作区指到别的仓库上,同样是要点头的事)。"""
+    try:
+        return GIT_DIR_NAME in {str(x).lower() for x in Path(path).parts}
+    except (TypeError, ValueError):
+        return False
+
+
+def git_write_hit(workspace: Path, raw: str) -> "Path | None":
+    """写型工具给的 `path` 参数是否指向 `.git` 内部;解析不动就当没命中(交给别的门)。"""
+    text = (raw or "").strip()
+    if not text or workspace is None:
+        return None
+    try:
+        _kind, p = classify_for_write(Path(workspace), text)
+    except Exception:
+        return None
+    return p if is_git_internal(p) else None
+
+
+def _token_touches_git(token: str) -> bool:
+    """token 里有没有一段真的指向 `.git` 的路径(命令与脚本文案共用这一份判定)。
+
+    同一条正则也用在脚本内容扫描上(`SCRIPT_GIT_PATTERNS`),这样"命令行里写 .git"
+    与"脚本里写 .git"两处的宽严不会各自漂。
+    """
+    return bool(GIT_PATH_TOKEN.search(token.strip("\"'")))
+
+
+def command_hits_git(command: str) -> str | None:
+    """命令里出现指向 `.git` 的 token 就返回那一段(给确认框看);没有返回 None。
+
+    **`git` 自己的子命令不算**:`git add` / `git commit` 本来就在往 `.git` 里写对象,
+    把它们也拦下等于把「帮我提交一下」这条日常用法打死。所以按 `; & |` 与换行分段,
+    首词是 git 的那一段放过,其余段照问(`echo x > .git/hooks/pre-commit`、
+    `cp evil .git/hooks/... && chmod +x ...`、`rm -rf .git`)。
+
+    一条已知限界,照 `command_hits_credential` 的写法原样承认:**按空白拆 token,
+    不解析引号**。所以 `python -c "open('.git/hooks/pre-commit','w')"` 这种把路径
+    塞进一整段引号里的写法扫不出来 —— 那条路要靠脚本内容那一层(`scan_script_text`
+    里有「碰仓库的 .git」这一类)。宁可问一次也不无声放行,但别以为挡全了。
+    """
+    for seg in _PIPE_SPLIT.split(command or ""):
+        tokens = [t.strip() for t in seg.split() if t.strip()]
+        if not tokens:
+            continue
+        head = tokens[0].lower().rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        head = head[:-4] if head.endswith(".exe") else head
+        if head == "git":
+            continue
+        for token in tokens:
+            if _token_touches_git(token):
+                return token.strip("\"'")[:120]
+    return None
+
+
 def classify_path(workspace: Path, raw: str, home: Path | None = None) -> tuple[str, Path]:
     """返回 (分级, 绝对路径)。路径解析失败时按工作区外处理。
 
@@ -336,6 +408,12 @@ SCRIPT_ESCAPE_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
         re.IGNORECASE)),
 )
 
+# 脚本里伸手到 `.git` —— 单独一类,不并进"走出工作区":那是位置问题,这一类是
+# **执行点**问题(钩子会被 git 自己拉起来跑),话术要指名才让人看得出轻重。
+SCRIPT_GIT_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
+    ("碰仓库的 .git(钩子/历史都在里面)", GIT_PATH_TOKEN),
+)
+
 # 内容外传的出口(联网 / 再起子进程)。只按名字与导入扫 —— 是"看过一眼再问",
 # 不是防火墙。
 SCRIPT_EGRESS_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
@@ -397,7 +475,7 @@ def _outside_abs_paths(text: str, workspace: Path | None) -> list[dict]:
 
 
 def scan_script_text(text: str, workspace: Path | None = None) -> dict:
-    """扫一份要跑的脚本,返回 {credential, escape, egress, truncated}。
+    """扫一份要跑的脚本,返回 {credential, escape, git, egress, truncated}。
 
     命中不算定罪:注释、字符串、文档里提到 `.ssh` 一样会命中。所以这里只产出
     "给用户看的那几行",决定权留给用户(见 KNOWN_LIMITS 的取舍说明)。
@@ -412,6 +490,7 @@ def scan_script_text(text: str, workspace: Path | None = None) -> dict:
     return {
         "credential": _scan_lines(body, SCRIPT_CREDENTIAL_PATTERNS),
         "escape": sorted(escape, key=lambda r: r["line"]),
+        "git": _scan_lines(body, SCRIPT_GIT_PATTERNS),
         "egress": _scan_lines(body, SCRIPT_EGRESS_PATTERNS),
         "truncated": truncated,
     }
@@ -422,6 +501,7 @@ def script_risk_note(hits: dict, source: str = "") -> str:
     lines = [f"要运行的脚本{(' ' + source) if source else ''}里有这些内容"
              "(可能只是提到,不是真读取):"]
     for key, label in (("credential", "碰密钥/凭据位置"),
+                       ("git", "伸进仓库的 .git"),
                        ("escape", "走出工作区"),
                        ("egress", "外传出口")):
         rows = hits.get(key) or []
@@ -454,7 +534,7 @@ def script_hits(policy: SandboxPolicy, text: str, *, touched_external: bool,
                         + " ;".join(f"第 {r['line']} 行 {r['code']}"
                                     for r in hits["egress"][:3])
                         + KNOWN_LIMITS["network"])
-    if hits["credential"] or hits["escape"]:
+    if hits["credential"] or hits["escape"] or hits["git"]:
         return ASK, script_risk_note(hits)
     if touched_external and hits["egress"]:
         return ASK, (script_risk_note(hits)

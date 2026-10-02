@@ -48,7 +48,11 @@ NOTIFY_KINDS = ("briefing", "class", "schedule", "reminders",
                 # (test_proactive 那根"新类别必须进表"的针盯的就是这件事)
                 "review", "gaps",
                 # v0.9.65:「模型恢复了」从裸 notify 收编 —— 不进表 = 关不掉
-                "recovery")
+                "recovery",
+                # v0.9.104:后台命令跑完的那条回执( shell._bg_notify_done )。
+                # 同样是"不进表就关不掉"这条规矩 —— 它打扰的频率比简报高得多
+                # (一条长命令就跑一次),更必须有开关。
+                "background")
 NOTIFY_DEFAULTS = {"enabled": True,
                    "kinds": {k: True for k in NOTIFY_KINDS},
                    "quiet_when_focused": True}
@@ -1127,7 +1131,7 @@ KIND_LABELS = {"briefing": "今日简报", "class": "课前提醒", "schedule": 
                "reminders": "待办临期", "calendar": "校历倒计时",
                "notices": "校园新通知", "update": "新版本",
                "weather": "天气提醒", "review": "每周回顾", "gaps": "缺口周报",
-               "recovery": "模型恢复提醒"}
+               "recovery": "模型恢复提醒", "background": "后台命令跑完"}
 
 
 def desktop_notify(ctx, action: str = "status", kind: str = "",

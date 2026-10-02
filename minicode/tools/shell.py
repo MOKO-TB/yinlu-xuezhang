@@ -282,6 +282,10 @@ BG_KEEP_FINISHED = 5           # 已结束且已播报过的任务最多留几�
 BG_BUFFER_CHARS = 200_000      # 每个任务只在内存里留尾部这么多字符
 BG_TAIL_DEFAULT = 4000         # bash_status 一次回看的默认长度
 BG_TAIL_MAX = 30_000
+# 桌面通知的类别。**必须同时进 `tray.NOTIFY_KINDS`** —— 表外的 kind 用户关不掉,
+# 而一条关不掉的打扰,最后结局是整个通知通道被关掉(test_tray 那根"描述与表逐类
+# 相等"的闸会把漏改当场钉红)。
+BG_NOTIFY_KIND = "background"
 BG_KILL_WAIT = 3.0             # 杀完之后最多再等这么久确认它真退了
 
 _bg_lock = threading.Lock()
@@ -316,11 +320,18 @@ class _BgJob:
         self.dropped = 0
         self.killed = False
         self.announced = False      # 结束状态有没有已经告知过模型(只播一次)
+        self.notified = False       # 结束回执有没有弹过给用户(也只弹一次)
         self.lock = threading.Lock()
 
     # -------------------------------------------------------------- 读输出
     def _pump(self) -> None:
-        """后台线程:按行读,EOF 之后再取退出码。异常只进缓冲,不外抛。"""
+        """后台线程:按行读,EOF 之后再取退出码。异常只进缓冲,不外抛。
+
+        EOF 之后还多等一步(`proc.wait` 然后弹通知)是为了**通知不迟到**:那三个
+        "被看见跑完"的落点(`bg_brief_for_model` 与 `bash_status` 两条)都要等模型
+        再走一步、或人自己去点 📋 看板 —— 而"丢一条长命令进后台然后人走开"恰恰就是
+        这个功能的用法本身。模型没有下一步的时候,只有这条线程知道它什么时候真结束。
+        """
         try:
             stream = self.proc.stdout
             while True:
@@ -330,6 +341,11 @@ class _BgJob:
                 self._append(_decode(line))
         except Exception as e:            # 强杀时管道会抛,不能带崩应用
             self._append(f"\n(读取输出中断:{type(e).__name__}: {e})\n")
+        try:
+            self.proc.wait()              # 这条线程是守护线程,等多久都不挡退出
+        except Exception:
+            return                        # 等不到就交给"被看见"那三个落点补弹
+        _bg_notify_done(self)
 
     def _append(self, text: str) -> None:
         with self.lock:
@@ -403,6 +419,9 @@ def _bg_start(ctx: ToolContext, command: str, argv: list[str] | None,
     return (f"已放进后台:{job_id}(pid={proc.pid}) · {job.command}\n"
             "它不会因为这一轮结束而停止 —— 跑完了去看:`bash_status`(id 传 "
             f"{job_id})拿输出尾部;要停:`bash_kill`(id 传 {job_id})。\n"
+            "跑完的那一刻会替用户弹一条桌面通知(类别「后台命令跑完」,他在「桌面提醒」"
+            "里关得掉,窗口在前台时也不重复弹)—— 所以**别把「我会告诉你」当成一定会发生**,"
+            "人回来问起时照旧要说清是哪一条。\n"
             "注意两条:后台跑**不受 timeout 限制**,也就没人替它超时收手;输出只在"
             "内存缓冲里(留尾部),**学长退出或电脑重启就没了**,要留档请重定向到工作区文件。")
 
@@ -529,6 +548,43 @@ def _bg_note_verify(ctx, job) -> None:
         from minicode import planning
         planning.note_verify_run(ctx, job.raw, job.exit_code, job.tail(400))
     except Exception:
+        pass
+
+
+def _bg_notify_done(job: _BgJob) -> None:
+    """跑完的那一刻弹一条桌面通知 —— 「人可以走开」这件事得有回执。
+
+    为什么非要这一条:后台命令存在的理由就是"超过 300 秒的活儿别占着这一轮",而它
+    结束时原先没有任何人知道,下一次提到它要等模型自己再走一步,或人自己去点 📋 看板。
+    同学最常见的用法是"丢一条全量测试然后去干别的",没有回执就等于把"回来自己查"
+    这件苦差留给用户。
+
+    **只有读输出那条线程叫它**(`_pump` 在 `proc.wait()` 之后)。三个"被看见跑完"的落点
+    不叫:那几处每次查询都会路过同一条旧任务,拿它当触发点会把一条早就结束的活儿再播
+    一遍,而"什么时候真结束"本来就只有那条线程知道得最准。
+    正文用 `job.line()` 那一行(与监控栏、与看板同一份事实),这里不拼第二份真相;
+    开关、按内容去重、"窗口在前景就不重复弹"全在 `tray.notify` 里。
+    `kind` 必须进 `tray.NOTIFY_KINDS` —— 关不掉的一类打扰,最后结局是整个通道被关掉。
+    弹不出去绝不能带崩状态播报,所以整段兜住异常;`notified` 保证只播一次。
+    """
+    if job.running:
+        return
+    try:
+        # 用任务自己的锁判"播过没有":线程与任何补播的路径撞在同一瞬间也只弹一条。
+        with job.lock:
+            if job.notified:
+                return
+            job.notified = True
+            code = job.exit_code
+            head = (f"后台命令跑完了({job.id})" if code == 0
+                    else f"后台命令结束了({job.id},退出码 {code})")
+            body = job.line()
+        from minicode import tray
+        tray.notify(head, body + "\n要看输出:问我 bash_status,或点侧栏「📋 看板」。",
+                    kind=BG_NOTIFY_KIND)
+    except Exception:
+        # 整段兜住:回执是锦上添花,它炸了不能把"这条任务什么状态"一起吞掉 ——
+        # 那句状态是模型下一步判断的依据,比这条通知重要。
         pass
 
 

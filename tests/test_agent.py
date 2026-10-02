@@ -1,4 +1,5 @@
 import json
+import threading
 
 from minicode.agent import WRAP_UP_NOTE, Agent
 from minicode.llm import AssistantTurn, ToolCall
@@ -814,6 +815,11 @@ class _StubJob:
         self.raw = "pytest -q"
         self.recorded = False
         self.exit_code = 0
+        # 真 `_BgJob` 有的字段这里就得有(加字段而桩不加,这条测试该红不是该被 getattr 兜住)。
+        # `notified` 走的是读输出那条线程,状态注入这条路不碰它 —— 所以这里给 False
+        # 也不会在跑测试时真弹通知;哪天真把回执也接到"被看见"的落点上,这条测试会先红。
+        self.notified = False
+        self.lock = threading.Lock()
 
     def tail(self, n: int = 400) -> str:
         return "1 passed"

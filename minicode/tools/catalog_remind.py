@@ -184,7 +184,7 @@ def remind_tools() -> list[Tool]:
                                             "schedule 课程 / reminders 待办 / calendar 校历 / "
                                             "notices 校园通知 / update 新版本 / weather 天气提醒 / "
                                             "review 心情周复盘 / gaps 知识库缺口周报 / "
-                                            "recovery 模型恢复提醒)"},
+                                            "recovery 模型恢复提醒 / background 后台命令跑完)"},
                     "reason": {"type": "string",
                                "description": "一句中文说明这次要做什么(显示在权限确认框里)"},
                 },

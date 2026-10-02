@@ -99,6 +99,102 @@ def test_bash_detection_rejects_wsl_and_missing_git(tmp_path, monkeypatch):
 # ------------------------------------------------------------- 后台命令(v0.9.84)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_desktop_notify(monkeypatch):
+    """本文件其余用例都在**真起后台任务**,不该在测试机上把 PowerShell 拉起来弹窗。
+
+    返回的那份 list 就是"回执都弹了什么",要看通知的用例直接读它。
+    """
+    from minicode import tray
+    calls: list[dict] = []
+
+    def _stub(title, body, kind="", force=False, **kw):
+        calls.append({"title": title, "body": body, "kind": kind})
+        return {"ok": True, "channel": "stub"}
+
+    monkeypatch.setattr(tray, "notify", _stub)
+    return calls
+
+
+def _wait_notify(calls: list, seconds: float = 6.0) -> bool:
+    """弹通知的是读输出那条线程,不是主线程 —— 有界等一会儿,别睡死。"""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if calls:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+# ---------------- 跑完的回执:桌面通知(v0.9.104)
+#
+# 后台命令存在的理由就是"人可以走开",而它原先结束时没有任何人知道 ——
+# 下一次提到它,要等模型自己再走一步,或者人自己去点 📋 看板。
+
+
+def test_finished_background_job_sends_one_receipt(ctx, _no_real_desktop_notify):
+    out = shell.bash(ctx, "echo receipt-one", background=True)
+    job_id = _job_id_of(out)
+    assert _wait_done(job_id), "后台命令没在 8 秒内跑完"
+    assert _wait_notify(_no_real_desktop_notify), "跑完了却没弹回执"
+    shot = _no_real_desktop_notify[0]
+    assert shot["kind"] == shell.BG_NOTIFY_KIND
+    assert job_id in shot["title"] and "跑完了" in shot["title"]
+    assert "echo receipt-one" in shot["body"]          # 认得出是哪一条
+    # 人再去查一遍,不许弹第二条
+    shell.bash_status(ctx)
+    shell.bash_status(ctx, id=job_id)
+    shell.bg_brief_for_model(ctx)
+    assert len(_no_real_desktop_notify) == 1
+
+
+def test_failing_background_job_names_the_exit_code(ctx, _no_real_desktop_notify):
+    out = shell.bash(ctx, "echo before-fail; exit 7", background=True)
+    job_id = _job_id_of(out)
+    assert _wait_done(job_id)
+    assert _wait_notify(_no_real_desktop_notify)
+    title = _no_real_desktop_notify[0]["title"]
+    assert "退出码 7" in title, title
+    assert "跑完了" not in title                       # 非零退出别写成好消息
+
+
+def test_running_job_is_not_announced_as_finished(ctx, _no_real_desktop_notify):
+    out = shell.bash(ctx, "sleep 6", background=True)
+    job_id = _job_id_of(out)
+    try:
+        assert shell._bg_jobs[job_id].running
+        assert shell.bash_status(ctx)                  # 查一遍状态不该"提前报丧"
+        assert _no_real_desktop_notify == []
+    finally:
+        shell.bash_kill(ctx, id=job_id)
+
+
+def test_a_broken_notify_channel_does_not_eat_the_status(ctx, monkeypatch):
+    """弹不出去是通道的事,不能把"这条任务什么状态"一起吞掉。"""
+    from minicode import tray
+
+    def _boom(*a, **k):
+        raise RuntimeError("PowerShell 不在")
+
+    monkeypatch.setattr(tray, "notify", _boom)
+    out = shell.bash(ctx, "echo still-reported", background=True)
+    job_id = _job_id_of(out)
+    assert _wait_done(job_id)
+    time.sleep(0.3)                                    # 给那条线程一点时间炸完
+    assert "已结束,退出码 0" in shell.bash_status(ctx, id=job_id)
+
+
+def test_receipt_kind_is_switchable_by_the_user():
+    """关不掉的一类打扰,最后结局是整个通道被关掉 —— 所以这张表必须有它。
+
+    这一条不靠 desktop_notify 那段描述(那是另一根闸),它钉的是跨模块的那句约定:
+    `shell.BG_NOTIFY_KIND` 必须是 `tray.NOTIFY_KINDS` 里的一类,且有给人看的名字。
+    """
+    from minicode import tray
+    assert shell.BG_NOTIFY_KIND in tray.NOTIFY_KINDS
+    assert tray.KIND_LABELS.get(shell.BG_NOTIFY_KIND) == "后台命令跑完"
+
+
 def _job_id_of(out: str) -> str:
     m = re.search(r"已放进后台:(j\d+)", out)
     assert m, f"没拿到 job 编号,实际回话:{out[:200]}"

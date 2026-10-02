@@ -324,6 +324,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.102 之后补:后台跑完那一刻补进验收账(漏 _bg_note_verify = 慢验收永远
     # 标不了 done;漏 raw = 拿截成 120 字那份去比对判据,永远对不上)
     "minicode.tools.shell": ("bg_facts", "_bg_note_verify", "raw", "recorded",
+                             # v0.9.104:跑完那一刻的回执(漏收 `_bg_notify_done` =
+                             # 装好的包里后台命令跑完照样没人吭声,而描述已经在教模型
+                             # "会弹一条通知" —— 那就是当着面说一句做不到的话;
+                             # 漏 BG_NOTIFY_KIND 更坏:那一类不在开关表里,用户关不掉)
+                             "_bg_notify_done", "BG_NOTIFY_KIND",
+                             "notified",
                              "py_script", "_py_runtime_command",
     # v0.9.84:后台命令(漏收 = `bash background=true` 在装好的包里静默变回同步等,
     # 长任务照样 300 秒被砍,而工具描述还在教模型用后台)
@@ -402,9 +408,18 @@ TARGETS: dict[str, tuple[str, ...]] = {
                          "scan_script_text", "script_risk_note", "script_hits",
                          "scrub_env", "KNOWN_LIMITS", "SCRIPT_CREDENTIAL_PATTERNS",
                          "SCRIPT_ESCAPE_PATTERNS", "SCRIPT_EGRESS_PATTERNS",
-                         "command_touches_outside_path"),
+                         "command_touches_outside_path",
+                         # v0.9.104:`.git` 这一层(漏收 = 包里的学长还是把
+                         # `.git/hooks/pre-commit` 当普通文件写 —— 那一行脚本会被以后
+                         # 每次 git 操作自动执行,而这份漏收**不会有任何报错**,
+                         # 表现就是"它怎么又一声不问就改了东西")
+                         "is_git_internal", "git_write_hit", "command_hits_git",
+                         "GIT_PATH_TOKEN", "GIT_DIR_NAME", "SCRIPT_GIT_PATTERNS"),
     "minicode.permission": ("note_external", "_is_sensitive_action",
-                            "_credential_hit", "_same_site"),
+                            "_credential_hit", "_same_site",
+                            # v0.9.104:上面那一层接到门里的那只手(漏收 = 判定还在
+                            # sandbox 里,但 PermissionGate 不叫它 → 四档一律照旧放行)
+                            "_git_hit"),
     "minicode.kb": ("crawl_credibility", "host_is_trusted",
                     "CRAWLED_UNVERIFIED",
                     # v0.9.39 B0:"没查到"这句话与判它的那一处必须同时在包里 ——

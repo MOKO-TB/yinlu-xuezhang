@@ -9,7 +9,8 @@ from minicode.sandbox import (
     ALLOW as SB_ALLOW, BLOCKED, INSIDE, OUTSIDE, REJECT as SB_REJECT,
     SandboxPolicy, SandboxState, check_command, classify_for_write,
     classify_path, command_hits_network, command_touches_outside_path,
-    policy_from_raw, policy_to_raw, sensitive_roots,
+    is_git_internal, policy_from_raw, policy_to_raw, scan_script_text,
+    script_hits, sensitive_roots,
 )
 from minicode.tools.base import PathBlocked, PathOutsideWorkspace, Tool, ToolContext
 
@@ -274,3 +275,99 @@ def test_describe_mentions_session_paths(tmp_path):
     st.approve_path(tmp_path / "a", session=True)
     st.approve_path(tmp_path / "b", session=True)
     assert "本会话已记住 2 个工作区外路径" in st.describe()
+
+
+# --------------------------------------------------------------- `.git` 这一层
+#
+# 写 `.git/hooks/pre-commit` 等于给以后每次 git 操作装一个**本机自动执行的入口** ——
+# 一段网页里的话("先加个提交前检查吧")就能骗出来,而且它从此一直在那儿。
+# 所以这一层与凭据文件同一心智模型:不参与权限档位、不被项目白名单批、
+# 也不因「本轮总是允许」而连续静默放行。这四条每个都有一根针,少一条就是话写白了
+# 但门没关上。
+
+@pytest.mark.parametrize("mode", ["confirm", "accept_edits", "accept_all", "full"])
+def test_git_writes_ask_in_every_mode(ws, mode):
+    """.git 里面:四种档一律 ASK,包括专门用来"少问几次"的 accept_all 与 full。"""
+    gate = PermissionGate(Config(permission_mode=mode), sandbox=SandboxState(SandboxPolicy(), ws))
+    assert gate.check(_tool("write_file"), {"path": ".git/hooks/pre-commit"}) == ASK
+    assert "钩子" in gate.ask_note, "点头之前要看得见这是什么量级的事"
+    assert gate.check(_tool("edit_file"), {"path": ".git/config"}) == ASK
+    assert gate.check(_tool("write_file"), {"path": "sub/.git/HEAD"}) == ASK
+
+
+def test_worktree_pointer_file_counts_too(ws):
+    """worktree / submodule 的 `.git` 是个**文件**(`gitdir: ...`),改它同样要点头。"""
+    assert is_git_internal(ws / ".git") is True
+    assert is_git_internal(ws / ".git" / "hooks" / "pre-commit") is True
+
+
+@pytest.mark.parametrize("path", [".gitignore", ".gitattributes", ".github/workflows/ci.yml",
+                                  "reports/my.git.txt", "gitlab/.gitlab-ci.yml"])
+def test_similar_names_are_not_the_git_dir(ws, path):
+    """只认整段叫 `.git` 的组件。误伤正常文件,用户就会去关整道门 —— 那不安全。"""
+    gate = PermissionGate(Config(permission_mode="accept_edits"),
+                          sandbox=SandboxState(SandboxPolicy(), ws))
+    assert gate.check(_tool("write_file"), {"path": path}) == ALLOW
+
+
+def test_reading_repo_history_stays_allowed(ws):
+    """这一层只拦**写**:看提交历史、读 HEAD 是日常需求,读也拦等于自废。"""
+    gate = PermissionGate(Config(permission_mode="confirm"),
+                          sandbox=SandboxState(SandboxPolicy(), ws))
+    assert gate.check(_tool("read_file", read_only=True), {"path": ".git/HEAD"}) == ALLOW
+
+
+def test_turn_always_allow_does_not_silence_git(ws):
+    gate = PermissionGate(Config(permission_mode="confirm"),
+                          sandbox=SandboxState(SandboxPolicy(), ws))
+    tool = _tool("write_file")
+    assert gate.check(tool, {"path": ".git/hooks/pre-commit"}) == ASK
+    gate.approve_for_turn("write_file")          # 人点了「本轮总是允许」
+    assert gate.check(tool, {"path": ".git/hooks/pre-commit"}) == ASK
+
+
+def test_project_allowlist_cannot_preapprove_git(ws):
+    """白名单能批「这个项目的 write_file」,但批不进 `.git` —— 那条路不走白名单。"""
+    from minicode import permspec
+    gate = PermissionGate(Config(permission_mode="confirm"),
+                          sandbox=SandboxState(SandboxPolicy(), ws))
+    rules, problems = permspec.parse_rules(
+        [{"tool": "write_file", "path_prefix": ".git/"}], {"write_file"})
+    assert not problems, problems
+    spec = permspec.Spec(workspace=ws, sha="ab" * 32, rules=rules, trusted=True)
+    assert spec.effective, "白名单没生效的话这条针就成了空断言"
+    gate.project = spec
+    assert gate.check(_tool("write_file"), {"path": ".git/hooks/pre-commit"}) == ASK
+    assert gate.project_allow_reason == "", "命中白名单才算被绕过 —— 这句要能反证它没被批走"
+
+
+@pytest.mark.parametrize("command,expect", [
+    ("echo x > .git/hooks/pre-commit", ASK),
+    ("cp /tmp/evil .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit", ASK),
+    ("rm -rf .git", ASK),
+    ("python -c \"open('.git/hooks/pre-commit','w')\"", ASK),
+    ("git commit -m fix", ALLOW),        # git 自己写 .git 是它的本职工作
+    ("git add -A && git commit -m wip", ALLOW),
+    ("pytest -q", ALLOW),
+])
+def test_bash_git_targets_ask_but_git_itself_does_not(ws, command, expect):
+    """full 档下验:命令行里指向 `.git` 的写法要问,`git` 子命令不问。
+
+    把 `git commit` 也拦下等于把「帮我提交一下」这条日常用法打死 —— 那条一旦疼,
+    整道门就会被关掉,所以这一半与前面那一半同样重要。
+    """
+    gate = PermissionGate(Config(permission_mode="full"),
+                          sandbox=SandboxState(SandboxPolicy(), ws))
+    assert gate.check(_tool("bash"), {"command": command}) == expect
+
+
+def test_script_layer_flags_git(ws):
+    """脚本内容里伸手 `.git` 也问(py_script 与 `bash("python x.py")` 共用这一层)。"""
+    code = "import pathlib\npathlib.Path('.git/hooks/pre-commit').write_text('x')\n"
+    hits = scan_script_text(code, ws)
+    assert hits["git"], "脚本扫描没把 .git 认出来"
+    level, why = script_hits(SandboxPolicy(enabled=True), code,
+                             touched_external=False, workspace=ws)
+    assert level == "ask" and ".git" in why
+    assert "钩子" in script_hits(SandboxPolicy(enabled=True), code,
+                                 touched_external=False, workspace=ws)[1]

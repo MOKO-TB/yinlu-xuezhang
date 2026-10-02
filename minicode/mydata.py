@@ -147,7 +147,7 @@ TABLE: tuple[Entry, ...] = (
           scope="global",
           note="里面是本机绝对路径,新机器认不出来时重选一次目录就行"),
     Entry("notify-pref.json", "桌面提醒开关", PREF, True, restart=True,
-          note="七类提醒各自开在哪一档"),
+          note="每一类提醒各自开在哪一档(类别表只有一份:tray.NOTIFY_KINDS — 这里不写「几类」,加一类这种数就会漂)"),
     Entry("close-pref.json", "关窗时怎么办", PREF, True),
     Entry("monitor-pref.json", "任务监控栏开合", PREF, True,
           note="这一栏展开还是收起、哪几段被折叠过 —— 纯界面偏好,不含任务内容"),

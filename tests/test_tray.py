@@ -1279,7 +1279,7 @@ def test_desktop_notify_kind_enum_matches_notify_kinds():
     block = block[:block.index("handler=tray.desktop_notify")]
     mentioned = set()
     for m in re.finditer(r"(briefing|class|schedule|reminders|calendar|notices|"
-                         r"update|weather|review|gaps|recovery)", block):
+                         r"update|weather|review|gaps|recovery|background)", block):
         mentioned.add(m.group(1))
     assert mentioned == set(tray.NOTIFY_KINDS), (
         f"desktop_notify 描述的类别集与 NOTIFY_KINDS 漂了:少 {set(tray.NOTIFY_KINDS) - mentioned},"
