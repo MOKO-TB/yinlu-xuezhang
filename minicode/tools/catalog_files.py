@@ -272,6 +272,8 @@ def worktree_tools() -> list[Tool]:
                 "文件时,在仓库同级开一份 `<项目>__<分支>/` 工作副本。"
                 "action=list(默认)报现状:现在这份是不是 git 仓库、有哪几份副本、"
                 "各在哪个分支、有没有未提交改动(逐行都有 git 现查的事实撑着);"
+                "action=changes 列**相对 HEAD 改了哪些文件**(含命令与编辑器改的,那些不在"
+                "「本轮改动」那份账里;看得见但退不掉,这句由后端带着回);"
                 "action=suggest 给 branch(如 login-fix)算出落点与**要执行的命令**:"
                 "命令必须走 bash 执行(会弹确认框,绝不偷偷建目录),建好后告诉用户"
                 "点顶栏「📁 工作区」把它选成工作区。三条口径照实说:①副本是普通"
@@ -283,7 +285,7 @@ def worktree_tools() -> list[Tool]:
             parameters={
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["list", "suggest"],
+                    "action": {"type": "string", "enum": ["list", "suggest", "changes"],
                                "description": "list=现状(默认,查当前工作区);"
                                               "suggest=给 branch 算落点与命令"},
                     "branch": {"type": "string",

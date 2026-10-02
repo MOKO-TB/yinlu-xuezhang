@@ -131,6 +131,94 @@ def worktree_facts(path: Path | None = None) -> dict:
     return {"ok": True, "repo": str(root), "worktrees": rows}
 
 
+# ---------------------------------------------------- 相对 HEAD 的改动清单
+#
+# 为什么单列这一档:「本轮改动」那份账只认 write_file / edit_file 的快照,bash、
+# py_script、编辑器自己保存出来的东西从来不在里面 —— 而那句「退不掉」原先只能靠承认。
+# git 看得见这些文件,所以这里把**看得见的部分**补上,同时把**仍然退不掉**写在回话里:
+# 它不是审查视图的第二份真相,是那份账外面的一整片黑。
+CHANGE_ROW_LIMIT = 30          # 一屏列几个文件(与看板 ROW_LIMIT 同一类节制)
+# action → 一句人话。错误提示与工具描述都从这份表来(加一类时只改这里与参数 enum)。
+ACTIONS = {"list": "看有哪几份副本、各自干净不干净", "suggest": "算新开副本的落点与命令", "changes": "列相对 HEAD 改了哪些文件"}
+
+
+_STATUS_LABELS = {"?": "未跟踪", "A": "新增", "M": "改", "D": "删除",
+                  "R": "改名", "C": "复制", "U": "冲突未解决", "T": "类型变了"}
+
+
+def parse_status_porcelain(text: str) -> list[dict]:
+    """解析 `git status --porcelain`(每行 `{XY} 路径`)→ [{path, state, staged}]。
+
+    X 是索引侧(已暂存)、Y 是工作区侧;两边都动过的(`MM`)只算一条并标出已暂存 ——
+    这里要的是"哪些文件与 HEAD 不一样",不是重演 git 的状态机。
+    改名行形如 `R  旧 -> 新`,取新名:人要看的是现在的名字。
+    """
+    out: list[dict] = []
+    for line in (text or "").splitlines():
+        if len(line) < 4:
+            continue
+        x, y = line[0], line[1]
+        body = line[3:]
+        path = body.split(" -> ")[-1] if "->" in body else body
+        path = path.strip().strip('"')
+        # 未跟踪是 XY 两位都是 `?`,所以单独判一次 —— 按位查表会把它认成"改"
+        state = ("未跟踪" if (x == "?" and y == "?")
+                 else _STATUS_LABELS.get(y) or _STATUS_LABELS.get(x)
+                 or ("改" if (x != " " or y != " ") else "不明"))
+        out.append({"path": path, "state": state, "staged": x not in " ?"})
+    return out
+
+
+def parse_numstat(text: str) -> dict:
+    """`git diff HEAD --numstat` → {路径: {added, removed, binary}}。
+
+    二进制文件 git 给的是 `-`:这里如实留 None 并打 binary 标 ——
+    补一个 0 等于宣称"它没改几行",那是当着面编数。
+    """
+    rows: dict[str, dict] = {}
+    for line in (text or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        added, removed, path = parts[0], parts[1], parts[-1].strip().strip('"')
+        rows[path] = {"added": int(added) if added.isdigit() else None,
+                      "removed": int(removed) if removed.isdigit() else None,
+                      "binary": added == "-" or removed == "-"}
+    return rows
+
+
+def changes(root: Path | None = None) -> dict:
+    """这份工作副本相对 HEAD 改了哪些文件 —— 只读:两条 git 命令,不写任何东西。
+
+    git 给不出的(未跟踪文件的行数、二进制)明说给不出,不补 0。
+    不是仓库 / git 不在 / 问不出 → ok=False 带原因,绝不回一份空清单装成功。
+    """
+    here = Path(root).resolve() if root else None
+    if here is None or not here.is_dir():
+        return {"ok": False, "msg": f"目录不存在:{here}"}
+    if not is_git_repo(here):
+        return {"ok": False, "msg": "当前工作区不是 git 仓库(没有 HEAD 可比)"}
+    ok, status = _git(["status", "--porcelain"], cwd=here)
+    if not ok:
+        return {"ok": False, "msg": f"git status 读不出来:{status}"}
+    rows = parse_status_porcelain(status)
+    # 第二次问的是"改了几行",仓库一次提交都没有时 diff HEAD 会失败 ——
+    # 那时文件清单照样给,只是行数一律没得算(下面按 None 走同一句实话)。
+    ok2, num = _git(["diff", "HEAD", "--numstat"], cwd=here)
+    counts = parse_numstat(num) if ok2 else {}
+    for r in rows:
+        got = counts.get(r["path"]) or {}
+        r["added"] = got.get("added")
+        r["removed"] = got.get("removed")
+        r["binary"] = bool(got.get("binary"))
+    return {"ok": True, "repo": str(here), "files": rows[:CHANGE_ROW_LIMIT],
+            "total": len(rows), "more": max(0, len(rows) - CHANGE_ROW_LIMIT),
+            "added": sum(r["added"] or 0 for r in rows),
+            "removed": sum(r["removed"] or 0 for r in rows),
+            "uncounted": sum(1 for r in rows if r["added"] is None),
+            "no_line_counts": not ok2}
+
+
 def suggest(repo: Path, branch: str, exists: bool | None = None) -> dict:
     """给出开副本的**完整建议**:落点、命令、要不要重名处理。
 
@@ -167,9 +255,38 @@ def worktree_tool(ctx, action: str = "list", branch: str = "",
         if not r.get("ok"):
             return f"错误: {r['msg']}"
         return (f"落点:{r['path']}\n要执行的命令:{r['command']}\n{r['note']}\n{r['next']}")
+    if action == "changes":
+        r = changes(root)
+        if not r.get("ok"):
+            return f"错误: {r['msg']}"
+        if not r["files"]:
+            return (f"{r['repo']} 相对 HEAD 是干净的:没有一个文件与上次提交不一样。"
+                    "\n(未跟踪的新文件也算\"有改动\",被 .gitignore 挡着的不算。)")
+        head = (f"{r['repo']} 相对 HEAD 改了 {r['total']} 个文件"
+                + (f"(这里列前 {len(r['files'])} 个,另有 {r['more']} 个没列)" if r["more"] else "")
+                + (f";git 算出来的合计 +{r['added']} / −{r['removed']} 行"
+                   if not r["no_line_counts"] else ";行数没算出来(这仓库一次提交都还没有)"))
+        lines = [head]
+        for f in r["files"]:
+            if f.get("binary"):
+                n = "二进制文件,git 没给行数"
+            elif f["added"] is None:
+                n = "git 没给行数(未跟踪的东西它还没存过)"
+            else:
+                n = f"+{f['added']} / −{f['removed']} 行"
+            lines.append(f"  - {f['state']} {f['path']} · {n}"
+                         + (" · 已暂存" if f["staged"] else ""))
+        if r["uncounted"]:
+            lines.append(f"  (其中 {r['uncounted']} 个文件没有行数,不是 0 行 —— 没算过的不写数。)")
+        lines.append("一句边界:这一档**看得见命令(bash / py_script)与编辑器自己改的文件**,"
+                     "而「本轮改动」那份账只认我用 write_file / edit_file 改的 —— "
+                     "所以看得见不等于退得掉:能逐处退的只有那份账里的。要退这里多出来的那些,"
+                     "得你自己下 `git restore -- <文件>`(未跟踪的只能自己删),那是丢东西的动作,"
+                     "我不替你做,也不替你决定哪些该丢。")
+        return "\n".join(lines)
     if action != "list":
-        return (f"错误: 不认识的 action「{action}」。可用:list(看现状)/"
-                f"suggest(算落点与命令)。")
+        return (f"错误: 不认识的 action「{action}」。可用:"
+                + "/".join(f"{a}({ACTIONS[a]})" for a in ACTIONS) + "。")
     r = worktree_facts(root)
     if not r.get("ok"):
         return f"错误: {r['msg']}"

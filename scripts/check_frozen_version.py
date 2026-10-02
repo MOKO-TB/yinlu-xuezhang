@@ -353,7 +353,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.tools.fs": ("repo_outline", "write_file", "edit_file"),
     "minicode.worktree": ("worktree_facts", "suggest", "parse_worktree_list",
                           "build_add_command", "suggest_copy_path",
-                          "worktree_tool"),
+                          "worktree_tool",
+                          # v0.9.105 相对 HEAD 那一档(漏 changes = 模型叫得到 list 却
+                          # 叫不到 changes,回话里"看得见但退不掉"那句就永远说不出来;
+                          # 漏 ACTIONS = 参数 enum 与实现各说一套,加一类忘一处没人红)
+                          "changes", "parse_status_porcelain", "parse_numstat",
+                          "ACTIONS", "CHANGE_ROW_LIMIT"),
     "minicode.tools.catalog_web": ("tools",),
     "minicode.tools.catalog_knowledge": ("skills_plan_search", "kb_suggest_tool",
                                          "memory_tool",

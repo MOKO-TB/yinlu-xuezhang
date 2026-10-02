@@ -194,9 +194,22 @@ def test_real_repo_passes_the_doc_sync_gate():
 def test_tool_count_gate_follows_the_registry():
     """HANDOFF §1 的「内置 N 工具」是**当前态**数字:加一只工具就得同步,否则这里红。"""
     assert check_docs.tool_count_problems(
-        49, "已完成:Agent 主循环 + 内置 49 工具(...)") == []
-    drift = check_docs.tool_count_problems(49, "已完成:内置 47 工具")
-    assert any("47" in p and "49" in p for p in drift)
+        49, [("HANDOFF §1", "已完成:Agent 主循环 + 内置 49 工具(...)")]) == []
+    drift = check_docs.tool_count_problems(
+        49, [("HANDOFF §1", "已完成:内置 47 工具")])
+    assert any("47" in p and "49" in p for p in drift), drift
+
+
+def test_tool_count_gate_reads_both_word_orders():
+    """HANDOFF 写「内置 56 工具」,README 写「56 个内置工具」——只认一种词序,
+    另一种就是漏网的那处(v0.9.105 实测 README 正停在 55 而注册表已经是 56)。"""
+    ok = check_docs.tool_count_problems(56, [("README", "- **56 个内置工具**(...)")])
+    assert ok == [], ok
+    drift = check_docs.tool_count_problems(
+        56, [("README", "- **55 个内置工具**(实测)")])
+    assert any("55" in p and "56" in p for p in drift), drift
+    # 出处要写进话里,不然维护者不知道去哪一句改
+    assert "README" in drift[0]
 
 
 def test_tool_count_only_reads_section_one():

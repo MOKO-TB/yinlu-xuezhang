@@ -307,18 +307,25 @@ def _manual_text() -> str:
     return src[start:end] if start > 0 and end > start else ""
 
 
-def tool_count_problems(n_tools: int, handoff_current: str) -> list[str]:
-    """HANDOFF §1 那句「内置 N 工具」必须等于注册表实测条数。
+# 「内置 N 工具」这类**当前态**数字:两种词序都要认(HANDOFF 写"内置 56 工具",
+# README 写"56 个内置工具"),只认一种就等于给漂留了一个口子。
+_TOOL_COUNT_PATTERNS = (r"内置\s*(\d+)\s*(?:个)?工具", r"(\d+)\s*个内置工具")
 
-    单独成一个函数是为了能被喂假文本测(工具数每加一只工具就会变一次,
-    而 §1 是**当前态**描述,不是历史 —— 历史行(§2 及以后)不许被改)。
+
+def tool_count_problems(n_tools: int, current_texts: "list[tuple[str, str]]") -> list[str]:
+    """每一处写「内置 N 工具」的**当前态**文本,都必须等于注册表实测条数。
+
+    单独成一个函数、并且只吃调用方递来的 (出处, 文本) 对,是为了能被喂假文本测:
+    工具数每加一只就会变一次,而这些句子是**当前态**描述,不是历史 ——
+    历史行(§2 及以后、CHANGELOG)不许被改,所以那些文本根本不该递进来。
     """
     problems: list[str] = []
-    for m in re.finditer(r"内置\s*(\d+)\s*(?:个)?工具", handoff_current):
-        got = int(m.group(1))
-        if got != n_tools:
-            problems.append(f"HANDOFF §1 写「内置 {got} 工具」,"
-                            f"注册表实测 {n_tools} 个")
+    for where, text in current_texts:
+        for pat in _TOOL_COUNT_PATTERNS:
+            for m in re.finditer(pat, text):
+                got = int(m.group(1))
+                if got != n_tools:
+                    problems.append(f"{where} 写「{m.group(0)}」,注册表实测 {n_tools} 个")
     return problems
 
 
@@ -348,8 +355,10 @@ def check_agent_doc_sync() -> list[str]:
         (ROOT / "README.md").read_text(encoding="utf-8"),
         (ROOT / "system_prompt.md").read_text(encoding="utf-8"),
         _manual_text())
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
     problems += tool_count_problems(len(build_default_registry()),
-                                    _handoff_section_1())
+                                    [("HANDOFF §1", _handoff_section_1()),
+                                     ("README", readme)])
     return problems
 
 
