@@ -249,7 +249,8 @@ class Config:
     # 存原文,不反向依赖功能模块。**Key 只允许出现在用户自己的 config.json 里**,
     # 绝不进仓库、绝不进分享包(save_config 的白名单落盘会把 api_key 洗掉)。
     capabilities: dict = field(default_factory=dict)
-    # 工具钩子(F3,v0.9.100):{"pre_tool": "命令", "post_tool": "命令"}。
+    # 工具钩子(F3,v0.9.100;C2 v0.9.102 起 matcher):值为字符串 = 对所有工具跑;
+    # 或 {"command": …, "tools": [工具名], "paths": ["通配符"]} 只对匹配的跑。
     # **只认 config.json 这一条路** —— 钩子是任意命令执行,工作区文件不能
     # 自证清白(permissions.json 同一条教训)。命令模板占位:{tool}=工具名、
     # {args_file}/{result_file}=参数/结果的临时 JSON 路径(经文件交付,

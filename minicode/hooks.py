@@ -44,6 +44,44 @@ def _render(cmd: str, tool: str, payload: dict | None, payload_key: str) -> "tup
     return text, tmp
 
 
+def _entry(hooks_cfg: dict | None, kind: str) -> "tuple[str, dict] | None":
+    """取出该类钩子的 (命令模板, 配置对象);没配返回 None。
+
+    两种形态(C2,v0.9.102 起):字符串 = 对**所有**工具跑(老形状,向后兼容);
+    对象 = {"command": …, "tools": [工具名…], "paths": ["通配符…"]} ——
+    matcher 语义:tools 缺省 = 全部;paths 只对带 path 参数的工具生效,
+    工具没有 path 或路径不匹配任何一个通配符 = 不跑。
+    """
+    raw = (hooks_cfg or {}).get(kind)
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        return raw, {}
+    if isinstance(raw, dict) and str(raw.get("command") or "").strip():
+        return str(raw["command"]), raw
+    return None
+
+
+def _matches(spec: dict, tool: str, args: dict | None) -> bool:
+    """matcher 判定:tools 白名单 + paths 通配符,两者都过才跑。"""
+    tools = spec.get("tools")
+    if tools:
+        names = [str(t).strip() for t in tools if str(t).strip()]
+        if names and tool not in names:
+            return False
+    paths = spec.get("paths")
+    if paths:
+        import fnmatch
+        pats = [str(x).strip() for x in paths if str(x).strip()]
+        path = str((args or {}).get("path") or "")
+        if not path:
+            return False          # 指定了 paths 而这只工具没有路径参数 = 不适用
+        if not any(fnmatch.fnmatch(path.replace(chr(92), "/"), pat.replace(chr(92), "/"))
+                   for pat in pats):
+            return False
+    return True
+
+
 def run_hook(kind: str, hooks_cfg: dict | None, tool: str,
              args: dict | None = None, result: str | None = None) -> "dict | None":
     """跑一条钩子;没配置该类返回 None(调用方直接跳过,零开销)。
@@ -52,8 +90,11 @@ def run_hook(kind: str, hooks_cfg: dict | None, tool: str,
     output 是输出尾部(调用方拿去当拒绝理由);post 的失败 → blocked=False、
     ok=False(调用方决定怎么如实说)。
     """
-    cmd_tpl = str((hooks_cfg or {}).get(kind) or "").strip()
-    if not cmd_tpl:
+    got = _entry(hooks_cfg, kind)
+    if got is None:
+        return None
+    cmd_tpl, spec = got
+    if not _matches(spec, tool, args):
         return None
     payload_key = "args_file" if kind == "pre_tool" else "result_file"
     payload = args if kind == "pre_tool" else (

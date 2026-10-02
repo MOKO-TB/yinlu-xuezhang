@@ -80,3 +80,36 @@ def test_pre_blocks_before_tool_start_and_reports(tmp_path):
     out = agent._execute(ToolCall(id="c1", name="write_file",
                                   arguments=_json.dumps({"path": "a.txt", "content": "x"})))
     assert "工具钩子拦下" in out and started == [], "被拦的那步绝不能真执行"
+
+
+# ------------------------------------------- matcher(C2,v0.9.102)
+
+def test_string_form_still_runs_for_every_tool():
+    cfg = {"pre_tool": "echo ok"}
+    assert hooks.run_hook("pre_tool", cfg, "bash", args={"x": 1})["ok"] is True
+    assert hooks.run_hook("pre_tool", cfg, "write_file", args={"path": "a"})["ok"] is True
+
+
+def test_match_tools_limits_scope():
+    cfg = {"pre_tool": {"command": "echo ok", "tools": ["write_file", "edit_file"]}}
+    assert hooks.run_hook("pre_tool", cfg, "write_file", args={"path": "a"}) is not None
+    assert hooks.run_hook("pre_tool", cfg, "bash", args={"cmd": "x"}) is None, \
+        "名单外的工具一个字节都不跑"
+
+
+def test_match_paths_requires_path_and_glob(tmp_path):
+    cfg = {"pre_tool": {"command": "echo ok", "paths": ["*.py", "src/*"]}}
+    assert hooks.run_hook("pre_tool", cfg, "write_file", args={"path": "a.py"}) is not None
+    assert hooks.run_hook("pre_tool", cfg, "write_file", args={"path": "src/x.txt"}) is not None
+    assert hooks.run_hook("pre_tool", cfg, "write_file", args={"path": "b.txt"}) is None
+    # 工具没有 path 参数:指定了 paths 就不适用
+    assert hooks.run_hook("pre_tool", cfg, "bash", args={"cmd": "x"}) is None
+    # 反斜杠路径按正斜杠口径匹配(Windows 传参形状)
+    assert hooks.run_hook("pre_tool", cfg, "write_file",
+                          args={"path": "src\y.py"}) is not None
+
+
+def test_bad_entry_shapes_are_skipped():
+    assert hooks.run_hook("pre_tool", {"pre_tool": {}}, "bash") is None
+    assert hooks.run_hook("pre_tool", {"pre_tool": {"command": "   "}}, "bash") is None
+    assert hooks.run_hook("pre_tool", {"pre_tool": 42}, "bash") is None
