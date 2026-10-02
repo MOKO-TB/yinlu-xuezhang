@@ -4,7 +4,8 @@ from minicode.llm import AssistantTurn, ToolCall
 import json
 
 from minicode import session as session_mod
-from minicode.session import Session, list_sessions, outbound, prune_sessions, to_markdown
+from minicode.session import (Session, fork_log_file, list_sessions,
+                              outbound, prune_sessions, to_markdown)
 from minicode.tools.base import Tool
 
 
@@ -304,3 +305,43 @@ def test_old_session_without_schema_still_loads(tmp_path):
     s = Session(system_prompt="s", log_dir=tmp_path, workspace=tmp_path)
     n = s.load_from(tmp_path / "session_old.jsonl")
     assert n == 1 and s.messages[-1]["content"] == "旧会话的一句话"
+
+
+# ------------------------------------------- 会话分支(C4,v0.9.100→102)
+
+def test_fork_log_file_copies_prefix_and_marks_origin(tmp_path):
+    """行级复制保留原 ts;新 session_start 带 forked_from;upto 越界如实 None。"""
+    from minicode.llm import AssistantTurn
+    s = Session(system_prompt="s", log_dir=tmp_path / "src", workspace=tmp_path)
+    s.add_user("第一问")            # 首条消息才懒创建留档(log_path 在这之后才有)
+    real_src = s.log_path
+    assert real_src is not None
+    s.add_assistant(AssistantTurn(text="第一答"))
+    s.add_user("第二问")
+    s.add_user("第三问")
+    # upto 语义 = 保留前 N **条消息**(user/assistant/tool 都算)
+    got = fork_log_file(real_src, 2, tmp_path / "forks", tmp_path)
+    assert got is not None
+    new_path, kept = got
+    assert kept == 2
+    data = json.loads(new_path.read_text(encoding="utf-8").splitlines()[0])
+    assert data["forked_from"] == real_src.name and data["schema"] == 2
+    lines = new_path.read_text(encoding="utf-8").splitlines()
+    roles = [json.loads(l).get("role") for l in lines[1:]]
+    assert roles == ["user", "assistant"], "分叉只保留前两**条消息**"
+    # 越界/非法
+    assert fork_log_file(real_src, 0, tmp_path / "forks", tmp_path) is None
+    assert fork_log_file(real_src, 99, tmp_path / "forks", tmp_path) is None
+    assert fork_log_file(tmp_path / "nope.jsonl", 1, tmp_path / "forks", tmp_path) is None
+
+
+def test_forked_log_loads_as_a_session(tmp_path):
+    """分叉出的留档能被 load_from 恢复成可继续对话的会话(ts 保留)。"""
+    s = Session(system_prompt="s", log_dir=tmp_path, workspace=tmp_path)
+    s.add_user("第一问")
+    s.add_user("第二问")
+    got = fork_log_file(s.log_path, 1, tmp_path / "forks", tmp_path)
+    new_path, _kept = got
+    forked = Session(system_prompt="s", log_dir=tmp_path, workspace=tmp_path)
+    n = forked.load_from(new_path)
+    assert n == 1 and forked.messages[-1]["content"] == "第一问"

@@ -115,6 +115,9 @@ class PublicApi:
     def edit_resend(self, ordinal: int, new_text: str, expect: str = "") -> dict:
         return self._b.edit_resend(ordinal, new_text, expect)
 
+    def fork_session(self, ordinal: int) -> dict:
+        return self._b.fork_session(ordinal)
+
     def get_suggestions(self) -> dict:
         return self._b.get_suggestions()
 
@@ -2099,6 +2102,35 @@ class Bridge:
             return {"ok": False, "msg": "消息内容已变化,请刷新后重试"}
         self.session.replace_messages(self.session.messages[:idx])
         return self.send_task(new_text)
+
+    def fork_session(self, ordinal: int) -> dict:
+        """会话分支(C4,v0.9.102):保留到第 ordinal 问(含),从这里开一份新会话。
+
+        原会话**原样保留** —— 分叉不是截断,是"从这一刻换个思路再走一遍"。
+        行级复制留档(原消息的 ts 原样),再按 resume 同一条路建运行器接上。
+        """
+        if self._busy:
+            return {"ok": False, "msg": "有任务正在进行中,分叉要等它停"}
+        src = self.session.log_path
+        if src is None:
+            return {"ok": False, "msg": "当前会话还没有留档(先说一句话)"}
+        idx, _content = self._find_user_message(int(ordinal))
+        if idx < 0:
+            return {"ok": False, "msg": f"第 {ordinal} 问已不在当前上下文(可能已被压缩)"}
+        from minicode.session import fork_log_file
+        got = fork_log_file(src, idx + 1, self.sessions_dir, self.workspace)
+        if got is None:
+            return {"ok": False, "msg": f"分叉失败:源留档读不到"}
+        new_path, kept = got
+        runner = self.open_session(load_path=new_path)
+        key = runner.key
+        self.ui.push("cleared", session=key)
+        self.ui.push("resumed", session=key, messages=self._history_for_frontend())
+        self.ui.push("info", session=key,
+                     text=f"已分叉出新会话:保留到第 {kept} 问(原会话原样保留在侧栏)。"
+                          f"从现在起两边各走各的。")
+        self._push_sessions()
+        return {"ok": True, "session": key, "file": new_path.name}
 
     def _find_user_message(self, ordinal: int) -> tuple[int, str]:
         """返回第 ordinal(1 起)条用户消息的 (原始下标, 内容);找不到返回 (-1, "")。"""

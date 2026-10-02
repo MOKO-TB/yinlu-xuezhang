@@ -599,6 +599,49 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
     return summaries
 
 
+def fork_log_file(source: Path, upto: int, log_dir: Path,
+                  workspace=None) -> "tuple[Path, int] | None":
+    """从源留档**复制前 upto 条消息**成一份新留档(C4,v0.9.100 会话分支)。
+
+    行级复制而不是经 Session 重放:原消息的 ts(v0.9.66)原样保留 —— 分叉的
+    意义就是"从这一刻换个思路再走一遍",时间线被改写等于伪造历史。新文件
+    的 session_start 带forked_from(回溯有据);upto<=0 或源文件不存在返回 None。
+    """
+    try:
+        lines = Path(source).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    msgs = [l for l in lines
+            if l.strip() and _is_message_line(l)]
+    if upto < 1 or upto > len(msgs):
+        return None
+    keep = msgs[:upto]
+    base = time.strftime("%Y%m%d_%H%M%S")
+    dest = Path(log_dir) / f"session_{base}_fork.jsonl"
+    suffix = 1
+    while dest.exists():
+        suffix += 1
+        dest = Path(log_dir) / f"session_{base}_{suffix}_fork.jsonl"
+    head = {"type": "session_start",
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "workspace": str(workspace) if workspace else "",
+            "schema": LOG_SCHEMA_VERSION,
+            "forked_from": Path(source).name, "fork_upto": upto}
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text("\n".join([json.dumps(head, ensure_ascii=False)]
+                               + keep) + "\n", encoding="utf-8")
+    return dest, upto
+
+
+def _is_message_line(line: str) -> bool:
+    """这一行是不是消息(而不是 session_start/cleared 等标记)。"""
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return False
+    return obj.get("role") in ("user", "assistant", "tool")
+
+
 def export_trace_tool(ctx, reason: str = "") -> str:
     """export_trace 工具处理器:把**当前会话**导成轨迹文件(工作区根目录)。
 
