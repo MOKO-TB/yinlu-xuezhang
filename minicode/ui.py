@@ -26,7 +26,7 @@ from minicode.tools.base import Tool
 SLASH_COMMANDS = ["/help", "/clear", "/model", "/history", "/resume", "/find",
                   "/undo", "/compact", "/sandbox", "/permission", "/think",
                   "/instructions", "/memory", "/remember", "/dream", "/plan",
-                  "/skills", "/kb", "/library", "/usage", "/browser",
+                  "/skills", "/kb", "/library", "/style", "/usage", "/browser",
                   "/workspace", "/exit", "/quit"]
 
 REFRESH_INTERVAL = 0.12     # 流式 Markdown 刷新节流
@@ -375,6 +375,8 @@ class TerminalUI:
             "  /clear        清空当前会话上下文\n"
             "  /model        查看当前使用的模型(GUI 顶部标识可添加/切换模型)\n"
             "  /usage [1|7|30] 查看 token 用量统计(默认近 7 天)\n"
+            "  /style [normal|guide] 回复风格:normal=直接帮做;guide=讲解模式\n"
+            "                (拆步骤引导你自己完成,不整段代做;适合学习场景)\n"
             "  /workspace [路径|default] 查看/切换工作区(Agent 在哪个文件夹里干活)\n"
             "  /browser      查看浏览器能力(能不能开网页/截图,连的是哪个浏览器)\n"
             "  /library      查看馆藏书目库状态;带书名就是搜书:/library 活着\n"

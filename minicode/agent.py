@@ -252,7 +252,10 @@ class Agent:
         crossed_day = today != self._prompt_date
         self._prompt_date = today
         self._prompt_sig = fp
-        if self.session.refresh_system_prompt(build_system_prompt(self.ctx.workspace)):
+        if self.session.refresh_system_prompt(build_system_prompt(
+                self.ctx.workspace,
+                reply_style=getattr(getattr(self.ctx, "config", None),
+                                    "reply_style", "normal"))):
             # D1(v0.9.102):重建条件从"跨天"推广为"跨天或指令/技能清单变了"
             # —— 内容变了才破 KV Cache,没变照旧稳定命中。
             if crossed_day:

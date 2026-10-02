@@ -176,7 +176,19 @@ def instructions_prompt_section(workspace) -> str:
     return user_agents_prompt_section() + agents_prompt_section(workspace)
 
 
-def build_system_prompt(workspace: Path, for_subagent: bool = False) -> str:
+GUIDE_STYLE_SECTION = """
+
+# 回复风格:讲解模式(用户开启)
+当前处于**讲解模式** —— 用户要的是学会,不是拿到结果。口径:
+- 把活拆成小步骤,每步先讲「这一步在做什么、为什么」,再给一个可以照着试的最小示例;
+- 用户自己动手的部分**留给他做**,他贴回你的成果你再看——不整段代做;
+- 概念用学生能听懂的话解释,该给例子就给例子;
+- 结束时给一句「下一步可以自己试什么」。
+与安全边界无关,工具与确认门照常。"""
+
+
+def build_system_prompt(workspace: Path, for_subagent: bool = False,
+                        reply_style: str = "normal") -> str:
     template = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
     prompt = (template
               .replace("{workspace}", str(workspace))
@@ -202,7 +214,8 @@ def build_system_prompt(workspace: Path, for_subagent: bool = False) -> str:
             + library_guide_prompt_section(workspace)
             + (mood_prompt_section() if not for_subagent else "")
             + (memory_prompt_section(workspace) if not for_subagent else "")
-            + instructions_prompt_section(workspace))
+            + instructions_prompt_section(workspace)
+            + (GUIDE_STYLE_SECTION if reply_style == "guide" and not for_subagent else ""))
 
 
 def _mcp_log(ui):
@@ -246,7 +259,8 @@ def build_runner_agent(config: Config, workspace: Path, ui, llm,
     undo_ref: list = []
     registry.append(build_task_tool(ctx, llm, ui, config, registry,
                                     parent_undo=undo_ref))
-    session = Session(system_prompt=build_system_prompt(workspace),
+    session = Session(system_prompt=build_system_prompt(
+        workspace, reply_style=getattr(config, "reply_style", "normal")),
                       log_dir=sessions_dir or SESSIONS_DIR,
                       workspace=workspace)
     ctx.session = session   # export_trace(v0.9.98):轨迹从活动会话现取,不翻留档文件

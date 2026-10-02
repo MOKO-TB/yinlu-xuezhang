@@ -502,3 +502,20 @@ def test_cli_instructions_reports_a_truncated_layer(tmp_path, monkeypatch):
     handle_slash("/instructions", Session(system_prompt="x"), Config(), ui,
                  FakeAgent(tmp_path))
     assert "只注入了前面那一截" in " ".join(t for _k, t in ui.messages)
+
+
+# ------------------------------------------- 讲解模式(Z1,v0.9.104)
+
+def test_style_toggles_and_persists(env, tmp_path):
+    """/style guide 切换并落盘;非法值报当前风格不乱切。"""
+    tmp_path, ui, agent = env
+    handle_slash("/style guide", Session(system_prompt="s", log_dir=tmp_path / "s",
+                                         workspace=tmp_path),
+                 agent.ctx.config, ui, agent)
+    assert agent.ctx.config.reply_style == "guide"
+    ui.messages.clear()
+    handle_slash("/style 不知道什么", Session(system_prompt="s", log_dir=tmp_path / "s",
+                                             workspace=tmp_path),
+                 agent.ctx.config, ui, agent)
+    assert any("guide" in t for _k, t in ui.messages), "非法值要报当前风格与用法"
+    assert agent.ctx.config.reply_style == "guide", "非法值不许改变现状"

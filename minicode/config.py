@@ -256,6 +256,9 @@ class Config:
     # {args_file}/{result_file}=参数/结果的临时 JSON 路径(经文件交付,
     # 不进命令行);pre 非零退出=拦截该步,post 失败只在结果尾如实附一行。
     hooks: dict = field(default_factory=dict)
+    # 回复风格(Z1,v0.9.104):normal=直接帮做(默认);guide=讲解模式 —— 不代做,
+    # 拆步骤引导同学自己完成(适合学习场景)。只影响提示词段,不影响任何工具与门。
+    reply_style: str = "normal"
 
     # ---- 活动供应商;base_url/api_key/model 属性保持旧代码零改动 ----
     @property
@@ -438,6 +441,7 @@ def _config_from_raw(raw: dict) -> Config:
         vision=bool(raw.get("vision", False)),
         capabilities=raw.get("capabilities") if isinstance(raw.get("capabilities"), dict) else {},
         hooks=raw.get("hooks") if isinstance(raw.get("hooks"), dict) else {},
+        reply_style=str(raw.get("reply_style") or "normal").strip().lower(),
     )
     # active 缺失/指向不存在的供应商 → 钉到第一个**用户配置**的供应商上。
     # 必须显式写回:Config.provider 在 id 为空时会隐式回退到 providers[0],
@@ -534,6 +538,7 @@ def save_config(path: Path, cfg: Config) -> None:
         # 空 dict 也照样存:用户写过就该在 config.json 里看得见(看不见就会被当成没生效)
         "subagent_models": cfg.subagent_models,
         "hooks": cfg.hooks,
+        "reply_style": cfg.reply_style,
         "feedback_recall": cfg.feedback_recall,
         "backup_dir": cfg.backup_dir,
         "context_window": cfg.context_window,

@@ -276,6 +276,20 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                     + f"{total} 条\n" + "\n".join(
                         f"  • {s['file']}: {s['count']} 条" for s in stats)
                     + "\n  提问相关话题时,Agent 会用 search_knowledge 检索并给出来源网址。")
+    elif name == "/style":
+        from minicode.config import save_config
+        want = arg.strip().lower()
+        if want not in ("normal", "guide"):
+            cur = getattr(config, "reply_style", "normal")
+            ui.info(f"回复风格当前:{cur}。可切:normal(直接帮做)/guide(讲解模式,"
+                    "拆步骤引导你自己完成)。用法:/style guide 或 /style normal")
+        else:
+            from minicode.config import CONFIG_PATH
+            config.reply_style = want
+            save_config(CONFIG_PATH, config)
+            ui.info(f"已切到 {want} 风格。"
+                    + ("下一轮起,学长会拆步骤引导你自己动手,不整段代做。"
+                       if want == "guide" else "下一轮起恢复直接帮做。"))
     elif name == "/usage":
         from minicode import usage as usage_mod
         days = int(arg) if arg.isdigit() and int(arg) in (1, 7, 30) else 7
