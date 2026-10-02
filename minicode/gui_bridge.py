@@ -858,6 +858,7 @@ class Bridge:
                 reg = runner.agent.registry
                 reg[:] = ([t for t in reg if not t.name.startswith("mcp_")]
                           + self._mcp_tools)
+                runner.agent.refresh_registry()   # 只换列表 = 新工具能看见却调不动
             n = len(self._mcp_tools)
             # 侧栏 MCP 健康行跟着刷新:配置与活状态只有这里有(同一份 _mcp_summary)
             self.ui.push("mcp_summary", session=self._current.key,
@@ -2594,15 +2595,27 @@ class Bridge:
         压缩是真的:agent 会把早期对话交给模型摘编(消耗一次 LLM 调用),
         所以任务进行中直接拒绝 —— 摘编读的就是那些消息,边跑边压会撕裂回合。
         压缩完立即回推一次 session_metrics,面板上的占用数字马上掉下来。
+
+        返回里带上压前/压后两个占用数,以及**这次到底压掉没有**:按钮按下却不回话,
+        用户读成"它坏了",而真实情况多半是"没有可压缩的早期对话"(原来这条一律
+        返回 ok,压没压只有 agent 自己知道)。
         """
         if self._busy:
             return {"ok": False, "msg": "任务进行中,等这轮跑完再压缩上下文"}
-        self.agent.compact_now()
+        before = int(self.agent.context_tokens())
+        done = bool(self.agent.compact_now())
+        after = int(self.agent.context_tokens())
         runner = self._current
         if runner is not None:
             self.ui.push("session_metrics", session=runner.key, **session_metrics(
                 runner.agent, runner.session, self.config, runner.llm_override))
-        return {"ok": True}
+        if not done:
+            return {"ok": False, "before": before, "after": after,
+                    "msg": f"没压掉东西:早期对话还不够多(或这次摘编没做成),"
+                           f"占用仍是约 {after} tokens"}
+        return {"ok": True, "before": before, "after": after,
+                "saved": max(0, before - after),
+                "msg": f"已压缩:占用约 {before} → {after} tokens"}
 
     def set_permission_mode(self, mode: str) -> dict:
         """切换权限档位(confirm/accept_edits/accept_all/full),写回 config.json。

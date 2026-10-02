@@ -413,21 +413,36 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
         # `context_window_for`:以前这里直接拿 config.context_window 算阈值,
         # 而触发器用的是运行时探测到的窗口 —— 两个数不一样时,用户按 /history
         # 说的"还早"去判断,却见它突然压了一次。
-        from minicode.model_catalog import context_window_for
-        total = agent.context_tokens()
-        tools_only = agent.tools_tokens
+        # 四栏明细与图形界面那个「上下文窗口」面板共用 `compaction.context_breakdown`:
+        # 命令行不该有一份自己的、算法不同的占用读法(v0.9.106)。
+        from minicode.compaction import context_breakdown
+        from minicode.model_catalog import context_reading, context_window_for
+        total, source = context_reading(agent, session)
+        tools_only = int(getattr(agent, "tools_tokens", 0) or 0)
         window = context_window_for(config.model, config.context_window)
         threshold = int(window * config.compact_at_ratio)
-        src = ""
-        if hasattr(agent, "context_source"):
-            src = ("这把尺子取的是上次请求**服务端真返回的 prompt_tokens**(当下限)。"
-                   if agent.context_source() == "real"
-                   else "这把尺子是本地估算(端点没返回 usage 时只能估)。")
+        src = ("这把尺子取的是上次请求**服务端真返回的 prompt_tokens**(当下限)。"
+               if source == "real"
+               else "这把尺子是本地估算(端点没返回 usage 时只能估)。")
         probed = "" if window == config.context_window else \
             f";窗口按运行时探测算 {window}(config 里写的是 {config.context_window})"
-        ui.info(f"当前上下文 {len(session.messages)} 条消息,约 {total} tokens"
-                f"(其中工具定义 {tools_only} tokens;压缩阈值 {threshold} tokens{probed})。"
-                f"{src}会话留档在 sessions/ 目录。")
+        lines = [f"当前上下文 {len(session.messages)} 条消息,约 {total} tokens"
+                 f"(其中工具定义 {tools_only} tokens;压缩阈值 {threshold} tokens{probed})。"
+                 f"{src}"]
+        breakdown = context_breakdown(agent, session, config, window, total, source)
+        if breakdown:
+            base = max(1, sum(int(x["tokens"]) for x in breakdown["buckets"]))
+            lines.append(f"占用拆四栏(本地估算之和 {breakdown['estimated']} tokens,量级参考):")
+            for row in breakdown["buckets"]:
+                extra = f"({row['count']}个)" if row.get("count") else ""
+                lines.append(f"  {row['label']}{extra}:"
+                             f" {row['tokens']} tokens"
+                             f" ({round(row['tokens'] / base * 100)}%)")
+            if source == "real":
+                lines.append("  实测那个数比四栏之和大,是大模型的真实分词与本地粗估的差,"
+                             "不是漏算了什么。")
+        lines.append("会话留档在 sessions/ 目录。")
+        ui.info("\n".join(lines))
     elif name == "/resume":
         summaries = list_sessions(SESSIONS_DIR)
         if not summaries:
@@ -463,7 +478,17 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
     elif name == "/rewind":
         _rewind_command(agent, session, ui, parts[1:])
     elif name == "/compact":
-        agent.compact_now()
+        # 压没压、压掉了多少,必须报出来:原来这条按完就像静默成功,
+        # 而"早期对话还不够多"和"摘编那次调用失败了"都是什么都没发生。
+        before = int(agent.context_tokens())
+        done = bool(agent.compact_now())
+        after = int(agent.context_tokens())
+        if done:
+            ui.info(f"已压缩:占用约 {before} → {after} tokens"
+                    f"(省出 {max(0, before - after)} tokens)。")
+        else:
+            ui.info(f"没压掉东西:早期对话还不够多,或这次摘编没做成;"
+                    f"占用仍是约 {after} tokens。")
     elif name == "/permission":
         from minicode.permission import MODE_LABELS, PERMISSION_MODES
         if arg:

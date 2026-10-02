@@ -44,7 +44,8 @@ def schema_tokens(tools) -> int:
     """工具 JSON Schema 占的 token —— 每一次请求都连着 messages 一起发出去。
 
     压缩阈值原先只数消息,等于拿一把短了几千 token 的尺子量窗口(v0.9.40 D2)。
-    注册表在运行期不变(MCP 工具在装配时就并进去了),所以调用方算一次存住即可。
+    注册表在运行期**会**变(MCP 热重载往里并工具、对外模式把它收窄成只读那一档),
+    所以调用方别存副本 —— `Agent.tools_tokens` 是随注册表现算的属性。
     """
     return _text_tokens(json.dumps([t.to_openai_schema() for t in tools],
                                    ensure_ascii=False))
@@ -70,6 +71,58 @@ def estimate_tokens(messages: list[dict]) -> int:
             fn = tc.get("function", {})
             total += _text_tokens(fn.get("arguments", "")) + _text_tokens(fn.get("name", "")) + 8
     return total
+
+
+def context_breakdown(agent, session, config, window: int, used: int,
+                      source: str = "estimated") -> dict | None:
+    """上下文占用明细:拆成 系统提示词 / 工具定义 / Skill / 对话消息 四栏。
+
+    GUI 的「上下文窗口」面板和 CLI 的 `/history` 共用这一份 —— 它住在压缩模块里,
+    是因为四栏必须由同一把尺子量出来:`used` 出自 `Agent.context_pair()`,工具那栏读
+    `agent.tools_tokens`(随注册表现算),消息那栏读 `estimate_tokens(session.messages)`。
+    各处各算一遍出过的岔子就是"面板说还没到七成,它却提前压了一次"(v0.9.40 D2)。
+
+    `used` 在服务端返回过 prompt_tokens 时是**实测值**,里面含着本地尺子量不到的分词
+    差异。所以四栏一律按本地估算(它们之和恒等于 `estimated`),实测那个数由 `used` +
+    `source` 单独报出去,界面写清"实测 X / 本地估 Y"。不拿估算去减实测:那笔差额会被
+    悄悄记进「对话消息」那一栏,而最没人去核对的正是它。
+
+    agent 没有 ctx(测试桩、拿不到工作区的场景)时返回 None,调用方不渲染明细。
+    """
+    ctx = getattr(agent, "ctx", None)
+    workspace = getattr(ctx, "workspace", None)
+    if workspace is None:
+        return None
+    from minicode.skills import load_skills, skill_dirs, skills_prompt_section
+
+    def _tok(text: str) -> int:
+        return max(0, estimate_tokens([{"role": "system", "content": text}]) - 8)
+
+    sys_msg = next((m for m in session.messages if m.get("role") == "system"), None)
+    system_total = _tok(str(sys_msg.get("content") or "")) if sys_msg else 0
+    skills = load_skills(skill_dirs(workspace))
+    skills_sec = skills_prompt_section(skills)
+    skills_tokens = _tok(skills_sec) if skills_sec else 0
+    tools_tokens = getattr(agent, "tools_tokens", None)
+    if not isinstance(tools_tokens, int):
+        tools_tokens = schema_tokens(getattr(agent, "registry", None) or [])
+    local_msgs = estimate_tokens(session.messages)
+    return {
+        "window": window,
+        "used": used,
+        "source": source or "estimated",
+        "estimated": local_msgs + tools_tokens,
+        "compact_at": config.compact_at_ratio,
+        "buckets": [
+            {"key": "system", "label": "系统提示词",
+             "tokens": max(0, system_total - skills_tokens)},
+            {"key": "tools", "label": "工具定义", "tokens": tools_tokens},
+            {"key": "skills", "label": "Skill", "tokens": skills_tokens,
+             "count": len(skills)},
+            {"key": "messages", "label": "对话消息",
+             "tokens": max(0, local_msgs - system_total)},
+        ],
+    }
 
 
 class Summarizer(Protocol):

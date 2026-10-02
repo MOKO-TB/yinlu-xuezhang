@@ -193,7 +193,7 @@ def apply_public_profile(agent: Agent, session: Session, workspace: Path) -> lis
     """
     kept = [t for t in agent.registry if t.name in PUBLIC_TOOLS]
     agent.registry = kept
-    agent._tool_map = {t.name: t for t in kept}      # noqa: SLF001 —— 同包内部约定
+    agent.refresh_registry()
 
     prompt = build_public_system_prompt(workspace)
     for i, msg in enumerate(session.messages):

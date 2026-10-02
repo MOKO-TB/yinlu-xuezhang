@@ -61,9 +61,6 @@ class Agent:
         # 这里不写第二个默认值 —— 显式传参(子代理那一档)优先,没传就回 config。
         self.max_steps = int(max_steps) if max_steps else int(ctx.config.max_steps)
         self._tool_map = {t.name: t for t in registry}
-        # 工具 JSON Schema 每轮都随消息一起发出去,量窗口不能只数消息。
-        # 注册表运行期不变(MCP 工具在装配时就并进来了),所以这里算一次存住。
-        self.tools_tokens = schema_tokens(registry)
         # 上一次请求**真发出去多少 prompt token**(服务端返回的,不是估的)与当时的
         # 消息条数。量窗口那把尺子从此有了实测的下限 —— 见 `context_tokens`。
         self._real_prompt: tuple[int, int] | None = None
@@ -668,6 +665,28 @@ class Agent:
                         else "一处都没退成。") + tail
                 + (" 命令与外部程序改的没被退(不在账里)。" if done else "")}
 
+    # ---------------------------------------------------------------- 工具表
+
+    @property
+    def tools_tokens(self) -> int:
+        """工具 JSON Schema 那份占用 —— 随注册表现算,不存副本。
+
+        每轮请求都把这些定义连着消息一起发出去,量窗口不能只数消息(v0.9.40 D2)。
+        存过副本的代价:MCP 热重载往注册表里并新工具(gui_bridge)、对外模式把注册表
+        收窄成只读那一档(web_profile),两处都只换列表、没有重算那个数 —— 于是压缩
+        触发器按换之前的清单算,面板按换之后的算,同一个会话两个"占用"。
+        现算一次实测 1.8ms(56 个工具),而它每轮只被读两三次,不值得为它维护副本。
+        """
+        return schema_tokens(self.registry)
+
+    def refresh_registry(self) -> None:
+        """注册表被就地换过内容之后,重新对齐"模型真能调用的那批工具"。
+
+        热重载只改 `registry`:新工具会出现在发给模型的定义清单里,却在 `_execute`
+        查不到,表现是「它说有这个工具、一用就说找不到」。
+        """
+        self._tool_map = {t.name: t for t in self.registry}
+
     # ------------------------------------------------------------ 压缩
 
     # 实测下限能用多久:同一轮里消息只会多出几条(工具结果 + 助手那句话)。
@@ -675,8 +694,11 @@ class Agent:
     # 上下文,拿它当底线会凭空触发一次真实的摘要调用(花额度、改留档),比估不准更糟。
     REAL_FLOOR_WINDOW = 8
 
-    def _context_pair(self) -> tuple[int, str]:
-        """(这次量出来的 token 数, 这个数的来源)。
+    def context_pair(self) -> tuple[int, str]:
+        """(这次量出来的 token 数, 这个数的来源) —— 一次读数,两个值一起拿。
+
+        拆成两个方法调用会各量一遍,中间消息序列可能已经变了:面板于是显示
+        "实测 12,345"却配了一个"本地估"的来源标签。要给界面的两个数出自同一次读数。
 
         v0.9.97 补的那层:服务端返回过真实 prompt_tokens 时拿它**当底线**。
         估算那条路是「CJK 一字一 token、其余四字符一 token」,英文、代码、JSON 工具
@@ -698,14 +720,19 @@ class Agent:
         只数消息会系统性低估几千 token,于是阈值偏晚触发,把真实窗口顶到脸上才想起
         来压(v0.9.40 D2)。CLI 的 `/history` 与任务面板用的是这同一个数。
         """
-        return self._context_pair()[0]
+        return self.context_pair()[0]
 
     def context_source(self) -> str:
         """这把尺子这次是"实测顶上来的"还是"本地估的" —— 报出去要说得出来源。"""
-        return self._context_pair()[1]
+        return self.context_pair()[1]
 
-    def compact_now(self) -> None:
-        self._maybe_compact(force=True)
+    def compact_now(self) -> bool:
+        """立刻压一次,返回**是否真的压掉了**(False = 没得压 / 这次摘要调用失败)。
+
+        返回值是给界面的:按钮按 `ok` 决定是刷新数字还是把原因写在屏上,
+        压完不回话就等于让用户以为"点了没反应是它坏了"。
+        """
+        return self._maybe_compact(force=True)
 
     def _maybe_compact(self, force: bool = False) -> bool:
         cfg = self.ctx.config

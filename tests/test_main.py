@@ -65,7 +65,7 @@ class FakeAgent:
 
     def undo_all(self): return "没有可撤销的文件改动(bash 产生的改动不在跟踪范围)。"
 
-    def compact_now(self): return None
+    def compact_now(self): return False   # 真 Agent 这层现在回报"到底压掉没有"
 
     def context_tokens(self): return 5000 + self.tools_tokens
 
@@ -77,7 +77,8 @@ def env(tmp_path, monkeypatch):
     return tmp_path, FakeUI(), FakeAgent(tmp_path)
 
 
-SILENT_COMMANDS = ("/clear", "/compact")   # 只改状态,不往 UI 打消息
+SILENT_COMMANDS = ("/clear",)   # 只改状态,不往 UI 打消息
+# /compact 从这一版起不再是静默的:压没压、压掉多少要回报(v0.9.106)。
 
 
 @pytest.mark.parametrize("cmd", [
@@ -209,17 +210,23 @@ def test_library_with_a_query_searches_through_the_tool_handler(env, tmp_path, m
 
 
 def test_history_says_which_ruler_it_used(env, tmp_path):
-    """`/history` 报的数要说得出来源:实测顶上来的 vs 本地估的,是两种可信度。"""
+    """`/history` 报的数要说得出来源:实测顶上来的 vs 本地估的,是两种可信度。
+
+    替身按真 Agent 的形状给 `context_pair()`:数与来源出自**同一次读数**,
+    所以这里改一个必然带着另一个,不存在"数字是估的、标签写实测"那种拼法。
+    """
     tmp_path, ui, agent = env
-    agent.context_source = lambda: "real"
+    agent.context_pair = lambda: (agent.context_tokens(), "real")
     handle_slash("/history", Session(system_prompt="x"), Config(), ui, agent)
     assert "服务端真返回" in " ".join(m[1] for m in ui.messages)
 
     ui2 = FakeUI()
     agent2 = FakeAgent(tmp_path)
-    agent2.context_source = lambda: "estimated"
+    agent2.context_pair = lambda: (agent2.context_tokens(), "estimated")
     handle_slash("/history", Session(system_prompt="x"), Config(), ui2, agent2)
-    assert "本地估算" in " ".join(m[1] for m in ui2.messages)
+    text2 = " ".join(m[1] for m in ui2.messages)
+    assert "本地估算" in text2
+    assert "占用拆四栏" in text2, "命令行要看得见面板那四类占用,不是只有一个总数"
 
 
 def test_history_survives_an_agent_without_a_source_label(env, tmp_path):

@@ -41,6 +41,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # v0.9.40 D2:回合步数上限(漏收 = 配置文件里的数字没人读)
                         "max_steps"),
     "minicode.gui_bridge": ("test_model", "fetch_models",
+                            # v0.9.106 Q1:MCP 热重载换过注册表要重新对齐工具表
+                            # (漏收 = 装好的包里那条「现有会话下一轮即可用」又是假的)
+                            "refresh_registry",
                             # v0.9.101 ①R1:审查视图的三个门面(漏 undo_step/undo_all =
                             # 面板一行行列出来了却点不动;漏 undo_records = get_activity
                             # 里那份 changes 永远是空的,整段不出现)
@@ -275,7 +278,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            , "export_trace", "export_trace_tool"),
     # v0.9.40 D1/D2:压缩保头+尾、工具 schema 进估算(漏收 = 装好的包里这两条退化
     # 回"保尾丢头"和"只数消息"的旧尺子,而界面看不出来)
-    "minicode.compaction": ("clip_history", "schema_tokens", "HISTORY_HEAD_CAP"),
+    # v0.9.106 Q2:占用明细那一处真相搬进 compaction(面板与命令行读同一份);
+    # 漏收 = 装好的包里 /history 又退回"只有一个总数"的老样子
+    "minicode.compaction": ("clip_history", "schema_tokens", "HISTORY_HEAD_CAP",
+                            "context_breakdown"),
     "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill",
                         # v0.9.63:技能使用账(漏收 = 装好的包里用了技能不记账,
                         # 「哪些技能真有人用」永远没有答案)
@@ -378,7 +384,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.tools.catalog_campus": ("calendar_gpa",),
     "minicode.tools.catalog_remind": ("remind_tools",),
     "minicode.tools.catalog_places": ("library_tools", "map_tools"),
-    "minicode.model_catalog": ("_context_breakdown", "vision_forced"),
+    # v0.9.106:面板与 /history 共用的那份明细住在 compaction(见那处的针);
+    # 这一只模块负责"一次读数拿到数与来源"(漏收 = 又开始各量一遍)
+    "minicode.model_catalog": ("context_reading", "vision_forced"),
     # ---- v0.9.17:截止提醒 ----
     "minicode.reminders": ("reminder", "add", "due_soon", "parse_due",
                            # v0.9.29:待办带钟点 → 到点前 20 分钟催(漏收 = 记进去了
@@ -520,13 +528,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # (漏 rollback_preview = 命令行只能盲退;漏 _rollback_scope =
                        # 两处各筛一遍,总有一天预览说 2 处而实际退 1 处)
                        "rollback_preview", "_rollback_scope", "_rollback_arg",
-                       # v0.9.105 /rewind 点头前那一屏:预览与动手共用一份筛选
-                       # (漏 rollback_preview = 命令行只能盲退;漏 _rollback_scope =
-                       # 两处各筛一遍,总有一天预览说 2 处而实际退 1 处)
-                       "rollback_preview", "_rollback_scope", "_rollback_arg",
                        # v0.9.97:量窗口那把尺子的实测下限(漏收 = 装好的包里压缩又回到
                        # 只按字符估,英文/代码多的会话会一路撞到真实窗口才压)
-                       "_context_pair", "context_source", "REAL_FLOOR_WINDOW",
+                       # v0.9.106 Q1:改名 context_pair(数与来源一次读数)+ 这把尺子
+                       # 随注册表现算(tools_tokens)+ 换过工具清单要能真调用
+                       # (refresh_registry)。漏收 = 装好的包里还是"副本 + 只换列表"
+                       # 那一版:MCP 热重载后新工具看得见调不动,压缩按旧清单算。
+                       "context_pair", "context_source", "REAL_FLOOR_WINDOW",
+                       "tools_tokens", "refresh_registry",
                        # v0.9.39 B0/B1:两个挂钩 + 那条"只活在一次请求里"的先验
                        "_messages_for_request", "_note_low_rated_prior",
                        "_mark_repeat_empty",

@@ -12,7 +12,7 @@ core/model_catalog.py(公开仓库 gitee.com/feng-chenhao/xingyao-y-code),
 """
 from __future__ import annotations
 
-from minicode.compaction import estimate_tokens, schema_tokens
+from minicode.compaction import context_breakdown, estimate_tokens, schema_tokens
 from minicode.config import API_KEY_PLACEHOLDERS
 
 # model -> {"context_window": int, "supports_vision": bool}
@@ -114,17 +114,22 @@ def capabilities(model: str) -> list[str]:
     return caps
 
 
-def context_total(agent, session) -> int:
-    """面板上"上下文占用"那个数 —— 与压缩触发器**同一个来源**(Agent.context_tokens)。
+def context_reading(agent, session) -> tuple[int, str]:
+    """面板上「上下文占用」那个数,连同这把尺子的来源 —— 与压缩触发器同一次读数。
 
     分开算会出这种事:面板按"消息 ÷ 窗口"说还没到七成,实际请求里还有 40 来个工具
-    定义,压缩提前来了 —— 用户看到的是"它自己乱压"。没有 ctx 的测试桩退回本地估算。
+    定义,压缩提前来了 —— 用户看到的是"它自己乱压"。没有 ctx 的测试桩退回本地估算,
+    来源如实写 estimated:没量过就不假装是实测。
     """
-    calc = getattr(agent, "context_tokens", None)
+    pair = getattr(agent, "context_pair", None)
+    if callable(pair):
+        used, source = pair()
+        return int(used), str(source or "estimated")
+    calc = getattr(agent, "context_tokens", None)   # 只报一个数的桩(测试 FakeAgent)
     if callable(calc):
-        return int(calc())
-    return estimate_tokens(session.messages) + schema_tokens(
-        getattr(agent, "registry", []) or [])
+        return int(calc()), "estimated"
+    return (estimate_tokens(session.messages)
+            + schema_tokens(getattr(agent, "registry", []) or [])), "estimated"
 
 
 def push_turn_usage(agent, session, config, turn) -> None:
@@ -141,7 +146,7 @@ def push_turn_usage(agent, session, config, turn) -> None:
     usage = turn.usage if isinstance(turn.usage, dict) else {}
     prompt = usage.get("prompt_tokens")
     estimated = not (isinstance(prompt, int) and prompt >= 0)
-    context = prompt if not estimated else context_total(agent, session)
+    context = prompt if not estimated else context_reading(agent, session)[0]
     try:
         push("turn_usage",
              consumed=int(getattr(agent, "turn_tokens", 0) or 0),
@@ -168,7 +173,7 @@ def session_metrics(agent, session, config, llm_override: dict | None) -> dict:
     """
     model = llm_override["model"] if llm_override else config.model
     window = context_window_for(model, config.context_window)
-    used = context_total(agent, session)
+    used, source = context_reading(agent, session)
     consumed = getattr(agent, "turn_tokens", 0) or 0
     info = lookup(model)
     selectable = []
@@ -193,7 +198,7 @@ def session_metrics(agent, session, config, llm_override: dict | None) -> dict:
             })
     active_id = (llm_override["provider_id"] if llm_override
                  else (config.provider.id if config.provider else ""))
-    breakdown = _context_breakdown(agent, session, config, window, used)
+    breakdown = context_breakdown(agent, session, config, window, used, source)
     return {
         "provider_id": active_id,
         "selected_key": f"{active_id}::{model}" if active_id and model else "",
@@ -207,51 +212,12 @@ def session_metrics(agent, session, config, llm_override: dict | None) -> dict:
         "known": info["known"],
         "context_window": window,
         "context_tokens": used,
+        # 这个占用的尺子来源:"real" = 上次请求服务端真返回的 prompt_tokens 当的下限,
+        # "estimated" = 本地粗估。面板必须把它显示出来 —— 同一个百分比,
+        # 实测和估出来的可信度不是一回事。
+        "context_source": source,
         "consumed": consumed,
         "compact_ratio": config.compact_at_ratio,
         "context_breakdown": breakdown,
         "selectable": selectable,
-    }
-
-
-def _context_breakdown(agent, session, config, window: int,
-                       used: int) -> dict | None:
-    """上下文窗口面板的明细(v0.9.15):占用拆成 系统提示词/工具定义/Skill/消息。
-
-    数字全部来自与任务面板同一把尺子(estimate_tokens 粗估),四项之和
-    ≈ used;服务端真实计费可能有出入,面板只做量级参考,不做精确记账。
-    agent 没有 ctx(个别测试桩)时返回 None,前端就不渲染明细。
-    """
-    ctx = getattr(agent, "ctx", None)
-    workspace = getattr(ctx, "workspace", None)
-    if workspace is None:
-        return None
-    from minicode.skills import load_skills, skill_dirs, skills_prompt_section
-
-    def _tok(text: str) -> int:
-        return max(0, estimate_tokens([{"role": "system", "content": text}]) - 8)
-
-    sys_msg = next((m for m in session.messages if m.get("role") == "system"), None)
-    system_total = _tok(str(sys_msg.get("content") or "")) if sys_msg else 0
-    skills = load_skills(skill_dirs(workspace))
-    skills_sec = skills_prompt_section(skills)
-    skills_tokens = _tok(skills_sec) if skills_sec else 0
-    # 与压缩触发器同一份算法:传进来的 `used` 出自 `Agent.context_tokens()`,
-    # 已经含工具定义了,所以这里只把它拆开看,不再加一次(加两次会虚报占用)。
-    tools_tokens = schema_tokens(getattr(agent, "registry", []) or [])
-    body = max(0, used - tools_tokens)          # 消息部分(含系统提示词)
-    messages_tokens = max(0, body - system_total)
-    # 四项之和 = (系统提示词-技能) + 工具定义 + 技能 + 对话消息 ≈ used,闭合靠同一个数
-    return {
-        "window": window,
-        "used": used,
-        "compact_at": config.compact_at_ratio,
-        "buckets": [
-            {"key": "system", "label": "系统提示词",
-             "tokens": max(0, system_total - skills_tokens)},
-            {"key": "tools", "label": "工具定义", "tokens": tools_tokens},
-            {"key": "skills", "label": "Skill", "tokens": skills_tokens,
-             "count": len(skills)},
-            {"key": "messages", "label": "对话消息", "tokens": messages_tokens},
-        ],
     }

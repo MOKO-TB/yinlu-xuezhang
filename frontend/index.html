@@ -887,6 +887,12 @@ try {
   .ctx-head b{ font-size:13px; color:var(--text-1); }
   .ctx-pct{ font-size:20px; font-weight:900; color:var(--primary-text); }
   .ctx-desc{ margin-top:4px; font-size:11px; line-height:1.6; color:var(--text-3); }
+  .ctx-num{ margin-top:3px; font-size:11.5px; font-weight:700; color:var(--text-2);
+            font-variant-numeric:tabular-nums; }
+  .ctx-src{ display:block; margin:8px 0 4px; font-size:10.5px; line-height:1.55;
+            color:var(--text-3); }
+  .ctx-res{ margin-top:8px; padding:6px 8px; border-radius:8px; font-size:11.5px;
+            font-weight:700; background:var(--primary-light); color:var(--primary-text); }
   .ctx-bar{ position:relative; height:8px; margin:10px 0 10px;
             background:var(--glass-lite); border:1px solid var(--line-soft);
             border-radius:999px; overflow:hidden; }
@@ -4156,6 +4162,10 @@ function renderTaskMetrics(m) {
 }
 
 /* ---------------- 上下文窗口面板(点任务栏「上下文」弹出) ---------------- */
+// 压缩结果只跟着"它报的那个占用数"显示:数字一变(新一轮/新推送)就撤,
+// 免得屏上留着"12K → 3K",而进度条早就走到别的数上了。
+let ctxResult = "", ctxResultUsed = null;
+
 function renderCtxPanel() {
   const panel = $("ctxPanel");
   const b = taskMetrics && taskMetrics.context_breakdown;
@@ -4167,18 +4177,32 @@ function renderCtxPanel() {
   const used = Number(b.used) || 0, win = Number(b.window) || 1;
   const pct = Math.min(100, Math.round(used / win * 100));
   const mark = Math.round((Number(b.compact_at) || 0.7) * 100);
-  const rows = (b.buckets || []).map(x => {
-    const share = used ? Math.round((Number(x.tokens) || 0) / used * 100) : 0;
+  // 占比分母用四栏之和(本地估算),不是 used:used 在服务端返回过真实用量时是实测值,
+  // 拿本地估的每一栏去除它,四栏加起来会不到 100%,用户读成"还有东西没算进来"。
+  const buckets = b.buckets || [];
+  const base = buckets.reduce((s, x) => s + (Number(x.tokens) || 0), 0) || 1;
+  const rows = buckets.map(x => {
+    const share = Math.round((Number(x.tokens) || 0) / base * 100);
     return `<div class="ctx-row"><span class="dot ${esc(x.key)}"></span>`
       + `<span class="lb">${esc(x.label)}${x.count ? ` (${x.count}个)` : ""}</span>`
       + `<span class="tk">${fmtTok(x.tokens)}</span><span class="pc">${share}%</span></div>`;
   }).join("");
+  const est = Number(b.estimated) || 0;
+  const src = b.source === "real"
+    ? `尺子:上次请求服务端实测 ${fmtTok(used)} tokens(本地估 ${fmtTok(est)});`
+      + "实测只当底线往上顶,所以自动压缩可能比四栏之和更早到。"
+    : `尺子:本地估算(这个端点没返回真实用量,只能按 CJK 一字一 token 估),`
+      + `四栏之和 ${fmtTok(est)} tokens。真实计费会有出入,这一屏看量级,不当记账。`;
+  const res = (ctxResult && ctxResultUsed === used)
+    ? `<div class="ctx-res">${esc(ctxResult)}</div>` : "";
   panel.innerHTML = `
     <div class="ctx-head"><b>上下文窗口</b><span class="ctx-pct">${pct}%</span></div>
+    <div class="ctx-num">${fmtTok(used)} / ${fmtTok(win)} tokens</div>
     <div class="ctx-desc">展示当前任务的上下文占用情况;压缩会把早期内容摘编成摘要(真压缩,不是清屏),需等待片刻并消耗少量 token。白线右侧是自动压缩线(${mark}%)。</div>
     <div class="ctx-bar"><div class="ctx-fill${pct >= mark ? " hot" : ""}" style="width:${pct}%"></div><div class="ctx-mark" style="left:${mark}%"></div></div>
+    <span class="ctx-src">${src}</span>
     <div class="ctx-rows">${rows}</div>
-    <button class="ctx-btn" id="btnCtxCompact">🗜 压缩上下文</button>`;
+    <button class="ctx-btn" id="btnCtxCompact">🗜 压缩上下文</button>${res}`;
   $("btnCtxCompact").addEventListener("click", doCompactContext);
 }
 function doCompactContext(ev) {
@@ -4191,6 +4215,9 @@ function doCompactContext(ev) {
     btn.disabled = false;
     btn.textContent = "🗜 压缩上下文";
     if (r && r.ok === false) toast(r.msg, true);
+    // 压成了:前→后写在面板里(占用与压缩同一屏);失败只走 toast,那句多半与数字无关
+    if (r && r.ok === true) { ctxResult = r.msg || "已压缩"; ctxResultUsed = Number(r.after); }
+    renderCtxPanel();
     // 成功时后端会推 compacted 提示与 session_metrics,数字由事件刷新
   }).catch(e => {
     btn.disabled = false;
@@ -4214,6 +4241,7 @@ $("tmContext").addEventListener("click", (ev) => {
   ev.stopPropagation();
   $("taskModelMenu").classList.remove("show");
   $("thinkMenu").classList.remove("show");
+  ctxResult = ""; ctxResultUsed = null;    // 每次重新打开都从"这次没压过"开始
   renderCtxPanel();
   $("ctxPanel").classList.toggle("show");
 });

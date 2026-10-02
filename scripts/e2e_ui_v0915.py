@@ -5,6 +5,11 @@
        系统提示词/工具定义/Skill/对话消息 四类占比
     新 「压缩上下文」按钮真的调 compact_now(忙时后端拒绝,按钮有压缩中态)
     新 压缩后 session_metrics 事件把面板数字刷新
+v0.9.106 续(同一屏把"尺子"也讲清楚):
+    新 顶部「已用 / 窗口」两个绝对数(以前只有百分比,看不出到底占了多少)
+    新 来源行:实测顶上来的就写实测 + 本地估,估的就直说是估的
+    新 占比分母换成四栏之和(实测 26K 而本地估 24K 时,四栏仍要加得起来)
+    新 压缩结果写在同一屏(「占用约 A → B」),且数字一变这句就撤 —— 不留着骗人
 跑法(项目根目录):
     .venv\\Scripts\\python.exe scripts\\e2e_ui_v0915.py
 """
@@ -22,6 +27,8 @@ FRONTEND = ROOT / "frontend"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# 第一屏故意给"实测顶上来的"那岔:used=26000 是服务端真返回的 prompt_tokens,
+# 四栏是本地估(之和 24000)。两把尺子的差必须摆在屏上,而不是被塞进某一栏。
 METRICS = {
     "provider_id": "gzasc", "selected_key": "gzasc::deepseek-v4-flash",
     "model": "deepseek-v4-flash", "capabilities": ["文本", "工具调用"],
@@ -30,11 +37,12 @@ METRICS = {
     "selectable": [],
     "context_breakdown": {
         "window": 327680, "used": 26000, "compact_at": 0.7,
+        "source": "real", "estimated": 24000,
         "buckets": [
             {"key": "system", "label": "系统提示词", "tokens": 3200},
             {"key": "tools", "label": "工具定义", "tokens": 5800},
             {"key": "skills", "label": "Skill", "tokens": 900, "count": 14},
-            {"key": "messages", "label": "对话消息", "tokens": 16100},
+            {"key": "messages", "label": "对话消息", "tokens": 14100},
         ],
     },
 }
@@ -61,7 +69,10 @@ window.pywebview = {
     }),
     get_session_metrics: () => Promise.resolve(Object.assign({ok: true}, METRICS)),
     compact_now: () => { CALLS.push(["compact_now"]);
-      return new Promise(res => setTimeout(() => res({ok: true}), 500)); },
+      // 后端真回:压没压 + 压前压后两个占用数(前端据此在同一屏写结果)
+      return new Promise(res => setTimeout(() => res(
+        {ok: true, before: 26000, after: 8000, saved: 18000,
+         msg: "已压缩:占用约 26K → 8K tokens"}), 500)); },
     get_suggestions: () => Promise.resolve({suggestions: []}),
     get_countdowns: () => Promise.resolve({ok: true, countdowns: []}),
     rate_message: () => Promise.resolve({ok: true}),
@@ -148,6 +159,18 @@ def main() -> int:
                 "() => document.querySelector('#ctxPanel .ctx-mark').style.left")
             check(mark == "70%", f"自动压缩线在 70%({mark})")
 
+            # ---- 1b. 顶部两个绝对数 + 尺子来源(v0.9.106) ----
+            num = page.locator("#ctxPanel .ctx-num").inner_text()
+            check(num == "26K / 327.7K tokens",
+                  f"顶栏写的是「已用 / 窗口」两个数,不只是百分比({num})")
+            src = page.locator("#ctxPanel .ctx-src").inner_text()
+            check("实测" in src and "本地估" in src,
+                  f"实测顶上来的时候,来源行同时给出实测与本地估({src[:38]}…)")
+            shares = page.eval_on_selector_all(
+                "#ctxPanel .ctx-row .pc", "els => els.map(e => e.textContent)")
+            check(shares == ["13%", "24%", "4%", "59%"],
+                  f"占比分母是四栏之和(本地估 24K),不是实测那个 26K({shares})")
+
             # ---- 2. 压缩按钮:真调 compact_now,有压缩中态与恢复 ----
             page.click("#btnCtxCompact")
             page.wait_for_function(
@@ -159,12 +182,34 @@ def main() -> int:
                 "() => !document.getElementById('btnCtxCompact').disabled")
             check(True, "压缩完成后按钮恢复可点")
 
+            # ---- 2b. 压完的账写在同一屏(占用与压缩本来就该是一处) ----
+            _push(page, {"type": "session_metrics", "session": "s1", **{
+                **METRICS, "context_tokens": 8000,
+                "context_breakdown": {**METRICS["context_breakdown"],
+                                      "used": 8000, "source": "estimated",
+                                      "estimated": 8000,
+                                      "buckets": [
+                                          {"key": "system", "label": "系统提示词",
+                                           "tokens": 1500},
+                                          {"key": "tools", "label": "工具定义",
+                                           "tokens": 5800},
+                                          {"key": "skills", "label": "Skill",
+                                           "tokens": 700, "count": 14},
+                                          {"key": "messages", "label": "对话消息",
+                                           "tokens": 0},
+                                      ]},
+            }})
+            page.wait_for_selector("#ctxPanel .ctx-res")
+            res = page.locator("#ctxPanel .ctx-res").inner_text()
+            check("26K → 8K" in res, f"压缩结果(前→后)落在同一屏({res})")
+
             # ---- 3. session_metrics 事件刷新面板数字 ----
             _push(page, {"type": "session_metrics", "session": "s1", **{
                 **METRICS,
                 "context_tokens": 65000,
                 "context_breakdown": {**METRICS["context_breakdown"],
-                                      "used": 65000,
+                                      "used": 65000, "estimated": 65000,
+                                      "source": "estimated",
                                       "buckets": [
                                           {"key": "system", "label": "系统提示词", "tokens": 3200},
                                           {"key": "tools", "label": "工具定义", "tokens": 5800},
@@ -175,7 +220,13 @@ def main() -> int:
             page.wait_for_function(
                 "() => document.querySelector('#ctxPanel .ctx-pct')"
                 " && document.querySelector('#ctxPanel .ctx-pct').textContent === '20%'")
-            check(True, "压缩后推送新指标,面板百分比即时更新(8% → 20%)")
+            check(True, "推送新指标,面板百分比即时更新(8% → 20%)")
+            check(page.evaluate(
+                "() => !document.querySelector('#ctxPanel .ctx-res')"),
+                "数字已经不是那次压缩的了 —— 上一句「26K → 8K」必须撤掉,不留着骗人")
+            src2 = page.locator("#ctxPanel .ctx-src").inner_text()
+            check("本地估算" in src2 and "实测" not in src2,
+                  f"来源跟着数字走:这一屏改成本地估,行里就不许再写实测({src2[:30]}…)")
 
             # ---- 4. 点别处收起面板 ----
             page.click("#chat", position={"x": 400, "y": 200})
