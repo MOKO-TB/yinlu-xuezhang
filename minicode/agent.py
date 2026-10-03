@@ -145,6 +145,9 @@ class Agent:
                     on_text=self.ui.on_text_delta,
                     on_reasoning=self.ui.on_reasoning_delta,
                     on_retry=self.ui.on_retry,
+                    fallback_provider_id=self._fallback_provider(),
+                    on_fallback=lambda e, n: self.ui.push(
+                        "info", text=str(e)) if hasattr(self.ui, "push") else None,
                 )
             except KeyboardInterrupt:
                 self.ui.turn_interrupted()
@@ -1032,6 +1035,19 @@ class Agent:
             return True
         return (st.st_size != post["size"]
                 or st.st_mtime > post["mtime"] + 1.0)
+
+    def _fallback_provider(self) -> str:
+        """C2(v0.9.108):主供应商 401/404/403 时的备选 —— 第一个「非活动、
+        有可用 Key」的供应商;没有就空串(不回落)。**只挑不切**:真切换在
+        llm.stream_chat 里,且切换必须经 on_fallback 说出口。"""
+        cfg = getattr(self.ctx, "config", None)
+        if cfg is None:
+            return ""
+        active = cfg.active_provider_id
+        for p in cfg.providers:
+            if p.id != active and p.has_key and p.enabled and p.enabled_models():
+                return p.id
+        return ""
 
     def _run_config_hook(self, kind: str, tool, args: dict,
                          result: str | None = None) -> "dict | None":
