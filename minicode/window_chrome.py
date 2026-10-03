@@ -104,6 +104,33 @@ def _dwmapi():
         return None
 
 
+# --- 子进程的模态错误框 ----------------------------------------------------
+# SEM_FAILCRITICALERRORS(0x1):关掉了「应用程序无法正常启动(0xc0000142)」那一类
+#   由加载器/系统弹出来的**模态**框 —— 模态的意思是:用户不点掉,整个程序就停在那儿。
+# SEM_NOGPFAULTERRORBOX(0x2):同一形状的崩溃框( Wer 那个「程序已停止工作」)。
+# 错误模式是**进程级并被子进程继承**的,所以在开机设一次,后面所有 git.exe / bash
+# 起不来的时候都不许再弹到用户脸上 —— 该看得见的是界面里那句实话,不是一个系统框。
+SEM_FAILCRITICALERRORS = 0x0001
+SEM_NOGPFAULTERRORBOX = 0x0002
+
+
+def silence_child_error_dialogs() -> dict:
+    """开机调用一次:本机若不接受就如实回,绝不影响界面。
+
+    → {ok, mode, msg}。`mode` 是系统返回的**旧**错误模式(能读到就有它,读不到给 -1)。
+    """
+    if getattr(ctypes, "windll", None) is None:      # 非 Windows(macOS/Linux 开发机)
+        return {"ok": False, "mode": -1, "msg": "非 Windows,没有这类错误框"}
+    want = SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
+    try:
+        prev = ctypes.windll.kernel32.SetErrorMode(want)
+        # SetErrorMode 返回旧值;旧值里没带我们要的这两位也算成功(现在带上了)
+        return {"ok": True, "mode": int(prev), "msg": ""}
+    except Exception as e:
+        return {"ok": False, "mode": -1,
+                "msg": f"{type(e).__name__}: {str(e)[:80]}"}
+
+
 def _hwnd_of(window) -> int:
     """pywebview 窗口 → 原生 HWND(拿不到返回 0,调用方据此降级)。
 

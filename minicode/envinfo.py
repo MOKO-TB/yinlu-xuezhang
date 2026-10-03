@@ -44,7 +44,7 @@ def collect(workspace: Path | None = None) -> dict:
         "added": 0, "removed": 0, "partial": False,
         "app_dir": "", "backend": "", "writable": True,
         "frozen": bool(paths.FROZEN),
-        "jobs": [], "msg": "",
+        "jobs": [], "msg": "", "git_note": "",
     }
     try:
         # diagnostics() 的真实字段:app_dir / config / backend / frozen / writable。
@@ -60,6 +60,9 @@ def collect(workspace: Path | None = None) -> dict:
         return out
 
     ch = worktree.changes(here)
+    # git 起不来时(用户看图 p7:打开监控栏就弹一个 0xc0000142 的系统框)这一屏要说的
+    # 不是"没有改动",而是"这台机器的 git 问不动" —— 熔断之后连问都不再问第二遍。
+    out["git_note"] = worktree.git_unavailable()
     if not ch.get("ok"):
         out["msg"] = str(ch.get("msg") or "这份工作区读不出改动")
     else:

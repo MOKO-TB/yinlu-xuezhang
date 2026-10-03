@@ -33,9 +33,11 @@ if str(ROOT) not in sys.path:
 # 界面上从上到下那一串(与 tests/test_rail_entries.py 那份清单同源):
 # v0.9.39 搬进来 14 颗,v0.9.89 加了第 15 颗「体检」—— 两份清单必须一起改。
 RAIL_IDS = ["btnMap", "btnSchedule", "btnMood", "btnPlan", "btnActivity",
-            "btnSkills", "btnMemory", "btnUsage", "btnMyData", "btnHealth",
-            "btnSandbox",
-            "btnExport", "btnUndo", "btnCompact", "btnTheme"]
+            "btnSkills", "btnMemory", "btnUsage",
+            "btnTerminal", "btnAutomate",       # v0.9.112:终端 / 自动化
+            "btnMyData", "btnHealth", "btnSandbox",
+            "btnExport", "btnUndo", "btnCompact", "btnTheme",
+            "btnSideToggle"]                     # v0.9.112:收起左侧栏
 
 STUB_JS = """
 window.__CALLS__ = [];
@@ -362,6 +364,34 @@ def main() -> int:
         # 现在深色 → 字写「浅色」。这一条一开始我写反了,红的是断言,不是界面。
         check(cap("btnTheme") == ("浅色" if dark_after else "深色"),
               f"格子上写的仍是'下一步能切去的那一档':{cap('btnTheme')!r}")
+
+        # ---- 13.5 🖥 终端 / ⏱ 自动化 / ◀ 收起侧栏(v0.9.112 新三颗)----
+        page.click("#btnTerminal")
+        page.wait_for_timeout(250)
+        check(page.evaluate("() => document.getElementById('termOverlay')"
+                            ".classList.contains('show')"),
+              "🖥 那一点真的打开后台命令面板")
+        check(len(calls("get_terminal")) == 1,
+              "面板里的数据是问本机要的,不是前端自己攒一份")
+        page.click("#termClose")
+        page.click("#btnAutomate")
+        page.wait_for_timeout(250)
+        check(page.evaluate("() => document.getElementById('autoOverlay')"
+                            ".classList.contains('show')"),
+              "⏱ 那一点真的打开自动化面板")
+        check(len(calls("get_automation")) == 1, "定时任务的清单来自 jobs.facts()")
+        page.click("#autoClose")
+        closed_before = page.evaluate("() => document.querySelector('.app')"
+                                      ".classList.contains('side-closed')")
+        page.click("#btnSideToggle")
+        page.wait_for_timeout(250)
+        check(page.evaluate("() => document.querySelector('.app')"
+                            ".classList.contains('side-closed')") is not closed_before,
+              "◀ 那一点真的把侧栏收/放了一次")
+        check(page.evaluate("() => localStorage.getItem('gcode-side')") is not None,
+              "收起这件事写到本机偏好里(下次开机还记得)")
+        page.click("#btnSideToggle")            # 放回去,后面那一节要看全部格子
+        page.wait_for_timeout(200)
 
         # ---- 14. 矮窗口里每一颗仍全部够得到(入口看不见 = 功能没了) ----
         page.set_viewport_size({"width": 1280, "height": 480})

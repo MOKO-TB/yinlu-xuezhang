@@ -18,6 +18,7 @@
   let data = null;                  // 后端下发的 {base_map,size,items,not_buildings,...}
   let byNo = new Map();
   let svg = null, gBase = null, gHi = null, gPin = null;
+  let stageRO = null;               // 舞台尺寸一变就重算 viewBox(见 watchStage 那段注释)
   const view = { cx: 1280, cy: 640, k: 1 };
   let boxes = [];                   // 当前框出的条目
   let boxColor = "orange";
@@ -84,6 +85,22 @@
     svg.setAttribute("viewBox",
       `${(view.cx - vw / 2).toFixed(1)} ${(view.cy - vh / 2).toFixed(1)} ` +
       `${vw.toFixed(1)} ${vh.toFixed(1)}`);
+  }
+
+  /* 舞台的高度不是我们说了算:筛选卡片与候选列表一出现就来挤它(用户报的「地图被
+     压成一条」),窗口、侧栏、任务栏变化同样会改它。而 viewBox 是按**当时**的宽高比
+     算的,算完不回头 —— 布局一变,画上去的图就是拉扁的。
+     所以挂一个 ResizeObserver:尺寸变了就按新的宽高比重算一次视角(中心与缩放不动,
+     只换 viewBox)。老 WebView 没有这个 API 就退回"开面板时算一次"的旧行为。 */
+  function watchStage(stage) {
+    if (stageRO) { stageRO.disconnect(); stageRO = null; }
+    if (!window.ResizeObserver) return;
+    let raf = 0;
+    stageRO = new ResizeObserver(() => {
+      if (raf) return;              // 一次布局抖动里多次回调只重算一次
+      raf = requestAnimationFrame(() => { raf = 0; applyView(); });
+    });
+    stageRO.observe(stage);
   }
 
   /* 把可见区域对准一批图形对象;pad=1 表示刚好铺满 */
@@ -584,6 +601,7 @@
     gBase = node("g", {}); gHi = node("g", {}); gPin = node("g", {});
     svg.appendChild(gBase); svg.appendChild(gHi); svg.appendChild(gPin);
     stage.appendChild(svg);
+    watchStage(stage);              // 卡片/列表把舞台挤扁时,视角要跟着重算
     drawBase();
     drawBoxes();
     fitAll();

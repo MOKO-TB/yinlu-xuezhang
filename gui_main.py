@@ -193,6 +193,14 @@ def main() -> None:
             return
         activate.set_pending_panel(activate.parse_uri(act_uri).get("panel"))
     config = ensure_config()  # 未配置也照常开窗,界面内给出警示
+    # 子进程起不来时**不许**弹到用户脸上:git.exe / bash 这类控制台子进程在桌面版里
+    # 初始化失败时,Windows 会弹一个模态的「应用程序无法正常启动(0xc0000142)」框 ——
+    # 点掉之前整个窗口卡住,而且用户报的是"每次打开任务监控都来一次"。错误模式是
+    # **进程级、子进程继承**的,所以必须在起任何子进程(MCP 服务器在下面那一步)之前设。
+    from minicode import window_chrome
+    quiet = window_chrome.silence_child_error_dialogs()
+    if not quiet["ok"] and quiet["msg"]:
+        tray.log("静默子进程错误框没做成:" + quiet["msg"])
     # 工作区:上次选的那个(workspaces.json 里的 current)优先,没有/失效才用
     # 默认工作区(= exe 目录,也就是改造前的写死值)
     workspace = ws.startup_workspace(app_path())

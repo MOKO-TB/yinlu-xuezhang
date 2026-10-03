@@ -180,7 +180,7 @@ def _call_index(messages) -> tuple[dict, dict, list]:
     return calls, results, order, result_ts
 
 
-def _extract_subagents(calls, results) -> list[dict]:
+def _extract_subagents(calls, results, result_ts=None) -> list[dict]:
     items = []
     for cid, call in calls.items():
         if call["name"] != "task":
@@ -189,6 +189,13 @@ def _extract_subagents(calls, results) -> list[dict]:
         tasks = [str(t) for t in _as_list(call["args"].get("task"))]
         n = max(len(types), len(tasks)) or 1
         result = results.get(cid)
+        # 耗时:发起那条 assistant 消息的 ts → 结果落档那条 tool 消息的 ts。
+        # 口径与时间线那一条一致(不含模型思考的间隙),老留档没 ts 就**不给时间**。
+        secs = None
+        start = _ts_epoch(call.get("ts") or "")
+        end = _ts_epoch((result_ts or {}).get(cid) or "")
+        if start is not None and end is not None:
+            secs = max(0, int(round(end - start)))
         # 并行派发时一次调用会出 N 个子代理:一调用一行还是 N 行?
         # N 行 —— 用户关心的正是"这四个探索各查了什么",合成一行就没法逐个看。
         for i in range(n):
@@ -203,10 +210,23 @@ def _extract_subagents(calls, results) -> list[dict]:
             else:
                 status, badge = "ok", "已返回报告"
                 detail = result[:DETAIL_MAX]
+            bits = [ttype or "子代理"]
+            if detail:
+                # 一次调用派了 N 路时,回来的只有**一份合并报告**:每行都写"报告 N 字"
+                # 等于把同一份字数念 N 遍。标成"合并"二字,不假装各算各的。
+                bits.append(("合并报告 " if n > 1 else "报告 ") + f"{len(result)} 字")
+            if secs is not None:
+                bits.append(f"用时 {secs}s")
+            files = (len(_FILE_TOOLS_LINE.findall(result))
+                     if (result and n == 1) else None)
+            if files:
+                bits.append(f"产出 {files} 处文件")
             items.append({
                 "key": f"sa:{cid}:{i}",
                 "title": _clip(task) or f"{ttype} 子代理",
-                "sub": (f"{ttype} · 报告 {len(result)} 字" if detail else ttype),
+                "sub": " · ".join(bits),
+                "type": ttype, "secs": secs,
+                "files": files,
                 "status": status, "badge": badge,
                 "action": ({"type": "detail", "label": "看报告", "text": detail}
                            if detail else None),
@@ -748,7 +768,8 @@ def now_line(now: dict | None) -> dict | None:
 
 # ------------------------------------------------------------------ 对外入口
 
-def session_activity(messages, workspace=None, live=None, now=None, busy=True) -> dict:
+def session_activity(messages, workspace=None, live=None, now=None, busy=True,
+                    group_limit=None) -> dict:
     """把会话消息聚合成右侧面板要的那份字典(纯函数,不碰磁盘以外的东西)。
 
     `busy` = 这个会话此刻还在不在跑。它决定"没有回话的那一步"算进行中还是算
@@ -757,7 +778,7 @@ def session_activity(messages, workspace=None, live=None, now=None, busy=True) -
     """
     calls, results, order, result_ts = _call_index(messages)
     groups = {
-        "subagents": _extract_subagents(calls, results),
+        "subagents": _extract_subagents(calls, results, result_ts),
         "files": _extract_files(calls, results, workspace),
         "web": _extract_web(calls, results),
         "sources": _extract_sources(calls, results),
@@ -765,6 +786,10 @@ def session_activity(messages, workspace=None, live=None, now=None, busy=True) -
     }
     # 抽取器都按调用顺序 append,所以倒过来就是"最新在上"(合并过行的类别以最后一次
     # 改动为准,同样落在末尾)
+    # 每类默认列 12 行(`GROUP_LIMIT`);界面点了「展开全部」时传 0 = 不截。
+    # 为什么允许 0:截断提示要能变成"点一下就看完"的动作,否则那句「另有 N 条」
+    # 是一句只能看不能办的死话 —— 而这一栏每一行都该点得动是它存在的理由。
+    cap = GROUP_LIMIT if group_limit is None else max(0, int(group_limit))
     out, total = [], 0
     for key, label, icon in GROUPS:
         rows = list(reversed(groups[key]))
@@ -774,8 +799,8 @@ def session_activity(messages, workspace=None, live=None, now=None, busy=True) -
                     r["status"], r["badge"] = "stale", "已中断"
         total += len(rows)
         out.append({"key": key, "label": label, "icon": icon,
-                    "count": len(rows), "items": rows[:GROUP_LIMIT],
-                    "more": max(0, len(rows) - GROUP_LIMIT)})
+                    "count": len(rows), "items": rows[:cap or None],
+                    "more": max(0, len(rows) - cap) if cap else 0})
     errors = sum(1 for cid in order if cid in results and _failed(results[cid]))
     silent = [cid for cid in order if cid not in results]
     running = len(silent) if busy else 0

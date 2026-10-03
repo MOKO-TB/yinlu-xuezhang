@@ -600,6 +600,28 @@ def bg_facts() -> list[dict]:
              "exit_code": j.exit_code, "chars": j.kept,
              "elapsed": int(time.monotonic() - j.started)} for j in jobs]
 
+def terminal_facts(tail_chars: int = 4000) -> dict:
+    """给界面「终端」那一屏:清单 + 每条命令的输出末尾(只读)。
+
+    为什么不在桥里拿 id 去翻 `_bg_jobs`:门面只给数据、不给内部对象(那套口径
+    在 gui_bridge 的 PublicApi 上写着)。为什么那句"缓冲只留尾部"由后端说:
+    上限是 `BG_BUFFER_CHARS`,前端抄一份迟早和它漂 —— 漂了就是界面在说一句过时的话。
+    """
+    with _bg_lock:
+        jobs = list(_bg_jobs.values())
+    rows = [{"id": j.id, "command": j.command, "running": j.running,
+             "exit_code": j.exit_code, "killed": bool(j.killed),
+             "chars": j.kept, "dropped": j.dropped,
+             "elapsed": int(time.monotonic() - j.started),
+             "tail": j.tail(tail_chars)} for j in jobs]
+    # 在跑的排前面;同一状态里跑得久的在前 —— 用户开这一屏找的就是"那条还没回来的"
+    rows.sort(key=lambda r: (not r["running"], -r["elapsed"]))
+    return {"jobs": rows, "buffer_chars": BG_BUFFER_CHARS,
+            "note": (f"这是**这一程**的临时账:关掉程序就没了。每条只留最后 "
+                     f"{BG_BUFFER_CHARS} 字输出,要完整结果请把命令输出重定向到"
+                     "工作区文件再读。")}
+
+
 def bg_brief_for_model(ctx=None) -> str:
     """本机后台任务的现状一行,给**本次请求**用;没有任务时返回空串。
 

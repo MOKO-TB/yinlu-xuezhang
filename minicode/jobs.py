@@ -90,11 +90,17 @@ def due(spec: JobSpec, now: datetime, last_run: datetime | None) -> bool:
 
 
 def due_jobs(specs: list[JobSpec], now: datetime | None = None,
-             state: dict | None = None) -> list[JobSpec]:
-    """到期的任务。接线时(A2)唯一的调用面。"""
+             state: dict | None = None, disabled=None) -> list[JobSpec]:
+    """到期的任务。接线时(A2)唯一的调用面。
+
+    `disabled=None` → 读本机那份开关:用户在「自动化」面板里关掉的不该再自己跑。
+    显式传 `[]` = "我要看什么都没关时它会到期什么"(测试与命令行用)。
+    """
     moment = now or datetime.now()
     book = load_state() if state is None else state
-    return [s for s in specs if due(s, moment, last_run(s.id, book))]
+    off = set(read_disabled() if disabled is None else disabled)
+    return [s for s in specs
+            if s.id not in off and due(s, moment, last_run(s.id, book))]
 
 
 # ---------------------------------------------------------------- A1 · 账本
@@ -225,3 +231,112 @@ def snapshot(specs: list[JobSpec], state: dict | None = None,
         lines.append(f"- {spec.id}({rhythm_text(spec)}):{ran_line};{state_line}")
     lines.append("机器没开机的那一班会跳过,下一班自然再来;上面的结论不含任务正文。")
     return "\n".join(lines)
+
+
+# ------------------------------------------------------ 界面那一屏(v0.9.112 自动化)
+#
+# 这之前任务表在本机只有两种问法:命令行里 `desktop_notify action=jobs` 念一段人话,
+# 和跨会话看板那几行(而且**从没跑过的任务整条不列**)。用户要的「自动化」面板要的是
+# 结构化的一份清单:有哪几个、按什么节奏、下一次大概什么时候、上次跑出了什么、
+# 能不能关掉。下面这几个函数只做一件事 —— 把那五问从现成的账与 spec 里读出来,
+# 不新起第二份真相(节奏、到期判定、结论全都复用上面那几个函数)。
+
+PREF_FILE = "jobs-pref.json"
+
+
+def pref_path() -> Path:
+    return app_path(PREF_FILE)
+
+
+def read_disabled() -> list[str]:
+    """这台机器上被关掉的任务 id。读不出来 = 一个都没关(方向:照登记跑)。"""
+    try:
+        raw = json.loads(pref_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    ids = raw.get("disabled") if isinstance(raw, dict) else None
+    return [str(x) for x in ids] if isinstance(ids, list) else []
+
+
+def set_enabled(job_id: str, on: bool) -> dict:
+    """开/关一个定时任务。写完之后**读回来**再说成没成 —— 写不进去不能假成功。
+
+    关掉的效力只有一处:`due_jobs` 不再把它算作到期。记账、看板、这一屏都还列得出它,
+    所以"关掉了"不等于"消失了",用户能随时再开回来。
+    """
+    off = set(read_disabled())
+    if on:
+        off.discard(str(job_id))
+    else:
+        off.add(str(job_id))
+    want = {"disabled": sorted(off),
+            "_说明": "这些定时任务不再自动到期跑;记账与界面仍然列得出来。"
+                   "删掉这个文件 = 全部恢复。"}
+    try:
+        pref_path().write_text(json.dumps(want, ensure_ascii=False, indent=1),
+                               encoding="utf-8")
+    except OSError as e:
+        return {"ok": False, "disabled": sorted(off),
+                "msg": f"本机偏好写不进去({type(e).__name__}),这次开关没生效"}
+    return {"ok": True, "disabled": read_disabled(), "msg": ""}
+
+
+def next_due(spec: JobSpec, now: datetime,
+             last: datetime | None) -> datetime | None:
+    """下一次大概什么时候该跑。
+
+    **算不出确切钟点的一律回 None**,由调用方说"下一次心跳"—— 没有 hour 的 daily
+    只保证"当天",编一个 00:00 摆给人看是一句假话;on_demand 永远不会自己跑,更是 None。
+    """
+    if spec.cadence == "on_demand":
+        return None
+    if spec.cadence == "interval":
+        base = last or now
+        return base + timedelta(minutes=max(1, int(spec.every)))
+    if spec.hour is None:
+        return None
+    at = now.replace(hour=spec.hour, minute=spec.minute, second=0, microsecond=0)
+    if spec.cadence == "daily":
+        return at if at > now else at + timedelta(days=1)
+    if spec.cadence == "every_days":
+        base = last or now
+        cand = base.replace(hour=spec.hour, minute=spec.minute, second=0,
+                            microsecond=0) + timedelta(days=max(1, int(spec.every)))
+        return cand if cand > now else cand + timedelta(days=1)
+    # weekly:往后数到那一天(最多七天),钟点过了就再等一周
+    for back in range(0, 8):
+        cand = (now + timedelta(days=back)).replace(
+            hour=spec.hour, minute=spec.minute, second=0, microsecond=0)
+        if cand.weekday() == spec.weekday and cand > now:
+            return cand
+    return None
+
+
+def facts(specs: list[JobSpec], now: datetime | None = None,
+          state: dict | None = None, disabled=None) -> list[dict]:
+    """给「自动化」那一屏的结构化清单(顺序 = 登记顺序,不按时序排)。"""
+    moment = now or datetime.now()
+    book = load_state() if state is None else state
+    off = set(read_disabled() if disabled is None else disabled)
+    rows = []
+    for spec in specs:
+        entry = book.get(spec.id) if isinstance(book.get(spec.id), dict) else {}
+        last = _parse(entry.get("last_run"))
+        nxt = next_due(spec, moment, last)
+        rows.append({
+            "id": spec.id,
+            "label": spec.label or spec.id,
+            "cadence": spec.cadence,
+            "rhythm": rhythm_text(spec),
+            "hour": spec.hour, "minute": spec.minute,
+            "weekday": spec.weekday, "every": spec.every,
+            "enabled": spec.id not in off,
+            "due_now": (spec.id not in off) and due(spec, moment, last),
+            "next": (nxt.strftime("%m-%d %H:%M") if nxt else ""),
+            "next_hint": ("按需触发,不会自己跑" if spec.cadence == "on_demand"
+                          else "当天到点前(没有固定钟点)" if nxt is None else ""),
+            "last": last.strftime("%Y-%m-%d %H:%M") if last else "",
+            "runs": runs_of(spec.id, book),
+            "result": str(entry.get("result") or ""),
+        })
+    return rows

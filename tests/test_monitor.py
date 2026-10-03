@@ -115,3 +115,18 @@ def test_public_api_forwards_the_monitor_names():
         assert hasattr(PublicApi, name), name
     assert list(inspect.signature(PublicApi.set_monitor_pref).parameters) == \
         ["self", "is_open", "folded_json"]
+
+
+def test_section_names_match_the_frontends_own_sections():
+    """`SECTIONS` 与前端 `actSect("…")` 的段名必须一一对应。
+
+    名字漂了的后果不是报错,而是**"用户折了它、下次开机又弹开"** —— `_clean_folded`
+    把陌生键丢掉(v0.9.111 的「环境信息」就是这么漏的:那一节早就在画,段名却没登记,
+    折叠状态写进去、读出来时被当垃圾扔了)。这条闸把"改一处要改两处"变成机器的事。
+    """
+    import re
+    from pathlib import Path
+    fe = (Path(__file__).resolve().parent.parent / "frontend" / "index.html")         .read_text(encoding="utf-8")
+    names = set(re.findall(r'actSect\(\s*"([a-z_]+)"', fe))
+    assert names == set(monitor.SECTIONS), (
+        f"前端在画的段与登记过的段对不上:{names ^ set(monitor.SECTIONS)}")

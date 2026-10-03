@@ -1062,7 +1062,14 @@ try {
                       font-size:12px; cursor:pointer; }
   .map-search button:hover{ border-color:var(--primary); color:var(--primary-text); }
   .map-search-info{ padding:5px 14px 0; font-size:11.5px; color:var(--text-3); min-height:16px; }
-  .map-stage{ flex:1; min-height:0; background:#F3EADC; position:relative; overflow:hidden; }
+  /* 舞台是这一列里唯一该伸缩的一块,但"能缩到 0"是 bug 不是特性:一按类别筛选,
+     下面的卡片(内容 ~250px)与候选列表(32% 屏高)就来挤它 —— 用户报的「地图被压成
+     一条,没法正常使用」就是这么来的(以前 `min-height:0` 等于宣布它可以让到底)。
+     给它一个真下限,多出来的内容改在自己肚子里滚。 */
+  .map-stage{ flex:1 1 auto; min-height:min(42vh, 300px);
+              background:#F3EADC; position:relative; overflow:hidden; }
+  /* 固定那几行不参与伸缩:标题/搜索/提示/图例被压一半比地图被压一条更难读 */
+  .map-head, .map-search, .map-search-info, .map-legend, .map-notice{ flex:0 0 auto; }
   html.dark .map-stage{ background:#101922; }
   .cm-svg{ width:100%; height:100%; display:block; cursor:grab; user-select:none;
            -webkit-user-select:none; }
@@ -1086,8 +1093,10 @@ try {
                color:var(--text-2); background:var(--glass-lite); }
   .map-notice.warn{ border-color:var(--warning); background:var(--warning-bg);
                     color:var(--warning); }
-  /* 单栋标注图卡片:点图看大图 */
-  .map-card{ display:none; padding:10px 12px 12px; border-top:1px solid var(--line-soft); }
+  /* 单栋标注图卡片:点图看大图。它和候选列表都是"内容多到吃整屏"的那一类 ——
+     以前它们想长多长就长多长,挤的是地图;现在各自封顶、在自己肚子里滚。 */
+  .map-card{ display:none; padding:10px 12px 12px; border-top:1px solid var(--line-soft);
+             flex:0 1 auto; min-height:0; max-height:34%; overflow-y:auto; }
   .map-card .mc-ask{ font-size:12px; font-weight:800; color:var(--warning);
                      background:var(--warning-bg); border:1px solid var(--warning);
                      border-radius:var(--r-m); padding:6px 10px; margin-bottom:8px; }
@@ -1119,7 +1128,8 @@ try {
                       font-weight:700; color:var(--text-2); cursor:pointer; }
   .map-card .mc-copy:hover{ border-color:var(--primary); color:var(--primary-text); }
   .map-card .mc-hint{ font-size:11.5px; color:var(--text-3); margin-top:6px; }
-  .map-list{ display:none; max-height:32%; overflow-y:auto; padding:6px 10px 10px;
+  .map-list{ display:none; max-height:26%; overflow-y:auto; padding:6px 10px 10px;
+             flex:0 1 auto; min-height:0;
              border-top:1px solid var(--line-soft); }
   .ml-head{ font-size:11.5px; font-weight:800; color:var(--text-3); padding:5px 6px; }
   .ml-row{ padding:6px 8px; border-radius:10px; cursor:pointer; font-size:12.5px;
@@ -1504,6 +1514,33 @@ try {
              backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
   .app.act-open .activity{ display:flex; }
   .app.act-open{ grid-template-columns:56px 260px 1fr 300px; }   /* 最左 56px 是 p3 入口栏;300px 与 map 让位的值同 */
+  /* 收起侧栏(Qoder 那颗 Ctrl+B):收的是中间这一列,最左 56px 入口栏留着 ——
+     不用先点开什么才收得回去。改的是**网格列宽**而不是 display:none:侧栏里有一堆
+     带状态的节点(计划角标、会话清单、展开到一半的项目树),藏宽度保节点,再展开时
+     不用重画、也不会把用户滚到的位置弄丢。 */
+  .app.side-closed{ grid-template-columns:56px 0 minmax(0,1fr); }
+  .app.side-closed.act-open{ grid-template-columns:56px 0 minmax(0,1fr) 300px; }
+  .app.side-closed .sidebar{ overflow:hidden; border-right:none; }
+  /* 终端(后台命令)与自动化(定时任务)两个面板共用的几行;
+     弹层本身走现成的 .overlay + .dialog,不再抄一套遮罩。 */
+  .tp-row{ display:flex; align-items:center; gap:8px; padding:7px 8px;
+           border-radius:10px; font-size:12.5px; }
+  .tp-row + .tp-row{ border-top:1px solid var(--line-soft); }
+  .tp-row .tp-cmd{ flex:1; min-width:0; font-weight:700; color:var(--text-1);
+                   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tp-row .tp-n{ font-variant-numeric:tabular-nums; color:var(--text-3);
+                 font-size:11.5px; flex:none; }
+  .tp-out{ margin:8px 0 0; padding:8px 10px; max-height:38vh; overflow:auto;
+           background:var(--glass-lite); border:1px solid var(--line-soft);
+           border-radius:10px; font-family:ui-monospace,Consolas,monospace;
+           font-size:11.5px; line-height:1.5; white-space:pre-wrap;
+           word-break:break-all; color:var(--text-2); }
+  .tp-note{ font-size:11.5px; line-height:1.55; color:var(--text-3); margin:4px 0 8px; }
+  .jb-sw{ margin-left:auto; border:1px solid var(--line-soft); background:var(--glass-lite);
+          color:var(--text-2); border-radius:var(--r-full); padding:2px 10px;
+          font-size:11.5px; font-weight:800; cursor:pointer; flex:none; }
+  .jb-sw:hover{ border-color:var(--primary); color:var(--primary-text); }
+  .jb-sw.off{ color:var(--text-3); background:transparent; }
   body.act-open .map-panel{ right:300px; }        /* 两栏并排时地图不压住活动面板 */
   .act-head{ display:flex; align-items:center; gap:6px; padding:12px 12px 6px; }
   .act-head b{ font-size:13px; color:var(--text-1); white-space:nowrap; }
@@ -1579,6 +1616,10 @@ try {
   .act-cap.fold:hover{ background:var(--primary-light); color:var(--primary-text); }
   .act-caret{ width:9px; display:inline-block; font-size:9px; color:var(--text-3); }
   .act-sect.folded .act-sectbody{ display:none; }
+  /* 类别那一层(产出与来源里的「文件」「网页」…)以前点不动:段级折叠是后加的,
+     类别只有 DOM 没有折叠壳。用户要的「多个小分区」就是这一层能各自收起来。 */
+  .act-sec.folded .act-secbody{ display:none; }
+  .act-sec .act-cap.fold{ cursor:pointer; user-select:none; -webkit-user-select:none; }
   .act-now{ display:flex; align-items:flex-start; gap:8px; padding:7px 8px;
             border:1px solid var(--line-soft); border-radius:10px;
             background:var(--primary-light); }
@@ -1796,6 +1837,25 @@ try {
            backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
            font-size:12px; color:var(--text-1); line-height:1.6; pointer-events:none; }
 .rail-pop b{ color:var(--text-3); font-size:11px; display:block; margin-bottom:2px; }
+/* 轮次那一叠小卡(v0.9.112):刻度条本身 8px 宽、又不常亮,用户看图 p2 说
+   「之前问题的跳转太难看到了,想要 Qoder 那样多个小分区而不是一长条」。
+   刻度留着当入口(它一直在、点得到),点开才摊出一叠小卡:每问一张,
+   十问一组带个小头 —— 不再是「一整条看不完」。 */
+.chat-rail{ opacity:.62; }
+.rail-pop.turns{ pointer-events:auto; width:min(340px,86vw); max-height:62vh;
+                 overflow:auto; cursor:default; }
+.rail-pop .tg-head{ font-size:10.5px; font-weight:800; color:var(--text-3);
+                    margin:9px 2px 4px; }
+.rail-pop .turn-card{ display:flex; gap:8px; align-items:baseline;
+                      padding:6px 8px; margin:2px 0; border-radius:10px;
+                      background:var(--glass-lite); border:1px solid var(--line-soft); }
+.rail-pop .turn-card:hover{ border-color:var(--primary); background:var(--primary-light); }
+.rail-pop .turn-card .tc-n{ flex:none; font-size:11px; font-weight:900;
+                            color:var(--primary-text); font-variant-numeric:tabular-nums; }
+.rail-pop .turn-card .tc-t{ flex:1; min-width:0; font-size:12px; color:var(--text-2);
+                            overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.msg.user.flash .bubble{ animation:turnFlash .9s ease 2; }
+@keyframes turnFlash{ 50%{ box-shadow:0 0 0 3px var(--primary); } }
 /* ---- 会话图片灯箱(v0.9.94,p7/p8) ---- */
 #imgLightbox{ z-index:80; cursor:zoom-out; }
 #imgLightbox .il-stage{ display:flex; align-items:center; justify-content:center;
@@ -1832,6 +1892,8 @@ try {
     <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐<span class="cap">技能</span></button>
     <button id="btnMemory" title="整理长期记忆">🧠<span class="cap">记忆</span></button>
     <button id="btnUsage" title="查看每日 token 消耗">📊<span class="cap">用量</span></button>
+    <button id="btnTerminal" title="后台命令:学长用 bash 丢到后台跑的命令都在这里——状态、耗时、输出末尾。只读,不在这里输入命令">🖥<span class="cap">终端</span></button>
+    <button id="btnAutomate" title="自动化:本机登记了哪几个定时任务、下一次什么时候跑、上次跑出什么,以及关掉/开回来">⏱<span class="cap">自动化</span></button>
     <button id="btnMyData" title="我的数据:都存在哪台目录、都有哪些文件,以及导出/导入迁移包(密钥与教务登录态永不外发)">💾<span class="cap">数据</span></button>
     <button id="btnSandbox" style="display:none" title="沙箱状态">🛡<span class="cap">沙箱</span></button>
     <div class="sep"></div>
@@ -1839,6 +1901,7 @@ try {
     <button id="btnUndo" title="撤销最近一次文件改动">↶<span class="cap">撤销</span></button>
     <button id="btnCompact" title="立即压缩上下文">🗜<span class="cap">压缩</span></button>
     <button id="btnTheme" title="切换深色/浅色主题(系统标题栏跟着一起换)">🌙<span class="cap" id="themeCap">深色</span></button>
+    <button id="btnSideToggle" title="收起/展开左侧栏(Ctrl+B)">◀<span class="cap" id="sideCap">收起栏</span></button>
   </nav>
   <aside class="sidebar">
     <div class="logo"><img class="m" src="img/cube.png" alt="引路学长">引路学长<small id="ver"></small></div>
@@ -2062,6 +2125,34 @@ try {
     <div class="btns">
       <button class="b-no" id="boardClose">关闭</button>
       <button class="b-yes" id="boardRefresh" title="重读四处现成的账">刷新</button>
+    </div>
+  </div>
+</div>
+<!-- 后台命令(用户看图 p5 点名要的「终端面板」)。它**只读**:命令是学长在对话里
+     经权限确认之后跑起来的,这里放一个输入框等于绕过那道确认 —— 那不是"少一个功能",
+     是"多一个后门"。要看输出点行,要跑命令直接在对话里说。 -->
+<div class="overlay" id="termOverlay">
+  <div class="dialog" style="width:640px">
+    <h3>🖥 后台命令</h3>
+    <p class="tp-note" id="termNote"></p>
+    <div id="termBody"></div>
+    <div class="btns">
+      <button class="b-no" id="termClose">关闭</button>
+      <button class="b-yes" id="termRefresh" title="重问一次本机那张后台账">刷新</button>
+    </div>
+  </div>
+</div>
+<!-- 自动化(定时任务)。这份清单的每一个数都读自两处现成事实:
+     proactive.JOB_SPECS(登记了什么)与 jobs-state.json(跑过什么),
+     开关的效力只有一处 —— 关掉之后 due_jobs 不再把它算作到期。 -->
+<div class="overlay" id="autoOverlay">
+  <div class="dialog" style="width:560px">
+    <h3>⏱ 自动化 · 定时任务</h3>
+    <p class="tp-note" id="autoNote"></p>
+    <div id="autoBody" style="max-height:56vh;overflow:auto"></div>
+    <div class="btns">
+      <button class="b-no" id="autoClose">关闭</button>
+      <button class="b-yes" id="autoRefresh" title="重读任务表与那本账">刷新</button>
     </div>
   </div>
 </div>
@@ -2876,6 +2967,9 @@ document.addEventListener("keydown", ev => {
     if (k === "f") { ev.preventDefault(); openFind(); return; }
     if (k === "k") { ev.preventDefault(); openProvDlg(); return; }
     if (k === "n") { ev.preventDefault(); $("btnNewTask").click(); return; }
+    // Ctrl+B 收起/展开左侧栏(Qoder 同一颗):输入框里正在打字时也接住 ——
+    // 用户按的就是"把这一列收起来"这个意图,与 Ctrl+F 那条同一个判断。
+    if (k === "b") { ev.preventDefault(); toggleSide(); return; }
   }
   // Ctrl+Shift+K 聚焦输入框(单列 Ctrl+K 已被模型管理占了;带 Shift 避让)、
   // Ctrl+Shift+[ / ] 在侧栏会话清单里前后切换 —— 与切标签页的肌肉记忆一致。
@@ -5934,6 +6028,8 @@ let actRows = {};              // key -> 行数据(时间线与五类共用;长�
 let actTimer = null;
 let actTick = null;            // 「已跑 N 秒」那一格的走针
 let actFolded = {};            // 段折叠:后端 monitor-pref.json 里那份
+let actGroupFold = {};         // 类别段折叠(产出与来源里的每一类),只在这次打开期间
+let actFull = false;           // 点过「再显示 N 条」之后:每次刷新都要给全
 let actTurnFold = {};          // 轮折叠:只在这次打开期间有效
 let actData = null;            // 上一次后端算好的整份(点折叠时原地重画,不敲桥)
 let actPrefDone = false;       // 没读回偏好之前不写盘:否则等于把默认值冒充成用户的选择
@@ -6019,7 +6115,8 @@ async function activityRefresh() {
   try {
     // 两条一起等:环境信息要跑 git 子进程(几十毫秒起),活动数据每轮事件都在刷。
     // 捆在一次 await 里 = 开这一栏只重画一次,也不会出现"环境那一节永远不来"的竞态。
-    const [envDone, got] = await Promise.all([loadEnvInfo(), api.get_activity()]);
+    const [envDone, got] = await Promise.all(
+      [loadEnvInfo(), api.get_activity(actFull)]);
     data = got;
   } catch (e) { /* 桥还没就绪(开机头几百毫秒)或有别的东西在抢:下一轮事件会再刷 */
     return;
@@ -6250,24 +6347,80 @@ function buildTimeline(parent, tl) {
 function buildGroups(parent, data) {
   const groups = (data.groups || [])
     .filter(g => g && g.count > 0 && (g.items || []).length)
+    // 子代理那一类单独成一段(见 buildSubagents):它不是"产出物",是"谁去干的",
+    // 混在产出与来源里要滚到第四屏才看见 —— 用户点名要的是它自己一节。
+    .filter(g => g.key !== "subagents")
     .sort((x, y) => ACT_ORDER.indexOf(x.key) - ACT_ORDER.indexOf(y.key));
   for (const g of groups) {
-    // 每一类是一块(.act-sec):标题 + 它自己的行 + 截断提示。
-    // 段级折叠是这一轮新加的一层,类别那层原来就有 DOM 结构,
-    // 拆散了 v0.9.34 那支 e2e 就没法再断"类目按后端给的顺序排"。
+    // 每一类是一块(.act-sec):可折的类别头 + 它自己的行 + 可点的"再显示 N 条"。
     const sec = actEl({ cls: "act-sec" });
     sec.dataset.group = String(g.key || "");
-    const cap = actEl("act-cap");
+    const folded = !!actGroupFold[g.key];
+    if (folded) sec.classList.add("folded");
+    const cap = actEl("act-cap fold");
+    cap.title = folded ? "展开这一类" : "折叠这一类";
+    cap.appendChild(actEl("act-caret", folded ? "▸" : "▾"));
     cap.appendChild(actEl({ tag: "b" }, g.label));
+    cap.appendChild(actEl("act-n", g.count + " 条"));
+    cap.addEventListener("click", () => {
+      actGroupFold[g.key] = !folded;
+      if (actData) renderActivity(actData);   // 原地重画,不为折叠去敲桥
+    });
     sec.appendChild(cap);
+    const body = actEl({ cls: "act-secbody" });
     for (const item of g.items || []) {
       actRows[String(item.key || "")] = item;
-      sec.appendChild(actRowEl(item));
+      body.appendChild(actRowEl(item));
     }
-    if (g.more) sec.appendChild(actEl("act-more", `另有 ${g.more} 条没列出(共 ${g.count} 条)`));
+    if (g.more) {
+      // 「另有 N 条没列出」以前是一句只能看不能办的死话 —— 后端默认每类截 12 行,
+      // 放开它的口是 get_activity(full)。点一次之后每次刷新都给全,不然下一轮
+      // 事件一来又缩回 12 行,那又是"记不住"。
+      const more = actEl("act-more");
+      const btn = document.createElement("button");
+      btn.className = "act-ib";
+      btn.textContent = `再显示 ${g.more} 条(这一类共 ${g.count} 条)`;
+      btn.title = "放开以后每一类都列全;这一栏之后的刷新都保持放开。";
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        actFull = true;
+        activityRefresh();
+      });
+      more.appendChild(btn);
+      body.appendChild(more);
+    }
+    sec.appendChild(body);
     parent.appendChild(sec);
   }
   return groups.reduce((n, g) => n + g.count, 0);
+}
+
+/* 子智能体一节(v0.9.112):这一轮派出去的每个子代理各一行 —— 类型、任务、
+   状态、耗时、报告。并行派发时一次调用会出 N 行(后端已经拆好了,前端不再合)。
+   数据全在 activity._extract_subagents 那一处,这里只画;每一行"看报告"点开的是
+   子代理交回来的原文,不是第二份摘要。 */
+function subagentRows(data) {
+  const g = (data.groups || []).find(x => x && x.key === "subagents");
+  return g ? { count: g.count, more: g.more, items: g.items || [] } : null;
+}
+
+function buildSubagents(parent, sa) {
+  for (const item of sa.items) {
+    actRows[String(item.key || "")] = item;
+    parent.appendChild(actRowEl(item));
+  }
+  if (sa.more) {
+    const more = actEl("act-more");
+    const btn = document.createElement("button");
+    btn.className = "act-ib";
+    btn.textContent = `再显示 ${sa.more} 个(共 ${sa.count} 个)`;
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation(); actFull = true; activityRefresh();
+    });
+    more.appendChild(btn);
+    parent.appendChild(more);
+  }
+  return sa.count;
 }
 
 // ---------------- 「本轮改动」段:把那本撤销栈摊开给人看 —— 一行退一处(v0.9.101)
@@ -6455,9 +6608,26 @@ function buildEnv(box, e) {
   } else {
     add(envRow("仓库", e.msg || "这份工作区不是 git 仓库", "没有 HEAD 可比,行数与分支都不报"));
   }
+  // git 子进程起不来(用户看图 p7:一开监控就弹 0xc0000142 系统框)时,这一屏要说的
+  // 不是"没有改动",而是"这台机器的 git 问不动" —— 熔断之后连问都不再问第二遍。
+  if (e.git_note) add(envRow("git", e.git_note,
+    "本机 git 子进程起不来,分支与行数留空;已停止再试,不会再弹系统错误框。"
+    + "要恢复:重启程序,或把 git 装进 PATH 后点 ↻"));
   add(envRow("版本", `${e.app} v${e.version}${e.frozen ? "(安装版)" : "(开发态)"}`));
   add(envRow("本机数据", e.app_dir, (e.backend ? "后端:" + e.backend + " · " : "")
     + (e.writable ? "可写" : "只读 —— 配了不会保存")));
+  // 深色界面顶上那条还是白的吗?这台机器到底收了哪几条 DWM 属性只有系统知道 ——
+  // 把它说出来的那一句摆在这里,报障时不必再猜"是代码没跑还是系统不收"。
+  const ch = e.chrome || {};
+  if ((ch.applied && ch.applied.length) || (ch.failed && ch.failed.length)) {
+    add(envRow("标题栏", ch.failed && ch.failed.length
+      ? "系统不收:" + ch.failed.join("、")
+      : "已跟着主题走:" + ch.applied.join("、"),
+      ch.failed && ch.failed.length
+        ? "这几项被 Windows 拒了(老系统常见),界面本身不受影响;"
+          + "要是这条写着 caption 被拒,顶部那条就只能留系统色 —— 不是没实现"
+        : "底色/文字/描边三条都被系统接受;若仍看着是白的,点 ↻ 再要一次"));
+  }
   const jobs = e.jobs || [];
   if (jobs.length) {
     box.appendChild(actEl("act-cap env-cap",
@@ -6503,12 +6673,19 @@ function renderActivity(data) {
   $("actPill").textContent = sum.running ? String(sum.running) : "";
 
   const tl = data.timeline || {};
+  const sa = subagentRows(data);
   const secs = [
     actSect("now", "⏱ 此刻", data.now ? "正在执行" : "", b => buildNow(b, data)),
     actSect("plan", "🗂 计划", actPlan && actPlan.total ? `${actPlan.done}/${actPlan.total}` : "",
       b => buildPlan(b)),
     actSect("timeline", "🧾 时间线", tl.calls ? tl.calls + " 次调用" : "",
       b => buildTimeline(b, tl)),
+    // 子智能体:从「产出与来源」里提出来单独一节(用户看图 p9/p10 点名的那一节)。
+    // 它回答的是"谁去干的、干成没有",和"产出了哪些文件"不是一回事,混在一起
+    // 就要滚到第四屏才看见那几行。
+    (sa ? actSect("subagents", "🤖 子智能体",
+      `${sa.count} 个` + (sa.items.some(x => x.status === "running") ? " · 有在跑" : ""),
+      b => buildSubagents(b, sa)) : null),
     actSect("groups", "📦 产出与来源", "", b => buildGroups(b, data)),
     actSect("changes", "🛠 本轮改动", (data.changes && data.changes.total)
       ? data.changes.total + " 处可退" : "", b => buildChanges(b, data)),
@@ -6684,10 +6861,11 @@ function jwRead(model) {
     jwBusyOff();
     if (!r || !r.ok) {
       jwParsed = null;
-      jwSayErr((r && r.msg) || "没读到课表");
+      jwSayErr((r && r.msg) || "没读到课表", r && r.stage);
       if (r && r.stage === "ready") jwStepOn(2);
-      // 页上本来就没有课表:让模型"整理"只会编出一份假课表,所以这一步不给那个按钮
-      if (!model && (!r || r.stage !== "not_timetable")) {
+      // 页上本来就没有课表:让模型"整理"只会编出一份假课表,所以这一步不给那个按钮。
+      // 页压根没接管到(no_page)同理 —— 没东西可整理,给了就是引导人再点一次失败。
+      if (!model && (!r || (r.stage !== "not_timetable" && r.stage !== "no_page"))) {
         jwBodyAppend(`<div class="jw-links"><button id="lnJwModel">让学长用模型整理一次</button></div>`);
         $("lnJwModel").addEventListener("click", () => jwRead(true));
       }
@@ -6700,12 +6878,16 @@ function jwRead(model) {
 }
 
 function jwBodyAppend(html) { $("jwBody").insertAdjacentHTML("beforeend", html); }
-function jwSayErr(msg) {
+function jwSayErr(msg, stage) {
+  // 「没找到还开着的教务页」(stage=no_page)这一种,"再读一次"是空转 —— 页都不在,
+  // 读一百次还是那句。该给的是回到第①步把窗口重开回来,所以按钮名字跟着事实变。
+  const lost = stage === "no_page";
+  const what = jwMode === "scores" ? "成绩" : "课表";
   jwSay(`<div class="jw-warn">${esc(msg)}</div>
-    <div class="jw-links"><button id="lnJwRetry">再读一次</button>
-    <button id="lnJwManual3">我自己贴课表文字/截图</button></div>`);
-  $("lnJwRetry").addEventListener("click", () => jwRead(false));
-  $("lnJwManual3").addEventListener("click", scheduleManualImport);
+    <div class="jw-links"><button id="lnJwRetry">${lost ? "① 重新打开登录页" : "再读一次"}</button>
+    <button id="lnJwManual3">我自己贴${what}文字/截图</button></div>`);
+  $("lnJwRetry").addEventListener("click", () => lost ? jwOpenLogin() : jwRead(false));
+  $("lnJwManual3").addEventListener("click", () => scheduleManualImport(jwMode));
 }
 
 const JW_DAYS = { 1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "日" };
@@ -7204,11 +7386,19 @@ function rebuildChatRail() {
   if (users.length < 3) { rail.hidden = true; rail.innerHTML = ""; return; }
   rail.hidden = false;
   rail.innerHTML = "";
+  // 顶上那颗是"打开这一叠"的把手:刻度本身 8px 宽,只在聊天区 hover 时才亮,
+  // 用户看图 p2 说的「太难看到」就是这个 —— 给一个带字的东西当入口,刻度继续当尺子。
+  const head = document.createElement("button");
+  head.className = "tick tick-head";
+  head.textContent = "☰";
+  head.title = `跳到某一问(这一条对话共 ${users.length} 问)`;
+  head.addEventListener("click", (ev) => { ev.stopPropagation(); turnPopToggle(); });
+  rail.appendChild(head);
   users.forEach((b, i) => {
     const tick = document.createElement("div");
     tick.className = "tick";
-    tick.title = `第 ${i + 1} 问`;
-    tick.addEventListener("click", () => b.scrollIntoView({ block: "start" }));
+    tick.title = `第 ${i + 1} 问 · 点开看全部`;
+    tick.addEventListener("click", turnPopToggle);
     tick.addEventListener("mouseenter", () => showRailPop(b, i));
     tick.addEventListener("mouseleave", hideRailPop);
     rail.appendChild(tick);
@@ -7216,13 +7406,63 @@ function rebuildChatRail() {
 }
 function showRailPop(bubble, i) {
   const pop = $("railPop");
+  if (pop.classList.contains("turns")) return;   // 摊开着一叠卡的时候不被 hover 预览顶掉
   pop.innerHTML = `<b>第 ${i + 1} 问</b>${esc((bubble.textContent || "").slice(0, 120))}`;
   pop.hidden = false;
   const r = bubble.getBoundingClientRect();
   pop.style.top = Math.max(60, Math.min(window.innerHeight - 130, r.top)) + "px";
   pop.style.right = "26px";
 }
-function hideRailPop() { $("railPop").hidden = true; }
+function hideRailPop() {
+  const pop = $("railPop");
+  if (!pop.classList.contains("turns")) pop.hidden = true;
+}
+
+/* 轮次那一叠小卡:每问一张(第N问 + 那一问的原话开头),十问一组带个小头。
+   点卡片跳过去并闪一下 —— 长对话里"跳到了哪"必须看得见。 */
+function turnPopToggle() {
+  const pop = $("railPop");
+  if (pop.classList.contains("turns") && !pop.hidden) {
+    pop.classList.remove("turns"); pop.hidden = true; return;
+  }
+  const users = Array.from($("chat").querySelectorAll(".msg.user"));
+  pop.innerHTML = "";
+  users.forEach((wrap, i) => {
+    const at = i % 10;
+    if (!at) {
+      const h = document.createElement("div");
+      h.className = "tg-head";
+      h.textContent = `第 ${i + 1}–${Math.min(i + 10, users.length)} 问`;
+      pop.appendChild(h);
+    }
+    const bubble = wrap.querySelector(".bubble");
+    const card = document.createElement("div");
+    card.className = "turn-card";
+    // 只摆"第几问 + 那一问的原话开头":消息节点上没有时刻(v0.9.66 的 ts 落在
+    // 留档里,没落到 DOM 上),为了好看编一个时间出来是这条项目一贯不许的事。
+    card.innerHTML = `<span class="tc-n">${i + 1}</span>`
+      + `<span class="tc-t">${esc((bubble ? bubble.textContent : "").trim().slice(0, 60))}</span>`;
+    card.addEventListener("click", () => {
+      if (bubble) {
+        bubble.scrollIntoView({ block: "start", behavior: "smooth" });
+        wrap.classList.add("flash");
+        setTimeout(() => wrap.classList.remove("flash"), 1900);
+      }
+      pop.classList.remove("turns"); pop.hidden = true;
+    });
+    pop.appendChild(card);
+  });
+  pop.classList.add("turns");
+  pop.hidden = false;
+  pop.style.top = "64px";
+  pop.style.right = "26px";
+}
+document.addEventListener("click", (ev) => {
+  const pop = $("railPop");
+  if (pop.hidden || !pop.classList.contains("turns")) return;
+  if (pop.contains(ev.target) || (ev.target.closest && ev.target.closest(".chat-rail"))) return;
+  pop.classList.remove("turns"); pop.hidden = true;    // 点外面就收,与看板那条一致
+});
 
 /* ---------------- 会话图片灯箱(v0.9.94,p7/p8;原图 v0.9.97) ----------------
    点对话里的照片放大(ZCode 同款):左右切换本会话内的图片、Esc/点遮罩关、
@@ -8000,8 +8240,160 @@ $("boardOverlay").addEventListener("click", (e) => {
   if (e.target.id === "boardOverlay") $("boardOverlay").classList.remove("show");
 });
 
+/* ---------------- 收起/展开左侧栏(Ctrl+B) ----------------
+   状态记在 localStorage(与主题、"只提醒一次"那两条同一个偏好家):收不收这一列是
+   纯界面习惯,不该为它敲一次桥。图标与说明必须跟着事实翻 —— 一个画着「◀」的按钮
+   在栏已经收起之后还画「◀」,用户就无法判断再点一次会发生什么。 */
+const SIDE_KEY = "gcode-side";
+function sideWantClosed() {
+  try { return localStorage.getItem(SIDE_KEY) === "closed"; } catch (e) { return false; }
+}
+function applySide(closed) {
+  document.querySelector(".app").classList.toggle("side-closed", !!closed);
+  const b = $("btnSideToggle");
+  if (b && b.firstChild) b.firstChild.textContent = closed ? "▶" : "◀";
+  if (b) b.title = closed ? "展开左侧栏(Ctrl+B)" : "收起左侧栏(Ctrl+B)";
+  const cap = $("sideCap");
+  if (cap) cap.textContent = closed ? "展开栏" : "收起栏";
+  try { localStorage.setItem(SIDE_KEY, closed ? "closed" : "open"); } catch (e) {}
+}
+function toggleSide() {
+  applySide(!document.querySelector(".app").classList.contains("side-closed"));
+}
+$("btnSideToggle").addEventListener("click", toggleSide);
+
+/* ---------------- 后台命令面板(用户看图 p5 点名要的「终端面板」) ----------------
+   它**只读**。命令是学长在对话里经权限确认之后跑起来的;在这个面板里放一个输入框
+   等于开一条绕过那道确认的路 —— 那不是"多一个功能",是"多一个后门"。
+   要跑命令:点「让学长跑一条命令」把话填回输入框,走正常那条有确认框的路。 */
+let termOpen = false, termTimer = 0, termShow = "";   // termShow = 哪几条的输出摊开了
+function termTick(ms) {
+  if (termTimer) clearTimeout(termTimer);
+  if (!termOpen) return;
+  termTimer = setTimeout(() => { termLoad(true); }, ms);
+}
+async function termLoad(quiet) {
+  const api = window.pywebview && pywebview.api;
+  if (!api || !api.get_terminal) {
+    $("termNote").textContent = quiet ? "" : "这一屏要问本机的后台账;网页版不开放。";
+    $("termBody").innerHTML = '<div class="tp-note">桌面版里才有后台命令这一程的账。</div>';
+    return;
+  }
+  let r = null;
+  try { r = await api.get_terminal(); } catch (e) {
+    if (!quiet) toast("读后台命令失败:" + String(e).slice(0, 60), true);
+    return;
+  }
+  if (!r || !r.ok) {
+    $("termNote").textContent = (r && r.msg) || "读不出后台命令";
+    $("termBody").innerHTML = "";
+    return;
+  }
+  const jobs = r.jobs || [];
+  $("termNote").textContent = r.note || "";
+  if (!jobs.length) {
+    $("termBody").innerHTML = '<div class="tp-note">这一程还没有丢到后台的命令。'
+      + "学长把长命令放后台跑之后,它们会自己出现在这里(状态、耗时、输出末尾)。</div>";
+    termTick(2000);
+    return;
+  }
+  $("termBody").innerHTML = jobs.map(j => {
+    const state = j.running ? "🟢 在跑" : (j.killed ? "⛔ 已终止" : (j.exit_code
+      ? "🔴 退出码 " + j.exit_code : "✅ 跑完"));
+    const open = termShow.indexOf(j.id) >= 0;
+    return `<div class="tp-row" data-job="${esc(j.id)}">
+      <span class="tp-n">${state}</span>
+      <span class="tp-cmd" title="${esc(j.command)}">${esc(j.command)}</span>
+      <span class="tp-n">${j.elapsed}s · ${j.chars} 字</span>
+      <button class="act-ib" data-tail="${esc(j.id)}">${open ? "收起输出" : "看输出"}</button>
+    </div>${open ? `<pre class="tp-out">${esc(j.tail || "(还没有输出)")}</pre>` : ""}`;
+  }).join("") + `<div class="tp-note" style="margin-top:10px">
+      <button class="act-ib" id="termAsk">让学长跑一条命令</button>
+      <span style="margin-left:6px">命令只在对话里跑 —— 那一步有权限确认框,这个面板不绕。</span></div>`;
+  $("termBody").querySelectorAll("[data-tail]").forEach(el => el.addEventListener("click", () => {
+    const id = el.dataset.tail;
+    termShow = termShow.split(",").filter(x => x && x !== id).concat([id]).join(",");
+    termLoad(true);
+  }));
+  const ask = $("termAsk");
+  if (ask) ask.addEventListener("click", () => {
+    $("input").value = "帮我把这条命令丢到后台跑,跑完了告诉我:\n";
+    $("input").focus();
+    termSetOpen(false);
+  });
+  termTick(jobs.some(j => j.running) ? 1600 : 4000);   // 有在跑的才勤快点
+}
+function termSetOpen(on) {
+  termOpen = !!on;
+  $("termOverlay").classList.toggle("show", termOpen);
+  if (!on && termTimer) { clearTimeout(termTimer); termTimer = 0; }
+  if (on) termLoad(false);
+}
+$("btnTerminal").addEventListener("click", () => termSetOpen(!termOpen));
+$("termClose").addEventListener("click", () => termSetOpen(false));
+$("termRefresh").addEventListener("click", () => termLoad(false));
+$("termOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "termOverlay") termSetOpen(false);
+});
+
+/* ---------------- 自动化(定时任务)面板 ----------------
+   清单上的每一个数都读自两处现成事实:proactive.JOB_SPECS(登记了什么)与
+   jobs-state.json(跑过什么)。开关的效力只有一处 —— 关掉之后 due_jobs 不再把它
+   算作到期;记账与这一屏都还列得出来,所以"关掉了"不等于"消失了"。 */
+let autoOpen = false, autoTimer = 0;
+async function autoLoad() {
+  const api = window.pywebview && pywebview.api;
+  if (!api || !api.get_automation) {
+    $("autoNote").textContent = "网页版不开放这一屏:那列的是服务器本机的日程与账。";
+    $("autoBody").innerHTML = "";
+    return;
+  }
+  let r = null;
+  try { r = await api.get_automation(); } catch (e) {
+    toast("读定时任务失败:" + String(e).slice(0, 60), true); return;
+  }
+  if (!r || !r.ok) { $("autoNote").textContent = (r && r.msg) || "读不出定时任务"; return; }
+  const jobs = r.jobs || [];
+  $("autoNote").textContent = jobs.length
+    ? "这些任务由本机每 5 分钟一次的心跳判到期;机器没开机的那一班会跳过,下一班自然再来。"
+    : "本机目前没有登记任何定时任务。";
+  $("autoBody").innerHTML = jobs.map(j => {
+    const next = j.next ? ("下一班 ~" + j.next) : (j.next_hint || "不会自己跑");
+    const last = j.last ? (`上次 ${j.last} · 共 ${j.runs} 次`) : "从未跑过";
+    return `<div class="tp-row" data-jobid="${esc(j.id)}">
+      <span class="tp-cmd" title="${esc(j.id)} · ${esc(j.rhythm)}">${esc(j.label)}</span>
+      <span class="tp-n">${esc(j.rhythm)} · ${esc(next)} · ${esc(last)}</span>
+      <button class="jb-sw ${j.enabled ? "" : "off"}" data-sw="${esc(j.id)}"
+        title="${j.enabled ? "关掉之后它不再自动到期跑(记账仍在这里)" : "开回来,下一次心跳就会算它到期"}">
+        ${j.enabled ? "在跑" : "已停用"}</button>
+    </div>${j.result ? `<pre class="tp-out" style="max-height:12vh">${esc(j.result)}</pre>` : ""}`;
+  }).join("");
+  $("autoBody").querySelectorAll("[data-sw]").forEach(el => el.addEventListener("click", () => {
+    const row = jobs.find(x => x.id === el.dataset.sw);
+    if (!row) return;
+    pywebview.api.set_job_enabled(row.id, !row.enabled).then(rr => {
+      if (rr && rr.ok === false) toast(rr.msg || "没改成", true);
+      else if (rr && rr.msg) toast(rr.msg);
+      autoLoad();
+    }).catch(e => toast("开关没生效:" + String(e).slice(0, 60), true));
+  }));
+  if (autoTimer) clearTimeout(autoTimer);
+}
+function autoSetOpen(on) {
+  autoOpen = !!on;
+  $("autoOverlay").classList.toggle("show", autoOpen);
+  if (on) autoLoad();
+}
+$("btnAutomate").addEventListener("click", () => autoSetOpen(!autoOpen));
+$("autoClose").addEventListener("click", () => autoSetOpen(false));
+$("autoRefresh").addEventListener("click", autoLoad);
+$("autoOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "autoOverlay") autoSetOpen(false);
+});
+
 window.addEventListener("DOMContentLoaded", () => {
   applyTheme(document.documentElement.classList.contains("dark"), false);
+  applySide(sideWantClosed());   // 上次收起来的这一列,开机还是收着的(习惯不该每次重摆)
   // 监控栏那段说明(p12 圈起来的第二处):点过「知道了」之后就再也不出现。
   // 它是静态 HTML、不是每次渲染出来的,所以开机这一处统一撤掉。
   const af = $("actFoot");

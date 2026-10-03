@@ -278,12 +278,24 @@ class PublicApi:
     def open_url(self, url: str) -> dict:
         return self._b.open_url(url)
 
-    def get_activity(self) -> dict:
-        return self._b.get_activity()
-
+    def get_activity(self, full=None) -> dict:
+        """`full` = 界面已经点了「展开全部」,这一轮每类都别截断。"""
+        return self._b.get_activity(full)
     def get_env_info(self) -> dict:
         """监控栏「环境信息」那一节:工作区/分支/本轮改动/后台命令/本机账本位置。"""
         return self._b.get_env_info()
+
+    def get_automation(self) -> dict:
+        """「自动化」面板:本机登记了哪几个定时任务、下一次什么时候跑、上次跑出什么。"""
+        return self._b.get_automation()
+
+    def get_terminal(self) -> dict:
+        """「终端」面板:后台命令的状态与输出末尾(只读,不在这里下命令)。"""
+        return self._b.get_terminal()
+
+    def set_job_enabled(self, job_id: str, on: bool) -> dict:
+        """开/关一个定时任务(关掉的不再自动到期跑,记账与这一屏仍列得出来)。"""
+        return self._b.set_job_enabled(job_id, on)
 
     def get_board(self) -> dict:
         """跨会话看板:几件事在跑、哪几件等你的决定、最近做完了什么(只读)。"""
@@ -1113,7 +1125,7 @@ class Bridge:
 
     # ------------------------------------------------------------ 任务监控栏
 
-    def get_activity(self) -> dict:
+    def get_activity(self, full=None) -> dict:
         """右侧「任务监控」栏的数据:这一轮真调过哪些工具、按先后排成时间线、
         此刻在跑哪一步、产出还在不在磁盘上。
 
@@ -1135,7 +1147,11 @@ class Bridge:
                 self.session.messages, workspace=self.workspace,
                 live=live() if callable(live) else None,
                 now=now() if callable(now) else None,
-                busy=bool(getattr(self._current, "busy", False)))
+                busy=bool(getattr(self._current, "busy", False)),
+                # 界面上点了「展开全部」之后,后面每一次刷新都要给全 ——
+                # 只在这一次给全,下一轮事件一来又缩回 12 行,那就是"记不住"。
+                group_limit=0 if str(full or "").lower() not in
+                    ("", "0", "false", "no", "none") else None)
             # 「本轮改动」跟着这一份载荷走:它和产出行是同一份事实的两个视图,
             # 同一次刷新到位,就不会出现"产出行说写了 3 个文件、审查清单还空着"。
             data["changes"] = self.undo_records()
@@ -1168,12 +1184,61 @@ class Bridge:
             data = {"msg": f"读环境信息失败:{type(exc).__name__}: {exc}", "jobs": [],
                     "files": [], "added": 0, "removed": 0, "total": 0, "more": 0,
                     "partial": False, "is_repo": False, "branch": ""}
+        # 标题栏那三条 DWM 属性本机收没收,只有系统知道。摆在这一屏上,用户报
+        # "深色界面顶上还是白的"时就不用猜:是代码没跑(applied 空),还是系统不收
+        # (failed 里有 caption)—— 这两种的下一步完全不同。
+        data["chrome"] = getattr(self, "_chrome_last", None) or {}
         self._env_cache = (now, dict(data))
         return data
 
     def invalidate_env_info(self) -> None:
         """切工作区 / 一轮跑完之后调一下:下一句「环境信息」要看到新的改动行数。"""
         self._env_cache = None
+
+    # ------------------------------------------------------------ 自动化(定时任务)
+
+    def get_terminal(self) -> dict:
+        """「终端」那一屏:后台命令的清单与输出末尾。只读 —— 输入命令要走对话里的确认。"""
+        from minicode.tools import shell
+        return {"ok": True, **shell.terminal_facts()}
+
+    def get_automation(self) -> dict:
+        """「自动化」那一屏:本机登记了哪几个定时任务、下一次什么时候跑、上次跑出什么。
+
+        数据只有一份真源:`proactive.JOB_SPECS`(登记)+ `jobs-state.json`(跑过的账)
+        + `jobs.due/next_due`(此刻的判定)。这里不存副本 —— 之前这两个数只有两个
+        出口(命令行念一段人话、看板列几行且**从没跑过的整条不列**),界面想摆
+        "有哪几个任务"就没有地方问。
+        """
+        from minicode import jobs, proactive
+        return {"ok": True,
+                "jobs": jobs.facts(proactive.JOB_SPECS),
+                "handlers": sorted(proactive.JOB_HANDLERS),
+                "msg": ""}
+
+    def set_job_enabled(self, job_id: str, on) -> dict:
+        """开/关一个定时任务。效力只有一处:关掉之后 `due_jobs` 不再把它算作到期。
+
+        不做「立即跑一次」:handler 会真的推桌面通知、写备份、发问,那是要花额度
+        和动文件的动作 —— 界面上一个按钮不该顺手做这件事,要跑说一声让学长走命令行。
+        """
+        from minicode import jobs, proactive
+        name = str(job_id or "").strip()
+        known = {s.id for s in proactive.JOB_SPECS}
+        if name not in known:
+            return {"ok": False,
+                    "msg": f"没有这个定时任务:{name or '(空)'}(认识的:"
+                           + "、".join(sorted(known)) + ")"}
+        want = bool(on) if isinstance(on, bool) else str(on).strip().lower() not in (
+            "0", "false", "no", "off")
+        got = jobs.set_enabled(name, want)
+        if got.get("ok"):
+            self.ui.push("info", text=f"定时任务「{name}」已{'恢复自动跑' if want else '停用'}"
+                              "(下一次心跳起不再算它到期)")
+        return {"ok": bool(got.get("ok")), "disabled": got.get("disabled") or [],
+                "msg": got.get("msg") or (
+                    f"「{name}」已{'开启' if want else '停用'}。"
+                    + ("它不再自动到期跑,但记账与这一屏都还列得出来。" if not want else ""))}
 
     # ------------------------------------------------------------ 跨会话看板(B1)
 
@@ -2525,9 +2590,14 @@ class Bridge:
         from minicode import APP_NAME, window_chrome
         if dark is not None:
             self._chrome_dark = bool(dark)
-        return window_chrome.apply(
+        got = window_chrome.apply(
             self._chrome_window(), dark=dark,
             title=f"{APP_NAME} · {ws.display_name(self.workspace, self.app_dir)}")
+        # 留着最后一次的结果给「环境信息」那一屏说:用户报"深色界面顶上还是白的",
+        # 而这台机器到底收了哪几条 DWM 属性只有系统知道 —— 看不见就只能猜是代码没跑
+        # 还是系统不收,这两种的下一步动作完全不同。
+        self._chrome_last = got
+        return got
 
     def set_chrome(self, dark: bool) -> dict:
         """前端切主题(含开机那一次)时报给本机,让系统标题栏跟着变。"""

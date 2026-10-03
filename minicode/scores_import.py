@@ -33,6 +33,14 @@ class ScoresFlow(ImportFlow):
 
     def read(self) -> dict:
         """读**当前**那张教务页的成绩表。绝不导航、绝不提交表单 —— 那是同学的事。"""
+        # 先接管,再问页:桥的每一次 js_api 调用跑在**自己的线程**上,而 browser 的
+        # 会话按线程 ident 分格(`_session_key`)—— ①「打开登录页」那条调用留下的会话
+        # 根本不属于②这条线程,直接问"我这张页"永远拿到 None,报出来的就是用户
+        # 截图里那句「BrowserError: 还没有打开的页面」。课表那条路每一步都 _anchor()
+        # 所以没暴露;成绩这条路**不能导航**(替同学跳回登录页会把他刚查出来的那张
+        # 表丢掉),所以只接管、不新开 —— 接管不到就明说,不猜、也不装成"没有成绩"。
+        if self.anchor_existing() is None:
+            return self.no_page_msg("成绩")
         parsed = self._read_scores()
         if parsed.get("ok"):
             parsed["stage"] = "ready"
@@ -48,6 +56,8 @@ class ScoresFlow(ImportFlow):
 
     def read_with_model(self, complete) -> dict:
         """第 2 步的退路:整页文字交给模型整理(会真的发出这段文字)。"""
+        if self.anchor_existing() is None:
+            return self.no_page_msg("要交给模型整理的那页文字")
         text = self.page_text()[:MODEL_TEXT_CHARS]
         parsed = scores.parse_scores_with_model(text, complete)
         parsed["stage"] = "ready" if parsed.get("ok") else "parsed_failed"

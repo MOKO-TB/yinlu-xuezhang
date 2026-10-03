@@ -83,6 +83,8 @@ SHIP_NEVER: tuple[StateFile, ...] = (
     StateFile("gui_warnings.log", FILE,
               "界面警告日志:装好的机器上界面行为不对时看的就是它,含本机路径"),
     StateFile("monitor-pref.json", FILE, "任务监控栏的开合与折叠偏好"),
+    StateFile("jobs-pref.json", FILE,
+              "定时任务的开关(哪几个被关掉):带去别人机器会把他的日程按你的关掉"),
     StateFile("onboarding.json", FILE, "首次运行向导的「不再显示」"),
     StateFile("notify-pref.json", FILE, "桌面提醒开关与类别偏好"),
     StateFile("pushed-today.json", FILE,

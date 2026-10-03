@@ -151,6 +151,8 @@ TABLE: tuple[Entry, ...] = (
     Entry("close-pref.json", "关窗时怎么办", PREF, True),
     Entry("monitor-pref.json", "任务监控栏开合", PREF, True,
           note="这一栏展开还是收起、哪几段被折叠过 —— 纯界面偏好,不含任务内容"),
+    Entry("jobs-pref.json", "定时任务开关", PREF, True,
+          note="被关掉的那几个不再自动跑;这是界面偏好,跑过的账在 jobs-state.json"),
     Entry("onboarding.json", "向导「不再显示」", PREF, True),
     Entry("weather.json", "常驻城市", PREF, True,
           note="首页天气 chip 按这个城市查"),

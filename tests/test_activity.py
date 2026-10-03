@@ -419,7 +419,12 @@ def test_public_api_forwards_the_activity_names():
         assert hasattr(PublicApi, name), name
     assert list(inspect.signature(PublicApi.reveal_file).parameters) == \
         ["self", "path"]
-    assert list(inspect.signature(PublicApi.get_activity).parameters) == ["self"]
+    # v0.9.112:界面上点了「展开全部」之后,这个参数要一路传到 session_activity
+    # 的 group_limit —— 停在门面这一层,那一屏就永远只有 12 行,按钮是假的。
+    assert list(inspect.signature(PublicApi.get_activity).parameters) == \
+        ["self", "full"]
+    src = inspect.getsource(PublicApi.get_activity)
+    assert "get_activity(full)" in src, "转发了签名却没传值 = 前端点了没反应"
 
 
 # ------------------------------------------- 时间线与实时表(v0.9.37 任务监控)

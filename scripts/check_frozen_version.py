@@ -119,13 +119,18 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # (漏 get_env_info = 界面那一节永远不出现;漏 SESSION_LIST_LIMIT
                             # = 侧栏列 50 条而点开只认前 10 条 —— 第 11 条以后「看得见但点不动」,
                             #   这一条是修切换卡顿时顺手挖出来的真缺陷)
-                            "get_env_info", "invalidate_env_info", "SESSION_LIST_LIMIT"
+                            "get_env_info", "invalidate_env_info", "SESSION_LIST_LIMIT",
+                            # v0.9.112:终端面板与自动化面板的三个门面(漏 get_terminal
+                            # = 那一屏永远空;漏 set_job_enabled = 开关点了没处去)
+                            "get_terminal", "get_automation", "set_job_enabled"
                             ),
     # v0.9.39 p2:标题栏整模块。漏收 = 桥里那句 `from minicode import window_chrome`
     # 在装好的包里 ImportError,而它被前端那个 try/catch 吞掉 → 表现为"改了个寂寞"。
     "minicode.window_chrome": ("apply", "chrome_for", "blend", "colorref",
                                "IMMERSIVE_DARK_MODE", "CAPTION_COLOR",
-                               "TEXT_COLOR", "BORDER_COLOR"),
+                               "TEXT_COLOR", "BORDER_COLOR",
+                            # v0.9.112 p7:开机静默子进程的模态错误框(漏收 = 弹窗又回到用户脸上)。
+                            "silence_child_error_dialogs"),
     # v0.9.39 p1:剪贴板整模块。漏收 = 装好的包里右键粘贴永远走不到本机这条,
     # 那条「xx 想要查看复制到剪贴板的文本和图像」的横条照旧弹(功能"看起来在",
     # 只是每次都违和),所以连 bmp_from_dib 一起钉 —— 它是图片那半的唯一出口。
@@ -362,7 +367,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.90:前台命令边跑边读 + 进度上报(漏收 = 装好的包里长命令中间又是黑的,
     # 而工具描述与 HANDOFF 都写着"每 15 秒报一行";_drain 漏了更坏:回到只读一条管道,
     # 两路都写满时子进程直接卡死在那条命令上)
-    "PROGRESS_EVERY", "_Progress", "_drain", "_report_progress"),
+    "PROGRESS_EVERY", "_Progress", "_drain", "_report_progress",
+                            # v0.9.112「终端」面板:后台命令 + 输出末尾(漏收 = 面板永远空)。
+                            "terminal_facts"),
     # ---- v0.9.39 #84:注册表按领域拆成 6 份目录(registry.py 只管装配顺序)----
     # 漏收一份 = 装好的包里**那个领域的工具整组消失**,而 build_default_registry()
     # 不报错(它只是拼不出那一段),模型侧表现是"这个能力没有了"。
@@ -382,7 +389,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           # 叫不到 changes,回话里"看得见但退不掉"那句就永远说不出来;
                           # 漏 ACTIONS = 参数 enum 与实现各说一套,加一类忘一处没人红)
                           "changes", "parse_status_porcelain", "parse_numstat",
-                          "ACTIONS", "CHANGE_ROW_LIMIT"),
+                          "ACTIONS", "CHANGE_ROW_LIMIT",
+                            # v0.9.112 p7:先看盘再起进程 + 起不来就熔断(漏收 = 装好的包里开监控栏又弹一次 0xc0000142)。
+                            "find_repo_root", "git_unavailable", "_reset_git_breaker"),
     "minicode.tools.catalog_web": ("tools",),
     "minicode.tools.catalog_knowledge": ("skills_plan_search", "kb_suggest_tool",
                                          "memory_tool",
@@ -424,7 +433,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                       "runs_of", "mark_run", "log_outcome", "STATE_FILE",
                       # v0.9.79:定时任务可观测(漏收 = 装好的包里「这周任务
                       # 跑没跑、为什么没跑」永远答不上来)
-                      "snapshot", "rhythm_text"),
+                      "snapshot", "rhythm_text",
+                      # v0.9.112 自动化那一屏:清单、下一班、开关与那份「关掉了」的账。
+                            "facts", "next_due", "set_enabled", "read_disabled"),
     # ---- v0.9.58:.ics 兜底导出(漏收 = 「把课表导进系统日历」在装好的包里
     #      做不到,而对话里什么错都不报——工具压根没注册) ----
     "minicode.ics_export": ("collect", "render", "export", "export_ics_tool",
@@ -667,7 +678,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                                  "clear_login_state", "GRID_JS", "_norm_periods",
                                  "MODEL_SYSTEM",
                                  # v0.9.24:通用取材 + 「先认版式再挑文法」那条路
-                                 "_parse_any", "page"),
+                                 "_parse_any", "page",
+                            # v0.9.112 p1:成绩读不到的根 —— 每一步先接管那张页(会话按线程分格)。
+                            "anchor_existing", "no_page_msg"),
     # ---- v0.9.24:结构化解析从"只对着强智"泛化成独立一层(漏收 = 向导和 page_parse 都炸) ----
     "minicode.site_parse": ("parse_page", "parse_qiangzhi_grid", "parse_generic_grid",
                             "_entry_generic", "_entry_qiangzhi", "_weekday_header",
@@ -781,6 +794,14 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # 撞名被撑到 69px 一行(整个面板 491px)。改名 `tkn` 是这次收窄的**真正**修法,
     # 针打在这儿,以后谁把它改回 `tk` 会在出包时红一次。
     "tkn",
+    # v0.9.112 p2/p5:轮次那一叠小卡、收起侧栏、终端与自动化两个面板
+    # (漏 turnPopToggle = 刻度点了没反应,还是"一长条看不到头";
+    #  漏 toggleSide = Ctrl+B 与那颗按钮都是死的;
+    #  漏 termLoad/autoLoad = 两个弹层有了壳,里面永远没数据)
+    "turnPopToggle", "toggleSide", "applySide", "termLoad", "autoLoad",
+    "buildSubagents", "subagentRows", "actGroupFold",
+    # p7/p8:地图舞台的下限与 git 降级那两行 —— 样式与字段名都在前端这一侧
+    "min-height:min(42vh, 300px)", "e.git_note", "e.chrome",
 )
 
 

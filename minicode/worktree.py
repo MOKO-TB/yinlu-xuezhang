@@ -21,20 +21,73 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
+
+# Windows 下起子进程要挂 CREATE_NO_WINDOW:桌面版是 **GUI 子系统**进程(没有控制台),
+# 而 git.exe 是控制台程序 —— 不挂这个标志就等于请系统替它新建一个控制台。
+# 用户看图 p7 那条「打开监控栏就弹 git.exe 应用程序无法正常启动(0xc0000142)」正是
+# 这一类:弹窗是**模态**的,点掉之前整个窗口卡住,而它每次开监控都会再来一遍。
+_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+# 0xc0000142 = STATUS_DLL_INIT_FAILED。子进程压根没起来时,有人把它当退出码回,
+# 有人直接抛 OSError —— 两种都要认,见 _git 里那两处判断。
+_BROKEN_CODES = {-1073741502, 3221225794}
+
+# 熔断:本机 git 一旦「起不来」(不是「这条命令失败」),这一程就不再试第二遍。
+# 表现不能是"每开一次监控弹一次系统错误框",也不能是"每开一次都白等几百毫秒"。
+_git_down = ""
+
+
+def git_unavailable() -> str:
+    """熔断之后给界面看的那句话;空串 = 没熔断过,git 还能问。"""
+    return _git_down
+
+
+def _reset_git_breaker() -> None:
+    """测试用:把熔断复位(一程之内只熔断一次是设计,但测试要能重来)。"""
+    global _git_down
+    _git_down = ""
 
 
 def _git(args: list[str], cwd: Path | None = None, timeout: int = 10) -> tuple[bool, str]:
     """跑一条只读的 git 命令;git 不在/出错都按 (False, 原因) 回,绝不抛。"""
+    global _git_down
+    if _git_down:
+        return False, f"本机 git 起不来({_git_down}),已停止再试"
     try:
         r = subprocess.run(["git", *args], cwd=str(cwd) if cwd else None,
                            capture_output=True, text=True, timeout=timeout,
-                           encoding="utf-8", errors="replace")
+                           encoding="utf-8", errors="replace",
+                           stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
     except (OSError, subprocess.TimeoutExpired) as e:
+        # 超时不是"git 坏了"(大仓库上 git 就是慢),那条不熔断;
+        # OSError 才是压根起不来 —— 熔断,免得下一次又弹一个模态框。
+        if isinstance(e, OSError):
+            _git_down = f"{type(e).__name__}: {e}"
         return False, f"{type(e).__name__}: {e}"
+    if r.returncode in _BROKEN_CODES:
+        _git_down = f"git.exe 启动失败(0x{(r.returncode) & 0xFFFFFFFF:08X})"
+        return False, _git_down
     if r.returncode != 0:
         return False, (r.stderr or r.stdout or "").strip()[:300]
     return True, r.stdout
+
+
+def find_repo_root(path: Path) -> Path | None:
+    """**不起进程**地往上看有没有 `.git`(目录或 worktree 的指针文件)。
+
+    存在的意义就是那条熔断之外的第二层省:大多数工作区压根不是仓库,
+    为它们起一次 git 子进程只是白等 + 白给系统一次弹窗的机会。
+    """
+    here = Path(path).expanduser()
+    try:
+        here = here.resolve()
+    except OSError:
+        return None
+    for cand in (here, *here.parents):
+        if (cand / ".git").exists():
+            return cand
+    return None
 
 
 def is_git_repo(path: Path) -> bool:
@@ -120,6 +173,8 @@ def worktree_facts(path: Path | None = None) -> dict:
     root = Path(path).resolve() if path else None
     if root is None or not root.is_dir():
         return {"ok": False, "msg": f"目录不存在:{root}"}
+    if find_repo_root(root) is None:
+        return {"ok": False, "msg": "当前工作区不是 git 仓库(往上没找到 .git)"}
     if not is_git_repo(root):
         return {"ok": False, "msg": "当前工作区不是 git 仓库(没有可用的工作副本这回事)"}
     ok, out = _git(["worktree", "list", "--porcelain"], cwd=root)
@@ -196,6 +251,10 @@ def changes(root: Path | None = None) -> dict:
     here = Path(root).resolve() if root else None
     if here is None or not here.is_dir():
         return {"ok": False, "msg": f"目录不存在:{here}"}
+    # 先**不起进程**判一次"往上有没有 .git":大多数工作区压根不是仓库,
+    # 为它们起一次 git 只是白等,还白给系统一次弹模态错误框的机会(见 _git 上面那段)。
+    if find_repo_root(here) is None:
+        return {"ok": False, "msg": "当前工作区不是 git 仓库(往上没找到 .git,没有 HEAD 可比)"}
     if not is_git_repo(here):
         return {"ok": False, "msg": "当前工作区不是 git 仓库(没有 HEAD 可比)"}
     ok, status = _git(["status", "--porcelain"], cwd=here)

@@ -43,6 +43,15 @@ _entry = _entry_qiangzhi
 
 # ---------------------------------------------------------------- 确定性解析(已下沉到 site_parse)
 
+def _host_of(url: str) -> str:
+    """取 URL 的主机名(接管页面时按它找)。坏地址回空串,不抛。"""
+    from urllib.parse import urlparse
+    try:
+        return (urlparse(str(url or "")).hostname or "").lower()
+    except Exception:
+        return ""
+
+
 def parse_grid(grid) -> dict:
     """一张表(强智 dump 或整页 dump)→ 课表记录。文法在 site_parse 里。"""
     return parse_page(grid if isinstance(grid, (dict, list)) else {})
@@ -125,6 +134,8 @@ class ImportFlow:
     def __init__(self, *, mode: str = "launch", browser_mod=None):
         self.mode = mode
         self._br = browser_mod
+        # 第 1 步真正开过的站点主机名(接管时优先按它找)。空 = 没开过/老配置。
+        self._last_host = ""
 
     # ---- 浏览器模块(延迟取,方便测试注入)
     @property
@@ -138,6 +149,7 @@ class ImportFlow:
     def open_login(self, url: str = LOGIN_URL) -> dict:
         """把教务登录页开在**看得见**的窗口里,然后交给用户。"""
         brs = self.browser
+        url = url or LOGIN_URL
         try:
             brs.ensure_visible()
             res = brs.open_page(url, mode=self.mode, headless=False,
@@ -148,12 +160,55 @@ class ImportFlow:
         except Exception as exc:
             return {"ok": False, "stage": "failed",
                     "msg": f"打不开教务登录页:{type(exc).__name__}: {exc}"}
+        # 记住这一步真正开的是哪个站点:后面「接管那张页」按它找,比按内置的
+        # HOST_HINT 找准 —— 学校换域名(或界面里填了别的地址)时 Hint 会落空。
+        self._last_host = _host_of(str((res or {}).get("url") or url))
         return {"ok": True, "stage": "need_login",
                 "url": str((res or {}).get("url") or url),
                 "title": str((res or {}).get("title") or ""),
                 "msg": ("登录页已经开在弹出的浏览器窗口里了。请**你自己**输账号密码和"
                         "验证码(学长不碰、也不问),然后在教务系统里点开"
                         "「课表查询 → 学期课表」,把周次选成(全部)。弄好了点「读取课表」。")}
+
+    # ---- 接管(不导航)
+    def _anchor_hints(self) -> list[str]:
+        """按什么去找"那张教务页"。
+
+        顺序有讲究:这一步之前真正开过的站点 > 内置站点提示 > (仅 launch 模式)任意一页。
+        最后那条兜底只敢在 **launch** 用:那个浏览器实例是学长自己起的独立 profile,
+        里面不该有别人的标签页;attach 模式接的是用户日常浏览器,按"任意一页"接管
+        就等于可能把他正在看的网站当成教务页来读 —— 那是读错东西,不是读不到。
+        """
+        hints = [h for h in (getattr(self, "_last_host", ""), HOST_HINT) if h]
+        if self.mode == "launch":
+            hints.append("")
+        return hints
+
+    def anchor_existing(self) -> dict | None:
+        """只**接管**已经开着的那一页,绝不导航、绝不新开。
+
+        为什么每一步都要它:桥的每一次 js_api 调用跑在**自己的线程**上,而 browser
+        的会话按线程 ident 分格(`_session_key`)—— 上一步「打开登录页」那条调用留下
+        的会话不属于这一步的线程,直接问"我这张页"永远得到 None,报出来就是
+        「BrowserError: 还没有打开的页面」。接管是按 URL 找回人的页,比"我们记得的那张"可靠。
+        """
+        brs = self.browser
+        for hint in self._anchor_hints():
+            try:
+                hit = brs.adopt_page(hint, mode=self.mode)
+            except Exception:
+                hit = None
+            if hit:
+                return hit
+        return None
+
+    def no_page_msg(self, what: str) -> dict:
+        """接管不到时给人看的那一句:说清"为什么读不到"和下一步点哪里,不猜、不装成功。"""
+        return {"ok": False, "stage": "no_page", "rows": [], "classes": [],
+                "msg": ("没找到还开着的教务页," + what + "读不到。多半是那个登录窗口"
+                        "被关掉了,或者你切回了自己日常的浏览器(学长只认自己弹出来的"
+                        "那个窗口)。请点「① 打开登录页」→ 在弹出的窗口里登录并点开查询"
+                        "结果页 → 再点读取。")}
 
     # ---- 第 2 步
     def read(self, *, goto_table: bool = True) -> dict:
@@ -248,9 +303,11 @@ class ImportFlow:
 
         为什么:登录完成后用户可能自己点了别的标签,我们线程那张页可能已经
         不是教务页了 —— 按 URL 找回来比"我们记得的那张"可靠。
+        找的顺序与 `anchor_existing` 同一份(先第 1 步真正开过的站点,再内置 Hint);
+        两条路共用一份口径,免得课表认得回来的页、成绩认不得。
         """
         brs = self.browser
-        hit = brs.adopt_page(HOST_HINT, mode=self.mode)
+        hit = self.anchor_existing()
         if hit is None:
             hit = brs.open_page(LOGIN_URL, mode=self.mode, headless=False,
                                 wait_ms=brs.MAX_WAIT_MS,

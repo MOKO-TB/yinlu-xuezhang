@@ -15,8 +15,11 @@ import json
 from minicode.paths import app_path
 
 PREF_FILE = "monitor-pref.json"
-# 五段各自的折叠状态。名字与前端那几个 section 一一对应,改一处要改两处。
-SECTIONS = ("now", "plan", "timeline", "groups", "changes")
+# 各段自己的折叠状态。名字与前端那几个 section 一一对应,改一处要改两处
+# (`tests/test_monitor.py` 里有一条闸:扫前端 `actSect("…")` 的段名,两边少谁都会红)。
+# v0.9.112 补上 env 与 subagents —— 「环境信息」那一节 v0.9.111 就在,但段名没登记,
+# 用户折了它、下次开机又弹开:折叠状态被 `_clean_folded` 当陌生键丢掉了。
+SECTIONS = ("now", "plan", "timeline", "groups", "changes", "env", "subagents")
 DEFAULTS = {"open": False, "folded": {}}
 
 
