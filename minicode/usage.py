@@ -168,6 +168,44 @@ def statistics(days: int = 7) -> dict:
             "summary": summary, "models": models, "days": days_out}
 
 
+def today_total() -> int:
+    """今天(本地时区)已花的 total tokens;读不到就是 0(C1,v0.9.108)。"""
+    try:
+        rows = _rows(1)
+    except sqlite3.Error:
+        return 0
+    return sum(int(r.get("total", 0) or 0) for r in rows
+               if str(r.get("date") or "") == _today_iso())
+
+
+def _today_iso() -> str:
+    from datetime import date as _date
+    return _date.today().isoformat()
+
+
+def budget_state(limit: int) -> dict:
+    """日预算的状态(C1,v0.9.108):limit<=0 = 未启用,只报今天的数。
+
+    口径:**只看今天**,不做滚动平均 —— 预算的意义是"今天还剩多少",
+    昨天花超了不该让今天一开始就是红的。阈值分三档:<80% 正常、
+    80%~100% 接近、≥100% 超支;条目里带"剩多少"而不是只报百分比。
+    """
+    spent = today_total()
+    if limit <= 0:
+        return {"enabled": False, "spent": spent, "limit": 0,
+                "ratio": 0.0, "level": "off"}
+    ratio = spent / limit
+    if ratio >= 1.0:
+        level = "over"
+    elif ratio >= 0.8:
+        level = "near"
+    else:
+        level = "ok"
+    return {"enabled": True, "spent": spent, "limit": limit,
+            "ratio": round(ratio, 4), "level": level,
+            "remaining": max(0, limit - spent)}
+
+
 def _rows(days: int) -> list[dict]:
     from datetime import date as _date, timedelta as _td
 

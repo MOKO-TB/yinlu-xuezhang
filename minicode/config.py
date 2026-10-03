@@ -261,6 +261,11 @@ class Config:
     # 真实用量(prompt+completion,不给 usage 的端点这道闸不起作用,文档写明)。
     # 到点与两条时限同一口径:两步之间收手,不强杀在跑的那一步。
     session_token_limit: int = 0
+    # 日预算(C1,v0.9.108):今天(本地时区)全供应商累计 total tokens 的上限。
+    # 只在**回合开始**检查一次:接近 80% / 达到 100% 各提醒一次(当天各一次,
+    # 记忆在内存里,不落盘不重复弹);0 = 不启用。与 session_token_limit 的
+    # 分工:那个管"这个会话",这个管"这台机器今天"。
+    daily_token_budget: int = 0
     # 会话留档保留个数(0=全部保留,默认):启动时按 mtime 删旧的。
     # 刻意只给这一个数 —— 年龄/体积的花样讲不清,一个数用户写得对。
     session_keep_last: int = 0
@@ -474,6 +479,7 @@ def _config_from_raw(raw: dict) -> Config:
         request_timeout_seconds=int(raw.get("request_timeout_seconds", 300)),
         turn_time_limit_seconds=max(0, int(raw.get("turn_time_limit_seconds", 1800) or 0)),
         session_token_limit=max(0, int(raw.get("session_token_limit", 0) or 0)),
+        daily_token_budget=max(0, int(raw.get("daily_token_budget", 0) or 0)),
         session_keep_last=max(0, int(raw.get("session_keep_last", 0) or 0)),
         subagent_time_limit_seconds=max(0, int(
             raw.get("subagent_time_limit_seconds", 600) or 0)),
@@ -588,6 +594,7 @@ def save_config(path: Path, cfg: Config) -> None:
         # 两条时限跟着落盘:用户在设置里改过、下次启动还在(0=不限也照样存下来)
         "turn_time_limit_seconds": cfg.turn_time_limit_seconds,
         "session_token_limit": cfg.session_token_limit,
+        "daily_token_budget": cfg.daily_token_budget,
         "session_keep_last": cfg.session_keep_last,
         "subagent_time_limit_seconds": cfg.subagent_time_limit_seconds,
         # 空 dict 也照样存:用户写过就该在 config.json 里看得见(看不见就会被当成没生效)

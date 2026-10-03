@@ -951,9 +951,24 @@ class Bridge:
         }
 
     def get_token_usage(self, days: int = 7) -> dict:
-        """每日/按模型聚合的 token 用量统计(前端弹窗圆环图)。"""
+        """每日/按模型聚合的 token 用量统计(前端弹窗圆环图)。
+
+        C1(v0.9.108):载荷带 today(按模型明细 + 日预算状态)—— 圆环图旁
+        能看到"今天花了多少、离预算还剩多少"。"""
         from minicode import usage
-        return usage.statistics(int(days))
+        out = usage.statistics(int(days))
+        if not out.get("ok"):
+            return out
+        today = usage.today_total()
+        budget = usage.budget_state(int(getattr(self.config,
+                                                "daily_token_budget", 0) or 0))
+        out["today"] = {"total": today,
+                        "by_model": [{"model": m.get("model") or m.get("key"),
+                                      "total": m.get("total", 0)}
+                                     for m in (usage.statistics(1).get("models")
+                                               or [])[:8]],
+                        "budget": budget}
+        return out
 
     # ------------------------------------------------------------ 技能面板
 

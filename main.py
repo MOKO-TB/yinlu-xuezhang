@@ -368,6 +368,18 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
             if not s["models"]:
                 lines.append("  暂无记录(服务端返回 usage 后自动统计;GUI 顶部「📊 用量」"
                              "可看每日圆环图)")
+            # C1(v0.9.108):今天的账 + 日预算状态
+            today = usage_mod.today_total()
+            lines.append(f"  今天: {today:,} tokens")
+            budget = usage_mod.budget_state(
+                int(getattr(config, "daily_token_budget", 0) or 0))
+            if budget.get("enabled"):
+                if budget["level"] == "over":
+                    lines.append(f"  ⚠ 日预算 {budget['limit']:,} 已超支"
+                                 f"(超出 {today - budget['limit']:,})")
+                else:
+                    lines.append(f"  日预算 {budget['limit']:,}:已用 "
+                                 f"{int(budget['ratio'] * 100)}%,还剩 {budget['remaining']:,}")
             ui.info("\n".join(lines))
     elif name == "/library":
         from minicode.library import catalog_health, health_notice, library_search

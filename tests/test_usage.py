@@ -124,7 +124,7 @@ class FakeLLMWithUsage:
         self.turns = list(turns)
 
     def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
-                    on_retry=None):
+                    on_retry=None, **kwargs):   # v0.9.108:agent 会传 fallback/on_fallback
         return self.turns.pop(0)
 
 

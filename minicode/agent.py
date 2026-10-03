@@ -100,6 +100,7 @@ class Agent:
         当时的附件消息体),再追加一遍会让模型把同一句话看到两遍,答出来的是"下一题"。
         """
         self._refresh_clock()      # 跨天了先重建日期与课表段,再收这条新消息
+        self._note_daily_budget()  # C1:日预算接近/超支,当天各提醒一次
         self.gate.new_turn()
         if add_user:
             self.session.add_user(user_input, content)
@@ -1048,6 +1049,37 @@ class Agent:
             if p.id != active and p.has_key and p.enabled and p.enabled_models():
                 return p.id
         return ""
+
+    def _note_daily_budget(self) -> None:
+        """C1(v0.9.108):日预算接近 80%/达到 100% 时各提醒一次,当天不重复。
+
+        提醒走 ui.push("info")(与 token_limit 同一家族);档位去重记在实例
+        内存 —— 重启后再达阈值会再提醒一次,可接受(进程内去重,不落盘
+        不新增账本)。读不到用量(库损坏)就静默:预算是提醒,不是闸门。
+        """
+        cfg = getattr(self.ctx, "config", None)
+        limit = int(getattr(cfg, "daily_token_budget", 0) or 0)
+        if limit <= 0:
+            return
+        if getattr(self, "_budget_noted", None) is None:
+            self._budget_noted = set()   # 进程内去重:同一档位当天只提醒一次
+        from minicode import usage
+        st = usage.budget_state(limit)
+        if not st.get("enabled"):
+            return
+        level = st.get("level")
+        if level not in ("near", "over") or level in self._budget_noted:
+            return
+        self._budget_noted.add(level)
+        spent, remaining = st.get("spent", 0), st.get("remaining", 0)
+        msg = (f"日预算提醒:今天已花 {spent:,} tokens,达到预算 {limit:,} 的"
+               f"{int(st.get('ratio', 0) * 100)}%。"
+               + (f"已超支 {spent - limit:,}。" if level == "over"
+                  else f"还剩 {remaining:,}。"))
+        try:
+            self.ui.push("info", text=msg)
+        except Exception:
+            pass
 
     def _run_config_hook(self, kind: str, tool, args: dict,
                          result: str | None = None) -> "dict | None":
