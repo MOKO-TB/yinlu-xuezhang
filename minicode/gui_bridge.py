@@ -281,6 +281,10 @@ class PublicApi:
     def get_activity(self) -> dict:
         return self._b.get_activity()
 
+    def get_env_info(self) -> dict:
+        """监控栏「环境信息」那一节:工作区/分支/本轮改动/后台命令/本机账本位置。"""
+        return self._b.get_env_info()
+
     def get_board(self) -> dict:
         """跨会话看板:几件事在跑、哪几件等你的决定、最近做完了什么(只读)。"""
         return self._b.get_board()
@@ -572,12 +576,18 @@ class SessionRunner:
         return self.session.log_path
 
 
+# 侧栏「历史会话」列几条 —— **列与读必须是同一个数**。
+# 以前 `_resolve_session_summary` 用 `list_sessions` 的默认值 10,而侧栏列 50:
+# 于是排在第 11~50 条的会话**看得见、点不开**(点一下回"会话不存在")。
+# 收成一个常量,免得再有人只改一处。
+SESSION_LIST_LIMIT = 50
+
+
 class Bridge:
     """暴露给前端 JS 的 API(window.pywebview.api.<method>)。
 
 支持多个会话同时运行:每个会话一个 SessionRunner,事件带 session 键,
 新建任务不再打断正在跑的任务(它转后台继续)。"""
-
     def __init__(self, config, workspace: Path, ui: GuiUI,
                  sessions_dir: Path = SESSIONS_DIR, config_path: Path = CONFIG_PATH,
                  llm=None, mcp_tools=None, sandbox=None,
@@ -1135,6 +1145,36 @@ class Bridge:
                     "summary": {}, "empty": True, "changes": self.undo_records(),
                     "msg": f"读取会话活动失败:{type(exc).__name__}: {exc}"}
 
+    # ------------------------------------------------ 环境信息(监控栏那一节)
+
+    def get_env_info(self) -> dict:
+        """监控栏「环境信息」:工作区 / 分支 / 本轮改动行数 / 后台命令 / 本机账本在哪。
+
+        里面要跑三条只读 git 命令(`status` / `diff --numstat` / `worktree list`),
+        大仓库上几十到一两百毫秒 —— 而这一栏以前是**每次活动推送都要刷**的,
+        直接挂在 get_activity 上就等于给卡顿再加一刀(用户刚报的那件)。所以:
+        ①单独一个方法,只在打开这一栏、点 ↻、或切工作区时由前端来问;
+        ②这里再加一层 2 秒的短缓存,连点 ↻ 也不会重复起子进程。
+        缓存只按"几秒前问的"失效,不改任何状态,读到稍旧的分支名不构成误导。
+        """
+        now = time.monotonic()
+        cached = getattr(self, "_env_cache", None)
+        if cached and now - cached[0] < 2.0:
+            return dict(cached[1])
+        from minicode import envinfo
+        try:
+            data = envinfo.collect(self.workspace)
+        except Exception as exc:            # 这一栏读不出来不该影响别处
+            data = {"msg": f"读环境信息失败:{type(exc).__name__}: {exc}", "jobs": [],
+                    "files": [], "added": 0, "removed": 0, "total": 0, "more": 0,
+                    "partial": False, "is_repo": False, "branch": ""}
+        self._env_cache = (now, dict(data))
+        return data
+
+    def invalidate_env_info(self) -> None:
+        """切工作区 / 一轮跑完之后调一下:下一句「环境信息」要看到新的改动行数。"""
+        self._env_cache = None
+
     # ------------------------------------------------------------ 跨会话看板(B1)
 
     def get_board(self) -> dict:
@@ -1404,6 +1444,7 @@ class Bridge:
         self.ui.push("info", session=runner.key, text=f"工作区已切换:{target}")
         # 标题栏那行字跟着换(p2):前端不重画主题,这里自己补一次
         self._apply_chrome()
+        self.invalidate_env_info()        # 环境信息跟着工作区走(分支/改动都是新目录的)
         return {"ok": True, "session": runner.key, "path": str(target)}
 
     def _close_runners(self) -> None:
@@ -2474,18 +2515,19 @@ class Bridge:
         return getattr(self.ui, "window", None)
 
     def _apply_chrome(self, dark: bool | None = None) -> dict:
-        """把标题栏染成与界面同一套色,并把字换成当前工作区名。
+        """把标题栏染成与界面同一套色,并把字写成「引路学长 · 当前工作区」。
 
         标题用的就是顶栏那颗 📁 胶囊同一份口径(`get_info()["workspace_name"]`
         走的就是 `ws.display_name`),两边写两个名字迟早会对不上;
         主题没报过来之前只改字、不猜颜色。
+        以前只写工作区名,窗口一多就分不清哪个是哪个(用户点名要「引路学长 + 工作区」)。
         """
-        from minicode import window_chrome
+        from minicode import APP_NAME, window_chrome
         if dark is not None:
             self._chrome_dark = bool(dark)
         return window_chrome.apply(
             self._chrome_window(), dark=dark,
-            title=ws.display_name(self.workspace, self.app_dir))
+            title=f"{APP_NAME} · {ws.display_name(self.workspace, self.app_dir)}")
 
     def set_chrome(self, dark: bool) -> dict:
         """前端切主题(含开机那一次)时报给本机,让系统标题栏跟着变。"""
@@ -2752,7 +2794,7 @@ class Bridge:
         序号 —— 渲染到点击之间若有新会话落盘,序号会错位到另一条(路线图 #11),
         文件名是稳定的。只拿输入比对 basename,绝不据它拼路径(防目录穿越)。
         """
-        summaries = list_sessions(self.sessions_dir)
+        summaries = list_sessions(self.sessions_dir, limit=SESSION_LIST_LIMIT)
         if isinstance(target, str):
             name = target.strip().replace("\\", "/").rsplit("/", 1)[-1]
             if not name:
@@ -3023,7 +3065,8 @@ class Bridge:
             return {"ok": True, "query": "", "total": 0, "results": []}
         hits = search_session_logs(self.sessions_dir, q)
         order = {s.path: i for i, s in
-                 enumerate(list_sessions(self.sessions_dir, limit=50), start=1)}
+                 enumerate(list_sessions(self.sessions_dir,
+                                 limit=SESSION_LIST_LIMIT), start=1)}
         results = []
         for hit in hits:
             idx = order.get(hit["path"])
@@ -3060,7 +3103,8 @@ class Bridge:
         cur_path = self.session.log_path
         cur_key = ws.key(self.workspace)
         items = []
-        for i, s in enumerate(list_sessions(self.sessions_dir, limit=50), start=1):
+        for i, s in enumerate(list_sessions(self.sessions_dir,
+                                        limit=SESSION_LIST_LIMIT), start=1):
             # 每条会话都带工作区名:前端按它分组(当前工作区的组不额外标名)。
             # 老留档没有 workspace 字段 → 归进"(未记录)"组,不与当前混在一起。
             if s.workspace:

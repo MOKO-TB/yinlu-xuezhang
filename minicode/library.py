@@ -648,11 +648,28 @@ def health_notice(health: dict) -> str | None:
             + REINSTALL_HINT)
 
 
-def catalog_stats(workspace: Path | None = None) -> dict | None:
-    """全库统计(给系统提示词/GUI 用)。"""
+# 全库统计的缓存:键是 (库路径, mtime_ns, 字节数)。
+# 为什么敢缓存 —— 这份库**只读**(conn 走 mode=ro),运行期唯一会改它的是"重新装一次包",
+# 那时路径/大小/修改时间至少变一样,键自然就换了;不存在"内容变了而键没变"的窗口。
+# 为什么必须缓存 —— 实测(2026-10-03,本机 1.31 GB / 133 万条):一次 `COUNT(*)` 要
+# **1640 ms**,而它在 `library_prompt_section` 里被系统提示词调用,于是**每切一次会话、
+# 每开一个新任务都要付这 1.6 秒**(用户报的"切换停顿好几秒"里最大的一块)。
+# 缓存只存这一份小字典,最多 8 个库(换工作区才会有第二个键),不是把整库读进内存。
+_STATS_CACHE: "dict[tuple, dict]" = {}
+
+
+def catalog_stats(workspace: Path | None = None) -> "dict | None":
+    """全库统计(给系统提示词/GUI 用);同一份库第二次问走缓存。"""
     path = db_path(workspace)
     if path is None:
         return None
+    try:
+        st = path.stat()
+        key: "tuple | None" = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is not None and key in _STATS_CACHE:
+        return dict(_STATS_CACHE[key])
     try:
         c = conn(path)
         row = _read(c,
@@ -663,8 +680,13 @@ def catalog_stats(workspace: Path | None = None) -> dict | None:
     if row is None:          # 一条 COUNT 不可能没有结果行:出现了就是这条连接被人动过,
         return None          # 按"读不出来"走 —— 宁可少一句馆藏统计,不报一个猜出来的数
     total, paper, ebook, cls = row
-    return {"total": total or 0, "paper": paper or 0,
-            "ebook": ebook or 0, "classes": cls or 0}
+    stats = {"total": total or 0, "paper": paper or 0,
+             "ebook": ebook or 0, "classes": cls or 0}
+    if key is not None:
+        if len(_STATS_CACHE) >= 8:
+            _STATS_CACHE.clear()
+        _STATS_CACHE[key] = dict(stats)
+    return dict(stats)
 
 
 def library_prompt_section(workspace: Path | None = None) -> str:

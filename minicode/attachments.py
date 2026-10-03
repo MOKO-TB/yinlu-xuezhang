@@ -216,14 +216,35 @@ def image_data_url(path: Path) -> str | None:
     return data_url(data, mime)
 
 
+# 缩略图的进程内缓存:键 (路径, mtime_ns, 字节数, 目标边长)。
+# 为什么要有 —— 恢复一条会话时,每个图片附件都要 PIL 解码 + LANCZOS 缩放 + 重编码
+# (手机拍的一张 4 MB 图几十到一百多毫秒),而**每切一次会话就把同几张图再压一遍**。
+# 图片文件被换掉/改过,mtime 与大小都会变,键自然换;不做磁盘缓存,免得又添一份
+# 要登记、要清理、要防外发的本机文件。最多留 24 张(每张 base64 上限 200 KB),
+# 超了就整表丢 —— 这是加速,不是持久层,丢了最坏是回到"重压一次"。
+_PREVIEW_CACHE: "dict[tuple, str]" = {}
+
+
 def preview_data_url(path: Path, max_edge: int = 320) -> str | None:
-    """前端缩略图:压得更小,避免一次性传大图进 DOM。"""
+    """前端缩略图:压得更小,避免一次性传大图进 DOM;同一张图第二次直接取缓存。"""
+    try:
+        st = path.stat()
+        key: "tuple | None" = (str(path), st.st_mtime_ns, st.st_size, int(max_edge))
+    except OSError:
+        key = None
+    if key is not None and key in _PREVIEW_CACHE:
+        return _PREVIEW_CACHE[key]
     try:
         data, mime = compress_image(path, max_edge=max_edge, quality=70,
                                     max_bytes=200 * 1024)
     except OSError:
         return None
-    return data_url(data, mime)
+    url = data_url(data, mime)
+    if key is not None:
+        if len(_PREVIEW_CACHE) >= 24:
+            _PREVIEW_CACHE.clear()
+        _PREVIEW_CACHE[key] = url
+    return url
 
 
 # --------------------------------------------------------------------- 消息体

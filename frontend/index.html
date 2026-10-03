@@ -901,19 +901,39 @@ try {
   .task-menu .tfilter:focus{ border-color:var(--primary); }
   .task-menu .tcount{ padding:1px 8px 4px; font-size:10.5px; color:var(--text-3); }
   .task-menu .tempty{ padding:6px 8px; font-size:11px; color:var(--text-3); }
+  /* 分组标题:25 行都以「基元」开头等于没有区分(p6)。供应商名挪到这里念一次,
+     行里只留模型名 —— 一屏能多看清好几行。 */
+  .task-menu .tgroup{ display:flex; align-items:center; gap:6px; padding:7px 8px 2px;
+                      font-size:10.5px; font-weight:700; letter-spacing:.3px;
+                      color:var(--text-3); }
+  .task-menu .tgroup .tg-n{ margin-left:auto; font-weight:400; opacity:.8; }
+  .task-menu .trow .tmodel{ font-weight:700; color:var(--text-1); }
+  /* 弹层是 absolute 定位到 .task-menu 的父级 —— 不包一层锚,思考档位的菜单
+     会开在最左边那颗模型按钮底下(p11 的"没对齐")。 */
+  .menu-anchor{ position:relative; display:inline-flex; }
+  /* 「知道了」:提示只提醒一次的出口(p12)。做成安静的次要按钮,不抢正文。 */
+  .tip-x{ margin-left:8px; padding:1px 9px; border-radius:var(--r-full);
+          border:1px solid var(--line-soft); background:transparent;
+          color:var(--text-3); font-size:10.5px; cursor:pointer; vertical-align:1px;
+          transition:.15s; }
+  .tip-x:hover{ color:var(--primary-text); border-color:var(--primary); }
   /* 上下文窗口面板(p1):点任务栏「上下文」弹出,进度条 + 分类占比 + 真压缩按钮 */
-  .task-menu.ctx-panel{ left:auto; right:0; min-width:380px; padding:12px 14px; }
+  /* 这块面板以前宽 380、内边距 12/14、说明文字两行起步 —— 用户点名"占用空间太大"
+     (p10:一打开盖住半屏,而要看的就是那四个数)。整体收一档:宽度、留白、行高都降,
+     数字与那条压缩线一个不少。 */
+  .task-menu.ctx-panel{ left:auto; right:0; min-width:300px; max-width:340px;
+                        padding:8px 10px; }
   .ctx-head{ display:flex; align-items:baseline; justify-content:space-between; }
-  .ctx-head b{ font-size:13px; color:var(--text-1); }
-  .ctx-pct{ font-size:20px; font-weight:900; color:var(--primary-text); }
-  .ctx-desc{ margin-top:4px; font-size:11px; line-height:1.6; color:var(--text-3); }
-  .ctx-num{ margin-top:3px; font-size:11.5px; font-weight:700; color:var(--text-2);
+  .ctx-head b{ font-size:12.5px; color:var(--text-1); }
+  .ctx-pct{ font-size:17px; font-weight:900; color:var(--primary-text); }
+  .ctx-desc{ margin-top:2px; font-size:10.5px; line-height:1.45; color:var(--text-3); }
+  .ctx-num{ margin-top:2px; font-size:11px; font-weight:700; color:var(--text-2);
             font-variant-numeric:tabular-nums; }
-  .ctx-src{ display:block; margin:8px 0 4px; font-size:10.5px; line-height:1.55;
+  .ctx-src{ display:block; margin:5px 0 3px; font-size:10.5px; line-height:1.45;
             color:var(--text-3); }
-  .ctx-res{ margin-top:8px; padding:6px 8px; border-radius:8px; font-size:11.5px;
+  .ctx-res{ margin-top:6px; padding:5px 8px; border-radius:8px; font-size:11.5px;
             font-weight:700; background:var(--primary-light); color:var(--primary-text); }
-  .ctx-bar{ position:relative; height:8px; margin:10px 0 10px;
+  .ctx-bar{ position:relative; height:7px; margin:5px 0 6px;
             background:var(--glass-lite); border:1px solid var(--line-soft);
             border-radius:999px; overflow:hidden; }
   .ctx-fill{ height:100%; border-radius:999px;
@@ -921,12 +941,15 @@ try {
   .ctx-fill.hot{ background:linear-gradient(90deg,#E0A42D,#E06A3F); }
   .ctx-mark{ position:absolute; top:-2px; bottom:-2px; width:2px;
              background:var(--warning); opacity:.8; }
-  .ctx-row{ display:flex; align-items:center; gap:8px; padding:3px 2px; font-size:12px; }
+  .ctx-row{ display:flex; align-items:center; gap:8px; padding:2px 2px; font-size:11.5px; }
   .ctx-row .dot{ width:8px; height:8px; border-radius:50%; flex:none; }
   .dot.system{ background:#334155; } .dot.tools{ background:#3FBDAE; }
   .dot.skills{ background:#7BC96A; } .dot.messages{ background:#94A3B8; }
   .ctx-row .lb{ color:var(--text-2); font-weight:700; }
-  .ctx-row .tk{ margin-left:auto; color:var(--text-3); font-variant-numeric:tabular-nums; }
+  /* 这一栏以前用 class="tk",被计划卡片的 `.tk{ padding:10px 13px 9px; margin:10px 0 14px }`
+     整条命中 —— 行高 20px 被撑成 69px,四行就 277px,面板打开盖掉半屏(p10 的"太大")。
+     改名 tkn 避开同名,内边距与外边距立刻回到行本身。 */
+  .ctx-row .tkn{ margin-left:auto; color:var(--text-3); font-variant-numeric:tabular-nums; }
   .ctx-row .pc{ width:44px; text-align:right; color:var(--text-2); font-weight:800;
                 font-variant-numeric:tabular-nums; }
   .ctx-btn{ width:100%; margin-top:10px; border:1px solid var(--primary);
@@ -1503,6 +1526,17 @@ try {
   .act-row:hover{ background:var(--primary-light); border-color:var(--line-soft); }
   .act-row.plain{ cursor:default; }               /* 没有可点动作的行不装得能点 */
   .act-row.plain:hover{ background:transparent; border-color:transparent; }
+  /* 环境信息那一节:左边一个字段名,右边一个值 —— 值可能很长(整条命令、整个路径),
+     所以让它独占中间那格并省略号收尾,鼠标移上去看全称。 */
+  .act-row.env-kv, .act-row.env-job{ grid-template-columns:auto 1fr auto; }
+  .act-row.env-kv .env-k, .act-row.env-job .env-k{ color:var(--text-3); font-size:11px;
+                                                   white-space:nowrap; }
+  .act-row .env-v{ color:var(--text-1); font-weight:600; overflow:hidden;
+                   text-overflow:ellipsis; white-space:nowrap; text-align:right;
+                   font-size:11.5px; }
+  .act-row .env-n{ color:var(--text-3); font-size:10.5px; white-space:nowrap;
+                   font-variant-numeric:tabular-nums; }
+  .env-cap{ margin-top:6px; }
   /* 并行子代理内部的每一步挂在父行下面(v0.9.92):缩进 + 一条竖线表示"属于上面那一步",
      字号小一档 —— 它是过程证据,不是与父调用并列的又一件事。 */
   .act-kids{ margin:0 0 6px 16px; padding-left:9px; border-left:1px solid var(--line-soft); }
@@ -1880,11 +1914,13 @@ try {
           <span id="tmName">…</span><span class="task-caps" id="tmCaps"></span><span class="tm-caret">▾</span>
         </button>
         <div class="task-menu" id="taskModelMenu"></div>
+        <span class="menu-anchor">
         <button class="task-model" id="thinkBtn" title="思考档位:控制模型的思考开关与深度"
                 style="display:none">
           <span>🧠</span><span id="thinkLabel">思考</span><span class="tm-caret">▾</span>
         </button>
         <div class="task-menu" id="thinkMenu" style="min-width:180px"></div>
+        </span>
         <span class="task-sep"></span>
         <span class="task-metric" id="tmConsumed" title="本次任务累计消耗的真实 token(服务端返回才计,绝不估算)">任务消耗 <b>—</b></span>
         <span class="task-metric task-metric-click" id="tmContext" title="当前对话占用 / 模型上下文窗口(点击看明细与压缩)">上下文 <b>—</b><span class="tm-caret">▾</span></span>
@@ -1905,9 +1941,10 @@ try {
       <button class="act-ib" id="btnActClose" title="收起这一栏(Ctrl+Shift+M 再展开)">✕</button>
     </div>
     <div class="act-body" id="actBody"></div>
-    <div class="act-foot">「现在」只在这轮真有工具在跑时出现;「时间线」按先后排,
+    <div class="act-foot" id="actFoot">「现在」只在这轮真有工具在跑时出现;「时间线」按先后排,
       时刻来自本机实时表 —— 没记到的行宁可不显示时间,也不拿刷新那一刻凑。
-      点一行才做事:定位文件 / 打开链接 / 看这一步的原文 / 把追问填回输入框。</div>
+      点一行才做事:定位文件 / 打开链接 / 看这一步的原文 / 把追问填回输入框。
+      <button class="tip-x" data-hint="act-foot">知道了</button></div>
   </aside>
 </div>
 
@@ -2392,6 +2429,26 @@ let homeSuggestions = HOME_SUGGESTIONS;   // 启动后由后端按聊天记录�
 let homeCountdowns = [];                  // 校历倒计时(后端下发,空则整行不显示)
 let homeContinue = [];                     // 「接着做」:计划里正挂着的那步 + 今天/逾期待办
 let homeWeather = null;                   // 首页天气 chip(只读缓存,拿不到就不显示)
+/* 「只提醒一次」的本机账:与主题同一个 localStorage(装过的机器上真的会留着)。
+   存一个逗号分隔的 id 集合,而不是给每条提示开一个键 —— 以后再加提示不用改存储。
+   **必须定义在 renderHome 之前**:整个界面只有一个 <script>,而 renderHome() 在
+   脚本顶层就被调用(首屏就是它画的)。放后面会撞上 const 的暂时性死区 ——
+   hintSeen 里那圈 try/catch 把 ReferenceError 吃掉、return false,于是「知道了」
+   按了、偏好也写进了 localStorage,下次开机这条提示照旧出现(p12 用户点名的就是它)。
+   e2e_ui_v09111 第 6 节钉这一条:两条都点过之后重开窗口,一条都不该再出现。 */
+const HINTS_KEY = "gcode-hints";
+function hintSeen(id) {
+  try {
+    return (localStorage.getItem(HINTS_KEY) || "").split(",").indexOf(id) >= 0;
+  } catch (e) { return false; }
+}
+function markHintSeen(id) {
+  try {
+    const set = new Set((localStorage.getItem(HINTS_KEY) || "").split(",").filter(Boolean));
+    set.add(id);
+    localStorage.setItem(HINTS_KEY, [...set].join(","));
+  } catch (e) {}
+}
 function renderHome() {
   const chips = homeSuggestions.map(t => `<button class="chip">${esc(t)}</button>`).join("");
   // 天气 chip:一句话实况 + 带伞建议进 title,点击直接问学长;拿不到(断网)整枚不出现
@@ -2418,6 +2475,9 @@ function renderHome() {
   const mapChip = `<button class="chip chip-map" title="打开手绘校园地图,可以搜楼名/俗称,或按类别看">🗺 打开校园地图</button>`;
   // 图书馆固定功能模块入口:点一下直接进图书馆导览(查书/找书/借还流程)
   const libChip = `<button class="chip chip-lib" title="图书馆导览:查馆藏、按索书号找楼层书库、借还流程,带新生走一遍">📚 图书馆导览</button>`;
+  // 那坨「小提示」以前永远坐在首屏底下(p12 用户原话:占地方、天天看)。
+  // 现在点「知道了」就记进本机偏好,之后不再出现 —— 与主题那条同一个 localStorage。
+  const tipHtml = hintSeen("home-tip") ? "" : `<div class="tip">小提示：找楼可以直接问我「图书馆在哪」，也可以点上面的地图自己搜（支持 E栋、s5 这类俗称）；聊天里用鼠标选中文字会出现「复制选区」按钮；思考过程与工具卡片在最终回复给出后会自动收起，点击可重新展开。<button class="tip-x" data-hint="home-tip">知道了</button></div>`;
   chat.innerHTML = `<div class="placeholder">
     <div class="hero">
       <div class="greet"><b>${esc(timeGreeting())}</b>，同学！</div>
@@ -2427,9 +2487,14 @@ function renderHome() {
       ${goRow}
       ${cdRow}
       <div class="chips"><span>试试这些：</span>${mapChip}${libChip}${chips}</div>
-      <div class="tip">小提示：找楼可以直接问我「图书馆在哪」，也可以点上面的地图自己搜（支持 E栋、s5 这类俗称）；聊天里用鼠标选中文字会出现「复制选区」按钮；思考过程与工具卡片在最终回复给出后会自动收起，点击可重新展开。</div>
+      ${tipHtml}
     </div>
   </div>`;
+  chat.querySelectorAll(".tip-x").forEach(el => el.addEventListener("click", () => {
+    markHintSeen(el.dataset.hint);
+    const box = el.closest(".tip");
+    if (box) box.remove();
+  }));
   chat.querySelectorAll(".chip").forEach(el => el.addEventListener("click", () => {
     if (el.classList.contains("chip-map")) {
       if (window.CampusMap) window.CampusMap.toggle(true);   // 打开面板并聚焦搜索框
@@ -3761,11 +3826,28 @@ function slugish(s) {
     .replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+let infoDefault = null;      // get_info 那份"全局默认模型",只在顶部药丸兜底时用
 function renderModelPill(info) {
   const active = (info.providers || []).find(p => p.id === info.active_provider);
   const name = active ? active.name : "广州应用科技学院";
+  infoDefault = { name: name, model: info.model };
   $("modelPill").textContent = `${name} · ${info.model}`;
-  $("modelPill").title = `当前模型:${name} · ${info.model}(点击管理模型)`;
+  $("modelPill").title = `默认模型:${name} · ${info.model}(点击管理模型)`;
+}
+
+/* 顶部药丸以前写的是**全局默认模型**,底下那颗写的是**本会话真正在用的模型** ——
+   同屏两个模型名,用户没法判断这句回答是谁给的(p8 原话:"最下角的模型和右上角的模型
+   不是统一的")。现在两处读同一个真相:`session_metrics` 那份;切过就在顶部标出来。 */
+function syncTopPill(m) {
+  if (!m || !m.model) return;
+  const hit = (m.selectable || []).find(x => x.key === m.selected_key);
+  const name = hit ? hit.name : (infoDefault ? infoDefault.name : "");
+  const pill = $("modelPill");
+  pill.textContent = `${name ? name + " · " : ""}${m.model}`
+    + (m.session_override ? " · 本任务已切换" : "");
+  pill.title = `这个会话现在调用的模型:${name} · ${m.model}`
+    + (m.session_override ? "(本任务单独切过,不影响其他会话与默认模型)"
+                          : "(与默认一致)") + " —— 点击管理模型";
 }
 
 function openProvDlg() {
@@ -4152,6 +4234,7 @@ function renderTaskMetrics(m) {
   $("tmContext").classList.toggle("over", !!over);
 
   const menu = $("taskModelMenu");
+  syncTopPill(m);                      // 顶部那颗药丸跟着这个会话真正在用的模型走
   modelRows = m.selectable || [];
   modelSelKey = m.selected_key || "";
   menu.innerHTML = '<div class="thead"><div class="tmenu-hint">切换本任务使用的模型(不影响默认模型)</div>'
@@ -4182,8 +4265,9 @@ function modelRowNode(p) {
      宁可显示"看不出现在用哪个",也不指着五个模型说"就是它"。 */
   row.className = "trow" + (modelSelKey && p.key === modelSelKey ? " on" : "");
   if (!p.has_key) row.classList.add("tnokey");
-  row.innerHTML = `<span class="tname">${esc(p.name)}</span>`
-    + `<span class="tmodel">${esc(p.model)}</span>`
+  // 供应商名交给分组标题去说,行里只留模型名 —— 25 行重复 25 次"基元"就是用户说的
+  // "太长、没有区分"。类名仍叫 .tmodel:e2e 与旧样式都按它取模型名。
+  row.innerHTML = `<span class="tmodel">${esc(p.model)}</span>`
     + `<span class="cap ${p.supports_vision ? "multi" : "text"}">${p.supports_vision ? "多模态" : "纯文本"}</span>`
     + (p.context_window ? `<span class="cap win">${fmtCtx(p.context_window)}</span>` : "")
     + (!p.has_key ? '<span class="tnokey">未配 Key</span>' : "");
@@ -4205,9 +4289,28 @@ function paintModelRows() {
   const hit = q ? modelRows.filter(p =>
     (`${p.name || ""} ${p.model || ""}`).toLowerCase().includes(q)) : modelRows;
   box.innerHTML = "";
-  for (const p of hit) box.appendChild(modelRowNode(p));
+  // 按供应商分组(保留原顺序,第一次出现的供应商排前面):只有一家时不写标题,
+  // 免得"基元 · 25"在头上和每一行里各念一遍。
+  const groups = new Map();
+  for (const p of hit) {
+    const g = String(p.name || p.id || "其他");
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(p);
+  }
+  const many = groups.size > 1;
+  for (const [gname, rows] of groups) {
+    if (many) {
+      const h = document.createElement("div");
+      h.className = "tgroup";
+      h.innerHTML = `<span class="tg-name">${esc(gname)}</span>`
+        + `<span class="tg-n">${rows.length} 个</span>`;
+      box.appendChild(h);
+    }
+    for (const p of rows) box.appendChild(modelRowNode(p));
+  }
   cnt.textContent = q ? `匹配 ${hit.length} / 共 ${modelRows.length} 个`
-                      : `共 ${modelRows.length} 个模型`;
+                      : (many ? `共 ${modelRows.length} 个模型 · ${groups.size} 家供应商`
+                              : `共 ${modelRows.length} 个模型`);
   if (!hit.length) {         // 筛空了要说清楚,别留一个空框让人以为界面坏了
     const e = document.createElement("div");
     e.className = "tempty";
@@ -4240,7 +4343,7 @@ function renderCtxPanel() {
     const share = Math.round((Number(x.tokens) || 0) / base * 100);
     return `<div class="ctx-row"><span class="dot ${esc(x.key)}"></span>`
       + `<span class="lb">${esc(x.label)}${x.count ? ` (${x.count}个)` : ""}</span>`
-      + `<span class="tk">${fmtTok(x.tokens)}</span><span class="pc">${share}%</span></div>`;
+      + `<span class="tkn">${fmtTok(x.tokens)}</span><span class="pc">${share}%</span></div>`;
   }).join("");
   const est = Number(b.estimated) || 0;
   const src = b.source === "real"
@@ -4253,7 +4356,7 @@ function renderCtxPanel() {
   panel.innerHTML = `
     <div class="ctx-head"><b>上下文窗口</b><span class="ctx-pct">${pct}%</span></div>
     <div class="ctx-num">${fmtTok(used)} / ${fmtTok(win)} tokens</div>
-    <div class="ctx-desc">展示当前任务的上下文占用情况;压缩会把早期内容摘编成摘要(真压缩,不是清屏),需等待片刻并消耗少量 token。白线右侧是自动压缩线(${mark}%)。</div>
+    <div class="ctx-desc">压缩是把早期内容摘编成摘要(真压缩,不是清屏),会等片刻并花一点 token。白线是自动压缩线(${mark}%)。</div>
     <div class="ctx-bar"><div class="ctx-fill${pct >= mark ? " hot" : ""}" style="width:${pct}%"></div><div class="ctx-mark" style="left:${mark}%"></div></div>
     <span class="ctx-src">${src}</span>
     <div class="ctx-rows">${rows}</div>
@@ -5914,7 +6017,10 @@ async function activityRefresh() {
   if (!api || !api.get_activity) return;
   let data = null;
   try {
-    data = await api.get_activity();
+    // 两条一起等:环境信息要跑 git 子进程(几十毫秒起),活动数据每轮事件都在刷。
+    // 捆在一次 await 里 = 开这一栏只重画一次,也不会出现"环境那一节永远不来"的竞态。
+    const [envDone, got] = await Promise.all([loadEnvInfo(), api.get_activity()]);
+    data = got;
   } catch (e) { /* 桥还没就绪(开机头几百毫秒)或有别的东西在抢:下一轮事件会再刷 */
     return;
   }
@@ -6306,6 +6412,80 @@ function actSect(key, label, countText, builder) {
   return sec;
 }
 
+/* ---------------- 环境信息(监控栏最后一节) ----------------
+   对标 Qoder 侧栏那块可折叠的「环境信息」。刻意**没有**那颗「提交或推送」按钮:
+   本机没有对应的动作(提交要走对话里的 bash + 确认框,推送按约定还要用户单独点头),
+   摆一颗点了没用的按钮就是装饰。每一行都能追到一次真调用:分支/行数来自两条只读
+   git 命令,后台进程读的是 shell 那张内存账,数据目录来自 paths.diagnostics()。 */
+let actEnv = null;
+
+function actEnvSummary(e) {
+  const bits = [];
+  if (e.is_repo) {
+    bits.push(`+${e.added} −${e.removed}${e.partial ? "(部分)" : ""}`);
+    if (e.total) bits.push(`${e.total} 个文件`);
+  }
+  if (e.branch) bits.push(e.branch);
+  if (e.jobs && e.jobs.length) bits.push(`${e.jobs.length} 个后台`);
+  return bits.join(" · ");
+}
+
+function envRow(k, v, title) {
+  if (v === "" || v === null || v === undefined) return null;
+  const el = actEl("act-row plain env-kv");
+  el.innerHTML = `<span class="env-k">${esc(k)}</span><span class="env-v">${esc(String(v))}</span>`;
+  if (title) el.title = String(title);
+  return el;
+}
+
+function buildEnv(box, e) {
+  // actSect 的约定:builder 返回**这一段摆了几行**,返回 0/undefined 整段不出现。
+  // 早先这里没有返回值,环境信息就永远不渲染 —— 别把它改回隐式 undefined。
+  const add = (el) => { if (el) box.appendChild(el); };
+  add(envRow("工作区", e.workspace, e.workspace));
+  if (e.is_repo) {
+    add(envRow("分支", e.branch || "(问不出分支名)", e.repo_root || ""));
+    add(envRow("本轮改动", `+${e.added} −${e.removed}`
+      + (e.partial ? "(只算了列出的那些)" : "(与 HEAD 比)"),
+      "git status + git diff --numstat,只读。标「只算了列出的那些」= 有未跟踪/二进制文件"
+      + "git 给不出行数,或未提交文件超过一屏(30 个) —— 不拿 0 补成一个看着完整的数"));
+    if (e.total) {
+      add(envRow("未提交文件", `${e.total} 个` + (e.more ? `(只列前 30,另有 ${e.more} 个)` : "")));
+    }
+  } else {
+    add(envRow("仓库", e.msg || "这份工作区不是 git 仓库", "没有 HEAD 可比,行数与分支都不报"));
+  }
+  add(envRow("版本", `${e.app} v${e.version}${e.frozen ? "(安装版)" : "(开发态)"}`));
+  add(envRow("本机数据", e.app_dir, (e.backend ? "后端:" + e.backend + " · " : "")
+    + (e.writable ? "可写" : "只读 —— 配了不会保存")));
+  const jobs = e.jobs || [];
+  if (jobs.length) {
+    box.appendChild(actEl("act-cap env-cap",
+      "🖥 后台命令 " + jobs.length + " 条(这一程的临时账,重启就没了)"));
+    for (const j of jobs) {
+      const el = actEl("act-row plain env-job");
+      el.innerHTML = `<span class="env-k">${j.running ? "🟢 在跑" : "⚪ 已退"}</span>`
+        + `<span class="env-v">${esc(j.command)}</span>`
+        + `<span class="env-n">${esc(j.running ? j.elapsed + "s" : "码 " + j.exit_code)}`
+        + ` · ${j.chars} 字</span>`;
+      el.title = "后台命令 " + j.id + ":" + j.command;
+      box.appendChild(el);
+    }
+  }
+  return box.children.length;
+}
+
+function loadEnvInfo() {
+  if (!window.pywebview || !pywebview.api || !pywebview.api.get_env_info) {
+    actEnv = null;
+    return Promise.resolve();
+  }
+  // 返回 promise:activityRefresh 要**等它一起**渲染。各发各的会撞出一个竞态 ——
+  // 环境信息先回来时 actData 还是空的(重画被跳过),这一节就永远不出现。
+  return pywebview.api.get_env_info().then(r => { actEnv = r || null; })
+    .catch(() => { actEnv = null; });
+}
+
 function renderActivity(data) {
   actData = data;
   const body = $("actBody");
@@ -6332,6 +6512,10 @@ function renderActivity(data) {
     actSect("groups", "📦 产出与来源", "", b => buildGroups(b, data)),
     actSect("changes", "🛠 本轮改动", (data.changes && data.changes.total)
       ? data.changes.total + " 处可退" : "", b => buildChanges(b, data)),
+    // 环境信息:数据不在 activity 里(那要每次推送都跑三条 git 命令),单独问一次、
+    // 2 秒缓存,只在开栏 / 点 ↻ / 切工作区时刷新 —— 用户刚报过切换卡顿,不能再加一刀。
+    (actEnv ? actSect("env", "🖥 环境信息", actEnvSummary(actEnv),
+      b => buildEnv(b, actEnv)) : null),
   ].filter(Boolean);
   for (const s of secs) body.appendChild(s);
   if (!secs.length || data.empty) {
@@ -7818,8 +8002,24 @@ $("boardOverlay").addEventListener("click", (e) => {
 
 window.addEventListener("DOMContentLoaded", () => {
   applyTheme(document.documentElement.classList.contains("dark"), false);
+  // 监控栏那段说明(p12 圈起来的第二处):点过「知道了」之后就再也不出现。
+  // 它是静态 HTML、不是每次渲染出来的,所以开机这一处统一撤掉。
+  const af = $("actFoot");
+  if (af) {
+    if (hintSeen("act-foot")) af.style.display = "none";
+    const x = af.querySelector(".tip-x");
+    if (x) x.addEventListener("click", () => {
+      markHintSeen("act-foot");
+      af.style.display = "none";
+    });
+  }
 
   function boot() {
+    // 标题栏要在**桥就绪之后**再报一次:上面 DOMContentLoaded 那次 applyTheme 撞上的
+    // 是 `pywebview.api` 还没注入(DOMContentLoaded 早于 pywebviewready),set_chrome
+    // 被静默跳过 —— 于是深色界面顶着一条系统白标题栏、那行字也停在没有工作区名的老样子。
+    // 用户看图 p3/p4 点的就是这一条。这里补一次,开机就能染上色。
+    applyTheme(document.documentElement.classList.contains("dark"), false);
     pywebview.api.get_info().then(info => {
     $("ver").textContent = "v" + info.version;
     renderWorkspacePill(info);

@@ -203,6 +203,10 @@ def session_metrics(agent, session, config, llm_override: dict | None) -> dict:
         "provider_id": active_id,
         "selected_key": f"{active_id}::{model}" if active_id and model else "",
         "model": model,
+        # 这个会话是不是单独切过模型。顶部那颗药丸要靠它决定写不写「本任务已切换」——
+        # 让前端去比"和全局默认一样不一样"是不可靠的:全局默认恰好等于覆盖值时,
+        # 明明切过却标不出来。真相在这里,不在前端猜。
+        "session_override": llm_override is not None,
         "capabilities": capabilities(model),
         "supports_vision": info["supports_vision"],
         # 真正决定是否发图的那个:v0.9.22 起按模型能力判定,面板上的"强制看图"

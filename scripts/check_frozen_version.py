@@ -115,6 +115,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "remember",
                             # v0.9.97 原钉的 get_health/_as_bool 随「体检」功能删除
                             # (v0.9.100),health.report 的针移到 minicode.health 组
+                            # v0.9.111 p9/p12:环境信息那一屏的门面与那条「列与读同一个数」
+                            # (漏 get_env_info = 界面那一节永远不出现;漏 SESSION_LIST_LIMIT
+                            # = 侧栏列 50 条而点开只认前 10 条 —— 第 11 条以后「看得见但点不动」,
+                            #   这一条是修切换卡顿时顺手挖出来的真缺陷)
+                            "get_env_info", "invalidate_env_info", "SESSION_LIST_LIMIT"
                             ),
     # v0.9.39 p2:标题栏整模块。漏收 = 桥里那句 `from minicode import window_chrome`
     # 在装好的包里 ImportError,而它被前端那个 try/catch 吞掉 → 表现为"改了个寂寞"。
@@ -393,7 +398,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.tools.catalog_places": ("library_tools", "map_tools"),
     # v0.9.106:面板与 /history 共用的那份明细住在 compaction(见那处的针);
     # 这一只模块负责"一次读数拿到数与来源"(漏收 = 又开始各量一遍)
-    "minicode.model_catalog": ("context_reading", "vision_forced"),
+    "minicode.model_catalog": ("context_reading", "vision_forced",
+                               # v0.9.111 p8:顶部药丸要说「这个任务真正在用的模型」,
+                               # 而「会话单独切过」这件事载荷里原本没有 —— 前端只能拿
+                               # 两个名字比着猜(漏收 = 界面又开始猜,全局默认名顶上来了)
+                               "session_override"),
+    # v0.9.111 p9:监控栏那一节「环境信息」的全部取材(漏 collect = 整节不出现;
+    # 漏 _added_removed = 有未跟踪文件时它会报一个看着完整的 +0 −0,那比没有更坏)
+    "minicode.envinfo": ("collect", "_added_removed"),
     # ---- v0.9.17:截止提醒 ----
     "minicode.reminders": ("reminder", "add", "due_soon", "parse_due",
                            # v0.9.29:待办带钟点 → 到点前 20 分钟催(漏收 = 记进去了
@@ -602,7 +614,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "MODE_UNANSWERED", "MAX_QUESTIONS"),
     # v0.9.95:馆藏连接的"整条语句在同一次持锁里跑完"(漏收 = 装好的包里并行派活
     # 随机一路"子代理执行出错",而这种只在并发下复现的毛病最难从用户话里倒推)
-    "minicode.library": ("_read",),
+    "minicode.library": ("_read",
+                         # v0.9.111 卡顿那一件:全库 COUNT 的结果必须有地方记住
+                         # (漏 _STATS_CACHE = 每切一次会话都重算一遍 1.6 秒,而这正是
+                         # 用户报的「切换任务总是要停顿好几秒」的那一根)
+                         "_STATS_CACHE"),
     # v0.9.97:语料新鲜度(漏收 = 提示词里那句"这批语料是几天前抓的"永远不出现,
     # 而它存在的意义就是让模型别把旧语料当"最近")
     "minicode.notices": ("corpus_age", "_corpus_line", "CRAWL_STAMP_FMT",
@@ -750,6 +766,21 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.101 ③B1:跨会话看板那一屏(漏 loadBoard = 按钮点了没数据;漏 boardOverlay
     # = JS 有函数但没有 DOM,首屏绑定直接抛;漏 btnBoard = 入口没了)
     "loadBoard", "boardOverlay", "btnBoard", "boardRow", "boardAct",
+    # v0.9.111 p9:监控栏那一节「环境信息」的前端半边(漏 buildEnv = 后端给了数据没人画,
+    # 整节不出现;漏 actEnvSummary = 段标题那句摘要没了,折叠着看不出改了点什么)
+    "buildEnv", "actEnvSummary", "envRow",
+    # v0.9.111 p8:顶部药丸写「这个会话真正在用的模型」(漏 syncTopPill = 事件推过来
+    # 没人重画,顶上还是那句全局默认 —— 用户原话「让用户无法判断到底调用的哪一个模型」)
+    "syncTopPill",
+    # v0.9.111 p6:模型清单按供应商分组(漏 tgroup = 分组标题没了,又变回一长条不分家的列表)
+    "tgroup",
+    # v0.9.111 p12:提示只提醒一次(漏 hintSeen = 每次都画;漏 markHintSeen = 点了「知道了」
+    # 当场消失、下次开机又回来 —— 那只算「藏了一次」,不算「记住一次」)
+    "hintSeen", "markHintSeen",
+    # v0.9.111 p10:上下文面板那四行明细的 class —— 它原本叫 `tk`,和计划卡片的 `.tk`
+    # 撞名被撑到 69px 一行(整个面板 491px)。改名 `tkn` 是这次收窄的**真正**修法,
+    # 针打在这儿,以后谁把它改回 `tk` 会在出包时红一次。
+    "tkn",
 )
 
 

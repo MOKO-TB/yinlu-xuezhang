@@ -205,10 +205,15 @@ def _bridge_src() -> str:
 
 
 def test_titlebar_and_topbar_use_the_same_workspace_name():
-    """标题栏那行字与 `get_info()["workspace_name"]` 必须是同一个调用。"""
+    """标题栏那行字与 `get_info()["workspace_name"]` 必须是同一个调用。
+
+    写的是「引路学长 · 当前工作区」:用户看图 p3 点名深色界面左上角那个名字没了,
+    拍板要"引路学长 + 当前工作区"。工作区名这一段**必须**与顶栏胶囊同一个
+    `ws.display_name(...)`,两边各写一套迟早对不上。
+    """
     src = _bridge_src()
     assert '"workspace_name": ws.display_name(self.workspace, self.app_dir)' in src
-    assert "title=ws.display_name(self.workspace, self.app_dir)" in src
+    assert 'title=f"{APP_NAME} · {ws.display_name(self.workspace, self.app_dir)}"' in src
 
 
 def test_switching_workspace_retitles_the_titlebar():

@@ -88,7 +88,12 @@ try:
     hiddenimports += h
 except Exception:
     pass
-hiddenimports += ["six", "minicode.tray"]
+hiddenimports += ["six", "minicode.tray",
+                  # v0.9.111 p9:环境信息那一节的取材模块。桥里那句
+                  # `from minicode import envinfo` 写在方法体内(与 tray 同一个形状),
+                  # 显式声明一次更稳 —— 漏收的表现不是报错,而是装好的包里
+                  # 「环境信息」那一节永远不出现,而源码测试全绿。
+                  "minicode.envinfo"]
 
 # v0.9.48 crawl4ai 内置:两包都在 crawl.py 的**函数内**延迟 import,静态分析收不到
 # (首包实测 PYZ 里没有 crawl4ai/playwright,ms-playwright 内核白拷) —— 必须用

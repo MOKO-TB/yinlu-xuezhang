@@ -602,6 +602,10 @@ def test_parallel_catalog_reads_all_get_their_own_result(tmp_path, monkeypatch):
         start.wait()                      # 尽量让八条线程真撞在一起
         try:
             for _ in range(60):
+                # v0.9.111 起 catalog_stats 有进程内缓存:不清缓存的话,八条线程第二次
+                # 起全走在内存上 —— 这条测的就不是"并发读同一份库",而是"读字典会不会
+                # 出错"。它当年抓的是 sqlite 的锁窗口,所以每次都要真去问库。
+                library._STATS_CACHE.clear()
                 st = library.catalog_stats(tmp_path)
                 if st != want:
                     errors.append(f"第{i}路统计不对:{st}")
