@@ -180,6 +180,14 @@ try {
   @keyframes spin{ to{ transform:rotate(360deg); } }
   .side-title{ padding:10px 16px 4px; color:var(--text-3); font-size:12px;
                letter-spacing:1px; font-weight:700; }
+  /* v0.9.111:看板按钮此前没有任何样式 → 浏览器默认白底系统按钮,深浅主题
+     都违和(p2/p3)。改为主题透明玻璃:平时融入侧栏,hover 才浮起。 */
+  .side-title #btnBoard{ background:transparent; border:1px solid transparent;
+    color:var(--text-3); font:inherit; letter-spacing:inherit; font-weight:inherit;
+    padding:1px 8px; margin-left:4px; border-radius:8px; cursor:pointer;
+    font-size:11px; line-height:1.5; transition:.15s; }
+  .side-title #btnBoard:hover{ background:var(--glass-lite); color:var(--text-1);
+    border-color:var(--line-soft); }
   .sessions{ flex:1; min-height:0; overflow-y:auto; padding:0 8px; }
   /* MCP 健康行(v0.9.70):配置了的都在、连没连上说清楚 —— 纯状态行,不可点 */
   .side-mcp{ padding:6px 12px 10px; font-size:11px; color:var(--text-3);
@@ -1815,7 +1823,6 @@ try {
       <button id="btnSessSearch" title="搜索">🔍</button>
     </div>
     <div class="sessions" id="sessions"><div style="color:var(--text-3);padding:8px 10px">暂无</div></div>
-    <div class="side-mcp" id="mcpLine" hidden></div>
     <!-- L3(v0.9.101):这一轮真读到了哪几层指令文件。没读到就整行不出现,不摆"未配置" -->
     <div class="side-mcp" id="instrLine" hidden></div>
   </aside>
@@ -3422,8 +3429,8 @@ window.__gcodeEvent = function (e) {
       // 搜索态下不覆盖结果列表:否则后台推一次会话清单,用户搜到的东西就没了
       if (!sessQuery) renderSessions(e.items || []);
       break;
-    case "mcp_summary":           // 侧栏 MCP 健康行:热重载后立即刷新(v0.9.70)
-      renderMcpLine(e.items || []);
+    case "mcp_summary":           // MCP 状态在「模型管理」与对话内 mcp 工具可查(侧栏行已删)
+      break;
       break;
     case "open_panel":            // 通知点击直达:激活 URI 交接进来 → 落面板(v0.9.72)
       openPanel(e.panel);
@@ -7686,21 +7693,6 @@ function openPanel(name) {
   if (name === "schedule") { openScheduleDlg(); return; }
   if (name === "mood") { openMood(); return; }
 }
-// MCP 健康行(v0.9.70):配置了的都在、连没连上说清楚;数据来自 get_info 的
-// mcp_servers 与热重载后推的 mcp_summary 事件(同一份 _mcp_summary)。
-function renderMcpLine(items) {
-  const el = $("mcpLine");
-  const list = items || [];
-  if (!list.length) { el.hidden = true; return; }
-  el.hidden = false;
-  el.textContent = "🔌 MCP:" + list.map(i =>
-    `${i.label}(${i.enabled === false ? "停用" : i.connected ? `${i.n_tools} 工具` : "未连上"})`
-  ).join(" · ");
-  // 健康行太窄,塞不下「对端声明了哪些能力、学长只接了 tools」——挂成悬停提示。
-  // 没连上的那台不编能力:握手都没发生,拿不到对端声明。
-  el.title = list.map(i =>
-    `${i.label}:${i.caps || "未连上,没握过手,拿不到对端声明的能力"}`).join("\n");
-}
 // 指令层那一行(v0.9.101 L3):"我明明写了规矩它不听"不该变成扯皮 —— 至少能确认
 // 它读没读到、读了几行。只报份数与来源,不贴内容,也不报"命中了哪条所以这么做"。
 function renderInstrLine(info) {
@@ -7858,7 +7850,6 @@ window.addEventListener("DOMContentLoaded", () => {
       loadReasoning();     // 思考档位按钮
       loadSlashCmds();     // 对话型 slash 命令表(v0.9.74)
       loadPlan();          // 计划角标:工作区里已有计划时开窗就看得见进度
-      renderMcpLine(info.mcp_servers);   // 侧栏 MCP 健康行(v0.9.70)
       renderInstrLine(info.instructions);  // 侧栏指令层那一行(v0.9.101 L3)
       if (info.activate_panel) openPanel(info.activate_panel);   // 点通知直达(首屏落点)
       actPrefPull();       // 任务监控栏:上次收起还是展开、哪几段折着(v0.9.37)
