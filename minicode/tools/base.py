@@ -35,6 +35,49 @@ class ToolContext:
 Handler = Callable[..., str]  # 签名: handler(ctx, **kwargs) -> str
 
 
+# OpenAI 协议允许 JSON Schema 的并集类型(`"type": ["array", "object"]`),
+# 但按 pydantic 校验请求体的网关(LiteLLM 那一类)会把 `type` 当字符串字段读:
+# 并集一来,整个请求体判成 `Invalid Field [failed to parse request body]`。
+# 坏的不是那一只工具,是这一整轮对话 —— 而且每发一次请求坏一次,界面上只有一张红卡。
+# 同学实测的形状正是「模型测试是通的、对话发不出去」:测试请求不带 tools。
+_SCHEMA_TYPES = ("array", "object", "string", "integer", "number", "boolean")
+
+
+def _pick_type(types: list) -> str:
+    """并集里挑一个能表达这份数据的类型(顺序按"信息量大的优先",拿不准退回 string)。"""
+    got = {str(t) for t in types}
+    for cand in _SCHEMA_TYPES:
+        if cand in got:
+            return cand
+    return "string"
+
+
+def _flatten_schema_types(node: Any) -> Any:
+    """把 schema 里所有并集 `type` 收成单类型;**没得改就原样返回同一个对象**。
+
+    原样返回同一个对象是有意的:每轮请求都要过 56 只工具,能少一份拷贝就少一份,
+    也保证 `Tool.parameters` 这份共享数据不会被这里改到(工具的 handler 读的还是原 schema)。
+    """
+    if isinstance(node, dict):
+        out = None
+        for key, val in node.items():
+            if key == "type" and isinstance(val, list):
+                out = dict(node)
+                out["type"] = _pick_type(val)
+                continue
+            fixed = _flatten_schema_types(val)
+            if fixed is not val:
+                out = dict(node) if out is None else out
+                out[key] = fixed
+            elif out is not None:
+                out[key] = val
+        return out if out is not None else node
+    if isinstance(node, list):
+        items = [_flatten_schema_types(v) for v in node]
+        return items if any(a is not b for a, b in zip(items, node)) else node
+    return node
+
+
 @dataclass
 class Tool:
     name: str
@@ -52,7 +95,9 @@ class Tool:
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.parameters,
+                # 出口处收一次并集类型:内置目录里不该有,但 MCP 工具的对端 schema
+                # 不归我们管 —— 一只坏类型会把整个请求体连带着 56 只工具一起打死。
+                "parameters": _flatten_schema_types(self.parameters),
             },
         }
 

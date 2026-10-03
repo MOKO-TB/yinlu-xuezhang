@@ -126,7 +126,10 @@ class GuiUI:
         self.push("hard_reject", command=str(args.get("command", "")))
 
     def on_retry(self, e: Exception, attempt: int) -> None:
-        self.push("info", text=f"请求失败({type(e).__name__}),第 {attempt} 次重试…")
+        # 见 ui.on_retry 的同一口径:「已切到备选」「摘掉某字段」是整句话,只报类型等于没说。
+        note = " ".join(str(e).split())[:160]
+        what = f"{type(e).__name__}: {note}" if note else type(e).__name__
+        self.push("info", text=f"请求失败({what}),第 {attempt} 次重试…")
 
     def turn_interrupted(self) -> None:
         self.push("finish_stream")

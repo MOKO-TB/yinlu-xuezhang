@@ -362,6 +362,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 漏收一份 = 装好的包里**那个领域的工具整组消失**,而 build_default_registry()
     # 不报错(它只是拼不出那一段),模型侧表现是"这个能力没有了"。
     "minicode.tools.registry": ("build_default_registry",),
+    # v0.9.110:工具 schema 的并集类型收平在**唯一出口**上 —— 这条针漏了,
+    # 包里就还是那份会把 LiteLLM 类网关打成 400 的旧 schema。
+    "minicode.tools.base": ("_flatten_schema_types", "_pick_type", "PathOutsideWorkspace"),
     "minicode.tools.catalog_files": ("tools", "perms_tools",
                          # v0.9.98:worktree 只读工具(漏收 = 模型看不到,
                          # "再开一份工作"只剩嘴上说)
@@ -591,7 +594,8 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # 或反过来在报告里编一句「本档模型 X」而代码里根本没这回事)
                            "model_choice"),
     # v0.9.95:换模型重建客户端的那条构造(漏收 = 档位分模型整块没了)
-    "minicode.llm": ("scoped",),
+    "minicode.llm": ("scoped",                 # v0.9.110:400 摘字段重发的那张梯子
+                             "LEAN_LADDER", "BODY_PARSE_MARKS", "lean"),
     # v0.9.96:提问的"形状与说法"一份真相(漏收 = 工具、桥、界面三层各判各的,
     # 最坏的那种是"没等到回答"被写成"用户同意了")
     "minicode.asking": ("normalize", "format_answers", "ask_user",

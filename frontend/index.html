@@ -868,6 +868,7 @@ try {
   .task-sep{ width:1px; height:12px; background:var(--line-soft); }
   .task-menu{ position:absolute; bottom:calc(100% + 6px); left:0; z-index:65;
               display:none; min-width:320px; max-width:92vw; padding:6px;
+              max-height:min(70vh, calc(100vh - 150px)); overflow-y:auto; overscroll-behavior:contain;
               background:var(--glass-strong); border:1px solid var(--line-soft);
               border-radius:var(--r-m); box-shadow:var(--shadow);
               backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
@@ -881,6 +882,17 @@ try {
   .task-menu .twin{ margin-left:auto; color:var(--text-3); font-size:10.5px; }
   .task-menu .tnokey{ color:var(--warning); font-size:10.5px; }
   .task-menu .tmenu-hint{ padding:4px 8px 6px; font-size:10.5px; color:var(--text-3); }
+  /* 清单能滚之后下一个问题就是"四十行里找一个 flash"。搜索框钉在顶上:
+     滚到底再回头改关键词,不用先把列表滚回上面去找那个框。 */
+  .task-menu .thead{ position:sticky; top:0; z-index:2; padding:0 2px 2px;
+                     background:var(--glass-strong); backdrop-filter:var(--blur);
+                     -webkit-backdrop-filter:var(--blur); }
+  .task-menu .tfilter{ width:100%; box-sizing:border-box; padding:5px 8px; margin:0 0 2px;
+                       font-size:11.5px; color:var(--text-1); background:var(--glass-lite);
+                       border:1px solid var(--line-soft); border-radius:var(--r-s); outline:none; }
+  .task-menu .tfilter:focus{ border-color:var(--primary); }
+  .task-menu .tcount{ padding:1px 8px 4px; font-size:10.5px; color:var(--text-3); }
+  .task-menu .tempty{ padding:6px 8px; font-size:11px; color:var(--text-3); }
   /* 上下文窗口面板(p1):点任务栏「上下文」弹出,进度条 + 分类占比 + 真压缩按钮 */
   .task-menu.ctx-panel{ left:auto; right:0; min-width:380px; padding:12px 14px; }
   .ctx-head{ display:flex; align-items:baseline; justify-content:space-between; }
@@ -4133,32 +4145,68 @@ function renderTaskMetrics(m) {
   $("tmContext").classList.toggle("over", !!over);
 
   const menu = $("taskModelMenu");
-  menu.innerHTML = '<div class="tmenu-hint">切换本任务使用的模型(不影响默认模型)</div>';
-  /* 「当前用的是哪一行」必须有真凭据才敢点亮:`p.key === m.selected_key` 在两边都
+  modelRows = m.selectable || [];
+  modelSelKey = m.selected_key || "";
+  menu.innerHTML = '<div class="thead"><div class="tmenu-hint">切换本任务使用的模型(不影响默认模型)</div>'
+    + '<input class="tfilter" id="tModelFilter" type="text" autocomplete="off"'
+    + ' placeholder="打几个字筛:名称或编号" value="' + esc(modelFilter) + '">'
+    + '<div class="tcount" id="tModelCount"></div></div><div id="tModelRows"></div>';
+  const box = $("tModelFilter");
+  box.addEventListener("input", () => { modelFilter = box.value; paintModelRows(); });
+  // 点搜索框不算"点了弹层外面"——document 上那条关弹层的监听会立刻把它收回去
+  box.addEventListener("click", ev => ev.stopPropagation());
+  box.addEventListener("keydown", ev => {
+    if (ev.key === "Escape") { ev.stopPropagation(); menu.classList.remove("show"); }
+  });
+  paintModelRows();
+  if ($("ctxPanel").classList.contains("show")) renderCtxPanel();   // 面板开着就同步数字
+}
+
+/* 模型清单的搜索框。同学那台机器上一家供应商四十多个模型,列表能滚之后下一个问题
+   就是"找一个要来回拖两轮"。打的字记在 modelFilter 里:每一次 session_metrics 推送
+   都会重画整条任务栏,不记的话正打到一半字就没了。 */
+let modelRows = [], modelSelKey = "", modelFilter = "";
+
+function modelRowNode(p) {
+  const row = document.createElement("div");
+  /* 「当前用的是哪一行」必须有真凭据才敢点亮:`p.key === selected_key` 在两边都
      缺字段时会变成 undefined === undefined,于是**整列每一行都标成当前项**(v0.9.11
      那场的夹具就是这样,红在断言上才被发现)。缺 selected_key 就一行都不标 ——
      宁可显示"看不出现在用哪个",也不指着五个模型说"就是它"。 */
-  const selKey = m.selected_key || "";
-  for (const p of m.selectable || []) {
-    const row = document.createElement("div");
-    row.className = "trow" + (selKey && p.key === selKey ? " on" : "");
-    if (!p.has_key) row.classList.add("tnokey");
-    row.innerHTML = `<span class="tname">${esc(p.name)}</span>`
-      + `<span class="tmodel">${esc(p.model)}</span>`
-      + `<span class="cap ${p.supports_vision ? "multi" : "text"}">${p.supports_vision ? "多模态" : "纯文本"}</span>`
-      + (p.context_window ? `<span class="cap win">${fmtCtx(p.context_window)}</span>` : "")
-      + (!p.has_key ? '<span class="tnokey">未配 Key</span>' : "");
-    row.addEventListener("click", () => {
-      menu.classList.remove("show");
-      if (!p.has_key) { toast(`「${p.name}」还没配 API Key,先在模型管理里配好`, true); return; }
-      if (selKey && p.key === selKey) return;   // 同上:没凭据时不许"点了当前项就当没事发生"
-      pywebview.api.set_session_model(p.id, p.model).then(r => {
-        if (!r.ok) toast(r.msg, true);
-      }).catch(e => toast("切换失败:" + String(e).slice(0, 60), true));
-    });
-      menu.appendChild(row);
-    }
-  if ($("ctxPanel").classList.contains("show")) renderCtxPanel();   // 面板开着就同步数字
+  row.className = "trow" + (modelSelKey && p.key === modelSelKey ? " on" : "");
+  if (!p.has_key) row.classList.add("tnokey");
+  row.innerHTML = `<span class="tname">${esc(p.name)}</span>`
+    + `<span class="tmodel">${esc(p.model)}</span>`
+    + `<span class="cap ${p.supports_vision ? "multi" : "text"}">${p.supports_vision ? "多模态" : "纯文本"}</span>`
+    + (p.context_window ? `<span class="cap win">${fmtCtx(p.context_window)}</span>` : "")
+    + (!p.has_key ? '<span class="tnokey">未配 Key</span>' : "");
+  row.addEventListener("click", () => {
+    $("taskModelMenu").classList.remove("show");
+    if (!p.has_key) { toast(`「${p.name}」还没配 API Key,先在模型管理里配好`, true); return; }
+    if (modelSelKey && p.key === modelSelKey) return;   // 同上:没凭据时不许"点了当前项就当没事发生"
+    pywebview.api.set_session_model(p.id, p.model).then(r => {
+      if (!r.ok) toast(r.msg, true);
+    }).catch(e => toast("切换失败:" + String(e).slice(0, 60), true));
+  });
+  return row;
+}
+
+function paintModelRows() {
+  const box = $("tModelRows"), cnt = $("tModelCount");
+  if (!box || !cnt) return;
+  const q = modelFilter.trim().toLowerCase();
+  const hit = q ? modelRows.filter(p =>
+    (`${p.name || ""} ${p.model || ""}`).toLowerCase().includes(q)) : modelRows;
+  box.innerHTML = "";
+  for (const p of hit) box.appendChild(modelRowNode(p));
+  cnt.textContent = q ? `匹配 ${hit.length} / 共 ${modelRows.length} 个`
+                      : `共 ${modelRows.length} 个模型`;
+  if (!hit.length) {         // 筛空了要说清楚,别留一个空框让人以为界面坏了
+    const e = document.createElement("div");
+    e.className = "tempty";
+    e.textContent = `没有名称或编号含「${modelFilter.trim()}」的模型 —— 换个词,或清空看全部`;
+    box.appendChild(e);
+  }
 }
 
 /* ---------------- 上下文窗口面板(点任务栏「上下文」弹出) ---------------- */

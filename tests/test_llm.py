@@ -121,3 +121,96 @@ def test_usage_omits_cached_tokens_when_absent(monkeypatch):
     client = _client_streaming(monkeypatch, [_usage_chunk(cached=None)])
     turn = client.stream_chat([{"role": "user", "content": "hi"}], [])
     assert "cached_tokens" not in turn.usage
+
+
+# ---------------- 400「请求体解析不了」:逐字段摘掉重发,而不是把回合打死 ----------------
+
+_LITELLM_400 = ("Error code: 400 - {'code': 'LITELLM_ERROR', 'message': "
+                "'Invalid Field [failed to parse request body]', 'trace': '9a27732c'}")
+
+
+def _tool(name="demo"):
+    from minicode.tools.base import Tool
+    return Tool(name=name, description="d",
+                parameters={"type": "object", "properties": {"a": {"type": "string"}}},
+                handler=lambda ctx, **kw: "ok")
+
+
+def _ladder(monkeypatch, fail_while, msg=_LITELLM_400):
+    """假端点:`fail_while(kwargs)` 为真就回那个 400,否则正常吐一个字。
+
+    用 `deepseek-v4-flash` 是因为它在思考能力表里登记过 —— 选了档位就会往请求里
+    塞 `extra_body`,正好是被严格网关拒的那一类字段。
+    """
+    from dataclasses import replace
+
+    from openai import BadRequestError
+    cfg = replace(_cfg(), providers=[replace(_cfg().providers[0],
+                                            model="deepseek-v4-flash")])
+    client = LLMClient(cfg)
+    seen: list[dict] = []
+
+    def fake_create(**kwargs):
+        seen.append(dict(kwargs))
+        if fail_while(kwargs):
+            req = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+            resp = httpx.Response(400, request=req, json={"error": {"message": msg}})
+            raise BadRequestError(msg, response=resp, body=None)
+        return iter([_chunk("好")])
+
+    monkeypatch.setattr(client._client.chat.completions, "create", fake_create)
+    monkeypatch.setattr("minicode.llm.time",
+                        types.SimpleNamespace(perf_counter=_time.perf_counter,
+                                              sleep=lambda _s: None))
+    return client, seen
+
+
+def test_body_parse_400_drops_the_thinking_params_first(monkeypatch):
+    """同学实测的形状:「测试」是通的,对话发不出去 —— 差别就在请求多带了字段。"""
+    client, seen = _ladder(monkeypatch, lambda kw: "extra_body" in kw)
+    client.reasoning_choice = "high"
+    notes = []
+    turn = client.stream_chat([{"role": "user", "content": "hi"}], [],
+                              on_retry=lambda e, n: notes.append(str(e)))
+    assert turn.text == "好", "摘掉字段之后这一轮要照常答完"
+    assert "extra_body" in seen[0] and "extra_body" not in seen[1]
+    assert client.lean == ["extra_body"]
+    assert any("思考档位" in n for n in notes), "摘了什么必须说出来,不能静默换形状"
+
+
+def test_lean_fields_are_not_sent_again_next_turn(monkeypatch):
+    """同一台端点撞过一次就够了:第二回合直接不发,不再拿用户的回合去试。"""
+    client, seen = _ladder(monkeypatch, lambda kw: "extra_body" in kw)
+    client.reasoning_choice = "high"
+    client.stream_chat([{"role": "user", "content": "一"}], [])
+    n = len(seen)
+    client.stream_chat([{"role": "user", "content": "二"}], [])
+    assert len(seen) == n + 1, "第二回合不该再先撞一次 400"
+    assert "extra_body" not in seen[-1]
+
+
+def test_ladder_ends_at_tools_and_says_what_it_cost(monkeypatch):
+    """什么都摘不干净时:摘到工具为止,再把「这一轮没有工具」讲明白,然后照实报错。"""
+    client, seen = _ladder(monkeypatch, lambda kw: True)
+    client.reasoning_choice = "high"
+    notes = []
+    import pytest as _pt
+    from openai import BadRequestError
+    with _pt.raises(BadRequestError):
+        client.stream_chat([{"role": "user", "content": "hi"}], [_tool()],
+                           on_retry=lambda e, n: notes.append(str(e)))
+    assert client.lean == ["extra_body", "stream_options", "tools"]
+    assert "tools" not in seen[-1] and "stream" in seen[-1]
+    assert any("工具清单" in n for n in notes), "把工具摘掉了是最大的降级,必须点名"
+
+
+def test_a_400_that_is_not_about_field_names_still_raises(monkeypatch):
+    """参数值写错那类 400 不在这一条路上:摘字段治不了它,原样抛给用户才看得见真相。"""
+    client, seen = _ladder(monkeypatch, lambda kw: True,
+                           msg="Error code: 400 - temperature: value is not a valid integer")
+    import pytest as _pt
+    from openai import BadRequestError
+    with _pt.raises(BadRequestError):
+        client.stream_chat([{"role": "user", "content": "hi"}], [])
+    assert len(seen) == 1, "不该乱摘字段重试"
+    assert client.lean == []

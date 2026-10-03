@@ -5,10 +5,12 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -670,20 +672,82 @@ def write_user_files(dist: Path) -> None:
         "   (最近一次核对 …)」,主代理与子代理同时收到,它会先告诉你缺什么、能给什么替代,\n"
         "   而不是硬跑或假装跑过。凭据是**真核对过的账**:每次加载技能都会把缺的那几样记进\n"
         "   技能使用账;从没核对过的技能不进这张表 —— 「没查过」不等于「能跑」,所以这一句\n"
-        "   只说查过的事。你把依赖补上、再让它核对一次,那句「还缺」就自己消失了。\n",
+        "   只说查过的事。你把依赖补上、再让它核对一次,那句「还缺」就自己消失了。\n"
+        "88. 模型多到一屏放不下时:点任务栏那个模型名弹清单,**上下滚动**就能看到全部\n"
+        "   (以前列表会长到窗口外面,排在最上面那几个既看不见也点不着),框顶上还多了一个\n"
+        "   **搜索框** —— 打几个字(如 flash、多模态、供应商名)就只剩匹配的那几行,旁边写着\n"
+        "   「匹配几 / 共几个」;筛到一行不剩时会照实说你筛的是哪个词,不会留一个空框让你猜。\n"
+        "   另一件修好的是「一句话发不出去」:有些自建网关(按 pydantic 校验请求体的那一类)不认\n"
+        "   我们多带的字段,以前直接 400 卡死一轮,现在会**把不认的那个字段摘掉重发**,并且把\n"
+        "   摘了什么写在对话里(摘掉工具时那一轮只能纯对话,所以一定告诉你)。\n",
         encoding="utf-8",
     )
+
+
+def _secrets_payload(workspace_file: Path, home_file: Path) -> tuple[dict | None, str]:
+    """出包要注入 `_MEIPASS` 的那份内置 Key,以及它是从哪读到的。
+
+    v0.9.107 的 S1 把内置 Key 从工作区的 `config.local.json` 迁进凭据目录,而且
+    **读到就迁出、抹掉工作区那一份** —— 于是 `packaging/gcode.spec` 找的那个文件从此
+    只剩一句 `_comment`。spec 的注释写着"缺这个文件也能出包,只是内置模型不可用",
+    所以构建一路绿、包照发,**同学装完发现开箱不能用** —— 这条链上没有任何一步会红。
+    修法不是把密钥再抄回工作区(那正是 S1 要拆掉的围栏),而是构建时直接从新家读、
+    写进一个临时文件交给 PyInstaller,用完就删。
+    """
+    for path, where in ((workspace_file, "工作区旧家"), (home_file, "凭据目录新家")):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        key = str((raw or {}).get("builtin_api_key") or "").strip() if isinstance(raw, dict) else ""
+        if key:
+            return {"builtin_api_key": key}, where
+    return None, ""
+
+
+def _inject_build_secrets(env: dict) -> str | None:
+    """把内置 Key 准备好交给 PyInstaller,返回那个临时文件的路径(没有就 None)。
+
+    只打印**来源与长度**,密钥本身一个字都不落日志。
+    """
+    payload, where = _secrets_payload(ROOT / "config.local.json",
+                                      Path.home() / ".yinluxs" / "builtin_key.json")
+    if payload is None:
+        print("警告:工作区与 ~/.yinluxs 都没有内置 Key —— 发出去的包里校园模型开箱不可用。"
+              "要么补上 Key 再构建,要么在 config.example.json 里说清需要自行配 Key。")
+        return None
+    fd, tmp = tempfile.mkstemp(prefix="yinluxs-secrets-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+    except OSError:
+        os.unlink(tmp)
+        raise
+    env["YINLUXS_BUILD_SECRETS"] = tmp
+    print("内置 Key 已注入构建(来源:%s,长度 %d 字符;临时文件用完即删)"
+          % (where, len(payload["builtin_api_key"])))
+    return tmp
 
 
 def main() -> None:
     skip_build = "--skip-build" in sys.argv
     dist = ROOT / "dist" / "引路学长"
+    tmp_secrets = None
     if not skip_build:
-        subprocess.run(
-            [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-             str(ROOT / "packaging" / "gcode.spec")],
-            cwd=ROOT, check=True,
-        )
+        env = dict(os.environ)
+        try:
+            tmp_secrets = _inject_build_secrets(env)
+            subprocess.run(
+                [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
+                 str(ROOT / "packaging" / "gcode.spec")],
+                cwd=ROOT, check=True, env=env,
+            )
+        finally:
+            if tmp_secrets:
+                try:
+                    os.unlink(tmp_secrets)
+                except OSError:
+                    print("临时密钥文件没删掉,请手动清理:%s" % tmp_secrets)
     else:
         print("跳过 PyInstaller(--skip-build),只用现有 dist 产物重新出包")
     _ensure_collected(dist)

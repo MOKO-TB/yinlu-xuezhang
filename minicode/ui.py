@@ -433,7 +433,13 @@ class TerminalUI:
         self.console.print(f"[red]{escape(text)}[/red]")
 
     def on_retry(self, e: Exception, attempt: int) -> None:
-        self.console.print(f"[yellow]请求失败({type(e).__name__}),"
+        # 把消息本身带上:重试这一路有两种句子 —— 一种是异常原文(网络/限流,
+        # 里面常有 `[failed to parse request body]` 这种会被 rich 当成标记的东西,
+        # 所以 escape 一遍),另一种是**写给人看的整句话**(已切到备选 / 摘掉某字段),
+        # 只报异常类型会把后者压成「请求失败(RuntimeError)」,等于没说。
+        note = " ".join(str(e).split())[:160]
+        what = f"{type(e).__name__}: {escape(note)}" if note else type(e).__name__
+        self.console.print(f"[yellow]请求失败({what}),"
                            f"第 {attempt} 次重试…[/yellow]")
 
     def turn_interrupted(self) -> None:

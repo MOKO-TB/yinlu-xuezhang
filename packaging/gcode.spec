@@ -26,7 +26,11 @@ datas = [
 # 内置校园模型的 Key 不放进仓库(公开仓库):打包时从本地未跟踪的
 # config.local.json 注入,运行时由 minicode.config._builtin_api_key() 从
 # _MEIPASS 读出。构建机缺这个文件也能出包,只是内置模型不可用。
-_local_secrets = os.path.join(ROOT, "config.local.json")
+# v0.9.110:优先用 build_exe.py 备好的临时文件(YINLUXS_BUILD_SECRETS)。
+# 缘由是 v0.9.107 的 S1 把 Key 迁进 ~/.yinluxs 并**读到就抹掉工作区那一份**,
+# 于是下面这个默认路径从此是空的 —— 构建一路绿而发出去的包开箱不能用,
+# 整条链上没有一步会红,所以这里必须留一行注释说明优先级。
+_local_secrets = os.environ.get("YINLUXS_BUILD_SECRETS") or os.path.join(ROOT, "config.local.json")
 if os.path.exists(_local_secrets):
     datas.append((_local_secrets, "."))
 binaries = []

@@ -15,6 +15,19 @@ from minicode.config import Config
 
 MAX_RETRIES = 2
 
+# 网关说「请求体解析不了」的几种写法。共同点是**字段不认识**,不是参数值不对 ——
+# 后者改不动(我们的值都是按 OpenAI 协议发的),前者可以一项项摘。
+BODY_PARSE_MARKS = ("failed to parse request body", "invalid field",
+                    "unrecognized key", "extra inputs are not permitted",
+                    "error parsing body", "invalid_json")
+# 我们在一轮标准请求之上多带的东西,按「摘掉最不伤」排:
+# thinking/reasoning 是锦上添花,include_usage 只影响实测数据,tools 摘掉才动到能力。
+LEAN_LADDER = ("extra_body", "stream_options", "tools")
+LEAN_LABELS = {"extra_body": "思考档位参数(thinking / reasoning_effort)",
+               "stream_options": "stream_options(要求回 usage 那个字段)",
+               "tools": "工具清单(这一轮没有工具可调用,只能纯对话)"}
+
+
 
 class FallbackUnavailable(RuntimeError):
     """备选供应商没有可用 Key —— 回落没发生,原错误继续往上走(C2)。"""
@@ -88,6 +101,9 @@ class LLMClient:
         # (跟着 LLMClient 走 —— 每个会话切模型时会重建,所以新会话回到
         # "默认";Bridge 切档位时只重建共享客户端,不影响别的会话)。
         self.reasoning_choice = "default"
+        # 这台端点**不收**的请求字段(撞过 400 之后记在这儿,后面几轮直接不发):
+        # 换供应商/换模型会重建客户端,所以这份账不会串到别的端点上,也不会跨重启留着。
+        self.lean: list[str] = []
 
     @classmethod
     def scoped(cls, config: Config, provider_id: str = "",
@@ -146,7 +162,7 @@ class LLMClient:
             emitted = {"any": False}
             try:
                 return self._stream_once(messages, schemas, on_text, on_reasoning,
-                                         emitted)
+                                         emitted, on_retry)
             except RETRYABLE_ERRORS as e:
                 # 已经往界面上吐过 chunk 就不再重试:重跑一遍用户会看到"半截答案 +
                 # 完整答案"两段叠在一起(这条口径原来只写在一行注释里,`received_any`
@@ -178,20 +194,47 @@ class LLMClient:
             return ""
         return getattr(choices[0].message, "content", "") or ""
 
-    def _create_stream(self, kwargs: dict):
-        try:
-            return self._client.chat.completions.create(**kwargs)
-        except BadRequestError as e:
-            # 个别兼容端点不认识 stream_options,去掉后重试一次
-            if "stream_options" in str(e) and "stream_options" in kwargs:
-                kwargs = {k: v for k, v in kwargs.items() if k != "stream_options"}
+    def _create_stream(self, kwargs: dict,
+                       on_retry: RetryCallback | None = None):
+        """发一次流式请求;端点说「请求体解析不了」时**逐字段摘掉重试**。
+
+        原来的做法只认 `stream_options` 一个名字,而且要求错误文本里正好写着它 ——
+        LiteLLM 那类网关回的是「Invalid Field [failed to parse request body]」,
+        一个字段名都不点,于是整个回合死在一张红卡上(同学实测:模型「测试」是通的,
+        对话发不出去,差别就在测试请求不带 tools/extra_body)。
+        现在按 `LEAN_LADDER` 的顺序摘:先想档位、再 usage 字段、最后才是工具,
+        **摘了哪一样必须说出来**,并且记在 `self.lean` 里 —— 同一轮里别每次都先撞一遍 400。
+        """
+        for gone in self.lean:
+            kwargs.pop(gone, None)
+        attempt = 0
+        while True:
+            try:
                 return self._client.chat.completions.create(**kwargs)
-            raise
+            except BadRequestError as e:
+                text = str(e).lower()
+                if not any(m in text for m in BODY_PARSE_MARKS):
+                    raise
+                named = next((f for f in LEAN_LADDER
+                              if f in kwargs and f in text), "")
+                drop = named or next((f for f in LEAN_LADDER if f in kwargs), "")
+                if not drop:
+                    raise
+                kwargs.pop(drop)
+                if drop not in self.lean:
+                    self.lean.append(drop)
+                attempt += 1
+                if on_retry is not None:
+                    on_retry(RuntimeError(
+                        "这个端点不收我们发的" + LEAN_LABELS[drop]
+                        + " —— 已把它从这次请求里摘掉重发,后面的回合也不再发它"),
+                        attempt)
 
     def _stream_once(self, messages: list[dict], schemas: list[dict],
                      on_text: TextCallback | None,
                      on_reasoning: TextCallback | None,
-                     emitted: dict | None = None) -> AssistantTurn:
+                     emitted: dict | None = None,
+                     on_retry: RetryCallback | None = None) -> AssistantTurn:
         kwargs: dict = {
             "model": self.config.model,
             "messages": messages,
@@ -209,7 +252,7 @@ class LLMClient:
         fragments: dict[int, dict] = {}
         started = time.perf_counter()
 
-        for chunk in self._create_stream(kwargs):
+        for chunk in self._create_stream(kwargs, on_retry):
             if emitted is not None:
                 # 收到首个 chunk 就记一笔:此后失败**不再重试**(见 stream_chat),
                 # 否则用户会看到半截答案后面又接一份完整答案。

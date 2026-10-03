@@ -42,8 +42,8 @@ def tools() -> list[Tool]:
                 "properties": {
                     "chart_type": {"type": "string",
                                    "description": "bar(比大小)/ line(看趋势)/ pie(看占比,最多 10 块)"},
-                    "data": {"description": "数据:[{label,value}] 数组、[[标签,数值]] 或 {标签:数值};数值必须是有限数字",
-                             "type": ["array", "object"]},
+                    "data": {"type": "array",
+                             "description": "数据:[{label,value}] 或 [[标签,数值]];数值必须是有限数字"},
                     "title": {"type": "string", "description": "图标题"},
                     "source": {"type": "string",
                                "description": "数据来源,会印在图脚注;没有就留空(返回值会提醒)"},
