@@ -18,6 +18,9 @@ sys.path.insert(0, str(ROOT))
 
 from minicode import __version__  # noqa: E402
 from minicode import state_files as _state_files  # noqa: E402  「不外发清单」的唯一真相
+# 包内那份私密文件的名字**由运行时决定**(`resource_path(LOCAL_SECRETS_NAME)`),
+# 构建侧不能自己另起一个名字 —— 起了就没人读,而构建一路绿。
+from minicode.config import LOCAL_SECRETS_NAME  # noqa: E402
 
 
 def _ensure_collected(dist: Path) -> None:
@@ -706,9 +709,15 @@ def _secrets_payload(workspace_file: Path, home_file: Path) -> tuple[dict | None
 
 
 def _inject_build_secrets(env: dict) -> str | None:
-    """把内置 Key 准备好交给 PyInstaller,返回那个临时文件的路径(没有就 None)。
+    """把内置 Key 准备好交给 PyInstaller,返回那个**临时目录**(没有就 None)。
 
-    只打印**来源与长度**,密钥本身一个字都不落日志。
+    只打印来源与长度,密钥本身一个字都不落日志。
+
+    为什么是"目录 + 固定文件名"而不是直接把临时文件交给 spec:PyInstaller 的 `datas`
+    按**源文件名**落进包里,而运行时读的是 `resource_path("config.local.json")`。
+    第一版这里用 `mkstemp(prefix="yinluxs-secrets-")`,出包后核对才发现包里躺的是
+    `_internal/yinluxs-secrets-6s8z93wk.json` —— 内容对、名字不对,应用永远读不到,
+    等于把"没 Key"换成了"Key 在包里但没人找"。所以名字必须是 `config.local.json`。
     """
     payload, where = _secrets_payload(ROOT / "config.local.json",
                                       Path.home() / ".yinluxs" / "builtin_key.json")
@@ -716,17 +725,46 @@ def _inject_build_secrets(env: dict) -> str | None:
         print("警告:工作区与 ~/.yinluxs 都没有内置 Key —— 发出去的包里校园模型开箱不可用。"
               "要么补上 Key 再构建,要么在 config.example.json 里说清需要自行配 Key。")
         return None
-    fd, tmp = tempfile.mkstemp(prefix="yinluxs-secrets-", suffix=".json")
+    tmp_dir = tempfile.mkdtemp(prefix="yinluxs-secrets-")
+    target = Path(tmp_dir) / LOCAL_SECRETS_NAME
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False)
+        target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     except OSError:
-        os.unlink(tmp)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
-    env["YINLUXS_BUILD_SECRETS"] = tmp
-    print("内置 Key 已注入构建(来源:%s,长度 %d 字符;临时文件用完即删)"
-          % (where, len(payload["builtin_api_key"])))
-    return tmp
+    env["YINLUXS_BUILD_SECRETS_DIR"] = tmp_dir
+    print("内置 Key 已注入构建(来源:%s,长度 %d 字符,包内文件名 %s;临时目录用完即删)"
+          % (where, len(payload["builtin_api_key"]), LOCAL_SECRETS_NAME))
+    return tmp_dir
+
+
+def _bundle_secrets_file(dist: Path) -> Path | None:
+    """在产物里找那份 `config.local.json`(onedir 落在 `_internal/`,老布局落在根上)。"""
+    for cand in (dist / "_internal" / LOCAL_SECRETS_NAME, dist / LOCAL_SECRETS_NAME):
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _verify_bundle_secrets(dist: Path, had_key: bool) -> None:
+    """构建完必须回头看一眼包里到底有没有 —— 这条链上原本没有任何一步会红。"""
+    path = _bundle_secrets_file(dist)
+    key = ""
+    if path is not None:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            key = str((raw or {}).get("builtin_api_key") or "").strip()
+        except (OSError, json.JSONDecodeError):
+            key = ""
+    if key:
+        print("包内已核对:%s 带内置 Key(长度 %d 字符)" % (path.name, len(key)))
+        return
+    if had_key:
+        raise SystemExit(
+            "构建机有内置 Key,但产物 %s 里没有读到 —— 这个包发出去校园模型开箱不能用,"
+            "别发。常见原因是注入的文件名不是 %s(PyInstaller 按源文件名落包)。"
+            % (dist, LOCAL_SECRETS_NAME))
+    print("警告:产物里没有内置 Key(构建机两处都没有)—— 同学装完要自己配模型。")
 
 
 def main() -> None:
@@ -742,14 +780,17 @@ def main() -> None:
                  str(ROOT / "packaging" / "gcode.spec")],
                 cwd=ROOT, check=True, env=env,
             )
+            # 包一落盘就核对,别等发出去才发现(见 _inject_build_secrets 的缘由)
+            _verify_bundle_secrets(dist, had_key=tmp_secrets is not None)
         finally:
             if tmp_secrets:
-                try:
-                    os.unlink(tmp_secrets)
-                except OSError:
-                    print("临时密钥文件没删掉,请手动清理:%s" % tmp_secrets)
+                shutil.rmtree(tmp_secrets, ignore_errors=True)
+                if Path(tmp_secrets).exists():
+                    print("临时密钥目录没删干净,请手动清理:%s" % tmp_secrets)
     else:
         print("跳过 PyInstaller(--skip-build),只用现有 dist 产物重新出包")
+        # 复用的产物也要核一眼 Key,否则 --skip-build 会绕过上面那道核对
+        _verify_bundle_secrets(dist, had_key=False)
     _ensure_collected(dist)
     assert (dist / "引路学长.exe").exists(), "构建产物缺失(GUI 版)"
     assert (dist / "引路学长-CLI.exe").exists(), "构建产物缺失(CLI 版)"
