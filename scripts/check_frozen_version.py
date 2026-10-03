@@ -129,6 +129,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.window_chrome": ("apply", "chrome_for", "blend", "colorref",
                                "IMMERSIVE_DARK_MODE", "CAPTION_COLOR",
                                "TEXT_COLOR", "BORDER_COLOR",
+                               # v0.9.112 p4:pywebview 每回都在写的 38 也要跟着应用
+                               # 主题写(漏收 = 深色界面顶上还是系统那条白)
+                               "TITLEBAR_MODE", "TITLEBAR_DARK", "TITLEBAR_LIGHT",
                             # v0.9.112 p7:开机静默子进程的模态错误框(漏收 = 弹窗又回到用户脸上)。
                             "silence_child_error_dialogs"),
     # v0.9.39 p1:剪贴板整模块。漏收 = 装好的包里右键粘贴永远走不到本机这条,

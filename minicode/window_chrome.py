@@ -18,7 +18,11 @@
   DWMWA_CAPTION_COLOR(35)  标题栏底色
   DWMWA_TEXT_COLOR(36)     标题文字
   DWMWA_BORDER_COLOR(34)   窗口描边
-加上 DWMWA_USE_IMMERSIVE_DARK_MODE(20) —— 那是 Win10 1903+ 唯一能让标题栏变暗的开关。
+加上 DWMWA_USE_IMMERSIVE_DARK_MODE(20) —— 那是 Win10 1903+ 唯一能让标题栏变暗的开关;
+再加 **38**:pywebview 自己在 winforms 后端每次都会按**系统**主题写它
+(`winforms.py:333-341`,暗 2 / 亮 1,系统主题变了还会再写一次)。我们不写它,
+它就一直按系统主题配 —— 应用深色、系统浅色时那三条颜色会被它压回去,
+这就是用户看图 p4「深色界面顶上还是白的」的一份成因。v0.9.112 起跟着**应用**主题写。
 
 底色不是另起一套:全部从 `frontend/index.html` 的 CSS 变量算出来 —— 标题栏就是
 界面上那层 `--glass` 玻璃叠在页面底色上,描边是 `--line` 再叠一层;深色没有覆盖
@@ -36,11 +40,20 @@ IMMERSIVE_DARK_MODE = 20
 BORDER_COLOR = 34
 CAPTION_COLOR = 35
 TEXT_COLOR = 36
+# 38 不是 SDK 里那四条之一,但 **pywebview 自己在 winforms 后端每次都会写它**
+# (`.venv/.../webview/platforms/winforms.py:333-341`:暗 2 / 亮 1,而且
+# `on_system_theme_changed` 会再写一次)。它按的是**系统**主题,不是本应用的主题 ——
+# 我们从不写这一条,于是系统处在浅色时它就把标题栏按亮色配一次,和我们设的
+# caption/text/border 三家打架。用户看图 p4 说的「深色界面顶上还是白的」有这一份成因。
+# 修法不是抢在 pywebview 之后跑,而是**跟着应用主题写同一个属性**:两个写家写同一套值。
+TITLEBAR_MODE = 38
+TITLEBAR_LIGHT = 1
+TITLEBAR_DARK = 2
 
 S_OK = 0
 DWMWA_NAMES = {IMMERSIVE_DARK_MODE: "immersive-dark-mode",
                BORDER_COLOR: "border", CAPTION_COLOR: "caption",
-               TEXT_COLOR: "text"}
+               TEXT_COLOR: "text", TITLEBAR_MODE: "titlebar-mode"}
 
 
 @dataclass(frozen=True)
@@ -205,6 +218,10 @@ def apply(window, dark: bool | None = None, title: str | None = None) -> dict:
     if dark is not None:
         c = chrome_for(bool(dark))
         attempt(DWMWA_NAMES[IMMERSIVE_DARK_MODE], IMMERSIVE_DARK_MODE, int(c.dark))
+        # 与 pywebview 那句 `DwmSetWindowAttribute(..., 38, 2|1)` 同一把尺子,
+        # 只是值跟着**应用**的主题走而不是系统的主题。
+        attempt(DWMWA_NAMES[TITLEBAR_MODE], TITLEBAR_MODE,
+                TITLEBAR_DARK if c.dark else TITLEBAR_LIGHT)
         attempt(DWMWA_NAMES[BORDER_COLOR], BORDER_COLOR, c.border)
         attempt(DWMWA_NAMES[CAPTION_COLOR], CAPTION_COLOR, c.caption)
         attempt(DWMWA_NAMES[TEXT_COLOR], TEXT_COLOR, c.text)

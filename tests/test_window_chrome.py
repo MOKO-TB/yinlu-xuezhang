@@ -1,5 +1,8 @@
 """v0.9.39 p2:系统标题栏跟着主题走,那行字写的是当前工作区。
 
+v0.9.112 补一条:除了 SDK 那四条,还要写 pywebview 自己每回都在写的
+DWMWA 38 —— 它按**系统**主题取值,不跟着应用主题走就会和我们的三色打架。
+
 拍板的方向是**保留系统标题栏,只改色与文字**(不做无边框):窗口仍是系统在画,
 拖拽/双击最大化/Win11 的圆角投影都归它管。这里钉的是"改的那两样"到底改了没有:
 
@@ -127,8 +130,8 @@ def test_apply_on_a_machine_without_windll_degrades(monkeypatch):
     monkeypatch.setattr(wc, "ctypes", types.SimpleNamespace())
     got = wc.apply(_FakeWindow(7), dark=True, title="campus")
     assert got["ok"] is False and not got["applied"]
-    assert set(got["failed"]) == {"immersive-dark-mode", "border", "caption",
-                                  "text", "title"}
+    assert set(got["failed"]) == {"immersive-dark-mode", "titlebar-mode",
+                                  "border", "caption", "text", "title"}
 
 
 # ------------------------------------------------------------- apply 报账口径
@@ -137,7 +140,8 @@ def test_apply_on_a_machine_without_windll_degrades(monkeypatch):
 @pytest.fixture
 def recorder(monkeypatch):
     """把两个 Win32 调用换成记账的假件,顺带按需扮演"系统只接受某几项"。"""
-    calls = {"attr": [], "text": [], "accept": {20, 34, 35, 36}, "title_ok": True}
+    calls = {"attr": [], "text": [], "accept": {20, 38, 34, 35, 36},
+             "title_ok": True}
 
     def _set_attr(hwnd, attr, value):
         calls["attr"].append((hwnd, attr, value))
@@ -156,19 +160,32 @@ def _failed(got):
     return set(got["failed"])
 
 
-def test_apply_sends_the_four_attributes_it_claims_to(recorder):
+def test_apply_sends_every_attribute_it_claims_to(recorder):
     got = wc.apply(_FakeWindow(99), dark=True, title="campus")
-    assert [a for _, a, _ in recorder["attr"]] == [20, 34, 35, 36]
-    assert [h for h, _, _ in recorder["attr"]] == [99] * 4
+    # 38 是 pywebview 自己在 winforms 后端每回都写的那一条(按**系统**主题)。
+    # 我们不写它 = 系统浅色时它把标题栏按亮色配一次,和 caption/text/border 打架
+    # —— 用户看图 p4「深色界面顶上还是白的」有这一份成因。写它不是抢跑,是同一套值。
+    assert [a for _, a, _ in recorder["attr"]] == [20, 38, 34, 35, 36]
+    assert [h for h, _, _ in recorder["attr"]] == [99] * 5
     c = wc.chrome_for(True)
     assert recorder["attr"][0][2] == 1                 # immersive dark = 1
-    assert recorder["attr"][1][2] == c.border
-    assert recorder["attr"][2][2] == c.caption
-    assert recorder["attr"][3][2] == c.text
+    assert recorder["attr"][1][2] == wc.TITLEBAR_DARK  # 38:暗 = 2
+    assert recorder["attr"][2][2] == c.border
+    assert recorder["attr"][3][2] == c.caption
+    assert recorder["attr"][4][2] == c.text
     assert recorder["text"] == [(99, "campus")]
     assert got["ok"] and _failed(got) == set()
-    assert set(got["applied"]) == {"immersive-dark-mode", "border", "caption",
-                                   "text", "title"}
+    assert set(got["applied"]) == {"immersive-dark-mode", "titlebar-mode",
+                                   "border", "caption", "text", "title"}
+
+
+def test_the_light_theme_writes_the_light_value(recorder):
+    """浅色要写 1,不是"没写"。留着 pywebview 那句按系统主题的 1 也算对,
+    但应用切到浅色而系统仍是深色时,不写就会顶着一块深色标题栏。"""
+    wc.apply(_FakeWindow(7), dark=False, title="x")
+    got = dict((a, v) for _, a, v in recorder["attr"])
+    assert got[wc.TITLEBAR_MODE] == wc.TITLEBAR_LIGHT
+    assert got[wc.IMMERSIVE_DARK_MODE] == 0
 
 
 def test_win10_refusal_is_reported_not_hidden(recorder):
@@ -176,7 +193,7 @@ def test_win10_refusal_is_reported_not_hidden(recorder):
     recorder["accept"] = {20}
     got = wc.apply(_FakeWindow(1), dark=True, title="campus")
     assert got["ok"] is False
-    assert _failed(got) == {"border", "caption", "text"}
+    assert _failed(got) == {"titlebar-mode", "border", "caption", "text"}
     assert "immersive-dark-mode" in got["applied"]
     for word in ("border", "caption", "text"):
         assert word in got["msg"]
