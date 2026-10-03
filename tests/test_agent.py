@@ -14,7 +14,7 @@ class FakeLLM:
         self.turns = list(turns)
         self.calls = []
 
-    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None):
+    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None, **kwargs):
         self.calls.append(list(messages))
         turn = self.turns.pop(0)
         if isinstance(turn, BaseException):
@@ -306,7 +306,7 @@ class ScriptLLM:
         self.calls = []            # [(messages, tools)]
 
     def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
-                    on_retry=None):
+                    on_retry=None, **kwargs):
         self.calls.append((list(messages), list(tools)))
         turn = self.turns.pop(0)
         if isinstance(turn, BaseException):

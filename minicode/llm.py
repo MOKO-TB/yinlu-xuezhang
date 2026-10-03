@@ -7,12 +7,18 @@ from dataclasses import dataclass, field, replace
 from typing import Callable
 from urllib.parse import urlparse
 
-from openai import (BadRequestError, InternalServerError, OpenAI,
+from openai import (AuthenticationError, BadRequestError, InternalServerError,
+                    NotFoundError, OpenAI, PermissionDeniedError,
                     APIConnectionError, APITimeoutError, RateLimitError)
 
 from minicode.config import Config
 
 MAX_RETRIES = 2
+
+
+class FallbackUnavailable(RuntimeError):
+    """备选供应商没有可用 Key —— 回落没发生,原错误继续往上走(C2)。"""
+
 RETRYABLE_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError,
                     InternalServerError)
 
@@ -103,9 +109,39 @@ class LLMClient:
     def stream_chat(self, messages: list[dict], tools: list,
                     on_text: TextCallback | None = None,
                     on_reasoning: TextCallback | None = None,
-                    on_retry: RetryCallback | None = None) -> AssistantTurn:
-        """发起一轮流式对话;返回聚合完成的 AssistantTurn。"""
+                    on_retry: RetryCallback | None = None,
+                    fallback_provider_id: str = "",
+                    on_fallback: "RetryCallback | None" = None) -> AssistantTurn:
+        """发起一轮流式对话;返回聚合完成的 AssistantTurn。
+
+        `fallback_provider_id`(C2,v0.9.108):主供应商连**认证都过不去**
+        (401/403/404——Key 失效、被停、模型下线)且备选供应商有可用 Key 时,
+        自动切备选重试一次;连接错误/限流**不触发回落**(那是重试的活儿,
+        修网络的归修网络)。切换必须说出来:`on_fallback(原因)` 由调用方
+        推给 UI —— 绝不静默换模型(§3 第 14 条口径)。
+        """
         schemas = [t.to_openai_schema() for t in tools]
+        try:
+            return self._with_retries(messages, schemas, on_text, on_reasoning,
+                                      on_retry)
+        except (AuthenticationError, NotFoundError, PermissionDeniedError) as e:
+            if not fallback_provider_id:
+                raise
+            backup = LLMClient.scoped(self.config, provider_id=fallback_provider_id)
+            if not backup.config.provider or not backup.config.provider.has_key:
+                raise FallbackUnavailable(
+                    f"备选供应商 {fallback_provider_id} 没有可用 Key,回落没发生") from e
+            note = (f"主供应商连不上({type(e).__name__}),已自动切到备选"
+                    f"「{backup.config.provider.name}」继续 —— 原因与切换都说在这里,"
+                    "模型回答照常,但质量可能不同。")
+            if on_fallback is not None:
+                on_fallback(RuntimeError(note), 1)
+            elif on_retry is not None:
+                on_retry(RuntimeError(note), 1)
+            return backup._with_retries(messages, schemas, on_text, on_reasoning,
+                                        on_retry)
+
+    def _with_retries(self, messages, schemas, on_text, on_reasoning, on_retry):
         for attempt in range(MAX_RETRIES + 1):
             emitted = {"any": False}
             try:

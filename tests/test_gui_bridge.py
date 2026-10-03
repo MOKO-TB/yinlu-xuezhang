@@ -33,7 +33,7 @@ class FakeLLM:
     def __init__(self, turns):
         self.turns = list(turns)
 
-    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None):
+    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None, **kwargs):
         turn = self.turns.pop(0)
         if isinstance(turn, BaseException):
             raise turn
@@ -48,7 +48,7 @@ class FakeLLMScripted(FakeLLM):
     def __init__(self, chunks):
         self.chunks = chunks
 
-    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None):
+    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None, **kwargs):
         for chunk in self.chunks:
             if on_text:
                 on_text(chunk)
@@ -71,7 +71,7 @@ class GatedLLM(FakeLLM):
         self.wait_timeout = wait_timeout
 
     def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
-                    on_retry=None):
+                    on_retry=None, **kwargs):
         if on_text:
             on_text(self.chunk)          # 先吐一片,让 wait_until(text_delta) 成立
         self.gate.wait(timeout=self.wait_timeout)   # 卡住:任务保持 busy
@@ -1065,7 +1065,7 @@ class _StreamOkLLM:
     """只回一个字的模型:确认框细节测试不需要真跑回合。"""
 
     def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
-                    on_retry=None):
+                    on_retry=None, **kwargs):
         return AssistantTurn(text="ok")
 
 
