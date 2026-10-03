@@ -1,3 +1,5 @@
+import json as _json
+
 from minicode import skills as sk
 from minicode.skills import (find_skill, load_skills, skill_dirs,
                              skills_prompt_section)
@@ -88,6 +90,88 @@ def test_skill_dirs_includes_workspace(tmp_path):
     assert resource_path("skills") in dirs             # 打包内置资源(_MEIPASS)
     assert dirs[-1] == tmp_path / "skills"
     assert len(dirs) == len({str(d) for d in dirs})    # 开发态去重后不重复
+
+
+# ---------------- 账上带上「这次核对缺什么」(v0.9.109) ----------------
+#
+# §6 #45 那条欠账原话是「router 派档时不读这本账,所以『这一档最近老失败』进不了决策」。
+# 动手前先看了眼账本本身,发现更前面的事实是:**这本账压根没有"失败"这一列** ——
+# 缺 pandas 的那一次也照样记成"用过一次"。所以先补列,再给读者;否则读者拿到的
+# 是一份连失败都没记的流水,接上去只会把"没记"说成"没失败"。
+
+def test_ledger_records_the_dependency_check(ctx, tmp_path, monkeypatch):
+    d = tmp_path / "skills" / "pptx-doc"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: pptx-doc\ndescription: 测试\nlibs: ghostlib, nosuchlib\n---\n正文",
+        encoding="utf-8")
+    monkeypatch.setattr(sk, "skill_dirs", lambda ws=None: [tmp_path / "skills"])
+    usage = tmp_path / "usage.jsonl"
+    monkeypatch.setattr(sk, "usage_path", lambda: usage)
+
+    out = sk.use_skill(ctx, "pptx-doc")
+    assert "⚠ 依赖缺" in out                      # 原来那句给模型看的警语一字没动
+    rec = _json.loads(usage.read_text(encoding="utf-8").splitlines()[-1])
+    assert rec["miss_libs"] == ["ghostlib", "nosuchlib"]
+    assert rec["miss_tools"] == []               # 核对过、工具那头齐 —— 空表也是信息
+    gaps = sk.usage_gaps()
+    assert gaps["pptx-doc"]["libs"] == ["ghostlib", "nosuchlib"]
+    assert gaps["pptx-doc"]["ts"]               # 说得出这是什么时候核对的
+
+
+def test_empty_check_is_recorded_as_checked(tmp_path, monkeypatch):
+    """什么都不缺也要落下那两个空字段 —— 不然「查过、齐」与「没查」在账上长一样。"""
+    usage = tmp_path / "usage.jsonl"
+    monkeypatch.setattr(sk, "usage_path", lambda: usage)
+    assert sk.log_skill_use("齐的技能", missing={"missing_tools": [],
+                                                "missing_libs": []}) is True
+    assert sk.log_skill_use("没查的技能") is True
+    recs = [_json.loads(ln) for ln in usage.read_text(encoding="utf-8").splitlines()]
+    assert "miss_libs" in recs[0] and "miss_libs" not in recs[1]
+    assert sk.usage_gaps() == {}, "两处都不缺 → 缺口表为空,但只有前者真有这个结论"
+
+
+def test_unchecked_history_lines_never_become_a_no_gap(tmp_path, monkeypatch):
+    """v0.9.63 那批老行只有 ts+skill:它们算次数,不算"核对过"。"""
+    usage = tmp_path / "usage.jsonl"
+    usage.write_text(
+        _json.dumps({"ts": "2026-10-01 09:00:00", "skill": "老技能"}) + "\n"
+        + "坏行不算账\n"
+        + _json.dumps({"ts": "2026-10-02 09:00:00", "skill": "老技能",
+                       "miss_tools": [], "miss_libs": []}) + "\n",
+        encoding="utf-8")
+    monkeypatch.setattr(sk, "usage_path", lambda: usage)
+    assert sk.usage_gaps() == {}
+    rows = sk.usage_summary()
+    assert [r["uses"] for r in rows if r["skill"] == "老技能"] == [2], "老行照记次数"
+
+
+def test_the_latest_check_wins_and_file_order_is_the_clock(tmp_path, monkeypatch):
+    """取最近一次核对按**写入顺序**,不比时间字符串 —— 这本账的时刻写过两种格式(§4)。
+
+    这里故意让"更早"的那条有个更晚的日期:按字符串比会选错,按顺序比才对。
+    """
+    usage = tmp_path / "usage.jsonl"
+    usage.write_text(
+        _json.dumps({"ts": "2026-10-09 09:00", "skill": "s",
+                     "miss_tools": ["web_search"], "miss_libs": []}) + "\n"
+        + _json.dumps({"ts": "2026-10-02 09:00:00", "skill": "s",
+                       "miss_tools": [], "miss_libs": []}) + "\n",   # 后写的:补齐了
+        encoding="utf-8")
+    monkeypatch.setattr(sk, "usage_path", lambda: usage)
+    assert sk.usage_gaps() == {}, "现在不缺了 —— 这本账答的是『现在还缺什么』"
+
+
+def test_gap_note_names_skill_and_dependency_and_stays_silent_otherwise():
+    ok = ["pptx-doc", "other"]
+    gaps = {"pptx-doc": {"tools": ["web_search"], "libs": ["pypdf"],
+                         "ts": "2026-10-03 10:00:00"}}
+    note = sk.gap_note(ok, gaps)
+    assert "pptx-doc" in note and "库 pypdf" in note and "工具 web_search" in note
+    assert "other" not in note, "这一档没用到的技能不该被扯进来"
+    assert sk.gap_note(ok, None) == "" and sk.gap_note(ok, {}) == ""
+    assert sk.gap_note([], gaps) == "", "这一档一份技能都不用时,一个字都不说"
+
 
 
 # ---------------- use_skill 截断避代码块(v0.9.55) ----------------

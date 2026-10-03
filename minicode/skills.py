@@ -145,9 +145,8 @@ def dependency_report(skill: Skill, available_tools=None, probe=None) -> dict:
     return {"missing_tools": missing_tools, "missing_libs": missing_libs}
 
 
-def _dependency_warning(skill: Skill, available_tools) -> str:
-    """缺依赖时给模型看的那句警语;什么都不缺(或没声明)回空串。"""
-    r = dependency_report(skill, available_tools=available_tools)
+def _warning_from(r: dict) -> str:
+    """从一份 dependency_report 的结果拼那句给模型看的警语;什么都不缺回空串。"""
     bits = []
     if r["missing_tools"]:
         bits.append("工具本机没有:" + "、".join(r["missing_tools"]))
@@ -157,6 +156,11 @@ def _dependency_warning(skill: Skill, available_tools) -> str:
         return ""
     return ("(⚠ 依赖缺:" + ";".join(bits) + " —— 这份技能里有一部分代码/工具用不了。"
             "把缺的**照实**告诉用户并给安装/替代办法,不要照模板硬跑,更不要假装跑过。)")
+
+
+def _dependency_warning(skill: Skill, available_tools) -> str:
+    """缺依赖时给模型看的那句警语;什么都不缺(或没声明)回空串。"""
+    return _warning_from(dependency_report(skill, available_tools=available_tools))
 
 
 def find_skill(skills: list[Skill], name: str) -> Skill | None:
@@ -199,9 +203,13 @@ def _clip_body(body: str, limit: int = SKILL_BODY_LIMIT) -> str:
 
 # ---------------------------------------------------- 技能使用账(v0.9.63)
 #
-# 「22 个技能里哪 3 个真有人用」一直没有账 —— 这份 jsonl 就是那本账。
+# 「这么多技能里到底哪几份真有人用」一直没有账 —— 这份 jsonl 就是那本账。
 # **每次成功调 use_skill 都记一条**(失败的不算:没读到的技能谈不上用过);
 # 不去重,次数就是频次本身。审计脚本 scripts/review_skill_usage.py 汇总它。
+#
+# v0.9.109 起这一行还带上**这次依赖核对的结果**(`miss_tools` / `miss_libs`)。
+# 缘由:§6 #45 那条欠账写的是「这一档最近老失败进不了决策」,而原实现连"失败"
+# 都没记 —— 缺 pandas 的技能照样记成"用过一次",账就成了假账。先有列,再谈读者。
 
 USAGE_FILE = "skill-usage.jsonl"
 
@@ -210,20 +218,82 @@ def usage_path() -> Path:
     return app_path(USAGE_FILE)
 
 
-def log_skill_use(name: str) -> bool:
-    """记一次技能使用;写失败静默回 False(账是锦上添花,不能拖垮调用)。"""
+def log_skill_use(name: str, missing: "dict | None" = None) -> bool:
+    """记一次技能使用,并把**这次依赖核对的结果**一起记下来。写失败静默回 False。
+
+    `missing` 只在核对过时传(就是 `dependency_report` 那份字典);不传就不写这两个
+    字段。这两种情况必须分得开:**"没查过"不等于"查过、什么都不缺"** —— 前者不能拿去
+    说"这技能能跑"。v0.9.63 起的老行都没有这两个字段,它们永远算"没查过"。
+    """
     text = str(name or "").strip()
     if not text:
         return False
+    rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "skill": text[:60]}
+    if isinstance(missing, dict):
+        rec["miss_tools"] = [str(t)[:40] for t in (missing.get("missing_tools") or [])]
+        rec["miss_libs"] = [str(l)[:40] for l in (missing.get("missing_libs") or [])]
     try:
         path = usage_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"ts": time.strftime("%Y-%m-%d %H:%M:%S"),
-                                "skill": text[:60]}, ensure_ascii=False) + "\n")
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         return True
     except OSError:
         return False
+
+
+def usage_gaps() -> "dict[str, dict]":
+    """每个技能**最近一次核对**还缺的依赖;不缺的、没核对过的都不在表里。
+
+    取的是**文件里最后一条带核对结果**的记录(这本账按追加写,后写的就是后发生的)——
+    不比时间字符串:这个仓库历史上把时刻写过两种格式(`%H:%M` 与 `%H:%M:%S`),
+    比字符串会把旧格式的行当成"更早",那条坑记在 §4。
+    某技能最近一次核对什么都不缺,它就从表里消失 —— 这本账说的是"现在还缺什么",
+    不是"历史上缺过什么"。
+    """
+    try:
+        raw = usage_path().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    last_checked: dict[str, dict] = {}
+    for line in raw:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        name = str(rec.get("skill") or "").strip()
+        if not name or not ("miss_tools" in rec or "miss_libs" in rec):
+            continue                     # 没核对过的那些行,一个字都不采信
+        last_checked[name] = {
+            "tools": [str(t) for t in (rec.get("miss_tools") or []) if str(t).strip()],
+            "libs": [str(l) for l in (rec.get("miss_libs") or []) if str(l).strip()],
+            "ts": str(rec.get("ts") or ""),
+        }
+    return {name: g for name, g in last_checked.items() if g["tools"] or g["libs"]}
+
+
+def gap_note(skill_names: "list[str]", gaps: "dict | None") -> str:
+    """把「这一档要用的技能里,哪几份在这台机器上还缺什么」压成一句人读的话;没缺就回空串。"""
+    if not gaps:
+        return ""
+    bits = []
+    for name in skill_names:
+        g = gaps.get(name)
+        if not g:
+            continue
+        tools = [str(t) for t in (g.get("tools") or []) if str(t).strip()]
+        libs = [str(l) for l in (g.get("libs") or []) if str(l).strip()]
+        if not tools and not libs:
+            continue        # 空缺口不写成一句话:那等于对着用户念"还缺(什么都不缺)"
+        what = "、".join([f"工具 {t}" for t in tools] + [f"库 {l}" for l in libs])
+        when = f"(最近一次核对 {g['ts']})" if g.get("ts") else ""
+        bits.append(f"{name} 还缺 {what}{when}")
+    return ";".join(bits)
 
 
 def usage_summary() -> "list[dict]":
@@ -275,16 +345,20 @@ def use_skill(ctx, name: str) -> str:
     —— 模型读到的第一眼就是"哪些用不了",不是抄完模板跑一半才炸。
     核对用的工具清单现取自注册表(与模型实际拿到的同一份);全部齐(或没声明)
     时输出与旧版逐字一致。
+
+    落账时把这次核对的结果一起落下(v0.9.109):账上因此第一次有了"这台机器上
+    这份技能跑不齐"这一列,派档那侧才有话可说(见 `usage_gaps` / router 的 gap 那句)。
     """
     skills = load_skills(skill_dirs(ctx.workspace))
     skill = find_skill(skills, name)
     if skill is None:
         available = ", ".join(s.name for s in skills) or "(无)"
         return f"错误: 未找到技能 '{name}'。可用技能: {available}"
-    log_skill_use(skill.name)
     from minicode.tools.registry import build_default_registry
-    warn = _dependency_warning(
+    report = dependency_report(
         skill, available_tools={t.name for t in build_default_registry()})
+    log_skill_use(skill.name, missing=report)
+    warn = _warning_from(report)
     body = _clip_body(skill.body)
     tail = ("\n…(技能内容过长,已截断;若尾部有未完整的代码模板,不要凭空补全 —— "
             "按已有的部分说明缺什么即可)" if len(skill.body) > SKILL_BODY_LIMIT else "")

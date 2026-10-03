@@ -1,6 +1,6 @@
 """领域路由:按任务特征决定"这活派给哪一档子代理",并把选择理由原样回给用户。
 
-为什么不另写一套提示词:本仓库已有 21 个 `skills/*/SKILL.md`,里面就是各领域
+为什么不另写一套提示词:本仓库已有几十份 `skills/*/SKILL.md`,里面就是各领域
 真正在用的规矩(论文流程、Excel 口径、错题本格式……)。再在子代理提示词里
 复述一遍就会出现"两处各写一份知识、改一处漏一处"。所以这里只登记
 **引用关系**:每个领域档记自己要先 `use_skill` 加载哪几个技能、常用哪些工具,
@@ -202,7 +202,20 @@ def skills_of(spec: DomainSpec, available: list[str] | None) -> tuple[list[str],
             [s for s in spec.skills if s not in have])
 
 
-def extra_prompt(spec: DomainSpec, available: list[str] | None) -> str:
+def gap_clause(ok: "list[str] | None", gaps: "dict | None") -> str:
+    """这一档要用的技能里,本机最近一次核对还缺哪些;没缺口就回空串。
+
+    `gaps` 由调用方在**派活那一刻**读一次(`skills.usage_gaps()`),不在每轮请求里敲盘。
+    这条句子的意义是**早一档**:原来只有子代理自己 `use_skill` 那一刻才看见警语,
+    现在派出去之前主代理与子代理都知道"这台机器上这几份跑不齐",而说出口的依据是
+    账上真记过的那次核对(没核对过的技能不在这张表里 —— 不拿"没查"当成"不缺")。
+    """
+    from minicode.skills import gap_note
+    return gap_note(list(ok or []), gaps)
+
+
+def extra_prompt(spec: DomainSpec, available: list[str] | None,
+                 gaps: "dict | None" = None) -> str:
     """领域档的子代理提示词:由登记信息生成,知识本体仍在 SKILL.md 里。"""
     ok, missing = skills_of(spec, available)
     lines = [
@@ -212,6 +225,11 @@ def extra_prompt(spec: DomainSpec, available: list[str] | None) -> str:
     if ok:
         lines.append("先逐个调用 use_skill 加载下面这些已有技能,按技能里的规矩做事,"
                      "不要自己另起一套流程:" + "、".join(ok) + "。")
+        clause = gap_clause(ok, gaps)
+        if clause:
+            lines.append("注意这几份在你这台机器上还缺东西:" + clause
+                         + " —— 用到缺的那部分之前先照实说缺什么、能给什么替代,"
+                           "不要照模板硬跑,更不要假装跑过。")
     if missing:
         lines.append("登记里还有 " + "、".join(missing)
                      + ",但本机技能库里加载不到 —— 跳过它们并在报告里说明,"
@@ -223,7 +241,8 @@ def extra_prompt(spec: DomainSpec, available: list[str] | None) -> str:
     return "\n".join(lines)
 
 
-def hit_line(match: Match, available: list[str] | None) -> str:
+def hit_line(match: Match, available: list[str] | None,
+             gaps: "dict | None" = None) -> str:
     """一条人读的路由说明:派了哪档、为什么、接下来会加载什么技能。"""
     ok, missing = skills_of(match.spec, available)
     parts = [f"派「{match.spec.label}」档({match.spec.key})"]
@@ -231,11 +250,15 @@ def hit_line(match: Match, available: list[str] | None) -> str:
     parts.append("会先加载技能 " + "、".join(ok) if ok else "无对应技能,按工具+知识库办")
     if missing:
         parts.append("本机没有的技能已跳过:" + "、".join(missing))
+    clause = gap_clause(ok, gaps)
+    if clause:
+        parts.append("这些技能本机还缺:" + clause)
     return parts[0] + " —— " + ";".join(parts[1:]) + "。"
 
 
 def resolve_type(requested: str, task_text: str,
-                 available: list[str] | None = None) -> tuple[str, str]:
+                 available: list[str] | None = None,
+                 gaps: "dict | None" = None) -> tuple[str, str]:
     """把 type 参数解析成真实档位,返回 `(档位, 给用户看的理由)`。
 
     显式指定时不改写(理由为空);只有 `auto` 才走路由。
@@ -250,7 +273,7 @@ def resolve_type(requested: str, task_text: str,
     if match is None:
         return "explore", ("路由:这句话没命中任何领域关键词,按只读侦察(explore)派,"
                            "没有凭领域特征选档。")
-    note = hit_line(match, available)
+    note = hit_line(match, available, gaps)
     others = [m for m in classify(task_text) if m.spec.key != match.spec.key]
     if others:
         note += ("(也命中:" + ";".join(f"{m.spec.key} 计分 {m.score}"

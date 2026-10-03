@@ -32,7 +32,7 @@ class FakeLLM:
         self.turns = list(turns) if turns else [AssistantTurn(text="图书馆在旧图那栋,学弟。")]
         self.delay = delay
 
-    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None):
+    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None, **kwargs):
         if self.delay:
             time.sleep(self.delay)
         turn = self.turns.pop(0) if self.turns else AssistantTurn(text="(无更多回合)")

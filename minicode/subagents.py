@@ -142,8 +142,27 @@ def _available_skill_names(workspace) -> list[str] | None:
         return None
 
 
-def type_spec(key: str, workspace=None) -> SubAgentSpec | None:
-    """把类型名解析成子代理规格:通用档取静态表,领域档按本机技能库现拼提示词。"""
+def _skill_gaps() -> dict:
+    """技能账里「这台机器上最近一次核对还缺什么」;读不到就当没有缺口。
+
+    时机是**派一批活之前读一次**,不是每轮请求读一次:这本账(v0.9.63)原本只被
+    事后统计脚本读,现在多一个派档前的读者,而派档是低频路径、请求路径一次都不该碰它。
+    回空表不骗人:`usage_gaps()` 只收真核对过的技能,没核对过的一律不在表里
+    (所以也不会被说成"能跑")。
+    """
+    try:
+        from minicode import skills as skills_mod
+        return skills_mod.usage_gaps()
+    except Exception:
+        return {}
+
+
+def type_spec(key: str, workspace=None, gaps: dict | None = None) -> SubAgentSpec | None:
+    """把类型名解析成子代理规格:通用档取静态表,领域档按本机技能库现拼提示词。
+
+    `gaps` 不传就当场读一次账(直接调用方与测试的路径);批量派发由调用方读一次
+    传给每一路,免得六路各敲一次盘。
+    """
     key = str(key or "").strip()
     spec = SUBAGENT_TYPES.get(key)
     if spec is not None:
@@ -153,7 +172,8 @@ def type_spec(key: str, workspace=None) -> SubAgentSpec | None:
         return None
     return SubAgentSpec(
         domain.key, domain.label, domain.description, domain.read_only,
-        router.extra_prompt(domain, _available_skill_names(workspace)))
+        router.extra_prompt(domain, _available_skill_names(workspace),
+                            gaps=_skill_gaps() if gaps is None else gaps))
 
 
 
@@ -618,10 +638,13 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
         # 路由理由要与实际提示词同源:available 传进去,hit_line 里"会先加载技能
         # xxx"才是核对过本机技能库的说法(缺的技能路由理由就不会许诺)。
         available = _available_skill_names(workspace)
+        # 缺依赖那一句同一个道理:账读一次,几路共用同一份(派发是低频路径,
+        # 每轮请求一个字都不碰这本账)。
+        gaps = _skill_gaps()
         specs = []
         for t, text in zip(types, tasks):
-            key, note = router.resolve_type(str(t).strip(), text, available)
-            spec = type_spec(key, workspace)
+            key, note = router.resolve_type(str(t).strip(), text, available, gaps)
+            spec = type_spec(key, workspace, gaps)
             if spec is None:
                 return (f"错误: 未知子代理类型 '{t}'。"
                         f"可用: {', '.join(TYPE_KEYS)}")

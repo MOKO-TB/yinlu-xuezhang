@@ -288,7 +288,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "log_skill_use", "usage_summary", "USAGE_FILE",
                         # v0.9.69:使用账并进技能面板(漏收 = get_skills 永远
                         # 不带 uses/last,面板上「用过 N 次」一行都不出现)
-                        "merge_usage"),
+                        "merge_usage",
+                        # v0.9.109:账带上「这次核对缺什么」+ 派档前那句的措辞
+                        # (漏收 usage_gaps = 派出去之前那句「本机还缺」永远不出现,
+                        #  而警语只剩子代理自己撞上的那一半)
+                        "usage_gaps", "gap_note"),
     "minicode.web_profile": ("网页版不开放会话导出", "search_sessions",
                              # v0.9.23:教务导入需要本机浏览器窗口,网页版必须挡掉
                              "教务课表导入",
@@ -521,7 +525,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "api_targets", "local_ready", "CONFIG_SHAPE",
                         "ImageError", "MAX_DOWNLOAD_BYTES", "MAX_CARD_HEIGHT"),
     "minicode.router": ("DOMAINS", "DomainSpec", "classify", "best", "resolve_type",
-                        "extra_prompt", "hit_line", "skills_of", "Match"),
+                        "extra_prompt", "hit_line", "skills_of", "Match",
+                        # v0.9.109:派档前那句「本机还缺」的那半(漏收 = 账有了、
+                        # 读者没了 —— 技能缺依赖还是只有子代理自己撞上去才知道)
+                        "gap_clause"),
     # v0.9.39:一轮总时限是真的在拦东西(漏收 = 配置文件里的数字没人读)
     "minicode.agent": ("run_turn", "turn_time_limited",
                        # v0.9.105 /rewind 点头前那一屏:预览与动手共用一份筛选

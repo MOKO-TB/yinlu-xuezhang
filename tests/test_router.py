@@ -183,6 +183,62 @@ def test_english_prompt_says_no_skill_and_gives_boundary():
     assert "分数线" in prompt                   # 边界照登记写进提示词
 
 
+# --------------------------------------- 派档前就把"本机还缺什么"说出口(v0.9.109)
+
+_GAP = {"paper-writing": {"tools": [], "libs": ["pypdf"], "ts": "2026-10-03 10:00:00"}}
+
+
+def test_extra_prompt_names_the_gap_before_the_subagent_starts():
+    """账上记着这一档要用的技能缺 pypdf,那句话就得在派出去之前出现。
+
+    原来只有子代理自己 `use_skill` 那一刻才看见警语 —— 也就是它已经准备照模板动手了;
+    这一档把它提前到派活那句里,主代理与子代理同时知道这台机器跑不齐。
+    """
+    spec = router.DOMAINS["writing"]
+    prompt = router.extra_prompt(spec, ["paper-writing", "reply-tone"], gaps=_GAP)
+    assert "还缺" in prompt and "pypdf" in prompt and "paper-writing" in prompt
+    assert "2026-10-03" in prompt, "说得出这是什么时候核对的,不是一句空口警告"
+    assert "不要照模板硬跑" in prompt
+
+
+def test_extra_prompt_adds_nothing_when_there_is_nothing_to_say():
+    """三种"没得说"必须与旧输出逐字相同:没账、账上齐、缺的是别的档的技能。"""
+    spec = router.DOMAINS["data"]
+    names = list(spec.skills)
+    base = router.extra_prompt(spec, names)
+    assert router.extra_prompt(spec, names, gaps={}) == base
+    assert router.extra_prompt(spec, names, gaps=None) == base
+    assert router.extra_prompt(spec, names,
+                               gaps={"别的档的技能": {"tools": [], "libs": ["pandas"],
+                                                     "ts": ""}}) == base
+    assert router.extra_prompt(spec, names,
+                               gaps={n: {"tools": [], "libs": [], "ts": "x"}
+                                     for n in names}) == base
+
+
+def test_extra_prompt_stays_quiet_when_the_skill_cannot_load_anyway():
+    """本机压根加载不到的技能,不该再说它"缺 pypdf"——两句话会互相打架。"""
+    spec = router.DOMAINS["writing"]
+    prompt = router.extra_prompt(spec, ["reply-tone"], gaps=_GAP)  # paper-writing 加载不到
+    assert "还缺" not in prompt
+    assert "本机技能库里加载不到" in prompt
+
+
+def test_hit_line_carries_the_same_gap_to_the_main_agent():
+    """路由理由那句人读的话里也要带上同一件事(同一个依据,不是再编一遍)。"""
+    match = router.Match(spec=router.DOMAINS["writing"], hits=("论文",), score=3)
+    line = router.hit_line(match, ["paper-writing", "reply-tone"], gaps=_GAP)
+    assert "本机还缺" in line and "pypdf" in line
+    assert "本机还缺" not in router.hit_line(match, ["paper-writing", "reply-tone"])
+
+
+def test_resolve_type_passes_the_gaps_through():
+    gaps = {"paper-writing": {"tools": ["web_search"], "libs": [], "ts": ""}}
+    key, note = router.resolve_type("auto", "帮我写一篇论文",
+                                    list(router.DOMAINS["writing"].skills), gaps)
+    assert key == "writing" and "还缺" in note and "web_search" in note
+
+
 # ------------------------------------------------------------ auto 解析与理由
 
 def test_explicit_type_is_not_rewritten():
