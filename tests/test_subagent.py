@@ -27,7 +27,7 @@ class QueueLLM:
         self.consumed = 0
 
     def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
-                    on_retry=None):
+                    on_retry=None, **kwargs):
         self.consumed += 1
         turn = self.turns.pop(0)
         if isinstance(turn, BaseException):
@@ -216,7 +216,7 @@ def test_task_sub_steps_capped(config, tmp_path):
             self.tool_counts = []      # 每次请求带了几份工具定义
 
         def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
-                        on_retry=None):
+                        on_retry=None, **kwargs):
             self.consumed += 1
             self.tool_counts.append(len(tools))
             if self.consumed == 1:
@@ -261,7 +261,7 @@ class RoutingLLM:
         self._lock = threading.Lock()
 
     def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
-                    on_retry=None):
+                    on_retry=None, **kwargs):
         with self._lock:
             self.calls.append([dict(m) for m in messages])
             self.live += 1
@@ -1071,3 +1071,28 @@ def test_task_study_dispatch_reports_back(config, tmp_path):
     assert "期末周" in result
     assert "study·campus_calendar" in [e["name"] for e in window.of_type("tool_start")]
     assert "派「" not in result
+
+
+def test_type_spec_brings_the_gap_into_the_subagent_prompt(tmp_path, monkeypatch):
+    """派出去之前那句「本机还缺」不来自猜测,来自账;而一次派发只读一次账。
+
+    两个反证:①账上没核对记录时一个字都不加(不拿"没查过"当"不缺"来许诺);
+    ②调用方显式传了 gaps 就不再读盘 —— 并行六路共用同一份,不是各敲一次。
+    """
+    import json
+    from minicode import router, skills as sk, subagents as sa
+    names = list(router.DOMAINS["writing"].skills)
+    usage = tmp_path / "skill-usage.jsonl"
+    monkeypatch.setattr(sa, "_available_skill_names", lambda ws: names)
+    monkeypatch.setattr(sk, "usage_path", lambda: usage)
+
+    usage.write_text("", encoding="utf-8")
+    assert "还缺" not in sa.type_spec("writing", tmp_path).extra_prompt
+
+    usage.write_text(json.dumps({"ts": "2026-10-03 10:00:00", "skill": names[0],
+                                 "miss_tools": [], "miss_libs": ["pypdf"]},
+                                ensure_ascii=False) + "\n", encoding="utf-8")
+    got = sa.type_spec("writing", tmp_path).extra_prompt
+    assert "还缺" in got and "pypdf" in got, "账上有这笔就必须说,而且要早一档"
+    assert "还缺" not in sa.type_spec("writing", tmp_path, gaps={}).extra_prompt, \
+        "显式传了 gaps 还去读盘 = 两处真相,而且每路各敲一次盘"

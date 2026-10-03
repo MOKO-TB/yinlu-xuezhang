@@ -147,7 +147,7 @@ class SpyLLM:
         self.calls = 0
 
     def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
-                    on_retry=None):
+                    on_retry=None, **kwargs):
         self.calls += 1
         turn = AssistantTurn(text=f"{self.tag}这一路的报告")
         if on_text and turn.text:

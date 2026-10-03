@@ -184,7 +184,7 @@ class ScriptedLLM:
         self.calls = list(calls)
         self.seen = []
 
-    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None):
+    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None, **kwargs):
         self.seen.append([dict(m) for m in messages])
         if self.calls:
             name, args = self.calls.pop(0)

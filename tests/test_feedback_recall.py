@@ -169,7 +169,7 @@ class RecordingLLM:
         self.seen: list[list[dict]] = []
 
     def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
-                    on_retry=None):
+                    on_retry=None, **kwargs):
         self.seen.append(messages)
         return self.turns.pop(0)
 

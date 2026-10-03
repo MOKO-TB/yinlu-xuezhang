@@ -123,7 +123,7 @@ class FakeLLM:
         self.turns = list(turns)
 
     def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
-                    on_retry=None):
+                    on_retry=None, **kwargs):
         return self.turns.pop(0)
 
 

@@ -132,7 +132,7 @@ class OneShotLLM:
         self.call = call
         self.seen = []
 
-    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None):
+    def stream_chat(self, messages, tools, on_text=None, on_reasoning=None, on_retry=None, **kwargs):
         self.seen.append([dict(m) for m in messages])
         if len(self.seen) == 1:
             return AssistantTurn(text="", tool_calls=[self.call], usage={})
