@@ -1037,24 +1037,11 @@ class Agent:
         return (st.st_size != post["size"]
                 or st.st_mtime > post["mtime"] + 1.0)
 
-    def _fallback_provider(self) -> str:
-        """C2(v0.9.108):主供应商 401/404/403 时的备选 —— 第一个「非活动、
-        有可用 Key」的供应商;没有就空串(不回落)。**只挑不切**:真切换在
-        llm.stream_chat 里,且切换必须经 on_fallback 说出口。"""
-        cfg = getattr(self.ctx, "config", None)
-        if cfg is None:
-            return ""
-        active = cfg.active_provider_id
-        for p in cfg.providers:
-            if p.id != active and p.has_key and p.enabled and p.enabled_models():
-                return p.id
-        return ""
-
     def _note_daily_budget(self) -> None:
         """C1(v0.9.108):日预算接近 80%/达到 100% 时各提醒一次,当天不重复。
 
-        提醒走 ui.push("info")(与 token_limit 同一家族);档位去重记在实例
-        内存 —— 重启后再达阈值会再提醒一次,可接受(进程内去重,不落盘
+        提醒走 ui.push("info")(与 token_limit 同一家族);账记在实例内存
+        —— 重启后再达阈值会再提醒一次,那是可接受的(进程内去重,不落盘
         不新增账本)。读不到用量(库损坏)就静默:预算是提醒,不是闸门。
         """
         cfg = getattr(self.ctx, "config", None)
@@ -1080,6 +1067,19 @@ class Agent:
             self.ui.push("info", text=msg)
         except Exception:
             pass
+
+    def _fallback_provider(self) -> str:
+        """C2(v0.9.108):主供应商 401/404/403 时的备选 —— 第一个「非活动、
+        有可用 Key」的供应商;没有就空串(不回落)。**只挑不切**:真切换在
+        llm.stream_chat 里,且切换必须经 on_fallback 说出口。"""
+        cfg = getattr(self.ctx, "config", None)
+        if cfg is None:
+            return ""
+        active = cfg.active_provider_id
+        for p in cfg.providers:
+            if p.id != active and p.has_key and p.enabled and p.enabled_models():
+                return p.id
+        return ""
 
     def _run_config_hook(self, kind: str, tool, args: dict,
                          result: str | None = None) -> "dict | None":
