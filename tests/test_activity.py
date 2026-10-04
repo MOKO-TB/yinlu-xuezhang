@@ -69,8 +69,10 @@ def test_empty_session_yields_an_all_empty_payload(tmp_path):
         ["subagents", "files", "web", "sources", "memory"]
     assert all(g["count"] == 0 for g in act["groups"])
     assert act["summary"] == {"calls": 0, "errors": 0, "running": 0,
-                              "interrupted": 0, "busy": True,
+                              "interrupted": 0, "retries": 0, "busy": True,
                               "workspace": str(tmp_path).replace("\\", "/")}
+    # W4:失败卡也是载荷的一部分;新会话一张卡都没有
+    assert act["findings"] == []
     # 时间线也要有结构(前端照它建段,缺键就是一次 undefined)
     assert act["timeline"]["turns"] == [] and act["timeline"]["calls"] == 0
     assert act["now"] is None and act["updated_at"]
@@ -540,7 +542,11 @@ def test_ts_restored_duration_is_the_real_call_to_result_gap(tmp_path):
 
 
 def test_same_call_twice_pairs_in_order_not_both_to_the_first(tmp_path):
-    """同一个文件读两次:两次各有各的时间。都领第一次的 = 面板在编故事。"""
+    """同一个文件读两次:两次各有各的时间。都领第一次的 = 面板在编故事。
+
+    W8 起同款调用归成一行 ×2 —— 配对正确性改在**子行**上验:两次各自
+    带自己的时刻与 key,一次不少、一次不串(子行丢了 = 定位现场失明)。
+    """
     s = _session(tmp_path, [[
         {"id": "a", "name": "read_file", "args": {"path": "a.py"}, "result": "x"},
         {"id": "b", "name": "read_file", "args": {"path": "a.py"}, "result": "x"},
@@ -548,7 +554,10 @@ def test_same_call_twice_pairs_in_order_not_both_to_the_first(tmp_path):
     live = [_live("read_file", {"path": "a.py"}, 100, 103, True),
             _live("read_file", {"path": "a.py"}, 500, 509, True)]
     rows = _rows(activity.session_activity(s.messages, workspace=tmp_path, live=live))
-    assert [r["dur_text"] for r in rows] == ["3s", "9s"]
+    assert len(rows) == 1 and rows[0]["group_n"] == 2
+    kids = rows[0]["children"]
+    assert [k["dur_text"] for k in kids] == ["3s", "9s"]    # 各领各的,不串
+    assert [k["key"] for k in kids] == ["t:a", "t:b"]       # 定位现场锚得到
 
 
 def test_now_line_only_exists_when_something_is_actually_running(tmp_path):
@@ -658,3 +667,221 @@ def test_direct_and_subagent_writes_merge_into_one_row(tmp_path):
     assert len(rows) == 1
     # 展示行没有内部计数键,次数与档位都读 sub 文本
     assert "写入 2 次" in rows[0]["sub"] and "implement 子代理" in rows[0]["sub"]
+
+
+# ------------------------------------------------------------------ W4 失败卡
+
+def _fails(*specs):
+    """一条调用描述 → findings 的输入步:specs 是 (cid, args, result|None)。"""
+    return [{"id": cid, "name": "bash", "args": args, "result": result}
+            for cid, args, result in specs]
+
+
+def test_three_identical_failures_raise_one_card(tmp_path):
+    s = _session(tmp_path, [[
+        {"id": "c1", "name": "bash", "args": {"command": "npm test"},
+         "result": "错误: 命令失败(第 1 次)"},
+        {"id": "c2", "name": "bash", "args": {"command": "npm test"},
+         "result": "错误: 命令失败(第 2 次)"},
+        {"id": "c3", "name": "bash", "args": {"command": "npm test"},
+         "result": "错误: 命令失败(第 3 次)"},
+    ]])
+    cards = activity.findings(s.messages)
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["count"] == 3 and card["turn"] == 1
+    assert card["cids"] == ["c1", "c2", "c3"]
+    assert "第 3 次" in card["preview"]
+    assert card["action"]["type"] == "locate"
+    assert card["action"]["cids"] == ["c1", "c2", "c3"]
+
+
+def test_two_failures_do_not_raise_a_card(tmp_path):
+    s = _session(tmp_path, [[
+        {"id": "c1", "name": "bash", "args": {"command": "x"}, "result": "错误: a"},
+        {"id": "c2", "name": "bash", "args": {"command": "x"}, "result": "错误: b"},
+    ]])
+    assert activity.findings(s.messages) == []
+
+
+def test_a_success_resets_the_chain(tmp_path):
+    s = _session(tmp_path, [[
+        {"id": "c1", "name": "bash", "args": {"command": "x"}, "result": "错误: a"},
+        {"id": "c2", "name": "bash", "args": {"command": "x"}, "result": "错误: b"},
+        {"id": "c3", "name": "bash", "args": {"command": "x"}, "result": "好了"},
+        {"id": "c4", "name": "bash", "args": {"command": "x"}, "result": "错误: c"},
+        {"id": "c5", "name": "bash", "args": {"command": "x"}, "result": "错误: d"},
+    ]])
+    assert activity.findings(s.messages) == []
+
+
+def test_changing_args_means_a_different_operation(tmp_path):
+    """换参数重试是健康的思路调整:不是同一条链,不立卡。"""
+    s = _session(tmp_path, [[
+        {"id": "c1", "name": "bash", "args": {"command": "x"}, "result": "错误: a"},
+        {"id": "c2", "name": "bash", "args": {"command": "x"}, "result": "错误: b"},
+        {"id": "c3", "name": "bash", "args": {"command": "y"}, "result": "错误: c"},
+        {"id": "c4", "name": "bash", "args": {"command": "x"}, "result": "错误: d"},
+    ]])
+    assert activity.findings(s.messages) == []
+
+
+def test_a_growing_chain_updates_one_card_instead_of_minting_more(tmp_path):
+    """0.5.0 的教训:链变长时更新原卡(count 往上走),不再立第二张。"""
+    calls = [{"id": f"c{i}", "name": "bash", "args": {"command": "x"},
+              "result": f"错误: 第 {i} 次"} for i in range(1, 5)]
+    s = _session(tmp_path, [calls])
+    cards = activity.findings(s.messages)
+    assert len(cards) == 1 and cards[0]["count"] == 4
+    assert cards[0]["cids"] == ["c1", "c2", "c3", "c4"]
+
+
+def test_a_new_user_turn_starts_a_new_chain(tmp_path):
+    """止损闸的连击只在本回合内计数(agent.py 同款口径):跨轮不缝成一条假链。"""
+    s = _session(tmp_path, [
+        [{"id": "c1", "name": "bash", "args": {"command": "x"}, "result": "错误: a"},
+         {"id": "c2", "name": "bash", "args": {"command": "x"}, "result": "错误: b"}],
+        [{"id": "c3", "name": "bash", "args": {"command": "x"}, "result": "错误: c"}],
+    ])
+    assert activity.findings(s.messages) == []
+
+
+def test_a_call_without_a_result_neither_counts_nor_resets(tmp_path):
+    """还在跑/没回话的调用:没有结果,既不构成失败也不构成成功 —— 链保持原样。"""
+    s = _session(tmp_path, [[
+        {"id": "c1", "name": "bash", "args": {"command": "x"}, "result": "错误: a"},
+        {"id": "c2", "name": "bash", "args": {"command": "x"}, "result": "错误: b"},
+        {"id": "c3", "name": "bash", "args": {"command": "y"}, "result": None},
+        {"id": "c4", "name": "bash", "args": {"command": "x"}, "result": "错误: c"},
+    ]])
+    cards = activity.findings(s.messages)
+    assert len(cards) == 1 and cards[0]["count"] == 3
+    assert cards[0]["cids"] == ["c1", "c2", "c4"]      # 没回话的那次不在链上
+
+
+def test_findings_are_capped(tmp_path, monkeypatch):
+    monkeypatch.setattr(activity, "FINDINGS_LIMIT", 2)
+    # 三条链各占一轮(链内连续失败,轮与轮之间是用户发言 —— 链不跨轮):
+    # 命令彼此不同 = 三条不同的链,FINDINGS_LIMIT=2 时只出两张。
+    s = _session(tmp_path, [
+        [{"id": f"c{i}", "name": "bash", "args": {"command": "a"},
+          "result": "错误: x"} for i in range(1, 4)],
+        [{"id": f"d{i}", "name": "bash", "args": {"command": "b"},
+          "result": "错误: x"} for i in range(1, 4)],
+        [{"id": f"e{i}", "name": "bash", "args": {"command": "c"},
+          "result": "错误: x"} for i in range(1, 4)],
+    ])
+    assert len(activity.findings(s.messages)) == 2
+
+
+def test_call_signature_is_the_breakers_key():
+    """与止损闸(agent._fail_streak_hit)同一把尺:两处各写一份迟早漂,
+    这条测试就是漂了会响的铃 —— 公式变了这里必须跟着红。"""
+    import json as _json
+    for name, args in [("bash", {"command": "npm test"}),
+                       ("edit_file", {"path": "a.py", "old": "x", "new": "y"}),
+                       ("bash", {}),
+                       ("mcp·tool", {"z": 1, "a": 2})]:
+        assert activity.call_signature(name, args) == \
+            name + "|" + _json.dumps(args, sort_keys=True, ensure_ascii=False)
+
+
+def test_payload_carries_findings_and_the_retries_count(tmp_path):
+    s = _session(tmp_path, [[
+        {"id": "c1", "name": "bash", "args": {"command": "x"}, "result": "错误: a"},
+        {"id": "c2", "name": "bash", "args": {"command": "x"}, "result": "错误: b"},
+        {"id": "c3", "name": "bash", "args": {"command": "x"}, "result": "错误: c"},
+    ]])
+    act = activity.session_activity(s.messages, retries=4)
+    assert act["summary"]["retries"] == 4
+    assert len(act["findings"]) == 1 and act["findings"][0]["count"] == 3
+
+
+# ------------------------------------------------------------------ W7/W8/W9
+
+def test_timeline_carries_the_turns_reasoning_record(tmp_path):
+    """W7:每轮一段思考 —— 字数是**真总数**,文本是各步拼接(截断有标记)。"""
+    s = _session(tmp_path, [[
+        {"id": "c1", "name": "bash", "args": {"command": "x"}, "result": "ok"},
+    ]])
+    s.add_assistant(AssistantTurn(text="答", reasoning="想" * 3000))
+    turn = activity.timeline(s.messages)["turns"][0]
+    assert turn["reasoning"]["chars"] == 3000      # 真总字数,不是截后残数
+    assert (len(turn["reasoning"]["text"]) < 3000
+            and "截断" in turn["reasoning"]["text"])
+    # 没思考的轮次:整键不出现,不拿空串凑
+    s2 = _session(tmp_path, [[{"id": "c2", "name": "bash",
+                               "args": {"command": "y"}, "result": "ok"}]])
+    assert activity.timeline(s2.messages)["turns"][0].get("reasoning") is None
+
+
+def test_identical_calls_group_into_one_row_with_children(tmp_path):
+    """W8:同款调用归一行 ×N,children 一次不少;真总数不因合并而动。"""
+    s = _session(tmp_path, [[
+        {"id": "c1", "name": "bash", "args": {"command": "x"}, "result": "ok"},
+        {"id": "c2", "name": "bash", "args": {"command": "x"}, "result": "错误: 二"},
+        {"id": "c3", "name": "bash", "args": {"command": "y"}, "result": "ok"},
+    ]])
+    turn = activity.timeline(s.messages)["turns"][0]
+    assert turn["calls"] == 3 and turn["errors"] == 1     # 真总数,合并只动显示
+    rows = turn["items"]
+    assert len(rows) == 2                                  # x×2 + y×1
+    g = rows[0]
+    assert g["group_n"] == 2
+    assert g["status"] == "failed" and g["badge"] == "失败"  # 状态跟最新一次
+    assert [k["key"] for k in g["children"]] == ["t:c1", "t:c2"]
+    assert g["children"][1]["status"] == "failed"          # 每次各自的状态
+    assert "group_n" not in rows[1]                        # 不同参数不并:直行
+
+
+def test_same_batch_gets_one_marker_single_call_does_not(tmp_path):
+    """W9:同条 assistant ≥2 调用 = 同批;单发不标。执行是逐个的,标记只说同批。"""
+    s = _session(tmp_path, [
+        [{"id": "a1", "name": "glob", "args": {"pattern": "*.py"}, "result": "x"},
+         {"id": "a2", "name": "grep", "args": {"pattern": "p"}, "result": "y"}],
+        [{"id": "b1", "name": "bash", "args": {"command": "z"}, "result": "ok"}],
+    ])
+    turns = {t["n"]: t for t in activity.timeline(s.messages)["turns"]}
+    rows1 = turns[1]["items"]
+    assert rows1[0]["batch"] and rows1[0]["batch"] == rows1[1]["batch"]
+    assert turns[2]["items"][0]["batch"] is None
+
+
+# ------------------------------------------------------------------ W10 实测耗时
+
+def test_restore_prefers_measured_ms_over_ts_drift(tmp_path):
+    """W10:留档带了 elapsed_ms 就按实测折秒 —— ts 秒级取整的漂移
+    (0.2s 的调用会漂成 0s/1s/2s)从此不进时间线。"""
+    s = _session(tmp_path, [[
+        {"id": "c1", "name": "bash", "args": {"command": "x"}, "result": "ok"},
+    ]])
+    # 测试里两条消息同一秒:ts 差只能给 0s;实测 2900ms 必须是 3s
+    s.messages[-1]["elapsed_ms"] = 2900
+    rows = _rows(activity.session_activity(s.messages, workspace=tmp_path))
+    # dur_text 是判别器:ts 漂移给 "0s",实测 2900ms 给 "3s" —— 实测优先看得见
+    assert rows[0]["dur_text"] == "3s"
+
+
+def test_restore_falls_back_to_ts_diff_without_elapsed(tmp_path):
+    """老留档没有 elapsed_ms:照旧走 ts 差(同一秒 → 0s),行为不变。"""
+    s = _session(tmp_path, [[
+        {"id": "c1", "name": "bash", "args": {"command": "x"}, "result": "ok"},
+    ]])
+    rows = _rows(activity.session_activity(s.messages, workspace=tmp_path))
+    assert rows[0]["dur_text"] == "0s"
+
+
+def test_measured_ms_wins_even_when_live_table_came_later(tmp_path):
+    """实时表与实测并存:实时表优先(它在调用那一刻记的)—— 实测只补
+    实时表没配到的行,两者不抢同一条。"""
+    s = _session(tmp_path, [
+        [{"id": "c1", "name": "bash", "args": {"command": "x"}, "result": "ok"}],
+        [{"id": "c2", "name": "bash", "args": {"command": "y"}, "result": "ok"}],
+    ])
+    s.messages[-1]["elapsed_ms"] = 2900          # 只有 c2 带实测
+    live = [_live("bash", {"command": "x"}, 100, 103, True)]
+    act = activity.session_activity(s.messages, workspace=tmp_path, live=live)
+    # 轮次最新在前:两轮的行都收进同一张 key 表,不靠默认轮序猜
+    by_key = {r["key"]: r for t in act["timeline"]["turns"] for r in t["items"]}
+    assert by_key["t:c1"]["dur_text"] == "3s"    # 实时表优先(3s)
+    assert by_key["t:c2"]["dur_text"] == "3s"    # 没配到实时表 → 实测折秒

@@ -87,11 +87,14 @@ def test_retry_still_happens_when_nothing_was_emitted(monkeypatch):
 
 # ---------------- usage 里带缓存命中(v0.9.50) ----------------
 
-def _usage_chunk(prompt=100, completion=20, cached=None):
-    """带 usage 的收尾分片;cached 给了就带 prompt_tokens_details。"""
+def _usage_chunk(prompt=100, completion=20, cached=None, reasoning=None):
+    """带 usage 的收尾分片;cached/reasoning 给了就带对应的 *_details。"""
     details = types.SimpleNamespace(cached_tokens=cached) if cached is not None else None
+    cdetails = (types.SimpleNamespace(reasoning_tokens=reasoning)
+                if reasoning is not None else None)
     usage = types.SimpleNamespace(prompt_tokens=prompt, completion_tokens=completion,
-                                  prompt_tokens_details=details)
+                                  prompt_tokens_details=details,
+                                  completion_tokens_details=cdetails)
     delta = types.SimpleNamespace(content=None, reasoning_content=None,
                                   reasoning=None, tool_calls=None)
     return types.SimpleNamespace(usage=usage,
@@ -121,6 +124,59 @@ def test_usage_omits_cached_tokens_when_absent(monkeypatch):
     client = _client_streaming(monkeypatch, [_usage_chunk(cached=None)])
     turn = client.stream_chat([{"role": "user", "content": "hi"}], [])
     assert "cached_tokens" not in turn.usage
+
+
+# ---------------- W5/W6:首字延迟与思考 token(端点回报了才有,缺了不编) ----------------
+
+def _text_chunk(text="你"):
+    return types.SimpleNamespace(
+        usage=None,
+        choices=[types.SimpleNamespace(delta=types.SimpleNamespace(
+            content=text, reasoning_content=None, reasoning=None,
+            tool_calls=None))])
+
+
+def test_ttft_is_measured_to_the_first_content_chunk(monkeypatch):
+    """W5:首字延迟 = 发请求 → 第一个**内容** chunk;usage-only 的收尾不算字。"""
+    client = _client_streaming(monkeypatch,
+                               [_text_chunk("你"), _usage_chunk(cached=None)])
+    turn = client.stream_chat([{"role": "user", "content": "hi"}], [])
+    assert isinstance(turn.ttft_ms, int) and turn.ttft_ms >= 0
+    assert turn.ttft_ms <= turn.elapsed_ms
+
+
+def test_ttft_counts_a_reasoning_chunk_as_the_first_word(monkeypatch):
+    """先思考后说话的模型:首个思考 chunk 就是"首字" —— 用户看到动静的那一刻。"""
+    think = types.SimpleNamespace(
+        usage=None,
+        choices=[types.SimpleNamespace(delta=types.SimpleNamespace(
+            content=None, reasoning_content="想", reasoning=None,
+            tool_calls=None))])
+    client = _client_streaming(monkeypatch, [think, _text_chunk("答")])
+    turn = client.stream_chat([{"role": "user", "content": "hi"}], [])
+    assert isinstance(turn.ttft_ms, int) and turn.ttft_ms >= 0
+
+
+def test_ttft_stays_none_when_no_content_ever_arrives(monkeypatch):
+    """没收到任何内容(纯 usage 流)→ None:未记录不是 0,不编"瞬间首字"。"""
+    client = _client_streaming(monkeypatch, [_usage_chunk(cached=None)])
+    turn = client.stream_chat([{"role": "user", "content": "hi"}], [])
+    assert turn.ttft_ms is None
+
+
+def test_usage_carries_reasoning_tokens_when_reported(monkeypatch):
+    """W6:端点回报 completion_tokens_details.reasoning_tokens 时透传。"""
+    client = _client_streaming(monkeypatch,
+                               [_usage_chunk(cached=None, reasoning=31)])
+    turn = client.stream_chat([{"role": "user", "content": "hi"}], [])
+    assert turn.usage["reasoning_tokens"] == 31
+
+
+def test_usage_omits_reasoning_tokens_when_absent(monkeypatch):
+    """思考明细端点不给就不带键 —— 与 cached_tokens 同一条"绝不估算"口径。"""
+    client = _client_streaming(monkeypatch, [_usage_chunk(cached=None)])
+    turn = client.stream_chat([{"role": "user", "content": "hi"}], [])
+    assert "reasoning_tokens" not in turn.usage
 
 
 # ---------------- 400「请求体解析不了」:逐字段摘掉重发,而不是把回合打死 ----------------

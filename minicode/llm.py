@@ -83,6 +83,9 @@ class AssistantTurn:
     # 用服务端 usage,缺了退回文本粗估(只用于展示"每秒 token",不进记账)。
     elapsed_ms: int | None = None
     completion_tokens: int | None = None
+    # W5:首字延迟(发请求 → 第一个内容 chunk 到达)。没收到任何内容(失败/
+    # 纯 usage 流)就是 None —— 宁可"未记录",不编一个 0 出来。
+    ttft_ms: int | None = None
 
 
 class LLMClient:
@@ -251,6 +254,7 @@ class LLMClient:
         turn = AssistantTurn()
         fragments: dict[int, dict] = {}
         started = time.perf_counter()
+        first_at: float | None = None      # W5:首个内容 chunk 的到达时刻
 
         for chunk in self._create_stream(kwargs, on_retry):
             if emitted is not None:
@@ -269,24 +273,36 @@ class LLMClient:
                 cached = getattr(details, "cached_tokens", None)
                 if isinstance(cached, int) and cached >= 0:
                     turn.usage["cached_tokens"] = cached
+                # W6:思考 token —— completion_tokens_details.reasoning_tokens,
+                # 与上面 cached_tokens 同一条口径:端点回报了才带这个键,
+                # 缺了不估算(校园端点大概率不给 → 面板如实写「未记录」)。
+                cdetails = getattr(chunk.usage, "completion_tokens_details", None)
+                reasoned = getattr(cdetails, "reasoning_tokens", None)
+                if isinstance(reasoned, int) and reasoned >= 0:
+                    turn.usage["reasoning_tokens"] = reasoned
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
 
             content = getattr(delta, "content", None)
+            reasoning = getattr(delta, "reasoning_content", None) \
+                or getattr(delta, "reasoning", None)
+            tool_deltas = getattr(delta, "tool_calls", None) or []
+            # W5:首个**内容** chunk(文本/思考/工具参数都算字)到达的时刻。
+            # usage-only 的收尾 chunk 在上面 choices 为空时已 continue,不会冒充首字。
+            if first_at is None and (content or reasoning or tool_deltas):
+                first_at = time.perf_counter()
             if content:
                 turn.text += content
                 if on_text:
                     on_text(content)
 
-            reasoning = getattr(delta, "reasoning_content", None) \
-                or getattr(delta, "reasoning", None)
             if reasoning:
                 turn.reasoning += reasoning
                 if on_reasoning:
                     on_reasoning(reasoning)
 
-            for tc in getattr(delta, "tool_calls", None) or []:
+            for tc in tool_deltas:
                 slot = fragments.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
                 if tc.id:
                     slot["id"] = tc.id
@@ -303,6 +319,9 @@ class LLMClient:
         ]
         # 实测耗时与输出 token 数(展示用,失败/缺失不挡流程):
         turn.elapsed_ms = int((time.perf_counter() - started) * 1000)
+        # W5:首字延迟;没收到任何内容(空流/纯 usage)保持 None,不编 0
+        if first_at is not None:
+            turn.ttft_ms = max(0, int((first_at - started) * 1000))
         u = turn.usage or {}
         ct = u.get("completion_tokens")
         if isinstance(ct, int) and ct >= 0:

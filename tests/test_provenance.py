@@ -172,7 +172,8 @@ class FakeSession:
     def add_assistant(self, turn):
         self.messages.append({"role": "assistant", "content": turn.text or ""})
 
-    def add_tool_result(self, call_id, name, result):
+    def add_tool_result(self, call_id, name, result, **kwargs):
+        # W10:真签名长了 elapsed_ms 可选参 —— 替身统一 **kwargs(v0.9.107 先例)
         self.messages.append({"role": "tool", "tool_call_id": call_id,
                               "name": name, "content": result})
 

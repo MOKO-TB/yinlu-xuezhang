@@ -130,3 +130,32 @@ def test_section_names_match_the_frontends_own_sections():
     names = set(re.findall(r'actSect\(\s*"([a-z_]+)"', fe))
     assert names == set(monitor.SECTIONS), (
         f"前端在画的段与登记过的段对不上:{names ^ set(monitor.SECTIONS)}")
+
+
+def test_retry_events_reach_the_activity_summary(tmp_path, monkeypatch):
+    """W1:重试计数住在**每会话的 UI**上(SessionGuiUI 各自一份),桥递给
+    activity;基座 UI 的计数器与会话无关,打在它身上面板读不到。"""
+    _pref(tmp_path, monkeypatch)
+    from minicode.config import Config, Provider
+    from minicode.gui_bridge import create_app
+    from tests.test_gui_bridge import FakeLLM
+
+    cfg = Config(providers=[Provider(id="t", name="T",
+                                     base_url="https://example.invalid/v1",
+                                     api_key="k", model="m")],
+                 active_provider_id="t")
+    bridge, _base_ui, _agent, _session = create_app(
+        cfg, tmp_path, llm=FakeLLM([]), sessions_dir=tmp_path / "sessions",
+        config_path=tmp_path / "config.json")
+    runner_ui = bridge._current.ui
+    assert runner_ui is not _base_ui            # 计数的是会话那一份,不是基座
+    runner_ui.on_retry(RuntimeError("连接断了"), 1)
+    runner_ui.on_retry(RuntimeError("又断了"), 2)
+    assert runner_ui.retry_count() == 2
+    assert bridge.get_activity()["summary"]["retries"] == 2
+    # 另一个会话各记各的账:每个 SessionGuiUI 实例自己的计数器,互不串账
+    from minicode.gui_bridge import SessionGuiUI
+    other = SessionGuiUI(_base_ui, "k2")
+    assert other.retry_count() == 0
+    other.on_retry(RuntimeError("那一路自己的断线"), 1)
+    assert other.retry_count() == 1 and runner_ui.retry_count() == 2

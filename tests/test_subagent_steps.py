@@ -271,7 +271,12 @@ def test_frontend_renders_children_and_never_makes_them_clickable():
     assert ".act-kids{" in html
     block = _hd_js("function actKidsEl(item)", "function actTlRowEl")
     assert 'classList.add("plain")' in block or 'add("plain")' in block
-    assert "dataset.k" not in block, "子行不该进 actRows 索引(它没有可点的原文)"
+    # 子行**没有可点的原文**:不进 actRows 索引、不挂点击 —— 子代理内部
+    # 步骤的老规矩。W8 起归类子行要带自己的 key(dataset.k):定位现场按
+    # key 逐行点亮被归并走的原始调用 —— 带 key ≠ 可点,可点看的是 action。
+    assert "actRows[" not in block, "子行不该进 actRows 索引(它没有可点的原文)"
+    assert "addEventListener" not in block, "子行不挂点击:没有可点的原文"
+    assert "dataset.k" in block, "W8 归类子行带 key,定位现场要点得亮"
 
 
 def test_child_step_event_drives_a_refresh():

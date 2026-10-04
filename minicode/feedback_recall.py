@@ -44,7 +44,7 @@ def empty_hits(messages) -> list[tuple[str, str, int]]:
     """
     from minicode import activity, growth, kb     # 延迟导入:activity 反过来要用本模块
 
-    calls, results, order, _result_ts = activity._call_index(messages)
+    calls, results, order, _result_ts, _result_ms = activity._call_index(messages)
     seen: dict[str, int] = {}
     out: list[tuple[str, str, int]] = []
     for cid in order:

@@ -16,6 +16,10 @@ from minicode.paths import SESSIONS_DIR
 # —— 留档格式再变时,新增一个迁移函数、把版本号 +1,消费方只认迁移后的形状。
 LOG_SCHEMA_VERSION = 2
 
+# W7:思考摘要进留档的截断上限。全文不落(思考动辄几十 KB,留档会撑爆),
+# 截断存 + 真总字数单独带 —— 时间线那句「思考 N 字」说的是真数,不是截后的残数。
+REASONING_CLIP = 2000
+
 
 @dataclass
 class SessionSummary:
@@ -101,10 +105,25 @@ class Session:
                 }
                 for tc in turn.tool_calls
             ]
+        # W7:思考摘要随留档走 —— 截断存、真字数另记;没有思考就不带键。
+        # 老留档没有这两键,消费方一律按"没有"处理(与 ts 同一条规矩),
+        # 重启/恢复后时间线的思考段照样能画,不再只剩聊天里那一屏活的。
+        reasoning = (turn.reasoning or "").strip()
+        if reasoning:
+            msg["reasoning"] = _clip(reasoning, REASONING_CLIP)
+            msg["reasoning_chars"] = len(reasoning)
         self._append(msg)
 
-    def add_tool_result(self, call_id: str, name: str, content: str) -> None:
-        self._append({"role": "tool", "tool_call_id": call_id, "content": content})
+    def add_tool_result(self, call_id: str, name: str, content: str,
+                        elapsed_ms: int | None = None) -> None:
+        msg: dict = {"role": "tool", "tool_call_id": call_id, "content": content}
+        # W10:这一步的实测毫秒(handler 全程)随留档走 —— 重启后时间线的
+        # 耗时不再靠 ts 秒级差还原(0.2s 的调用会漂成 0s/1s/2s)。没有实测
+        # (早退路径/老调用方)就不带键 —— 与 reasoning 同一条规矩。
+        if (isinstance(elapsed_ms, int) and not isinstance(elapsed_ms, bool)
+                and elapsed_ms >= 0):
+            msg["elapsed_ms"] = elapsed_ms
+        self._append(msg)
 
     def clear(self) -> None:
         """清空对话上下文,保留 system prompt。"""
@@ -387,13 +406,21 @@ def _content_text(content) -> str:
     return ""
 
 
-def outbound(messages: list[dict]) -> list[dict]:
-    """发往模型端点的消息:剥掉 `ts` 这类**本地记账字段**。
+# 留档有、协议没有的本地键:发往端点前逐个剥掉 —— 严格端点对未知字段报 400,
+# 而且一次没剥干净,表现是"下一轮"莫名 400,回溯不到这一轮。新增留档键时
+# 必须来这里登记(与 _messages_for_request 那道出口闸同一处)。
+LOCAL_KEYS = ("ts", "reasoning", "reasoning_chars", "elapsed_ms")
 
-    留档里的键比协议多(时间戳是给监控栏/导出用的),而严格端点会对未知字段
-    报 400 —— 所以出口必须净。拷贝剥离,不动 session.messages 本体。
+
+def outbound(messages: list[dict]) -> list[dict]:
+    """发往模型端点的消息:剥掉 `ts`/思考摘要这类**本地记账字段**。
+
+    留档里的键比协议多(时间戳是给监控栏/导出用的,思考摘要 W7 起也是),
+    而严格端点会对未知字段报 400 —— 所以出口必须净。拷贝剥离,不动
+    session.messages 本体。
     """
-    return [{k: v for k, v in m.items() if k != "ts"} for m in messages]
+    return [{k: v for k, v in m.items() if k not in LOCAL_KEYS}
+            for m in messages]
 
 
 def to_markdown(sess: "Session", title: str = "") -> str:

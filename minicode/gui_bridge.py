@@ -1232,11 +1232,21 @@ class Bridge:
         ui = getattr(self._current, "ui", None)
         live = getattr(ui, "live_rows", None)
         now = getattr(ui, "live_now", None)
+        # W1:重试事件数是**会话级**的活账,和实时表一个住法 —— 消息里没有
+        # 它的位置,桥从 UI 计数器递进去,activity 只转发不另造来源。
+        retries = 0
+        counter = getattr(ui, "retry_count", None)
+        if callable(counter):
+            try:
+                retries = int(counter() or 0)
+            except Exception:
+                retries = 0
         try:
             data = session_activity(
                 self.session.messages, workspace=self.workspace,
                 live=live() if callable(live) else None,
                 now=now() if callable(now) else None,
+                retries=retries,
                 busy=bool(getattr(self._current, "busy", False)),
                 # 界面上点了「展开全部」之后,后面每一次刷新都要给全 ——
                 # 只在这一次给全,下一轮事件一来又缩回 12 行,那就是"记不住"。

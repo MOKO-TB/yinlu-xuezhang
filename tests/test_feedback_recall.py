@@ -248,8 +248,11 @@ def test_monitor_marks_from_the_second_empty_search(tmp_path, config, only_tmp_k
         _search_turn("社团招新", "c1"), _search_turn("社团招新", "c2"),
         _search_turn("社团招新", "c3"), AssistantTurn(text="收工")])
     agent.run_turn("帮我查社团招新")
-    marks = [r.get("repeat_text", "") for r in _timeline_rows(agent.session)]
-    assert marks == ["", "×2 未命中", "×3 未命中"], marks
+    # W8 起同款搜索归一行 ×3:标记跟**最新一次**(×3),归并计数(×3 同款)
+    # 与未命中计数(×3)各自成立、互不顶替 —— 首行的空标记不再顶掉真标记。
+    rows = _timeline_rows(agent.session)
+    assert len(rows) == 1 and rows[0]["group_n"] == 3
+    assert rows[0]["repeat_text"] == "×3 未命中"
 
 
 def test_monitor_and_tool_result_tell_the_same_count(tmp_path, config, only_tmp_kb):

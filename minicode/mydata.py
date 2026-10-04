@@ -151,6 +151,9 @@ TABLE: tuple[Entry, ...] = (
     Entry("close-pref.json", "关窗时怎么办", PREF, True),
     Entry("monitor-pref.json", "任务监控栏开合", PREF, True,
           note="这一栏展开还是收起、哪几段被折叠过 —— 纯界面偏好,不含任务内容"),
+    Entry("pricing-override.json", "费用估算改价", PREF, True,
+          note="只存与默认价不同的行(USD/每百万 token);删掉即回默认价目。"
+               "改完在下一次统计时生效,不用重启"),
     Entry("jobs-pref.json", "定时任务开关", PREF, True,
           note="被关掉的那几个不再自动跑;这是界面偏好,跑过的账在 jobs-state.json"),
     Entry("jobs-user.json", "我的定时任务", PERSONAL, True, restart=True,

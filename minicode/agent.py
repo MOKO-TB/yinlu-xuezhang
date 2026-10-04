@@ -74,6 +74,12 @@ class Agent:
         self._undo_open = None     # 等这次真落盘之后补"改后指纹"的那条 seq
         self._narration = ""       # 本轮模型写的说明文字:权限确认框里当"为什么要做"的兜底
         self._pending_prior = ""   # B1:下一步 search_knowledge 命中历史差评时的那句系统侧先验
+        # W1:这次请求成功之前撞了几次重试。挂在 agent 上而不是 UI 上,因为
+        # 它要跟 `_record_usage` 一起落库(UI 的那份是给监控栏的会话级计数)。
+        self._llm_retries = 0
+        # W10:本步实测毫秒(handler 全程)。_execute 每步开头清零;替身/子类
+        # 覆盖 _execute 时这里保底 None —— add_tool_result 拿到 None 不带键。
+        self._step_ms = None
         # 身上这份 system prompt 是哪一天建的。system prompt 里烧着日期与"今天/明天
         # 的课",而本应用是托盘常驻的 —— 记下建它的那天,回合开头一比对就知道过没过期。
         self._prompt_date = date.today()
@@ -145,7 +151,7 @@ class Agent:
                     self.registry,
                     on_text=self.ui.on_text_delta,
                     on_reasoning=self.ui.on_reasoning_delta,
-                    on_retry=self.ui.on_retry,
+                    on_retry=self._on_retry,
                     fallback_provider_id=self._fallback_provider(),
                     on_fallback=lambda e, n: self.ui.push(
                         "info", text=str(e)) if hasattr(self.ui, "push") else None,
@@ -176,7 +182,8 @@ class Agent:
                     # 轮起每次请求都会 400,而用户看不出跟刚才那次报错有什么关系。
                     result = (f"错误: 工具 {call.name} 执行时抛了 "
                               f"{type(e).__name__}: {str(e)[:200]}")
-                self.session.add_tool_result(call.id, call.name, result)
+                self.session.add_tool_result(call.id, call.name, result,
+                                             elapsed_ms=self._step_ms)
                 if self._fail_streak_hit(call):
                     # 连续 N 次一模一样的失败:再原样重试只是烧 token(撞上
                     # max_steps/时间限才停)。收一次尾,把"接下来怎么办"交给
@@ -205,7 +212,7 @@ class Agent:
                 self.session.messages + [{"role": "user", "content": note}], [],
                 on_text=self.ui.on_text_delta,
                 on_reasoning=self.ui.on_reasoning_delta,
-                on_retry=self.ui.on_retry)
+                on_retry=self._on_retry)
         except KeyboardInterrupt:
             self.ui.turn_interrupted()
             return
@@ -316,20 +323,52 @@ class Agent:
         """
         return getattr(self.llm, "config", None) or self.ctx.config
 
+    def _on_retry(self, e: Exception, attempt: int) -> None:
+        """重试的中转(W1):先记一笔账,再把原话转给界面。
+
+        为什么不把 `ui.on_retry` 直接递给 LLM 层:重试次数要跟着 `_record_usage`
+        落进本地账本(usage.retries 列),而那条账记在 agent 这一层 —— 中转一次,
+        两头(落库的数、屏幕上的话)才出自同一个计数。转交经 getattr 且兜异常:
+        界面坏了绝不能把重试本身带走。
+        """
+        self._llm_retries += 1
+        forward = getattr(self.ui, "on_retry", None)
+        if callable(forward):
+            try:
+                forward(e, attempt)
+            except Exception:
+                pass
+
     def _record_usage(self, turn) -> None:
         """把本轮真实 token 用量记进本地统计(见 minicode/usage.py)。
 
         只在**有真实 usage** 时记账;服务端没返回 usage 就不记,绝不估算。
-        记账失败静默忽略——统计功能绝不能拖垮对话主流程。
+        W0 起随账多带三个实测事实:会话身份(留档文件名,子代理没有留档就是
+        空串)、这次请求的实测耗时、成功之前撞了几次重试。重试计数只在**真记上
+        账时**清零 —— 这次请求没 usage,这笔重试挂在下一条有账的记录上,
+        不让它凭空消失。记账失败静默——统计功能绝不能拖垮对话主流程。
         """
         try:
             from minicode import usage
             cfg = self._effective_config()
-            usage.record_usage(
+            u = turn.usage if isinstance(turn.usage, dict) else {}
+            ttft = getattr(turn, "ttft_ms", None)
+            logged = usage.record_usage(
                 provider=cfg.provider.id if cfg.provider else "",
                 model=cfg.model,
                 usage=turn.usage,
+                session_id=(self.session.log_path.stem
+                            if self.session.log_path else ""),
+                elapsed_ms=(turn.elapsed_ms if isinstance(turn.elapsed_ms, int)
+                            and turn.elapsed_ms >= 0 else None),
+                retries=self._llm_retries,
+                # W5/W6:端点回报了才有的两格实测。record_usage 里 None=未记录、
+                # 绝不落 0 —— 0 是"瞬间首字/零思考",NULL 是"端点根本没说"。
+                ttft_ms=(ttft if isinstance(ttft, int) and ttft >= 0 else None),
+                reasoning_tokens=u.get("reasoning_tokens"),
             )
+            if logged:
+                self._llm_retries = 0
         except Exception:
             pass
 
@@ -769,6 +808,9 @@ class Agent:
     # ------------------------------------------------------------------
 
     def _execute(self, call: ToolCall) -> str:
+        # W10:每步先清零 —— 早退路径(工具不存在/参数坏/被拒/钩子拦)不残留
+        # 上一步的实测,add_tool_result 拿到 None 就不带 elapsed_ms 键。
+        self._step_ms = None
         tool = self._tool_map.get(call.name)
         if tool is None:
             return (f"错误: 未找到工具 '{call.name}'。"
@@ -825,12 +867,17 @@ class Agent:
                     f"钩子输出:{pre.get('output') or '(无)'}")
         self._snapshot_before_mutation(tool, args)
         self.ui.tool_start(tool, args)
+        t0 = time.monotonic()
         try:
             result = tool.handler(self.ctx, **args)
         except TypeError as e:
             result = f"错误: 工具参数与 schema 不匹配: {e}"
         except Exception as e:
             result = f"工具执行出错: {type(e).__name__}: {e}"
+        # W10:这一步的实测耗时(handler 全程,含异常路径 —— 抛错也是真实
+        # 耗时)。口径与实时表一致(tool_start→tool_done);确认框等待不算
+        # (handler 还没跑),与实时表同一条规矩。
+        self._step_ms = max(0, int((time.monotonic() - t0) * 1000))
         self.ui.tool_done(tool, result)
         self._mark_after_mutation(tool, args, result)
         # post 钩子:失败不拦截,在结果尾部如实附一行(一行,不刷屏)

@@ -345,3 +345,70 @@ def test_forked_log_loads_as_a_session(tmp_path):
     forked = Session(system_prompt="s", log_dir=tmp_path, workspace=tmp_path)
     n = forked.load_from(new_path)
     assert n == 1 and forked.messages[-1]["content"] == "第一问"
+
+
+# ------------------------------------------------------------------ W7 思考摘要
+
+def test_reasoning_is_archived_clipped_with_true_count(tmp_path):
+    """W7:思考摘要随留档走 —— 截断存、真字数另记;没有思考就不带键。"""
+    s = Session(system_prompt="sys", log_dir=tmp_path)
+    big = "想" * 5000
+    s.add_assistant(AssistantTurn(text="答", reasoning=big))
+    msg = s.messages[-1]
+    assert msg["reasoning_chars"] == 5000           # 「思考 N 字」说的是真数
+    assert len(msg["reasoning"]) < 5000 and "截断" in msg["reasoning"]
+    s.add_assistant(AssistantTurn(text="没有思考"))
+    assert "reasoning" not in s.messages[-1]        # 没有就不带键(与 ts 同规)
+
+
+def test_outbound_strips_reasoning_bookkeeping(tmp_path):
+    """出口必须净:ts/reasoning/reasoning_chars 都是本地记账,严格端点报 400。"""
+    s = Session(system_prompt="sys", log_dir=tmp_path)
+    s.add_assistant(AssistantTurn(text="答", reasoning="想" * 3000))
+    out = outbound(s.messages)
+    for m in out:
+        assert not ({"ts", "reasoning", "reasoning_chars"} & set(m))
+    assert "reasoning" in s.messages[-1]            # 拷贝剥离,本体不动
+
+
+def test_old_archive_without_reasoning_still_loads(tmp_path):
+    """老留档没有思考键:照常载入,消费方按「没有」处理(与 ts 同一条规矩)。"""
+    import json as _json
+    log = tmp_path / "session_old.jsonl"
+    log.write_text("\n".join([
+        _json.dumps({"type": "session_start", "time": "2026-01-01 00:00:00",
+                     "workspace": "", "schema": 2}),
+        _json.dumps({"role": "user", "content": "hi",
+                     "ts": "2026-01-01 00:00:01"}),
+        _json.dumps({"role": "assistant", "content": "答",
+                     "ts": "2026-01-01 00:00:02"}),
+    ]) + "\n", encoding="utf-8")
+    s = Session(system_prompt="sys", log_dir=tmp_path)
+    n = s.load_from(log)
+    assert n == 2
+    assert "reasoning" not in s.messages[-1]
+
+
+# ------------------------------------------------------------------ W10 实测耗时
+
+def test_tool_result_carries_elapsed_ms_when_measured(tmp_path):
+    """W10:实测毫秒随留档走 —— 重启后时间线不再靠 ts 秒级差猜耗时。"""
+    s = Session(system_prompt="sys", log_dir=tmp_path)
+    s.add_tool_result("c1", "bash", "ok", elapsed_ms=2900)
+    assert s.messages[-1]["elapsed_ms"] == 2900
+    # 没实测(早退路径/老调用方)/负数/bool:一律不带键,宁缺毋错
+    s.add_tool_result("c2", "bash", "ok")
+    s.add_tool_result("c3", "bash", "ok", elapsed_ms=-1)
+    s.add_tool_result("c4", "bash", "ok", elapsed_ms=True)
+    for cid in ("c2", "c3", "c4"):
+        assert "elapsed_ms" not in next(m for m in s.messages
+                                        if m.get("tool_call_id") == cid)
+
+
+def test_outbound_strips_elapsed_ms(tmp_path):
+    """elapsed_ms 是本地记账:出端点前剥掉,严格端点对未知字段报 400。"""
+    s = Session(system_prompt="sys", log_dir=tmp_path)
+    s.add_tool_result("c1", "bash", "ok", elapsed_ms=2900)
+    out = outbound(s.messages)
+    assert all("elapsed_ms" not in m for m in out)
+    assert s.messages[-1]["elapsed_ms"] == 2900      # 拷贝剥离,本体不动

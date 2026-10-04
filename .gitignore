@@ -81,6 +81,9 @@ skill-usage.jsonl
 # v0.9.22 关窗偏好与托盘诊断日志(本机状态)+ 数据目录写探针
 /close-pref.json
 /monitor-pref.json
+
+# W2 费用估算的本地改价(只存与默认价不同的行;运行时生成)
+/pricing-override.json
 /jobs-pref.json
 /jobs-user.json
 /tray.log
@@ -151,3 +154,6 @@ skill-usage.jsonl
 # v0.9.101 用户级工程规矩(主人自己写的 AGENTS.md,存在就每轮进提示词)。
 # 它是这台机器上某个人的习惯,发出去的包里凭空带一份最容易被当成"学长自己乱写东西"。
 /AGENTS.md
+
+# IDE 配置目录(本机工具生成,不入仓库)
+.idea/

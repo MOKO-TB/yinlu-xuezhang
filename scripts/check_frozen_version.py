@@ -176,7 +176,18 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           # 漏 _FILE_TOOLS_LINE = 正则没了、行行都不认;漏 _extract_files
                           # = 认了解析不收 —— 两种表现都是「装好的包里子代理写的文件
                           # 不出现在产出栏」,而不报错。
-                          "_FILE_TOOLS_LINE", "_extract_files"),
+                          "_FILE_TOOLS_LINE", "_extract_files",
+                          # v0.9.114 观测线(W1/W4/W7/W8/W9):重复失败探测(漏
+                          # findings = 同款调用连挂 3 次面板一声不吭,止损闸停了
+                          # 也没人看见;漏 call_signature = 探测器与止损闸各写
+                          # 一份"同样",迟早漂成「闸停了卡没立」)、×N 归类
+                          # (漏 _group_rows = 同款调用一行行排几百 KB)、每轮
+                          # 思考段(漏 REASONING_JOIN_CLIP = 各步拼接不再整体
+                          # 截断,几十 KB 思考撑爆载荷)、同批标记(漏 batch =
+                          # 模型一轮同时要的几步看不出是一批下发的)
+                          "findings", "call_signature", "_group_rows",
+                          "_group_member", "FAIL_CHAIN_MIN", "FINDINGS_LIMIT",
+                          "CHAIN_KEEP", "FINDING_PREVIEW", "REASONING_JOIN_CLIP"),
     # v0.9.37:工具口径只有一份真相 —— 聊天里的工具卡片、右侧时间线、实时表三处
     # 都调它。漏收 = 三处措辞各自漂移(时间线里写「读取」,卡片里写「读文件」),
     # 而配对靠的是同一个 summarize 结果,漂了就再也对不上,行行都显示不了耗时。
@@ -317,7 +328,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                          "repair_tool_pairs"
 
                            # v0.9.98:运行轨迹导出(漏收 = 装好的包里报障拿不出流水)
-                           , "export_trace", "export_trace_tool"),
+                           , "export_trace", "export_trace_tool",
+                           # v0.9.114 W7:思考摘要进留档(漏 REASONING_CLIP = 几十 KB
+                           # 思考原文撑爆留档;漏 LOCAL_KEYS = 出口剥不干净,严格
+                           # 端点对未知字段报 400,"下一轮"莫名 400 回溯不到这轮)
+                           "REASONING_CLIP", "LOCAL_KEYS"),
     # v0.9.40 D1/D2:压缩保头+尾、工具 schema 进估算(漏收 = 装好的包里这两条退化
     # 回"保尾丢头"和"只数消息"的旧尺子,而界面看不出来)
     # v0.9.106 Q2:占用明细那一处真相搬进 compaction(面板与命令行读同一份);
@@ -815,6 +830,17 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "VERIFY_RE", "verify_of", "note_verify_run",
                           "find_verify_run", "_with_verify", "_verify_gate",
                           "VERIFY_RUNS_LIMIT"),
+    # v0.9.114 W2/W4/W5/W6:估算费用与用量画像。漏收 = token 弹窗里「估算费用」
+    # 永远「未知」、风云榜四卡永远空 —— 价目缺行显示未知是**诚实**,
+    # 整个模块不在包里是**假绿**(界面照旧弹,只是每一栏都空)。
+    "minicode.pricing": ("RATES", "RATES_SOURCE", "OVERRIDE_FILE", "rate_for",
+                         "estimate", "summarize", "load_override",
+                         "save_override", "effective_rates"),
+    "minicode.usage": ("record_usage", "statistics", "budget_state",
+                       # v0.9.114 W0/W5/W6:三列迁移 + 按模型画像(漏 _model_profile
+                       # = 风云榜四卡没有数据来源;漏 _extra_totals = 头部累计耗时
+                       # 与会话数永远 0 —— 不是没数据,是没人去数)
+                       "_model_profile", "_extra_totals"),
 }
 
 # ---- 包内前端(v0.9.94 起):界面那半边不在 PYZ 里,它由 packaging/gcode.spec 的
@@ -907,6 +933,16 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     "buildSubagents", "subagentRows", "actGroupFold",
     # p7/p8:地图舞台的下限与 git 降级那两行 —— 样式与字段名都在前端这一侧
     "min-height:min(42vh, 300px)", "e.git_note", "e.chrome",
+    # v0.9.114 观测线(W1/W2/W4/W7/W8/W9):监控栏翻车段 + 失败卡 + 定位现场
+    # + token 弹窗风云榜四卡 + 每轮思考折叠段 + ×N 归类 + 同批 ∥ 标记 +
+    # 头部第二行。漏收的表现全是不报错的那种:面板少了那一段、点了卡片没反应、
+    # 弹窗里没有那一栏、模型一轮同时要的几步看不出是一批。
+    "act-failhead", "act-find", "locateFinding", "act-flash",
+    "usage-cards", "usage-card", "uc-head", "uc-line", "uc-sub",
+    "fmtCost", "fmtDur",
+    "act-reason", "act-reason-cap", "act-reason-body", "💭 思考",
+    '×${item.group_n} 同款调用', "same-batch",
+    "累计耗时", "有账的会话", "缓存命中(端点不回报)",
 )
 
 

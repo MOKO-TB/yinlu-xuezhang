@@ -25,6 +25,7 @@ v0.9.37 起这一栏叫「任务监控」,多了两样:**按真实先后的时�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -155,9 +156,11 @@ def _call_index(messages) -> tuple[dict, dict, list]:
     """
     calls: dict[str, dict] = {}
     order: list[str] = []
+    batch_n = 0
     for m in messages or []:
         if not isinstance(m, dict) or m.get("role") != "assistant":
             continue
+        batch_ids: list[str] = []
         for call in m.get("tool_calls") or []:
             cid = str(call.get("id") or "")
             name = str((call.get("function") or {}).get("name") or "")
@@ -167,9 +170,18 @@ def _call_index(messages) -> tuple[dict, dict, list]:
                 cid = f"{name}#{len(order)}"      # 没 id 的兜底:照样算一次调用
             calls[cid] = {"name": name, "args": _args(call),
                           "ts": str(m.get("ts") or "")}
+            batch_ids.append(cid)
             order.append(cid)
+        # W9:同批 = 模型同一条 assistant 消息里**同时要下**的几步(≥2 才算批,
+        # 单发不标)。执行是逐个的 —— 标记只说"同批下发",绝不说"并行执行"。
+        if len(batch_ids) > 1:
+            batch_n += 1
+            bid = f"b{batch_n}"
+            for cid in batch_ids:
+                calls[cid]["batch"] = bid
     results: dict[str, str] = {}
     result_ts: dict[str, str] = {}
+    result_ms: dict[str, int] = {}
     for m in messages or []:
         if isinstance(m, dict) and m.get("role") == "tool":
             cid = str(m.get("tool_call_id") or "")
@@ -177,7 +189,12 @@ def _call_index(messages) -> tuple[dict, dict, list]:
             if cid and isinstance(body, str):
                 results[cid] = body
                 result_ts[cid] = str(m.get("ts") or "")
-    return calls, results, order, result_ts
+                # W10:留档带了实测毫秒(handler 全程)就收下 —— 时间线还原
+                # 时它优先于 ts 秒级差(0.2s 的调用会漂成 0s/1s/2s)。
+                ms = m.get("elapsed_ms")
+                if isinstance(ms, int) and not isinstance(ms, bool) and ms >= 0:
+                    result_ms[cid] = ms
+    return calls, results, order, result_ts, result_ms
 
 
 def _extract_subagents(calls, results, result_ts=None) -> list[dict]:
@@ -475,6 +492,8 @@ def _extract_memory(calls, results) -> list[dict]:
 TURN_LIMIT = 12         # 一轮最多列几行(和类别那套一样:再多就是噪声)
 TURNS_LIMIT = 8         # 面板最多往回翻几轮
 TIMELINE_DETAIL = 1200  # 时间线一行点开能看的全文长度
+# W7:一轮思考**拼接后**的总截断(各步在留档时已各自截过;拼起来还可能超)。
+REASONING_JOIN_CLIP = 6000
 
 
 def _turn_split(messages) -> list[dict]:
@@ -486,7 +505,8 @@ def _turn_split(messages) -> list[dict]:
     turns: list[dict] = []
 
     def open_turn(title: str = "") -> dict:
-        t = {"n": len(turns) + 1, "title": title, "cids": []}
+        t = {"n": len(turns) + 1, "title": title, "cids": [],
+             "reasoning": [], "reasoning_chars": 0}
         turns.append(t)
         return t
 
@@ -501,6 +521,13 @@ def _turn_split(messages) -> list[dict]:
         elif role == "assistant":
             if cur is None:
                 cur = open_turn("")
+            # W7:这一轮各步的思考摘要。字数优先取留档里的**真总字数**
+            # (reasoning_chars);老留档没有这个键就按存的截断文本数 ——
+            # 文本自带「截断,原 N 字」标记,不会冒充完整。
+            r = m.get("reasoning")
+            if isinstance(r, str) and r.strip():
+                cur["reasoning"].append(r)
+                cur["reasoning_chars"] += int(m.get("reasoning_chars") or len(r))
             for call in m.get("tool_calls") or []:
                 name = str((call.get("function") or {}).get("name") or "")
                 if not name:
@@ -591,8 +618,15 @@ def _dur(entry: dict):
 
 
 def _dur_text(entry: dict) -> str:
-    """「用时 Ns」里那个字符串:格式化只这一处(时间线的行与子行同一份)。"""
-    d = _dur(entry)
+    """「用时 Ns」里那个字符串:格式化只这一处(时间线的行与子行同一份)。
+
+    W10 起优先读 `entry["dur"]`(实测毫秒折的秒 / 实时表的真实间隔)——
+    它比 start/end 的 ts 差准(消息 ts 只有秒级,0.2s 的调用会漂成 0s/1s/2s);
+    dur 缺席时才退回 start/end 重算(老行为,时刻锚还在就照样能算)。
+    """
+    d = entry.get("dur")
+    if d is None:
+        d = _dur(entry)
     return "" if d is None else f"{d}s"
 
 
@@ -606,7 +640,8 @@ def _ts_epoch(ts: str) -> "float | None":
         return None
 
 
-def _restore_from_ts(rows: list[dict], calls: dict, result_ts: dict) -> int:
+def _restore_from_ts(rows: list[dict], calls: dict, result_ts: dict,
+                     result_ms: dict | None = None) -> int:
     """实时表没配到的行,用 v0.9.66 起的消息时间戳还原时刻与耗时。
 
     诚实边界:①只填 `start/end/dur` 为**空**的行 —— 实时表的时刻永远优先
@@ -614,6 +649,10 @@ def _restore_from_ts(rows: list[dict], calls: dict, result_ts: dict) -> int:
     重新计算);②**老留档没有 ts,照旧不给时间** —— 宁可空着,不猜;
     ③dur 是"发起调用 → 结果落档"的真实间隔,不含模型思考的间隙,口径与
     实时表一致(实时表也是 start=tool_start/end=tool_done)。
+    W10 起第④条:**实测毫秒优先** —— 留档消息带了 elapsed_ms(handler 全程
+    实测)就用它折秒,消息 ts 的秒级取整漂移(0.2s 的调用会漂成 0s/1s/2s)
+    从此不进时间线;没有 elapsed_ms 的老留档照旧走 ts 差,两档并存时实测
+    永远在 ts 猜测前面。
     """
     restored = 0
     for row in rows:
@@ -627,6 +666,12 @@ def _restore_from_ts(rows: list[dict], calls: dict, result_ts: dict) -> int:
         end = _ts_epoch(result_ts.get(row.get("cid")))
         if end is not None and end >= start:
             row["end"] = end
+        ms = (result_ms or {}).get(row.get("cid"))
+        if isinstance(ms, int) and not isinstance(ms, bool) and ms >= 0:
+            # W10:实测毫秒折秒(半秒进位)—— 真实测过 2900ms 就是 3s,
+            # 不吃 ts 取整的漂移;end 仍取 ts(那是唯一知道的结束点)。
+            row["dur"] = max(0, (ms + 500) // 1000)
+        elif row.get("end") is not None:
             row["dur"] = _dur({"start": start, "end": end})   # 与实时表同一格式
         restored += 1
     return restored
@@ -639,6 +684,66 @@ def _clock(epoch) -> str:
         return time.strftime("%H:%M:%S", time.localtime(float(epoch)))
     except (OSError, OverflowError, ValueError, TypeError):
         return ""
+
+
+def _group_member(r: dict) -> dict:
+    """归并行的子行:原始那一次调用,带着**它自己**的时刻与状态。"""
+    return {"tool": r["tool"], "verb": r["verb"], "title": r["summary"],
+            "status": r["status"], "badge": r["badge"],
+            "time": r.get("time") or "", "dur": r.get("dur"),
+            "dur_text": r.get("dur_text") or "", "progress": "",
+            # W4「定位现场」按 key 找行:被归并走的原始调用在 children 里
+            # 照样带 key,前端逐行点亮不因归类而失联。
+            "key": f"t:{r['cid']}" if r.get("cid") else ""}
+
+
+def _group_rows(items: list[dict]) -> list[dict]:
+    """W8 归类:同一轮里**可证明相同**的调用(工具名+规范化参数全等)合成
+    一行 ×N;原始调用逐条挂在 children 下 —— 展开仍是那几次,一次不少。
+
+    四条口径:①不同参数绝不合并(换参数重试是健康的思路调整,叠一起等于
+    把调整抹掉);②合并行显示**最后一次**的状态与时刻(与「产出」栏
+    "状态跟最新"同一条规矩),未命中标记同理跟最新;③单发不标 ×N,照旧
+    直行,children 保持原样(可能是配到的子代理步骤,也可能是空)——
+    **自己不当自己的子行**;④×N 的 children = 原有子行在前 + 全部原始调用
+    在后,一次不少。
+    """
+    out: list[dict] = []
+    index: dict[str, dict] = {}
+    for r in items:
+        sig = call_signature(r["tool"], r.get("args") or {})
+        head = index.get(sig)
+        if head is None:
+            row = dict(r)
+            row["n"] = 1
+            row["_members"] = [r]          # 临时:同款的全部原始调用(含首秀)
+            index[sig] = row
+            out.append(row)
+        else:
+            head["n"] += 1
+            head["_members"].append(r)
+            head["status"] = r["status"]           # 状态跟最新一次
+            head["badge"] = r["badge"]
+            head["start"] = r.get("start")
+            head["end"] = r.get("end")
+            head["dur"] = r.get("dur")
+            # 原文/参数也跟最新一次:点开"看这一步的原文"看到的
+            # 必须是状态所指向的那一次,不是最早那次的残影。
+            head["result"] = r.get("result")
+            head["args"] = r.get("args")
+            head["batch"] = r.get("batch") or head.get("batch")
+            if r.get("repeat_text"):
+                head["repeat_text"] = r["repeat_text"]   # 未命中标记跟最新
+    for row in out:
+        n = row.pop("n")
+        members = row.pop("_members")
+        if n > 1:
+            # ×N:原有子行(同批 task 配到的子代理步骤)在前,原始调用在后
+            # —— 归并不吃掉任何一步,展开仍是那几次。
+            row["children"] = (list(row.get("children") or [])
+                               + [_group_member(m) for m in members])
+            row["group_n"] = n
+    return out
 
 
 def _timeline_action(row: dict, result: str) -> dict | None:
@@ -670,9 +775,16 @@ def timeline(messages, workspace=None, live=None, busy=True) -> dict:
 消息时间戳还原,**再老的留档没有 ts 仍旧不给时间**);③在跑的那一步单独标,
     不和"已经失败"混在一个数里。
     """
-    calls, results, _order, result_ts = _call_index(messages)
+    calls, results, _order, result_ts, result_ms = _call_index(messages)
     rows: list[dict] = []
+    reason_by_turn: dict[int, dict] = {}
     for turn in _turn_split(messages):
+        # W7:这一轮的思考记录(各步拼接,再整体截断;字数是**真总数**)。
+        if turn.get("reasoning"):
+            reason_by_turn[turn["n"]] = {
+                "chars": turn["reasoning_chars"],
+                "text": _clip("\n\n".join(turn["reasoning"]),
+                              REASONING_JOIN_CLIP)}
         for cid in turn["cids"]:
             call = calls.get(cid)
             if not call:
@@ -691,12 +803,14 @@ def timeline(messages, workspace=None, live=None, busy=True) -> dict:
                          "args": args,
                          "status": status, "badge": _badge(status),
                          "start": None, "end": None, "dur": None,
+                         # W9:同批下发的批号(同一条 assistant ≥2 调用才有)
+                         "batch": call.get("batch"),
                          # 并行子代理内部的每一步挂在下面(v0.9.92);形状先给齐,
                          # 前端就不用为"这一行到底有没有 children"再判一次
                          "children": [], "children_dropped": 0,
                          "result": result if isinstance(result, str) else ""})
     _pair_times(rows, live)
-    _restore_from_ts(rows, calls, result_ts)
+    _restore_from_ts(rows, calls, result_ts, result_ms)
     by_turn: dict[int, list[dict]] = {}
     for row in rows:
         by_turn.setdefault(row["turn"], []).append(row)
@@ -717,12 +831,6 @@ def timeline(messages, workspace=None, live=None, busy=True) -> dict:
                 counts[r["status"]] += 1
         title = items[0]["turn_title"]
         when = _clock(items[0].get("start"))
-        # 轮与轮之间最新在上;**轮内按先后顺序读下来** —— 时间线存在的理由就是
-        # "它先做了什么、后做了什么",轮内再倒过来就没人能顺着看了。
-        # 截断保留这一轮最近的 TURN_LIMIT 行(少列行,不少报次数)。
-        shown = items[-TURN_LIMIT:]
-        for r in shown:
-            r["action"] = _timeline_action(r, r["result"])
         for r in items:
             # 时刻只可能是空串:实时表没记到的行(并行子代理内部、上一版程序跑的)
             # 就不显示时间。宁可少一列,不许拿"现在"凑一个。
@@ -731,14 +839,31 @@ def timeline(messages, workspace=None, live=None, busy=True) -> dict:
             hits = empty_marks.get(r.get("cid"))
             if hits and hits >= mark_from:
                 r["repeat_text"] = f"×{hits} 未命中"
+        # W8:归类只叠**可证明相同**的调用 —— 先补齐时刻(子行要各自带着自己的
+        # 时刻走),再合并;真总数(calls/errors)从合并前的 items 数出来,
+        # 合并只动显示,绝不动口径。
+        groups = _group_rows(items)
+        # 轮与轮之间最新在上;**轮内按先后顺序读下来** —— 时间线存在的理由就是
+        # "它先做了什么、后做了什么",轮内再倒过来就没人能顺着看了。
+        # 截断保留这一轮最近的 TURN_LIMIT 行(少列行,不少报次数)。
+        shown = groups[-TURN_LIMIT:]
+        for r in shown:
+            r["action"] = _timeline_action(r, r["result"])
+            # 显示行(合并行在内)一律要净:args/result 只给 action 用,
+            # 算完就剥 —— 不剥的话页面原文会整段躺进面板载荷(隐私和体积
+            # 都是账,来源栏那次的教训)。合并行是副本,必须在这里单独剥。
+            for k in ("args", "result", "cid", "raw", "turn_title", "end", "dur"):
+                r.pop(k, None)
+        for r in items:
             for k in ("args", "result", "cid", "raw", "turn_title", "end", "dur"):
                 r.pop(k, None)
         turns.append({"n": n, "title": title,
                       "calls": len(items), "errors": counts["failed"],
                       "running": counts["running"], "stale": counts["stale"],
                       "when": when,
+                      "reasoning": reason_by_turn.get(n),
                       "items": shown,
-                      "more": max(0, len(items) - len(shown))})
+                      "more": max(0, len(groups) - len(shown))})
     hidden = max(0, len(turns) - TURNS_LIMIT)
     return {"turns": turns[:TURNS_LIMIT], "turns_total": len(turns),
             "turns_more": hidden, "calls": len(rows),
@@ -766,17 +891,121 @@ def now_line(now: dict | None) -> dict | None:
             "elapsed": max(0, int(now.get("elapsed") or 0))}
 
 
+# ------------------------------------------------- 重复失败探测(W4)
+
+FAIL_CHAIN_MIN = 3      # 同一调用连续失败几次立一张卡(与 agent.FAIL_STREAK_LIMIT 同节奏)
+FINDINGS_LIMIT = 8      # 面板最多几张卡;超出是病态场景(止损闸每轮 3 次就会收尾)
+CHAIN_KEEP = 10         # 一条链最多记几个调用 id(定位现场锚的是这几个)
+FINDING_PREVIEW = 160   # 卡片上那段错误原文截多长
+
+
+def call_signature(name: str, args) -> str:
+    """「同一次调用」的钥匙 —— 与 agent._fail_streak_hit 同一条公式。
+
+    那边是止损闸(连续 3 次同键失败就收尾),这边是显示器。同一件事两处
+    各写一份"同样"的定义,迟早漂成「闸停了卡没立」或反过来 —— 所以这里
+    不另写一份,参数规范化用同一个 `json.dumps(sort_keys=True)`。
+    """
+    try:
+        flat = json.dumps(args if isinstance(args, dict) else {},
+                          sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        flat = str(args)
+    return f"{str(name or '')}|{flat}"
+
+
+def _hash8(text: str) -> str:
+    """卡片的稳定短 id:同一条链更新同一张卡,不按出现次序编号(0.5.0 的教训)。"""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+
+
+def findings(messages) -> list[dict]:
+    """重复失败探测:同一工具+同一组参数**连续**失败 ≥3 次,立一张可定位的卡。
+
+    口径与 agent._fail_streak_hit 同源(失败问 toolsum.is_failure,"同一"=
+    call_signature 那把钥匙,阈值同是 3)—— 止损闸停下的那一步,这里必须
+    看得见,不然"它已经停了"和"面板上什么都没有"会同时成立。
+
+    三条边界(每条都对应一种会骗人的画法):
+    ①链**按轮计**:用户发了新话就是新链 —— 止损闸的失败连击只在本回合内
+      计数(agent.py 同款口径),跨轮连着算就会出现"同一操作失败了 9 次"
+      这种把两次独立尝试缝成一条的假链;
+    ②没有回话的调用(在跑/已中断)**不计也不清**:它没有结果,既不构成
+      失败也不构成成功,拿它断链等于拿"不知道"当"成功了";
+    ③卡片的 id 锚在 (轮次, 钥匙) 上,链变长时**更新原卡**、count 往上走,
+      而不是再立一张 —— 连续失败刷出一排重复卡,是最坏的一种刷屏。
+
+    这是显示器不是判决书:卡片文案照实说"这是重复失败证据,不是确定的
+    空转或质量判决" —— 换个参数重试是健康的思路调整,不立卡。
+    """
+    calls, results, order, _result_ts, _result_ms = _call_index(messages)
+    turn_of: dict[str, int] = {}
+    title_of: dict[int, str] = {}
+    for t in _turn_split(messages):
+        title_of[t["n"]] = t["title"]
+        for cid in t["cids"]:
+            turn_of[cid] = t["n"]
+    out: list[dict] = []
+    cur: dict | None = None            # 当前链:{"turn", "key", "tool", "args", ...}
+    for cid in order:
+        call = calls.get(cid) or {}
+        result = results.get(cid)
+        if result is None:
+            continue                    # ② 还在跑/没回话:链保持原样
+        if not _failed(result):
+            cur = None                  # 成功重置(agent 闸同款)
+            continue
+        turn = turn_of.get(cid)
+        key = call_signature(call.get("name", ""), call.get("args") or {})
+        if cur is not None and cur["key"] == key and cur["turn"] == turn:
+            cur["count"] += 1
+            cur["cids"].append(cid)
+        else:
+            # ① 新链:换钥匙、换轮次都算 —— 跨轮的旧失败不缝进新链
+            cur = {"turn": turn, "key": key, "tool": str(call.get("name") or ""),
+                   "args": call.get("args") or {}, "count": 1, "cids": [cid]}
+        cur["cids"] = cur["cids"][-CHAIN_KEEP:]
+        cur["preview"] = result
+        if cur["count"] < FAIL_CHAIN_MIN:
+            continue
+        fid = f"rf:{cur['turn']}:{_hash8(key)}"
+        name = cur["tool"]
+        row = {
+            "id": fid, "turn": cur["turn"],
+            "turn_title": title_of.get(cur["turn"], ""),
+            "tool": name, "verb": toolsum.verb(name),
+            "title": _clip(toolsum.summarize(name, cur["args"])) or toolsum.verb(name),
+            "count": cur["count"],
+            "cids": list(cur["cids"]),
+            "preview": _clip(cur["preview"], FINDING_PREVIEW),
+            # 「定位现场」(对齐 dsh-watcher 0.5.0):点卡片滚到那几步,不是
+            # 滚到轮次标题就完事 —— 锚的是具体调用 id,前端按 key 对行。
+            "action": {"type": "locate", "label": "定位现场",
+                       "turn": cur["turn"], "cids": list(cur["cids"])},
+        }
+        old = next((r for r in out if r["id"] == fid), None)
+        if old is not None:
+            old.update(row)             # ③ 同一条链:更新原卡
+        else:
+            out.append(row)
+    out.reverse()                       # 最新在上(与面板其余各行同序)
+    return out[:FINDINGS_LIMIT]
+
+
 # ------------------------------------------------------------------ 对外入口
 
 def session_activity(messages, workspace=None, live=None, now=None, busy=True,
-                    group_limit=None) -> dict:
+                     group_limit=None, retries: int = 0) -> dict:
     """把会话消息聚合成右侧面板要的那份字典(纯函数,不碰磁盘以外的东西)。
 
     `busy` = 这个会话此刻还在不在跑。它决定"没有回话的那一步"算进行中还是算
     已中断:用户按了停止之后,`tool_done` 不会再来到,消息里那条调用就永远没有
     回话 —— 这时还写"写入中"就是谎话。
+
+    W1/W4 起多带两样:`retries` = 模型层重试事件数(桥从 UI 计数器递进来的
+    会话级账,这里只转发);`findings` = 重复失败探测卡(见 `findings`)。
     """
-    calls, results, order, result_ts = _call_index(messages)
+    calls, results, order, result_ts, _result_ms = _call_index(messages)
     groups = {
         "subagents": _extract_subagents(calls, results, result_ts),
         "files": _extract_files(calls, results, workspace),
@@ -810,10 +1039,14 @@ def session_activity(messages, workspace=None, live=None, now=None, busy=True,
     line = timeline(messages, workspace=workspace, live=live, busy=busy)
     return {"ok": True, "groups": out,
             "timeline": line, "now": now_line(now) if busy else None,
+            # W1:模型层重试的事件数(会话级,本程序这次开着期间的账)。
+            # 由桥从 UI 计数器递进来;这里只转发,不另造第二个来源。
+            "findings": findings(messages),
             # 「统计于 HH:MM:SS」的那个数:是**这次算**的时刻,不是动作发生的时刻
             "updated_at": time.strftime("%H:%M:%S", time.localtime()),
             "summary": {"calls": len(order), "errors": errors, "running": running,
                         "interrupted": interrupted,
+                        "retries": max(0, int(retries or 0)),
                         "busy": bool(busy),
                         "workspace": _rel(workspace, None) if workspace else ""},
             # 前端拿它排"哪一类该显示";空类直接不渲染,不摆一屏"暂无"

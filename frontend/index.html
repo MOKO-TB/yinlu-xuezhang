@@ -1805,6 +1805,24 @@ try {
                         max-width:150px; }
   .act-turn.folded .act-rows{ display:none; }
   .act-turn.err .act-turnhead b{ color:var(--danger); }
+  /* W4「定位现场」:点失败卡滚到那几步并逐行闪一下 —— 高亮要能自己退场,
+     不留一块洗不掉的底色;系统开了"减弱动态效果"就不闪,直接铺底色。 */
+  .act-row.flash{ animation:act-flash 1.8s ease-out 1; }
+  @keyframes act-flash{ 0%,45%{ background:var(--primary-light); }
+                        100%{ background:transparent; } }
+  @media (prefers-reduced-motion: reduce){
+    .act-row.flash{ animation:none; background:var(--primary-light); } }
+  .act-failhead .act-t{ color:var(--danger); font-weight:700; }
+  .act-find{ cursor:pointer; border-left:2px solid var(--danger); }
+  /* W7:每轮思考的折叠段 —— 默认收着,展开看各步思考的拼接(截断有标记)。 */
+  .act-reason{ margin:2px 0 4px; }
+  .act-reason-cap{ padding:3px 5px; font-size:10.5px; }
+  .act-reason-cap b{ color:var(--text-3); font-weight:600; }
+  .act-reason-body{ margin:2px 8px 4px; padding:6px 8px; font-size:11px;
+                    line-height:1.55; color:var(--text-2); white-space:pre-wrap;
+                    word-break:break-word; background:var(--glass-lite);
+                    border:1px solid var(--line-soft); border-radius:var(--r-m);
+                    max-height:220px; overflow-y:auto; }
   .plm{ display:flex; flex-direction:column; gap:3px; }
   .plm-bar{ height:4px; border-radius:99px; background:var(--line-soft); overflow:hidden;
             margin:2px 4px 5px; }
@@ -1901,6 +1919,21 @@ try {
                     border-radius:var(--r-m); padding:10px 12px; }
   .usage-sum .cell b{ display:block; font-size:19px; letter-spacing:-.4px; }
   .usage-sum .cell span{ color:var(--text-3); font-size:11px; }
+  /* W3 风云榜:冠军卡(极致打字机/最慢树懒/深度沉思狂/算力明细)。端点没回报
+     实测(首字/思考)的卡整张不出 —— 有账才画,不摆"暂无"的空牌撑版面。 */
+  .usage-cards{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+                gap:8px; margin:0 0 14px; }
+  .usage-card{ background:var(--glass-lite); border:1px solid var(--line-soft);
+               border-radius:var(--r-m); padding:10px 12px; min-width:0; cursor:default; }
+  .usage-card .uc-head{ display:flex; align-items:baseline; gap:6px; }
+  .usage-card .uc-head i{ margin-left:auto; font-style:normal; color:var(--text-3);
+                          font-size:10.5px; white-space:nowrap; }
+  .usage-card b{ display:block; font-size:13px; color:var(--text-1); margin-top:5px;
+                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .usage-card .uc-line{ font-size:12.5px; color:var(--text-2); margin-top:2px;
+                        overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+                        font-variant-numeric:tabular-nums; }
+  .usage-card .uc-sub{ font-size:10.5px; color:var(--text-3); margin-top:2px; }
   .usage-days{ display:grid; grid-template-columns:repeat(auto-fill,minmax(84px,1fr));
                gap:8px; margin-bottom:14px; }
   .usage-day{ display:flex; flex-direction:column; align-items:center; gap:7px;
@@ -5060,6 +5093,19 @@ function loadUsage() {
     $("usageBody").innerHTML = `<div class="usage-empty">读取失败:${esc(String(e).slice(0, 80))}</div>`;
   });
 }
+function fmtCost(n) {
+  // 费用显示:小于 1 美元给 4 位小数(几美分的单子两位数全是 0,看不出差别)。
+  return "$" + (n >= 1 ? n.toFixed(2) : n.toFixed(4));
+}
+function fmtDur(ms) {
+  // W3 耗时显示:毫秒/秒/分/时按量级取整 —— 只格式化实测值,未记录如实写,
+  // 不拿 0 凑(0 是"瞬间完成",未记录是"端点没说",两回事)。
+  if (ms === null || ms === undefined) return "未记录";
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)} 秒`;
+  if (ms < 3600000) return `${(ms / 60).toFixed(1)} 分钟`;
+  return `${(ms / 3600).toFixed(1)} 小时`;
+}
 function renderUsage(s) {
   const sum = s.summary;
   const legend = (s.models || []).map(m =>
@@ -5074,21 +5120,95 @@ function renderUsage(s) {
       <div class="dm">${label}<i>${d.requests || 0} 次</i></div>
     </div>`;
   }).join("");
-  const rows = (s.models || []).map(m => `<tr title="${esc(m.key)} · ${m.total} token">
+  // W2 估算费用:主数字只显示有价可依的部分;缺行显示「未知」,绝不当 $0 ——
+  // 把不知道的记成零是最会骗人的诚实。缓存那份端点不返回明细,标「未计」。
+  const cost = sum.cost_usd;
+  const costCell = (cost === null || cost === undefined)
+    ? `<div class="cell"><b>未知</b><span>估算费用 · 价目缺行</span></div>`
+    : `<div class="cell"><b>${fmtCost(cost)}</b><span>估算费用 · 非账单</span></div>`;
+  // W3 头部第二行:累计耗时/有账的会话数/缓存命中。缓存端点不回报 → 如实
+  // 「未记录」:0 是"一次都没命中",未记录是"端点根本没说",不能把没说画成 0。
+  const durCell = `<div class="cell"><b>${fmtDur(sum.elapsed_ms)}</b><span>累计耗时</span></div>`;
+  const sessCell = `<div class="cell"><b>${sum.sessions || 0}</b><span>有账的会话</span></div>`;
+  const cacheCell = `<div class="cell"><b>未记录</b><span>缓存命中(端点不回报)</span></div>`;
+  // W3 风云榜:冠军卡全部从**实测列**里挑 —— 没有首字/思考实测的模型不参选,
+  // 一张卡都凑不齐时整段不渲染(不摆空牌);榜首并列时只认先到的那一个。
+  const models = s.models || [];
+  const cards = [];
+  const timed = models.filter(m => m.ttft_samples > 0
+                                 && m.ttft_ms !== null && m.ttft_ms !== undefined);
+  if (timed.length) {
+    const fast = timed.reduce((a, b) => (b.ttft_ms < a.ttft_ms ? b : a));
+    const slow = timed.reduce((a, b) => (b.ttft_ms > a.ttft_ms ? b : a));
+    cards.push({icon: "⚡", title: "极致打字机", tag: "首字最快",
+                model: fast.model || fast.key,
+                line: `首字均值 ${fmtDur(fast.ttft_ms)}`,
+                sub: `${fast.ttft_samples} 次实测`,
+                tip: `${fast.model || fast.key} · ${fast.ttft_samples} 次请求的首字延迟均值`});
+    if (slow.ttft_ms !== fast.ttft_ms)
+      cards.push({icon: "🦥", title: "最慢树懒", tag: "排队最久",
+                  model: slow.model || slow.key,
+                  line: `首字均值 ${fmtDur(slow.ttft_ms)}`,
+                  sub: `${slow.ttft_samples} 次实测`,
+                  tip: `${slow.model || slow.key} · ${slow.ttft_samples} 次请求的首字延迟均值`});
+  }
+  const thinkers = models.filter(m => m.reasoning_samples > 0
+                                    && (m.completion || 0) > 0
+                                    && m.reasoning_tokens !== null);
+  if (thinkers.length) {
+    const top = thinkers.reduce((a, b) =>
+      (b.reasoning_tokens / b.completion > a.reasoning_tokens / a.completion ? b : a));
+    cards.push({icon: "🧠", title: "深度沉思狂", tag: "思考占比最高",
+                model: top.model || top.key,
+                line: `思考占比 ${Math.round(top.reasoning_tokens / top.completion * 100)}%`,
+                sub: `思考 ${fmtTok(top.reasoning_tokens)} / 正文 ${fmtTok(top.completion)} token`,
+                tip: `${top.model || top.key} · 思考 token 占自身正文输出的比例`});
+  }
+  const ranked = models.filter(m => m.reasoning_samples > 0 && m.reasoning_tokens > 0)
+    .sort((a, b) => b.reasoning_tokens - a.reasoning_tokens);
+  if (ranked.length)
+    cards.push({icon: "📊", title: "算力明细", tag: "思考 token 降序",
+                model: `${ranked[0].model || ranked[0].key} 居首`,
+                line: `${ranked.length} 个模型在思考`,
+                sub: "悬停看完整排名",
+                tip: ranked.map(m => `${m.model || m.key}: ${fmtTok(m.reasoning_tokens)} 思考 token`).join("\n")});
+  const cardsHtml = cards.length ? `
+    <div class="usage-cards">${cards.map(c => `
+      <div class="usage-card" title="${esc(c.tip || c.line)}">
+        <div class="uc-head"><span>${c.icon}</span><i>${esc(c.tag)}</i></div>
+        <b>${esc(c.title)}</b>
+        <div class="uc-line">${esc(c.model)}</div>
+        <div class="uc-line" style="font-weight:700">${esc(c.line)}</div>
+        ${c.sub ? `<div class="uc-sub">${esc(c.sub)}</div>` : ""}
+      </div>`).join("")}</div>` : "";
+  const rows = (s.models || []).map(m => `<tr title="${esc(m.key)} · ${m.total} token`
+      + `${m.rate_note ? " · " + esc(m.rate_note) : ""}">
       <td><b>${esc(m.model || m.key)}</b><br><small style="color:var(--text-3)">${esc(m.provider || "")}</small></td>
       <td>${fmtTok(m.prompt)}</td><td>${fmtTok(m.completion)}</td>
-      <td><b>${fmtTok(m.total)}</b></td></tr>`).join("");
+      <td><b>${fmtTok(m.total)}</b></td>
+      <td>${m.cost_usd === null || m.cost_usd === undefined ? "未知" : fmtCost(m.cost_usd)}</td></tr>`).join("");
+  const unpriced = s.unpriced_models || [];
+  const foot = [];
+  if (unpriced.length) foot.push(`未标价(没算进总数,不是 $0):${unpriced.map(esc).join("、")}`);
+  foot.push("缓存命中端点不返回明细,未计;价目是公开挂牌价的本地快照,滞后于官方页、"
+    + "不含折扣 —— 估算,非账单。要改价:「我的数据 → 设置与偏好」里的 pricing-override.json");
   $("usageBody").innerHTML = `
     <div class="usage-sum">
       <div class="cell"><b>${fmtTok(sum.total)}</b><span>总 Token · ${sum.requests} 次请求</span></div>
       <div class="cell"><b>${fmtTok(sum.prompt)}</b><span>输入</span></div>
       <div class="cell"><b>${fmtTok(sum.completion)}</b><span>输出</span></div>
       <div class="cell"><b>${fmtTok(Math.round(sum.completion / (sum.prompt || 1) * 100))}%</b><span>输出/输入</span></div>
+      ${costCell}
+      ${durCell}
+      ${sessCell}
+      ${cacheCell}
     </div>
+    ${cardsHtml}
     ${legend ? `<div class="usage-legend">${legend}</div>` : ""}
     <div class="usage-days">${days}</div>
-    ${rows ? `<table class="usage-table"><thead><tr><th>模型</th><th>输入</th><th>输出</th><th>合计</th></tr></thead><tbody>${rows}</tbody></table>`
-           : '<div class="usage-empty">暂无记录——发出第一句对话后,这里会出现真实的用量统计。</div>'}`;
+    ${rows ? `<table class="usage-table"><thead><tr><th>模型</th><th>输入</th><th>输出</th><th>合计</th><th>费用(估)</th></tr></thead><tbody>${rows}</tbody></table>`
+           : '<div class="usage-empty">暂无记录——发出第一句对话后,这里会出现真实的用量统计。</div>'}
+    <div class="usage-empty" style="padding-top:2px">${foot.join("<br>")}</div>`;
 }
 $("btnUsage").addEventListener("click", () => openUsageDlg());
 $("btnUsageClose").addEventListener("click", () => $("usageOverlay").classList.remove("show"));
@@ -6555,6 +6675,7 @@ let actFolded = {};            // 段折叠:后端 monitor-pref.json 里那份
 let actGroupFold = {};         // 类别段折叠(产出与来源里的每一类),只在这次打开期间
 let actFull = false;           // 点过「再显示 N 条」之后:每次刷新都要给全
 let actTurnFold = {};          // 轮折叠:只在这次打开期间有效
+let actReasonOpen = {};        // W7:每轮思考段的展开(同样只在这次打开期间有效)
 let actData = null;            // 上一次后端算好的整份(点折叠时原地重画,不敲桥)
 let actPrefDone = false;       // 没读回偏好之前不写盘:否则等于把默认值冒充成用户的选择
 const ACT_ORDER = ["subagents", "files", "web", "sources", "memory"];
@@ -6779,6 +6900,9 @@ function actKidsEl(item) {
   for (const k of kids) {
     const row = actEl({ cls: "act-row act-kid " + (k.status || "ok") });
     row.classList.add("plain");
+    // W8:归类子行带着自己的 key —— 定位现场按 key 点灯,被归并走的
+    // 原始调用照样逐行点亮,不因归类失明。
+    if (k.key) row.dataset.k = String(k.key);
     const mid = actEl({ cls: "act-m" });
     mid.appendChild(actEl("act-t", (k.route ? k.route + " " : "") + (k.title || k.tool)));
     const bits = [];
@@ -6804,11 +6928,18 @@ function actTlRowEl(item) {
   const row = actEl({ cls: "act-row " + (item.status || "ok") });
   if (!item.action || !item.action.type) row.classList.add("plain");
   row.dataset.k = String(item.key || "");
+  // W9:同批下发(模型同一条消息里同时要的几步,逐个执行)—— 只说"同批",
+  // 不说"并行":执行是顺序的,说并行就是说谎。
+  if (item.batch) {
+    row.classList.add("same-batch");
+    row.title = "与同批另几步一起由模型一轮同时要下(逐个执行)";
+  }
   const mid = actEl({ cls: "act-m" });
   mid.appendChild(actEl("act-t", item.summary || item.tool || "(没参数)"));
   const bits = [];
   if (item.time) bits.push(item.time);                 // 没记到时刻 = 不显示,不拿刷新那一刻凑
   if (item.dur_text) bits.push("用时 " + item.dur_text);
+  if (item.group_n > 1) bits.push(`×${item.group_n} 同款调用`);   // W8:归类,展开看各次
   // 「×N 未命中」由后端从会话消息里数出来(与工具结果末尾那句同一次扫描),前端不自己数
   if (item.repeat_text) bits.push(item.repeat_text);
   if (bits.length) mid.appendChild(actEl("act-s", bits.join(" · ")));
@@ -6818,7 +6949,8 @@ function actTlRowEl(item) {
   // 色弱的人与"截图发给同学"的场景里根本分不出失败还是完成。
   const abnormal = item.status && item.status !== "ok" && item.badge;
   row.appendChild(actEl("act-badge",
-    (item.verb || "") + (abnormal ? ((item.verb ? " · " : "") + item.badge) : "")));
+    (item.verb || "") + (item.group_n > 1 ? " ×" + item.group_n : "")
+    + (abnormal ? ((item.verb ? " · " : "") + item.badge) : "")));
   return row;
 }
 
@@ -6847,6 +6979,27 @@ function buildTimeline(parent, tl) {
     head.dataset.turn = String(t.n);
     if (t.errors) turn.classList.add("err");
     turn.appendChild(head);
+    // W7:这一轮的思考记录 —— 默认折着,点开看各步思考的拼接(截断有标记)。
+    if (t.reasoning) {
+      const ropen = !!actReasonOpen[t.n];
+      const rsec = actEl("act-reason");
+      const rcap = actEl("act-cap fold act-reason-cap");
+      rcap.appendChild(actEl("act-caret", ropen ? "▾" : "▸"));
+      rcap.appendChild(actEl({ tag: "b" }, `💭 思考 ${t.reasoning.chars} 字`));
+      rcap.title = ropen ? "收起这一轮的思考记录"
+                         : "展开这一轮的思考记录(各步拼接,截断有标记)";
+      rcap.addEventListener("click", () => {
+        actReasonOpen[t.n] = !actReasonOpen[t.n];
+        if (actData) renderActivity(actData);   // 原地重画,不为折叠去敲桥
+      });
+      rsec.appendChild(rcap);
+      if (ropen) {
+        const rbody = actEl("act-reason-body");
+        rbody.textContent = t.reasoning.text;
+        rsec.appendChild(rbody);
+      }
+      turn.appendChild(rsec);
+    }
     const rows = actEl("act-rows");
     for (const item of t.items || []) {
       actRows[String(item.key || "")] = item;
@@ -6864,6 +7017,74 @@ function buildTimeline(parent, tl) {
   });
   if (tl.turns_more) parent.appendChild(actEl("act-more", `另有 ${tl.turns_more} 轮没列出`));
   return turns.length;
+}
+
+// ---------------- 翻车排查(W1/W4):报错/重试总数 + 重复失败卡 ----------------
+// 每一行都有真来源:报错数从会话消息按 toolsum 唯一口径数出来,重试数是模型层
+// 的会话级活账(重启清零,文案里说清楚),失败卡是"同一操作连续失败 ≥3 次"
+// 的探测结果(口径与止损闸同源)。没有失败就没有这一节,不摆一排"暂无"。
+
+function failCount(sum, findings) {
+  const bits = [];
+  if (sum.errors) bits.push(sum.errors + " 错");
+  if (sum.retries) bits.push(sum.retries + " 重试");
+  const n = (findings || []).length;
+  if (n) bits.push(n + " 卡");
+  return bits.join(" · ");
+}
+
+function buildFailures(box, data) {
+  const sum = data.summary || {};
+  const finds = data.findings || [];
+  if (!sum.errors && !sum.retries && !finds.length) return 0;
+  let n = 0;
+  const head = actEl("act-row plain act-failhead");
+  const bits = [];
+  if (sum.errors) bits.push(`工具报错 ${sum.errors} 次`);
+  if (sum.retries) bits.push(`模型重试 ${sum.retries} 次`);
+  head.appendChild(actEl("act-t", bits.join(" · ")));
+  head.title = "报错按失败唯一口径从会话消息里数;重试只数模型层的自动重试,"
+    + "是本程序这次开着期间的账,重启清零 —— 不假装翻得出历史。";
+  box.appendChild(head);
+  n++;
+  for (const f of finds) {
+    const row = actEl("act-row failed act-find");
+    const mid = actEl("act-m");
+    mid.appendChild(actEl("act-t", `第 ${f.turn} 轮 · ${f.title}`));
+    const sub = [];
+    if (f.turn_title) sub.push(`「${f.turn_title}」`);
+    sub.push(`同一操作连续失败 ${f.count} 次`);
+    if (f.preview) sub.push(f.preview);
+    mid.appendChild(actEl("act-s", sub.join(" · ")));
+    row.appendChild(actEl("act-dot"));
+    row.appendChild(mid);
+    row.appendChild(actEl("act-badge",
+      (f.verb || "") + (f.verb ? " · " : "") + `连败 ×${f.count}`));
+    row.title = "点这里:展开那一轮、滚到现场、把这几步逐行高亮";
+    row.addEventListener("click", () => locateFinding(f));
+    box.appendChild(row);
+    n++;
+  }
+  return n;
+}
+
+function locateFinding(f) {
+  // 「定位现场」(对齐 dsh-watcher 0.5.0):不是滚到轮次标题就完事 ——
+  // 展开那一轮、把链上的每一步高亮、滚到最早那一步。
+  actTurnFold["T" + f.turn] = false;
+  if (actData) renderActivity(actData);
+  const want = new Set((f.cids || []).map(String));
+  requestAnimationFrame(() => {
+    let first = null;
+    document.querySelectorAll("#actBody .act-row[data-k]").forEach(el => {
+      const k = String(el.dataset.k || "");
+      if (k.startsWith("t:") && want.has(k.slice(2))) {
+        el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+        if (!first) first = el;
+      }
+    });
+    if (first) first.scrollIntoView({ block: "center", behavior: "smooth" });
+  });
 }
 
 // ---------------- 「产出与来源」段:v0.9.34 那五类,原样收进一段
@@ -7190,6 +7411,7 @@ function renderActivity(data) {
   const bits = [];
   if (sum.calls) bits.push(sum.calls + " 次工具调用");
   if (sum.errors) bits.push(sum.errors + " 处失败");
+  if (sum.retries) bits.push(sum.retries + " 次重试");
   if (sum.running) bits.push(sum.running + " 个在跑");
   if (sum.interrupted) bits.push(sum.interrupted + " 个已中断");
   if (data.updated_at) bits.push("统计于 " + data.updated_at);
@@ -7204,6 +7426,10 @@ function renderActivity(data) {
       b => buildPlan(b)),
     actSect("timeline", "🧾 时间线", tl.calls ? tl.calls + " 次调用" : "",
       b => buildTimeline(b, tl)),
+    // 翻车排查(W1/W4):报错与重试的总数 + 重复失败卡。紧跟时间线 ——
+    // 它是时间线的"哪儿不对劲"摘要,不是又一类产出。
+    actSect("failures", "🛑 翻车排查", failCount(sum, data.findings),
+      b => buildFailures(b, data)),
     // 子智能体:从「产出与来源」里提出来单独一节(用户看图 p9/p10 点名的那一节)。
     // 它回答的是"谁去干的、干成没有",和"产出了哪些文件"不是一回事,混在一起
     // 就要滚到第四屏才看见那几行。

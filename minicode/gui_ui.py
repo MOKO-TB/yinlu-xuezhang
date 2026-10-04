@@ -26,6 +26,10 @@ class GuiUI:
         self.plan_review_handler = None
         self.abandon_pending = None       # 停止/关窗时叫醒正在等回答的那两条线程
         self.on_llm_failure = None        # 模型的看门狗,由桥注入(见 GuiUI.llm_error)
+        # W1:本会话模型层重试的**事件数**(每 on_retry 一次 +1)。每会话一份
+        # (SessionGuiUI 各自实例化),是本程序这次开着期间的账 —— 重启清零,
+        # 监控栏据此如实说,不假装翻得出历史。落库的那份按请求记,在 agent 层。
+        self._retries = 0
         self._send_lock = threading.Lock()
         # ---- 实时表(v0.9.37):每个工具调用的**真实**开始/结束时刻。
         # 会话消息里没有时间戳(留档只有会话开始那一行),所以"跑了多久"这件事
@@ -142,9 +146,14 @@ class GuiUI:
 
     def on_retry(self, e: Exception, attempt: int) -> None:
         # 见 ui.on_retry 的同一口径:「已切到备选」「摘掉某字段」是整句话,只报类型等于没说。
+        self._retries += 1
         note = " ".join(str(e).split())[:160]
         what = f"{type(e).__name__}: {note}" if note else type(e).__name__
         self.push("info", text=f"请求失败({what}),第 {attempt} 次重试…")
+
+    def retry_count(self) -> int:
+        """本会话重试事件数(监控栏「翻车排查」那格读的就是它)。"""
+        return self._retries
 
     def turn_interrupted(self) -> None:
         self.push("finish_stream")
