@@ -30,14 +30,20 @@ E2E = (ROOT / "scripts" / "e2e_ui_v0939_p3.py").read_text(encoding="utf-8")
 # 顺序 = 界面上从上到下的顺序(入口栏里就是这一份顺序)
 # v0.9.39 搬进来 14 颗;v0.9.89 加过「体检」(v0.9.100 随体检面板一起删);
 # v0.9.112 加三颗:🖥 终端、⏱ 自动化(用户看图 p5 点名要)、◀ 收起左侧栏(Ctrl+B)。
+# v0.9.113:「收起左侧栏」按图 p1/p2 搬到**对话区左上角**(见下面 TOPBAR_ICON_IDS),
+# 入口栏因此回到 16 颗 —— 它是唯一的"收起入口"家,两处都有一颗就会打架。
 # 加一颗要同时改这里、下面两处计数、以及 scripts/e2e_ui_v0939_p3.py 那份真点击
 # 清单 —— 这个测试就是为了让漏改当场红。
 RAIL_IDS = ["btnMap", "btnSchedule", "btnMood", "btnPlan", "btnActivity",
             "btnSkills", "btnMemory", "btnUsage",
             "btnTerminal", "btnAutomate",       # v0.9.112:终端 / 自动化
             "btnMyData", "btnSandbox",
-            "btnExport", "btnUndo", "btnCompact", "btnTheme",
-            "btnSideToggle"]                     # v0.9.112:收起左侧栏
+            "btnExport", "btnUndo", "btnCompact", "btnTheme"]
+
+# 顶栏左上角那一颗(它不是面板入口,是"这一列要不要在"的开关,所以归顶栏)
+TOPBAR_ICON_IDS = ["btnSideToggle"]
+# 无边框窗口的自绘三颗:只在 win_state 说"这窗真没系统标题栏"时才出现
+WIN_CTRL_IDS = ["winMin", "winMax", "winClose"]
 
 # 每一颗**原来**去的地方(与 e2e_ui_v0939_p3.py 真点击断的是同一份口径):
 # 弹层类写弹层 id,动作类写桥方法名 —— 都能在这份文件里追回真代码。
@@ -123,8 +129,13 @@ def test_topbar_keeps_only_status_and_no_navigation(topbar: str, rail: str):
         assert f'id="{bid}"' in rail, f"{bid} 没进入口栏"
     for sid in TOPBAR_STATUS_IDS:
         assert f'id="{sid}"' in topbar, f"顶栏少了状态件 {sid}(这轮不动它)"
-    # 上限:今天 4 样。谁再往顶栏塞导航按钮,这条会拦下来问一句"这是状态还是入口"
-    assert len(re.findall(r'id="([A-Za-z0-9_]+)"', topbar)) <= 6, \
+    # v0.9.113:顶栏多了「收起左侧栏」那一颗 + 无边框的三颗窗口控件。
+    # 这两组都不是**面板入口**(一个管这一列在不在,三个管这个窗本身),
+    # 所以入口仍然一颗不许进顶栏 —— 上限从 6 抬到 10,再多就是往顶栏塞导航。
+    for bid in TOPBAR_ICON_IDS + WIN_CTRL_IDS:
+        assert f'id="{bid}"' in topbar, f"顶栏少了 {bid}"
+        assert f'id="{bid}"' not in rail, f"{bid} 搬完还留在入口栏(两处都会翻状态)"
+    assert len(re.findall(r'id="([A-Za-z0-9_]+)"', topbar)) <= 10, \
         "顶栏控件数又涨回去了 —— 这轮要解决的正是「上面的工具堆太多」"
 
 
@@ -148,6 +159,21 @@ def test_entry_has_a_live_click_binding(bid: str):
         f"{bid} 的点击绑定不是一条(丢了就是死图标,多了会连点两次)"
 
 
+def test_the_moved_collapse_button_is_still_live_and_still_explained():
+    """「收起栏」搬到对话区左上角:只剩图标没有字了,那 title/aria 必须补上这堂课。
+
+    入口栏那条「图标之外必须有字」的规矩在这里换了一种守法 ——
+    顶栏那一行要给工作区名与模型胶囊留位置,塞不下两个字,所以解释写在
+    title(悬停)与 aria-label(读屏)里,并且图标本身要跟着实际状态翻明暗。
+    """
+    assert HTML.count('$("btnSideToggle").addEventListener("click"') == 1
+    m = re.search(r'<button class="tb-ico"[^>]*id="btnSideToggle"[^>]*>', HTML)
+    assert m, "对话区左上角没有那颗收起栏按钮"
+    assert 'title="' in m.group(0) and 'aria-label="' in m.group(0), "只剩一个图标没人猜得中"
+    assert 'b.classList.toggle("on", !!closed)' in HTML, "按钮不跟着实际收没收起翻"
+    assert 'id="sideCap"' not in HTML, "旧的那份文字标签还在,状态写两处迟早对不上"
+
+
 def test_overlay_entries_target_their_own_dialog():
     """七个弹层入口各自的目标弹层仍在,且仍是被 `.classList.add("show")` 打开。"""
     for ov in ["scheduleOverlay", "moodOverlay", "planOverlay",
@@ -161,7 +187,7 @@ def test_overlay_entries_target_their_own_dialog():
 def test_every_entry_has_one_cap_line(rail: str):
     """"图标 + 字"两行结构:每颗按钮都得留一个 `.cap` 给真状态写。"""
     buttons = re.findall(r"<button\b[^>]*>(.*?)</button>", rail, flags=re.S)
-    assert len(buttons) == len(RAIL_IDS) == 17, "入口栏的格子数与这份清单不一致"
+    assert len(buttons) == len(RAIL_IDS) == 16, "入口栏的格子数与这份清单不一致"
     for bid, body in zip(RAIL_IDS, buttons):
         assert body.count('class="cap"') == 1, f"{bid} 的标签行不是一份,状态没地方写"
 
@@ -249,10 +275,13 @@ def test_user_manual_documents_the_rail(rail: str):
     assert "入口栏" in src, "《使用说明》里没写这条竖栏"
     caps = [c.strip() for c in re.findall(
         r'<span class="cap"[^>]*>([^<]+)</span>', rail)]
-    assert len(caps) == 17, f"从界面取到的标签数不是 17:{caps}"
+    assert len(caps) == 16, f"从界面取到的标签数不是 16:{caps}"
     for label in re.findall(r"顶栏「([^」]*)」", src):
         hit = [c for c in caps if c in label]
         assert not hit, f"《使用说明》还把「{label}」指到顶栏,它已经在入口栏里了"
+    # 「收起栏」这一颗 v0.9.113 起**就在顶栏左上角**:《使用说明》不许再把它指回入口栏
+    for label in re.findall(r"入口栏「([^」]*)」", src):
+        assert "收起" not in label, f"《使用说明》还说「{label}」在入口栏"
 
 
 def test_handoff_documents_the_move():

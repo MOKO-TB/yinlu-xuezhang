@@ -159,7 +159,8 @@ def _hwnd_of(window) -> int:
         for obj in (native, getattr(native, "Form", None)):
             handle = getattr(obj, "Handle", None)
             if handle is not None:
-                return int(handle)
+                to_i64 = getattr(handle, "ToInt64", None)   # pythonnet 的 IntPtr
+                return int(to_i64()) if callable(to_i64) else int(handle)
     except Exception:
         pass
     try:
@@ -198,6 +199,156 @@ def _set_text(hwnd: int, title: str) -> bool:
             ctypes.c_void_p(hwnd), ctypes.c_wchar_p(title)))
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------- 无边框(frameless)那三件补票的事
+#
+# 2026-10-04 在这台机器上探针实测(不是查文档):
+# - `frameless=True` 之后客户区**铺满整窗**(origin_offset 恒为 [0,0])—— 用户要的
+#   "深色下顶栏不再白"由此根除:系统那条标题栏压根不存在了;
+# - 但 FormBorderStyle=None 之后非客户区高度为 0,WM_NCHITTEST 一律回 HTCLIENT:
+#   **系统边缘拖不动了**(打 WS_THICKFRAME 也不给边带,实测 rect 没变),
+#   所以"拉边缩放"必须由界面自己发起、Python 侧 SetWindowPos 落实;
+# - 不设 MaximizedBounds 时 `maximize()` 会**盖住任务栏**(实测 1920×1080,
+#   而工作区是 1920×1032)。设了以后最大化正好 1920×1032 —— 这一条必须补。
+
+SPI_GETWORKAREA = 0x0030
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+MIN_W, MIN_H = 720, 480        # 再小界面就要开始叠罗汉了(顶栏一行都放不下)
+EDGES = ("n", "s", "e", "w", "ne", "nw", "se", "sw")
+
+
+def work_area() -> list[int]:
+    """屏幕去掉任务栏的那块 [左,上,右,下](读不到回空列表,调用方据此降级)。"""
+    if getattr(ctypes, "windll", None) is None:
+        return []
+    try:
+        from ctypes import wintypes as wt
+        rect = wt.RECT()
+        if not ctypes.windll.user32.SystemParametersInfoW(
+                SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+            return []
+        return [int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)]
+    except Exception:
+        return []
+
+
+def maximize_bounds(window) -> dict:
+    """给无边框的窗补上"最大化让出任务栏"(实测不补就会盖住 —— 这是那条的票)。
+
+    只在拿得到原生 Form 时做;拿不到(网页版/别的后端)如实回 ok=False,不硬来。
+    """
+    form = getattr(window, "native", None) if window is not None else None
+    if form is None:
+        return {"ok": False, "msg": "窗口原生对象还没就绪"}
+    wa = work_area()
+    if not wa:
+        return {"ok": False, "msg": "读不到工作区,最大化范围不改"}
+    try:
+        from System.Drawing import Rectangle
+        form.MaximizedBounds = Rectangle(wa[0], wa[1], wa[2] - wa[0], wa[3] - wa[1])
+    except Exception as exc:
+        return {"ok": False, "msg": f"MaximizedBounds 没设上:{type(exc).__name__}"}
+    return {"ok": True, "work_area": wa, "msg": ""}
+
+
+def window_rect(window) -> list[int]:
+    """窗口在屏幕上的 [左,上,右,下](拿不到回 [])—— 边缘缩放以它为尺子。"""
+    hwnd = _hwnd_of(window) if window is not None else 0
+    if not hwnd or getattr(ctypes, "windll", None) is None:
+        return []
+    try:
+        from ctypes import wintypes as wt
+        rect = wt.RECT()
+        if not ctypes.windll.user32.GetWindowRect(ctypes.c_void_p(hwnd),
+                                                  ctypes.byref(rect)):
+            return []
+        return [int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)]
+    except Exception:
+        return []
+
+
+def _apply_edge(rect, edge: str, dx: int, dy: int,
+                min_w: int = MIN_W, min_h: int = MIN_H) -> list[int]:
+    """把"拖某条边/角"的位移算成新矩形 —— 纯算术,单独有针。
+
+    撞到最小尺寸时**让被拖的那条边停在够得着的地方**(而不是把对边推走):
+    同学往外拖到极限就该停住,往里拖不能把窗口翻过来。
+    """
+    left, top, right, bottom = [int(v) for v in rect[:4]]
+    dx, dy = int(dx), int(dy)
+    if "w" in edge:
+        left = min(left + dx, right - min_w)
+    if "e" in edge:
+        right = max(right + dx, left + min_w)
+    if "n" in edge:
+        top = min(top + dy, bottom - min_h)
+    if "s" in edge:
+        bottom = max(bottom + dy, top + min_h)
+    return [left, top, right, bottom]
+
+
+def resize_edge(window, edge: str, dx: int, dy: int) -> dict:
+    """界面边缘那几条 5px 的把手走这里:增量式(SetWindowPos 一次一动)。
+
+    为什么是增量而不是绝对坐标:JS 那一侧只能可靠地知道"鼠标又走了多少",
+    而窗口现在多大归系统说了算 —— 两边各记一份绝对位置迟早对不上,
+    对不上的表现是"拖一下窗口跳一下"。
+    """
+    if edge not in EDGES:
+        return {"ok": False, "msg": f"不认识的方向 {edge}(可用:{'、'.join(EDGES)})"}
+    rect = window_rect(window)
+    if not rect:
+        return {"ok": False, "msg": "读不到窗口位置,缩放不动"}
+    hwnd = _hwnd_of(window)
+    new = _apply_edge(rect, edge, dx, dy)
+    try:
+        ok = ctypes.windll.user32.SetWindowPos(
+            ctypes.c_void_p(hwnd), 0, new[0], new[1],
+            new[2] - new[0], new[3] - new[1], SWP_NOZORDER | SWP_NOACTIVATE)
+    except Exception as exc:
+        return {"ok": False, "msg": f"{type(exc).__name__}"}
+    return {"ok": bool(ok), "rect": new, "msg": "" if ok else "SetWindowPos 没成功"}
+
+
+def is_maximized(window) -> bool:
+    """界面据此决定 □ 的悬浮提示是"最大化"还是"还原"(不猜)。"""
+    form = getattr(window, "native", None) if window is not None else None
+    try:
+        return str(getattr(form, "WindowState", "")) == "Maximized"
+    except Exception:
+        return False
+
+
+GWL_STYLE = -16
+WS_CAPTION = 0x00C00000
+
+
+def style_of(window) -> int:
+    """窗口的 Win32 样式位(读不到回 0)。"""
+    hwnd = _hwnd_of(window) if window is not None else 0
+    if not hwnd or getattr(ctypes, "windll", None) is None:
+        return 0
+    try:
+        user32 = ctypes.windll.user32
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            user32.GetWindowLongPtrW.restype = ctypes.c_longlong
+            return int(user32.GetWindowLongPtrW(ctypes.c_void_p(hwnd), GWL_STYLE)) \
+                & 0xFFFFFFFF
+        return int(user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_STYLE)) & 0xFFFFFFFF
+    except Exception:
+        return 0
+
+
+def is_borderless(window) -> bool:
+    """这条窗口现在**真的**没有系统标题栏吗(按样式位读,不按配置里的布尔猜)。
+
+    界面要不要摆自绘的最小/最大/关闭三颗,取决于窗口实际长什么样:
+    配置写了 frameless 而某个后端没生效时,界面上再摆一套就是"两排关闭按钮"。
+    """
+    style = style_of(window)
+    return bool(style) and not (style & WS_CAPTION)
 
 
 def apply(window, dark: bool | None = None, title: str | None = None) -> dict:

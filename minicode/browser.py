@@ -810,6 +810,35 @@ def adopt_page(url_like: str = "", *, mode: str = "attach",
                 "browser": browser_name}
 
 
+def page_targets(url_like: str = "", *, timeout: float = 15.0) -> list[dict]:
+    """列出浏览器里**还开着**的页面(只按 URL 含 url_like 筛)。不接管、不导航、不开新的。
+
+    为什么要有这一条(v0.9.113):`adopt_page` 只会拿**第一张**匹配的页,而登录后的
+    正方教务常常同时躺着好几张 —— 框架页 `framework/xsMain.jsp` 一张、成绩页
+    (另一张标签或弹窗)一张。按站点找回了框架页就收工,屏幕上明明有那张成绩表,
+    学长读回来的却是菜单。先把"到底开着哪几张"摆出来,调用方才能逐张试。
+    """
+    with _LOCK:
+        conn = _STATE.conn
+    if conn is None:
+        return []
+    try:
+        targets = conn.call("Target.getTargets", timeout=timeout).get("targetInfos") or []
+    except Exception:
+        return []
+    out: list[dict] = []
+    for t in targets:
+        if t.get("type") != "page":
+            continue
+        u = str(t.get("url") or "")
+        if not u or u.startswith(("devtools://", "chrome://", "edge://", "about:")):
+            continue
+        if url_like and url_like not in u:
+            continue
+        out.append({"url": u, "title": str(t.get("title") or "")})
+    return out
+
+
 def _walk_frame_tree(node: dict, out: list[dict], depth: int = 0) -> None:
     """摊平 Page.getFrameTree(帧里还能套帧)。"""
     f = node.get("frame") or {}

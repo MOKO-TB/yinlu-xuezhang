@@ -155,6 +155,12 @@ def post_startup(ui) -> None:
     """webview.start 的回调(独立线程):补开右键菜单 + 接管关窗 + 自启进托盘。"""
     _enable_native_context_menu()
     install_tray(ui)
+    # 无边框窗的"最大化让出任务栏"要在窗口起来之后补(实测不设会盖住任务栏,
+    # 那时候人连开始菜单都点不到 —— 比不能最大化坏得多)。
+    from minicode import window_chrome
+    bounds = window_chrome.maximize_bounds(getattr(ui, "window", None))
+    if not bounds["ok"] and bounds["msg"]:
+        tray.log("最大化范围没设上:" + bounds["msg"])
     # 开机自启带 --background:窗口建的时候就是 hidden,这里只验托盘在不在。
     if tray.starts_hidden() and not tray.start_in_tray():
         _reveal_window()
@@ -222,6 +228,15 @@ def main() -> None:
             js_api=api,
             width=1280, height=820,
             background_color="#FDF6EC",
+            # 无边框(p5/p6):系统那条标题栏整个不要了 —— 用户报的"深色模式顶上还是
+            # 一条白的"由此根除(实测 frameless 后客户区铺满整窗,origin_offset 恒 [0,0])。
+            # 代价有两条,都已在界面上补票:①系统不给可拖的边带(实测 WM_NCHITTEST 一律
+            # HTCLIENT),所以拉边缩放由界面边缘发起(win_resize);②拖标题栏靠
+            # .pywebview-drag-region(easy_drag=False:否则整窗任何一处按下都能拖,
+            # 选中文字会变成挪窗口)。
+            frameless=True,
+            easy_drag=False,
+            shadow=False,
             # 开机自启(--background)建窗口时先不显示,等托盘就绪;手动双击照常弹出。
             # 上面那条「前端资源缺失」的分支**永远显示**:报错看不见比多一个窗口更糟。
             hidden=tray.starts_hidden(),

@@ -306,6 +306,19 @@ class PublicFacade:
         self._handlers.update({n: (lambda **k: _refuse(_reason)) for n in (
             "schedule_import_open", "schedule_import_read", "schedule_import_model",
             "schedule_import_confirm", "schedule_import_clear")})
+        # 成绩那一屏读的是**这台机器上主人本人**的成绩存档(含每一门课的分数与绩点),
+        # 导入更要本机浏览器窗口让人自己登录。两个都不给,并且要给一句人话 ——
+        # 别让前端把方法名当错误码显示出来。
+        _sc_reason = ("网页版不开放成绩导入与「我的成绩」(读的是这台机器上"
+                      "主人本人的成绩单,请用桌面版)")
+        self._handlers.update({n: (lambda **k: _refuse(_sc_reason)) for n in (
+            "scores_import_open", "scores_import_read", "scores_import_model",
+            "scores_import_confirm", "scores_import_clear", "get_score_stats")})
+        # 窗口控件(无边框那套 −□✕ 与边缘缩放)动的是**跑服务的那台机器**的窗口:
+        # 访客点了既不是他的窗,还可能把主人的窗最小化/关掉。整组拒绝。
+        _win_reason = "网页版不开放窗口控件(那是服务器自己的窗口,请用桌面版)"
+        self._handlers.update({n: (lambda **k: _refuse(_win_reason)) for n in (
+            "win_state", "win_minimize", "win_zoom", "win_close", "win_resize")})
         # 「我的数据」列的是**服务器本机**的文件清单,导出/导入还会在服务器上写读文件:
         # 对访客既没意义又泄露路径,整组明确拒绝(桌面版才有这个面板)。
         _md_reason = "网页版不开放「我的数据」(列的是服务器本机的文件,迁移请用桌面版)"

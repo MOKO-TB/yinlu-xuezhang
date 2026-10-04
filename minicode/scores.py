@@ -143,31 +143,167 @@ def courses_for_gpa(rows=None) -> list[dict]:
             for r in data["rows"] if isinstance(r, dict)]
 
 
+STATS_ROW_LIMIT = 80          # 面板最多摊给你看的行数(数字是全量算的,不受这个限制)
+
+
+def stats(semester: str = "") -> dict:
+    """「我的成绩」那一屏的数:门数/总学分/平均分/绩点,可按学期筛。
+
+    为什么单独有这一条:界面要的是**四个数**,而 gpa_calc 给的是一篇给人读的说明。
+    两者必须同源 —— 这里直接吃 `gpa._as_score/_gpa5/_gpa4` 那三个函数,面板与工具
+    不许各算一套口径(算出两个绩点是比"没有绩点"更坏的事)。
+
+    诚实边界:等级成绩按常见折算(优=95…),缺学分或非数字成绩的行**不参与加权**
+    并如实报 `skipped`;绩点两式都只是国内常见算法,以学校教务处为准(那句在 `note`)。
+    """
+    from minicode import gpa
+    data = load()
+    rows = [r for r in ((data or {}).get("rows") or []) if isinstance(r, dict)]
+    all_sem = sorted({str(r.get("semester") or "").strip()
+                      for r in rows if str(r.get("semester") or "").strip()})
+    want = str(semester or "").strip()
+    scope = [r for r in rows if not want
+             or str(r.get("semester") or "").strip() == want]
+    scored: list[tuple[float, float | None]] = []
+    skipped = 0
+    for r in scope:
+        score = gpa._as_score(str(r.get("score") or "").strip())
+        credit = gpa._as_credit(r.get("credit"))
+        if score is None or not (0 <= score <= 100):
+            skipped += 1
+            continue
+        scored.append((score, credit))
+    total_credit = sum(c for _s, c in scored if c)
+    with_credit = [(s, c) for s, c in scored if c]
+    acc = sum(s * c for s, c in with_credit)
+    shown = [{"name": str(r.get("name") or "")[:60],
+              "score": str(r.get("score") or "")[:20],
+              "credit": str(r.get("credit") or "")[:10],
+              "semester": str(r.get("semester") or "")[:30]} for r in scope[:STATS_ROW_LIMIT]]
+    note = ("等级成绩按常见折算(优=95 / 良=85 / 中=75 / 及格=65);绩点两式都只是国内"
+            "常见算法,评奖学金/保研请以学校教务处的算法为准。")
+    if not rows:
+        return {"ok": False, "empty": True, "entries": 0, "courses": 0,
+                "credits": 0.0, "avg": None, "weighted": None,
+                "gpa5": None, "gpa4": None, "semesters": [], "semester": want,
+                "skipped": 0, "rows": [], "rows_truncated": False,
+                "note": ("还没有成绩存档 —— 点「从教务导入成绩」,"
+                         "登录由你本人在弹出的窗口里完成。")}
+    return {
+        "ok": True, "empty": False,
+        "entries": len(scope),
+        "courses": len({str(r.get("name") or "").strip() for r in scope}),
+        "credits": round(total_credit, 2),
+        "avg": (round(sum(s for s, _c in scored) / len(scored), 2) if scored else None),
+        "weighted": (round(acc / total_credit, 2)
+                     if with_credit and total_credit > 0 else None),
+        "gpa5": (round(sum(gpa._gpa5(s) * c for s, c in with_credit) / total_credit, 2)
+                 if with_credit and total_credit > 0 else None),
+        "gpa4": (round(sum(gpa._gpa4(s) * c for s, c in with_credit) / total_credit, 2)
+                 if with_credit and total_credit > 0 else None),
+        "semesters": all_sem, "semester": want,
+        "counted": len(scored), "skipped": skipped,
+        "rows": shown, "rows_truncated": len(scope) > len(shown),
+        "note": note,
+        "source": str((data or {}).get("source") or ""),
+        "updated_at": str((data or {}).get("updated_at") or ""),
+    }
+
+
+
 # ---------------------------------------------------------------- 成绩表解析
 
-def _find_header(rows: list) -> "tuple[int, dict[str, int]] | None":
-    """在一行里认出成绩表的列位:「成绩/总评」+「课程」两个字样都出现才认。
+# 「成绩标识/成绩说明」这类列不是分数本身 —— 认错了会把一列文字当成绩存下去。
+_SCORE_BLOCK = ("标识", "说明", "备注", "类型", "是否")
+_HEADER_SCAN = 14          # 表头最多在前这么多行里找(正方那页顶上几行是学生信息+大标题)
+_SEM_RE = re.compile(r"\d{4}\s*[-–~至]\s*\d{4}")
 
-    学分/学期列**有就认、没有不拦** —— 有的学校成绩页就是没有学分列;
-    「成绩」这个表头字样本身就够特异,配上课程名不会误伤选课表/通知表。
-    认不出回 None —— 表头认列是硬门槛,防止把任意表格硬凑成成绩。
+
+def _rank_name(text: str) -> int:
+    t = str(text or "").strip()
+    if t in ("课程名称", "课程名", "科目名称", "课程"):
+        return 3
+    if any(k in t for k in _COL_COURSE) or "科目" in t:
+        return 2
+    return 0
+
+
+def _rank_score(text: str) -> int:
+    t = str(text or "").strip()
+    if not t or any(b in t for b in _SCORE_BLOCK):
+        return 0
+    if t in ("成绩", "总评", "总评成绩", "最终成绩"):
+        return 3
+    if any(k in t for k in _COL_SCORE):
+        return 2
+    return 0
+
+
+def _rank_credit(text: str) -> int:
+    t = str(text or "").strip()
+    if t == "学分":
+        return 3
+    if any(k in t for k in _COL_CREDIT):
+        return 2
+    return 0
+
+
+def _rank_sem(text: str) -> int:
+    t = str(text or "").strip()
+    if any(k in t for k in ("学期", "学年")):
+        return 2
+    return 0
+
+
+def _cols_of(cells: list) -> dict:
+    """一行表头 → {列: 列号}。同一类有多个候选时取**最具体**的那个,并列取最左的。
+
+    为什么要打分:教务表的表头常是「课程编号 / 课程名称 / 课程性质」连着出现,
+    「成绩 / 成绩标识 / 绩点」连着出现 —— 按"含关键字就认"会认到第一串里最不像的那列。
     """
-    for i, row in enumerate(rows[:8]):
+    want = {"name": _rank_name, "score": _rank_score,
+            "credit": _rank_credit, "semester": _rank_sem}
+    col: dict[str, int] = {}
+    for key, rank in want.items():
+        best_idx, best_rank = None, 0
+        for idx, text in enumerate(cells):
+            r = rank(str(text or ""))
+            if r > best_rank:
+                best_idx, best_rank = idx, r
+        if best_idx is not None:
+            col[key] = best_idx
+    return col
+
+
+def _find_header(rows: list) -> "tuple[int, dict[str, int], int] | None":
+    """在一行里认出成绩表的列位:「成绩」+「课程」两个字样都出现才认。
+
+    先试单行表头,再试**相邻两行合并**(表头跨两行/单元格竖排的那种)——
+    合并只在单行认不出时才做,认得出就不动它,免得给正常表多猜一层。
+    回 `(表头行号, {列: 列号}, 表头占几行)`;认不出回 None —— 表头认列是硬门槛,
+    防止把任意表格硬凑成成绩。学分/学期列**有就认、没有不拦**。
+    """
+    limit = min(len(rows), _HEADER_SCAN)
+    plain: list[list[str]] = []
+    for i in range(limit):
+        row = rows[i]
         if not isinstance(row, list):
+            plain.append([])
             continue
         cells = [str(c or "").strip() for c in row]
-        col: dict[str, int] = {}
-        for idx, text in enumerate(cells):
-            if any(k in text for k in _COL_COURSE) and "name" not in col:
-                col["name"] = idx
-            if any(k in text for k in _COL_SCORE) and "score" not in col:
-                col["score"] = idx
-            if any(k in text for k in _COL_CREDIT) and "credit" not in col:
-                col["credit"] = idx
-            if ("学期" in text or "学年" in text) and "semester" not in col:
-                col["semester"] = idx
+        plain.append(cells)
+        col = _cols_of(cells)
         if "name" in col and "score" in col:
-            return i, col
+            return i, col, 1
+    for i in range(limit - 1):
+        a, b = plain[i], plain[i + 1]
+        if not a or not b:
+            continue
+        merged = [(a[k] if k < len(a) else "") + (b[k] if k < len(b) else "")
+                  for k in range(max(len(a), len(b)))]
+        col = _cols_of(merged)
+        if "name" in col and "score" in col:
+            return i, col, 2
     return None
 
 
@@ -176,45 +312,110 @@ def _pick(cells: list, idx) -> str:
     return cells[idx] if isinstance(idx, int) and 0 <= idx < len(cells) else ""
 
 
-def parse_score_table(page) -> dict:
+_HEADER_WORDS = ("成绩", "总评", "总评成绩", "最终成绩", "课程名称", "课程名", "科目名称")
+
+
+def _looks_like_header(cells: list) -> bool:
+    """数据区里又冒出一行表头(冻结表头/竖排表头的第二行)—— 不能当课程存下去。"""
+    col = _cols_of(cells)
+    if "name" in col and "score" in col:
+        return True
+    # 竖排表头下一半(「名称 / 总评」这种)单看既不像表头也不像数据,但它绝不是分数。
+    return any(str(c or "").strip() in _HEADER_WORDS for c in cells)
+
+
+def _rows_from(body: list, col: dict, semester_hint: str = "") -> list[dict]:
+    got: list[dict] = []
+    for row in body:
+        if not isinstance(row, list):
+            continue
+        cells = [str(c or "").strip() for c in row]
+        if _looks_like_header(cells):
+            continue
+        name, score = _pick(cells, col.get("name")), _pick(cells, col.get("score"))
+        if (not name or not score or len(name) < 2
+                or any(k in name for k in ("平均", "合计", "共 "))):
+            continue
+        got.append({"name": name[:60], "score": score[:20],
+                    "credit": _pick(cells, col.get("credit"))[:10],
+                    "semester": (_pick(cells, col.get("semester"))
+                                 or semester_hint)[:30]})
+    return got
+
+
+def _header_echo(rows: list) -> str:
+    """把一张认不出的表的第一行内容原样摊出来给人看 —— 下一轮就不用再猜长什么样。"""
+    for row in rows or []:
+        if not isinstance(row, list):
+            continue
+        cells = [str(c or "").strip() for c in row if str(c or "").strip()]
+        if len(cells) >= 2:
+            return " / ".join(cells[:9])[:90]
+    return ""
+
+
+def semester_hint_of(page) -> str:
+    """页面筛学期的下拉框当前值(如「2024-2025-1」)—— 表里没有学期列时用它补。
+
+    这不是猜:值就写在这张页的下拉框上,同学筛的是哪个学期,读到的就是哪个学期。
+    认法只按形状(四个数字-四个数字),对不上就留空,不硬塞。
+    """
+    selects = (page or {}).get("selects") if isinstance(page, dict) else None
+    for _k, v in (selects or {}).items():
+        text = str(v or "").strip()
+        if _SEM_RE.search(text):
+            return text[:30]
+    return ""
+
+
+def parse_score_table(page, *, semester_hint: str = "") -> dict:
     """site_parse 那种整页 dump(或裸 rows)→ 成绩行。认不出就是认不出,绝不硬凑。
 
     只在**列名**上做文章:课程/成绩/学分/学期四列按表头字样对号;数据行里
     课程名与成绩至少要有一个,否则跳过(表尾的"平均分/共 N 条"这类行自己会掉)。
+    两处宽容是给真机形状的:①表头跨两行;②表头与表体是**两张表**
+    (冻结表头的网格就是这么拆开的)—— 这时候往后找一张自己没有表头、
+    列数又对得上的表当表体,对不上就不认。
     """
     tables = []
     if isinstance(page, dict):
         tables = [t for t in (page.get("tables") or []) if isinstance(t, dict)]
+        semester_hint = semester_hint or semester_hint_of(page)
     elif isinstance(page, list):
         tables = [{"rows": page}]
     best: dict | None = None
-    for t in tables:
+    seen: list[str] = []
+    for ti, t in enumerate(tables):
         rows = t.get("rows") if isinstance(t.get("rows"), list) else []
         hit = _find_header(rows)
         if hit is None:
+            echo = _header_echo(rows)
+            if echo:
+                seen.append(echo)
             continue
-        hidx, col = hit
-        i_name, i_score = col.get("name"), col.get("score")
-        i_credit, i_sem = col.get("credit"), col.get("semester")
-        got: list[dict] = []
-        for row in rows[hidx + 1:]:
-            if not isinstance(row, list):
-                continue
-            cells = [str(c or "").strip() for c in row]
-            name, score = _pick(cells, i_name), _pick(cells, i_score)
-            if (not name or not score or len(name) < 2
-                    or any(k in name for k in ("平均", "合计", "共 "))):
-                continue
-            got.append({"name": name[:60], "score": score[:20],
-                        "credit": _pick(cells, i_credit)[:10],
-                        "semester": _pick(cells, i_sem)[:30]})
+        hidx, col, span = hit
+        got = _rows_from(rows[hidx + span:], col, semester_hint)
+        if not got:
+            need = max(list(col.values()) + [0]) + 1
+            for t2 in tables[ti + 1: ti + 4]:
+                rows2 = t2.get("rows") if isinstance(t2.get("rows"), list) else []
+                if not rows2 or _find_header(rows2) is not None:
+                    continue          # 自己有表头的表不该被当成别人的表体
+                widest = max((len(r) for r in rows2 if isinstance(r, list)), default=0)
+                if widest < need:
+                    continue
+                got = _rows_from(rows2, col, semester_hint)
+                if got:
+                    break
         if got and (best is None or len(got) > len(best["rows"])):
             best = {"ok": True, "rows": got}
     if best is None:
-        return {"ok": False, "rows": [],
-                "msg": ("这一页没有认出成绩表(要有「课程/成绩/学分」这样的表头)。"
-                        "请确认已经打开成绩查询页、选好学期并点了「查询」。")}
+        tip = (" 学长在这一页看到的表头长这样:" + " ｜ ".join(seen[:4]) + "。") if seen else ""
+        return {"ok": False, "rows": [], "seen": seen[:6],
+                "msg": ("这一页没有认出成绩表(要有「课程/成绩」这样的表头)。"
+                        "请确认已经打开成绩查询页、选好学期并点了「查询」。" + tip)}
     return {"ok": True, "rows": best["rows"], "summary": summarize(best["rows"])}
+
 
 
 # ---------------------------------------------------------------- 模型兜底

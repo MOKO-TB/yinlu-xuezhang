@@ -194,6 +194,10 @@ class PublicApi:
         """成绩导入收尾:关窗口并清掉那份独立 profile 的登录态。"""
         return self._b.scores_import_clear()
 
+    def get_score_stats(self, semester: str = "") -> dict:
+        """课表面板「成绩」那一档:门数/总学分/平均分/绩点(只读本机 scores.json)。"""
+        return self._b.get_score_stats(semester)
+
     def schedule_undo(self) -> dict:
         """课表面板「换回上一版」(名字避开输入框那个已有的 undo)。"""
         return self._b.schedule_undo()
@@ -209,6 +213,26 @@ class PublicApi:
     def set_chrome(self, dark: bool) -> dict:
         """开机与每次切主题报一次:系统标题栏跟着界面染色、写工作区名(p2)。"""
         return self._b.set_chrome(dark)
+
+    def win_state(self) -> dict:
+        """无边框控件开机问一次:有没有系统标题栏、是否最大化。"""
+        return self._b.win_state()
+
+    def win_minimize(self) -> dict:
+        """自绘标题栏的「−」。"""
+        return self._b.win_minimize()
+
+    def win_zoom(self) -> dict:
+        """自绘标题栏的「□」:最大化/还原同一颗。"""
+        return self._b.win_zoom()
+
+    def win_close(self) -> dict:
+        """自绘标题栏的「✕」:只转给窗口自己的关闭流程(托盘偏好说了算)。"""
+        return self._b.win_close()
+
+    def win_resize(self, edge: str = "", dx: int = 0, dy: int = 0) -> dict:
+        """无边框后由界面边缘发起的缩放(增量式)。"""
+        return self._b.win_resize(edge, dx, dy)
 
     def set_notice_watch(self, enabled: bool) -> dict:
         """主动推荐开关:官网新通知看门狗。"""
@@ -2548,7 +2572,11 @@ class Bridge:
             view = _scores.view()
         except Exception:
             view = None
-        return {"ok": ok, "msg": msg, "scores": view}
+        try:
+            stats = _scores.stats()
+        except Exception:
+            stats = None
+        return {"ok": ok, "msg": msg, "scores": view, "stats": stats}
 
     def scores_import_clear(self) -> dict:
         """收尾:关掉导入用的浏览器窗口并清掉那份独立 profile 的登录态。"""
@@ -2558,6 +2586,20 @@ class Bridge:
             return schedule_import.clear_login_state()
         except Exception as exc:
             return {"ok": False, "msg": f"清理登录态失败:{type(exc).__name__}: {exc}"}
+
+    def get_score_stats(self, semester: str = "") -> dict:
+        """课表面板「成绩」那一档:门数/总学分/平均分/绩点,可按学期筛(只读本机存档)。
+
+        为什么给面板而不是只让模型算:同学要的是"我绩点多少"这**一眼**,而
+        `gpa_calc` 给的是一篇说明。两个数必须同源,所以这里复用 `scores.stats()`
+        (它吃的还是 `gpa._as_score/_gpa5/_gpa4` 那三个函数),面板不算第二套口径。
+        """
+        from minicode import scores as _scores
+        try:
+            return {"ok": True, "stats": _scores.stats(semester)}
+        except Exception as exc:
+            return {"ok": False, "msg": f"成绩读数失败:{type(exc).__name__}: {exc}",
+                    "stats": None}
 
     def schedule_undo(self) -> dict:
         """课表换回上一版(save/clear 时留的那份备份)。
@@ -2602,6 +2644,83 @@ class Bridge:
     def set_chrome(self, dark: bool) -> dict:
         """前端切主题(含开机那一次)时报给本机,让系统标题栏跟着变。"""
         return self._apply_chrome(bool(dark))
+
+    # ------------------------------------------------------------ 无边框窗口控件(p5/p6)
+
+    def win_state(self) -> dict:
+        """界面开机问一次:这窗到底有没有系统标题栏、现在是不是最大化。
+
+        为什么让界面**问**而不是前端自己决定摆不摆三颗按钮:配置里写了无边框,
+        不等于这台机器的后端真给去掉了边框(用户报的是"顶上那条白的",
+        上一次就是这么猜的)。读的是窗口自己的样式位,不是配置文件。
+        """
+        from minicode import window_chrome as wc
+        w = self._chrome_window()
+        wa = wc.work_area()
+        return {"ok": bool(w), "borderless": wc.is_borderless(w),
+                "maximized": wc.is_maximized(w),
+                "rect": wc.window_rect(w), "work_area": wa,
+                "bounds_ok": wc.maximize_bounds(w)["ok"]}
+
+    def win_minimize(self) -> dict:
+        w = self._chrome_window()
+        if w is None:
+            return {"ok": False, "msg": "窗口还没起来"}
+        try:
+            w.minimize()
+            return {"ok": True, "msg": ""}
+        except Exception as exc:
+            return {"ok": False, "msg": f"{type(exc).__name__}: {exc}"}
+
+    def win_zoom(self) -> dict:
+        """□ 那一颗:没最大化就最大化,已经最大化就还原(同一颗按钮两个动作)。
+
+        最大化之前先补 `MaximizedBounds` —— 实测无边框的窗不设它会**盖住任务栏**
+        (1920×1080 vs 工作区 1920×1032),那比"不能最大化"坏得多:人关不掉了。
+        """
+        from minicode import window_chrome as wc
+        w = self._chrome_window()
+        if w is None:
+            return {"ok": False, "msg": "窗口还没起来"}
+        bounds = wc.maximize_bounds(w)
+        try:
+            if wc.is_maximized(w):
+                w.restore()
+                action = "restore"
+            else:
+                w.maximize()
+                action = "maximize"
+            return {"ok": True, "action": action, "maximized": wc.is_maximized(w),
+                    "bounds": bounds, "msg": bounds["msg"]}
+        except Exception as exc:
+            return {"ok": False, "msg": f"{type(exc).__name__}: {exc}"}
+
+    def win_close(self) -> dict:
+        """✕ 那一颗:**只转给窗口自己的关闭流程**,学长不在这儿替同学决定去留。
+
+        关窗到底意味着什么(问一句/藏进托盘/真退出)归托盘那套偏好管:
+        这里如果直接 `tray.quit()` 或设 `allow_exit`,就等于绕过了他自己设的规矩。
+        """
+        w = self._chrome_window()
+        if w is None:
+            return {"ok": False, "msg": "窗口还没起来"}
+        try:
+            w.close()
+            return {"ok": True, "msg": ""}
+        except Exception as exc:
+            return {"ok": False, "msg": f"{type(exc).__name__}: {exc}"}
+
+    def win_resize(self, edge: str = "", dx: int = 0, dy: int = 0) -> dict:
+        """边缘把手:无边框之后系统不给那条可拖的边带,缩放只能由界面发起。
+
+        为什么是增量(edge + dx/dy)而不是"我要多大":窗口现在多大只有系统知道,
+        两边各存一份绝对尺寸迟早对不上 —— 对不上的表现就是拖一下跳一下。
+        """
+        from minicode import window_chrome as wc
+        try:
+            return wc.resize_edge(self._chrome_window(), str(edge), int(dx), int(dy))
+        except (TypeError, ValueError) as exc:
+            return {"ok": False, "msg": f"参数不对:{type(exc).__name__}"}
 
     def read_clipboard(self) -> dict:
         """输入框右键菜单「粘贴」:本机直接读剪贴板,不弹浏览器那条授权横条。

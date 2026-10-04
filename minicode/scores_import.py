@@ -49,6 +49,8 @@ class ScoresFlow(ImportFlow):
                     + (f",覆盖 {len(s['semesters'])} 个学期" if s["semesters"] else ""))
             if s.get("no_credit"):
                 lead += f";{len(s['no_credit'])} 行没有学分(绩点会跳过它们)"
+            if (parsed.get("scanned") or {}).get("frames", 0) > 1:
+                lead += f"(翻了 {parsed['scanned']['frames']} 个帧)"
             parsed["msg"] = (lead + "。请核对后确认导入 —— 在你点确认之前,"
                              "学长不会写任何文件;确认会**整表覆盖**现有存档。")
             return parsed
@@ -63,15 +65,46 @@ class ScoresFlow(ImportFlow):
         parsed["stage"] = "ready" if parsed.get("ok") else "parsed_failed"
         return parsed
 
-    # ---- 取材复用父类的 page()/page_text();这里只负责"认不认得出成绩表"。
+    # ---- 取材:逐张页 × 逐帧(父类 scans()),这里只负责"认不认得出成绩表"。
     def _read_scores(self) -> dict:
-        parsed = scores.parse_score_table(self.page() or {})
-        if parsed.get("ok"):
-            return parsed
-        # 表格路没认出来:给"至少读到了什么"的诚实失败原因,而不是干巴巴一句失败。
-        page = self.page()
-        if page:
-            return {**parsed, "stage": "no_grid", "msg": parsed["msg"] + self._where()}
-        return {"ok": False, "stage": "no_grid", "rows": [],
-                "msg": ("当前页读不到任何表格。请先在教务系统里点开「成绩查询」,"
-                        "选好学期、点了「查询」,再回来点「读取成绩」。" + self._where())}
+        """把**每张还开着的教务页、每个帧**都试一遍,取认得出的那一张表。
+
+        为什么不是"读当前那张页的第一张表"(v0.9.112 之前就是这么写的):
+        同学登录后人往往停在框架页 `framework/xsMain.jsp`,它自己就带着菜单表,
+        于是旧路在第一帧上交了差 → 报「这一页没有认出成绩表」,而屏幕上明明有那张
+        成绩表(用户 2026-10-04 的图 p3/p4 正是这个形状)。挑哪张表是"看得懂表头的人"
+        的事,不能由取材那一层代劳。
+        """
+        shots = [d for d in self.scans()
+                 if any(isinstance(t, dict) and (t.get("rows") or [])
+                        for t in (d.get("tables") or []))]
+        if not shots:
+            return {"ok": False, "stage": "no_grid", "rows": [],
+                    "msg": ("还开着的教务页里一个表格都没捞到(把每一页的每个内嵌帧"
+                            "都翻过了)。请先在教务系统里点开「成绩查询」,选好学期、"
+                            "点了「查询」,让成绩表出现在页面上,再点「读取成绩」。"
+                            + self._where())}
+        best = None
+        best_at = ""
+        seen: list[str] = []
+        pages: set[str] = set()
+        for dump in shots:
+            pages.add(str(dump.get("_page") or ""))
+            parsed = scores.parse_score_table(dump)
+            if parsed.get("ok"):
+                if best is None or len(parsed["rows"]) > len(best["rows"]):
+                    best = parsed
+                    best_at = str(dump.get("_frame") or dump.get("_page") or "")
+            else:
+                seen += [s for s in (parsed.get("seen") or []) if s]
+        if best is not None:
+            best["scanned"] = {"pages": len(pages), "frames": len(shots)}
+            best["from"] = best_at[:120]
+            return best
+        tip = (" 学长翻到的表头长这样:" + " ｜ ".join(seen[:4]) + "。") if seen else ""
+        return {"ok": False, "stage": "no_grid", "rows": [], "seen": seen[:6],
+                "scanned": {"pages": len(pages), "frames": len(shots)},
+                "msg": (f"翻过 {len(pages)} 张页、{len(shots)} 个帧,都没认出成绩表"
+                        "(要有「课程/成绩」这样的表头)。请确认成绩查询页还开着、"
+                        "学期已选好、点了「查询」。" + tip + self._where())}
+

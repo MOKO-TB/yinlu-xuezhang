@@ -42,6 +42,7 @@ try {
     --danger:#E5484D;  --danger-bg:rgba(229,72,77,.12);
     --warning:#C77E12; --warning-bg:rgba(245,165,36,.16);
     --success:#2F9E6E; --success-bg:rgba(47,158,110,.14);
+    --rail-tick:rgba(28,43,40,.40);   /* 右缘轮次刻度:浅色下也要看得见(图 p8) */
 
     --code-bg:rgba(16,32,29,.88); --code-text:#DFF3EE;
 
@@ -79,6 +80,7 @@ try {
     --danger:#FF8A8F;  --danger-bg:rgba(229,72,77,.18);
     --warning:#FFC46B; --warning-bg:rgba(245,165,36,.14);
     --success:#4FD8A8; --success-bg:rgba(79,216,168,.16);
+    --rail-tick:rgba(190,230,225,.32);   /* 深色下刻度要"看得见但不刺眼" */
 
     --code-bg:rgba(5,12,17,.92); --code-text:#CFEFE9;
 
@@ -297,6 +299,29 @@ try {
                    color:var(--text-2); cursor:pointer; }
   .sc-tabs button.on{ border-color:var(--primary); color:var(--primary-text);
                       background:var(--primary-light); }
+  /* 「我的成绩」那一档(v0.9.113):这几个数全部来自本机 scores.json,
+     一行都不在界面里估 —— 绩点两式与 gpa_calc 同一个函数算出来的(见 scores.stats)。 */
+  .sc-stats{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:2px 0 10px; }
+  .sc-stat{ border:1px solid var(--line); border-radius:12px; padding:8px 10px;
+            background:var(--glass-lite); min-width:0; }
+  .sc-stat .v{ font-size:20px; font-weight:700; color:var(--primary-text);
+               font-variant-numeric:tabular-nums; line-height:1.25; }
+  .sc-stat .k{ font-size:11px; color:var(--text-3); margin-top:2px; }
+  .sc-sem{ display:flex; align-items:center; gap:8px; margin:0 0 8px;
+           font-size:12px; color:var(--text-2); }
+  .sc-sem select{ background:var(--glass-lite); color:var(--text-1);
+                  border:1px solid var(--line); border-radius:8px;
+                  padding:4px 8px; font-size:12px; max-width:200px; }
+  .sc-courses{ max-height:250px; overflow:auto; border:1px solid var(--line);
+               border-radius:12px; }
+  .sc-crow{ display:flex; gap:8px; align-items:baseline; padding:5px 10px;
+            font-size:12px; border-bottom:1px solid var(--line-soft); }
+  .sc-crow:last-child{ border-bottom:none; }
+  .sc-crow .nm{ flex:1 1 auto; min-width:0; overflow:hidden;
+                text-overflow:ellipsis; white-space:nowrap; color:var(--text-1); }
+  .sc-crow .sc{ flex:0 0 auto; font-weight:700; color:var(--primary-text);
+                font-variant-numeric:tabular-nums; }
+  .sc-crow .cr,.sc-crow .sm{ flex:0 0 auto; color:var(--text-3); }
   .sc-body{ max-height:52vh; overflow-y:auto; margin:8px 0; }
   .sc-empty{ padding:26px 10px; text-align:center; color:var(--text-3); font-size:13px; line-height:1.9; }
   .sc-dayhead{ font-size:12px; color:var(--text-3); margin:6px 0 4px; }
@@ -527,6 +552,37 @@ try {
   .topbar .wspill{ max-width:34%; overflow:hidden; text-overflow:ellipsis;
                    white-space:nowrap; }
   .topbar .spacer{ flex:1; }
+  /* ---- 无边框那一套(p5/p6):对话区左上角的收起栏 + 右上角的窗口三颗 ----
+     按钮都是"图标一颗",不带文字条 —— 顶栏那一行只有状态,文字一多就把工作区名挤没。 */
+  .topbar .tb-drag{ align-self:stretch; min-width:24px; cursor:default; }
+  .tb-ico{ display:inline-flex; align-items:center; justify-content:center;
+           width:28px; height:26px; padding:0; border-radius:8px; flex:0 0 auto;
+           border:1px solid transparent; background:transparent;
+           color:var(--text-2); cursor:pointer; }
+  .tb-ico:hover{ background:var(--primary-light); color:var(--primary-text);
+                 border-color:var(--primary); }
+  .tb-ico.on .pane{ opacity:.18; }        /* 栏收起时那一半"淡下去",一眼看出再点会展开 */
+  .winbtns{ display:inline-flex; gap:2px; margin-left:2px; flex:0 0 auto; }
+  .winbtns[hidden]{ display:none; }       /* flex 会盖掉 hidden 的 UA 样式 */
+  .wb{ width:30px; height:26px; line-height:1; border:1px solid transparent;
+       border-radius:8px; background:transparent; color:var(--text-2);
+       font-size:13px; cursor:pointer; }
+  .wb:hover{ background:var(--primary-light); color:var(--primary-text); }
+  .wb-x:hover{ background:var(--danger-bg); color:var(--danger); border-color:var(--danger); }
+  /* 边缘缩放把手:无边框后系统不给那条边带(实测 hit-test 全是 HTCLIENT),
+     所以自己铺 8 条 5px 的(角给 14px 好够得着)。平时不抢点击 —— 它只在边上。 */
+  .rz{ position:fixed; inset:0; pointer-events:none; z-index:96; }
+  .rz[hidden]{ display:none; }
+  .rz-b,.rz-c{ position:absolute; pointer-events:auto; }
+  .rz-b[data-e=n],.rz-c[data-e=nw],.rz-c[data-e=ne]{ top:0; left:0; right:0; height:5px; cursor:ns-resize; }
+  .rz-b[data-e=s],.rz-c[data-e=sw],.rz-c[data-e=se]{ bottom:0; left:0; right:0; height:5px; cursor:ns-resize; }
+  .rz-b[data-e=w]{ top:0; bottom:0; left:0; width:5px; cursor:ew-resize; }
+  .rz-b[data-e=e]{ top:0; bottom:0; right:0; width:5px; cursor:ew-resize; }
+  .rz-c[data-e=nw],.rz-c[data-e=sw]{ left:0; width:14px; }
+  .rz-c[data-e=ne],.rz-c[data-e=se]{ right:0; width:14px; }
+  .rz-c[data-e=nw],.rz-c[data-e=ne]{ top:0; height:14px; cursor:nwse-resize; }
+  .rz-c[data-e=sw],.rz-c[data-e=se]{ bottom:0; height:14px; cursor:nesw-resize; }
+  .rz-c[data-e=ne],.rz-c[data-e=sw]{ cursor:nesw-resize; }
   /* 模型标识:可点开「添加模型」弹窗(内置模型 key 永不展示) */
   .topbar .modelpill{ background:var(--primary-light); color:var(--primary-text);
                       border:1px solid var(--primary); border-radius:var(--r-full);
@@ -1821,16 +1877,21 @@ try {
 .pm-body b{ font-size:12.5px; color:var(--text-1); }
 .pm-desc{ font-size:11px; color:var(--text-3); }
 .pm-check{ margin-left:auto; color:var(--primary); font-weight:700; opacity:0; }
-/* ---- 会话轮次导航条(v0.9.94,p6):右侧细条按轮分刻度,hover 出预览 ---- */
-.chat-rail{ position:absolute; right:2px; top:10px; bottom:14px; width:8px;
+/* ---- 会话轮次导航条(v0.9.94,p6):右侧细条按轮分刻度,hover 出预览 ----
+   v0.9.113 照图 p8/p9 改三处:①离右边框留出距离(原来贴死在 2px 上,浅色下像窗口的
+   一条边而不像可点的东西);②刻度色换成"看得见"的那一档 token(原来吃 --line,
+   浅色下 ≈ 4% 对比,看不清);③鼠标停在哪一条,那一条加宽 + 描一圈光,
+   当前所在的轮次也保持点亮(不只是 hover 才看得见)。 */
+.chat-rail{ position:absolute; right:12px; top:12px; bottom:16px; width:10px;
             display:flex; flex-direction:column; justify-content:space-between;
-            align-items:center; opacity:.5; transition:.15s; z-index:12; }
+            align-items:center; opacity:.9; transition:.15s; z-index:12; }
 .chat-rail[hidden]{ display:none; }   /* flex 会盖掉 hidden 的 UA 样式,必须显式收回 */
 .chat-wrap:hover .chat-rail{ opacity:1; }
-.chat-rail .tick{ width:6px; flex:1 1 0; min-height:8px; margin:1px 0;
-                  border-radius:3px; background:var(--line); cursor:pointer;
+.chat-rail .tick{ width:5px; flex:1 1 0; min-height:9px; margin:2px 0;
+                  border-radius:3px; background:var(--rail-tick); cursor:pointer;
                   transition:.15s; }
-.chat-rail .tick:hover{ background:var(--primary); flex-grow:1.4; }
+.chat-rail .tick:hover,.chat-rail .tick.on{ width:9px; background:var(--primary);
+                  box-shadow:0 0 0 3px var(--primary-light); }
 .rail-pop{ position:fixed; z-index:61; max-width:380px; padding:10px 13px;
            background:var(--glass-strong); border:1px solid var(--line);
            border-radius:var(--r-m); box-shadow:var(--shadow-lg);
@@ -1841,7 +1902,6 @@ try {
    「之前问题的跳转太难看到了,想要 Qoder 那样多个小分区而不是一长条」。
    刻度留着当入口(它一直在、点得到),点开才摊出一叠小卡:每问一张,
    十问一组带个小头 —— 不再是「一整条看不完」。 */
-.chat-rail{ opacity:.62; }
 .rail-pop.turns{ pointer-events:auto; width:min(340px,86vw); max-height:62vh;
                  overflow:auto; cursor:default; }
 .rail-pop .tg-head{ font-size:10.5px; font-weight:800; color:var(--text-3);
@@ -1880,6 +1940,15 @@ try {
 </style>
 </head>
 <body>
+<!-- 无边框后系统不给可拖的边带(本机实测:WM_NCHITTEST 对客户区一律回 HTCLIENT),
+     所以缩放由界面这 8 条把手发起:按下后把"又走了多少"报给 win_resize(增量式,
+     两边各存一份绝对尺寸迟早对不上)。只有 win_state 说这窗真没标题栏时才放开。 -->
+<div class="rz" id="rz" hidden>
+  <div class="rz-b" data-e="n"></div><div class="rz-b" data-e="s"></div>
+  <div class="rz-b" data-e="w"></div><div class="rz-b" data-e="e"></div>
+  <div class="rz-c" data-e="nw"></div><div class="rz-c" data-e="ne"></div>
+  <div class="rz-c" data-e="sw"></div><div class="rz-c" data-e="se"></div>
+</div>
 <div class="app">
   <!-- 最左入口栏(p3):顶栏原来平铺 16 个控件,面板入口全部搬到这里。
        id 一个没改、点击行为一行没动 —— 换的是位置,不是功能。 -->
@@ -1901,7 +1970,6 @@ try {
     <button id="btnUndo" title="撤销最近一次文件改动">↶<span class="cap">撤销</span></button>
     <button id="btnCompact" title="立即压缩上下文">🗜<span class="cap">压缩</span></button>
     <button id="btnTheme" title="切换深色/浅色主题(系统标题栏跟着一起换)">🌙<span class="cap" id="themeCap">深色</span></button>
-    <button id="btnSideToggle" title="收起/展开左侧栏(Ctrl+B)">◀<span class="cap" id="sideCap">收起栏</span></button>
   </nav>
   <aside class="sidebar">
     <div class="logo"><img class="m" src="img/cube.png" alt="引路学长">引路学长<small id="ver"></small></div>
@@ -1926,12 +1994,29 @@ try {
 
   <section class="main">
     <div class="topbar">
-      <!-- p3:面板入口在左边那条入口栏里,顶栏只留"此刻在哪个工作区、用了多少、
-           用哪个模型、什么权限"这四样 —— 都是状态,不是导航。 -->
+      <!-- p1/p2:「收起左侧栏」原来埋在入口栏最下面一颗,人看不见 —— 搬到对话区左上角,
+           与 Qoder 同一处。窗口三颗(−□✕)只在**真的没有系统标题栏**时才摆:
+           开机问一次 win_state(读窗口的样式位),配置里写了无边框不等于这台机器真去掉了。
+           中间那段空的是唯一的拖拽区(.pywebview-drag-region):整条都能拖的话,
+           选一行文字就变成了挪窗口。 -->
+      <button class="tb-ico" id="btnSideToggle" title="收起/展开左侧栏(Ctrl+B)"
+              aria-label="收起/展开左侧栏">
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+          <rect x="1.3" y="2.6" width="13.4" height="10.8" rx="2.2"
+                fill="none" stroke="currentColor" stroke-width="1.25"/>
+          <path class="pane" d="M6 2.9H3.5A2 2 0 0 0 1.5 4.9v6.2a2 2 0 0 0 2 2H6Z"
+                fill="currentColor" opacity=".5"/>
+        </svg></button>
       <button class="wspill" id="wsPill" title="当前工作区(点击切换)">📁 …</button>
-      <span class="spacer"></span>
+      <span class="spacer tb-drag pywebview-drag-region" id="tbDrag"
+            title="按住这里可以挪动窗口"></span>
       <span class="modelpill" id="modelPill"></span>
       <button class="perm-pill" id="permPill" title="权限模式(点开选择)">变更前确认</button>
+      <span class="winbtns" id="winBtns" hidden>
+        <button class="wb" id="winMin" title="最小化">−</button>
+        <button class="wb" id="winMax" title="最大化">□</button>
+        <button class="wb wb-x" id="winClose" title="关闭">✕</button>
+      </span>
     </div>
 
     <div class="chat-wrap">
@@ -2225,6 +2310,7 @@ try {
       <button data-tab="today" class="on">今天</button>
       <button data-tab="tomorrow">明天</button>
       <button data-tab="week">本周</button>
+      <button data-tab="scores" title="导入过成绩就在这里看:绩点/平均分/门数/总学分,可按学期筛(只读本机 scores.json)">成绩</button>
     </div>
     <div class="sc-body" id="scBody"></div>
     <div class="btns">
@@ -5315,6 +5401,88 @@ function scTimesForm() {
           这里改一行存一行;要改回去直接改完再保存。`
       : "现在没填:空档按节次说。"}</div>`;
 }
+/* ---------------- 课表面板里的「我的成绩」(v0.9.113,图 p3/p4 那一档) ----------------
+   同学要的是**一眼看到的那几个数**,而不是再开一轮对话让学长算一遍。
+   数全部来自后端 `scores.stats()`(它吃的还是 gpa 那三个折算函数)—— 前端一行不自算,
+   否则面板说 3.42、工具说 3.38,那比没有绩点更坏。学期下拉的候选也来自存档里
+   真出现过的学期,没有的学期不摆(摆了就是假选项)。 */
+let scoreStats = null, scoreSem = "", scoreBusy = false;
+function scStatsFail(msg) {
+  scoreBusy = false;
+  scoreStats = { nosuch: true, entries: 0, courses: 0, credits: 0, semesters: [],
+                 rows: [], semester: scoreSem, note: msg };
+  renderSchedule();
+}
+function scStatsGet(sem) {
+  const api = window.pywebview && window.pywebview.api;
+  if (!api || !api.get_score_stats) {
+    scStatsFail("成绩这一屏只在桌面版有(网页版不开放)。");
+    return;
+  }
+  scoreBusy = true;
+  renderSchedule();
+  api.get_score_stats(sem || "").then(r => {
+    if (r && r.stats) {
+      scoreBusy = false;
+      scoreStats = r.stats;
+    } else {
+      scStatsFail((r && r.msg) || "成绩读数没回来(学长那边没接上)。");
+      return;
+    }
+    renderSchedule();
+  }).catch(e => scStatsFail("学长这边出错了:" + e));
+}
+function scStatCard(k, v, unit) {
+  const n = (v === null || v === undefined || v === "");
+  // esc() 吃字符串:后端这几个数是 float(3.4 / 74.5),直接递过去会撞
+  // "s.replace is not a function"(真机 e2e 抓到的,不是猜的)。
+  return `<div class="sc-stat"><div class="v">${n ? "—" : esc(String(v)) + esc(unit || "")}</div>
+      <div class="k">${k}</div></div>`;
+}
+function scScoresPanel() {
+  if (scoreBusy) return '<div class="sc-empty">正在读本机成绩存档…</div>';
+  if (!scoreStats) { setTimeout(() => scStatsGet(scoreSem), 0);
+                     return '<div class="sc-empty">正在读本机成绩存档…</div>'; }
+  const s = scoreStats;
+  if (s.nosuch) return `<div class="sc-empty">${esc(s.note || "读不到成绩。")}</div>`;
+  if (s.empty) {
+    return `<div class="sc-empty">这台机器还没有成绩存档。<br>
+      点下面「导入成绩」:登录页会开在**看得见**的窗口里,账号密码与验证码由你自己输
+      (学长不碰也不问);读到的表要你核对、点了确认才落盘,只写本机
+      <code>scores.json</code>。</div>`;
+  }
+  const sems = s.semesters || [];
+  const cards = `<div class="sc-stats">`
+    + scStatCard("五分制绩点", s.gpa5) + scStatCard("4.0 制绩点", s.gpa4)
+    + scStatCard("平均成绩", s.avg) + scStatCard("加权平均分", s.weighted)
+    + scStatCard("科目数量", s.courses, " 门") + scStatCard("总学分", s.credits, " 分")
+    + `</div>`;
+  const sel = `<div class="sc-sem"><label for="scSemSel">学期</label>
+      <select id="scSemSel">
+        <option value="">全部学期${sems.length ? "(" + sems.length + " 个)" : ""}</option>
+        ${sems.map(x => `<option value="${esc(x)}"${
+          x === (s.semester || "") ? " selected" : ""}>${esc(x)}</option>`).join("")}
+      </select>
+      <span style="opacity:.7">换学期只改这一屏,不动存档</span></div>`;
+  const rows = (s.rows || []).map(r => `<div class="sc-crow">
+      <span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
+      <span class="sc">${esc(r.score)}</span>
+      <span class="cr">${r.credit ? esc(r.credit) + " 学分" : "无学分"}</span>
+      ${s.semester ? "" : `<span class="sm">${esc(r.semester || "未标学期")}</span>`}
+    </div>`).join("");
+  const fine = [
+    `这一屏共 ${s.entries} 条成绩` + (s.skipped
+      ? `;其中 ${s.skipped} 条没参与加权(缺学分,或成绩不是数字也不是优/良/中/及格)` : ""),
+    s.rows_truncated ? `清单只列前 ${(s.rows || []).length} 条(上面那些数是按全部条数算的)` : "",
+    (s.source || s.updated_at)
+      ? `来源 ${esc(s.source || "?")} · 更新于 ${esc(s.updated_at || "?")}` : "",
+    esc(s.note || ""),
+  ].filter(Boolean).join("<br>");
+  return cards + sel
+    + (rows ? `<div class="sc-courses">${rows}</div>`
+            : '<div class="sc-empty">这个学期里没有可读的成绩行(存档里的学期都对不上)。</div>')
+    + `<div class="sc-note">${fine}<br>只在本机:<code>scores.json</code> —— 不进对话、不上传。</div>`;
+}
 function renderSchedule() {
   const body = $("scBody");
   const undoBtn = $("btnScheduleUndo");
@@ -5322,6 +5490,12 @@ function renderSchedule() {
   const timesBtn = $("btnScheduleTimes");
   // 没登记课表时空档算不出来,「填作息表」这个入口此刻没有意义(藏掉,不留死按钮)
   if (timesBtn) timesBtn.style.display = (scheduleData && scheduleData.registered) ? "" : "none";
+  // 成绩那一档不看课表在不在:没登记过课表的人也导入过成绩(v0.9.113 图 p3/p4)。
+  if (scheduleTab === "scores") {
+    $("scWeek").textContent = "只读本机 scores.json";
+    body.innerHTML = scScoresPanel();
+    return;
+  }
   if (!scheduleData || !scheduleData.registered) {
     $("scWeek").textContent = "";
     body.innerHTML = `<div class="sc-empty">还没有登记课表。<br>
@@ -5365,6 +5539,9 @@ function openScheduleDlg() {
     scheduleData = (r && r.ok) ? r.schedule : { registered: false };
     scheduleTab = "today";
     scTimesRows = 0;
+    // 成绩那一档每次重新打开面板都重读:别的地方(对话里导入/清空)改过存档时,
+    // 屏上挂着旧数字比不显示更坏。点了「成绩」才会真去读一次。
+    scoreStats = null; scoreBusy = false; scoreSem = "";
     scSyncTabs();
     renderSchedule();
     $("scheduleOverlay").classList.add("show");
@@ -5382,6 +5559,13 @@ $("scTabs").addEventListener("click", (e) => {
   scheduleTab = b.dataset.tab;
   scSyncTabs();
   renderSchedule();
+});
+// 「我的成绩」那一档的学期下拉:换学期只是**换一次读数**,不改存档、也不改课表。
+$("scBody").addEventListener("change", (e) => {
+  const sel = e.target.closest("#scSemSel");
+  if (!sel) return;
+  scoreSem = sel.value || "";
+  scStatsGet(scoreSem);
 });
 // 下钻某天/作息表表单都算「本周」那一档:否则点了「本周」再下钻,标签会全不亮,
 // 人不知道自己还在课表面板里哪一层。
@@ -6882,12 +7066,32 @@ function jwSayErr(msg, stage) {
   // 「没找到还开着的教务页」(stage=no_page)这一种,"再读一次"是空转 —— 页都不在,
   // 读一百次还是那句。该给的是回到第①步把窗口重开回来,所以按钮名字跟着事实变。
   const lost = stage === "no_page";
+  // 「页在、表也在,可学长认不出表头」(no_grid / not_timetable)是另一种死路:
+  // 同学看得见那张表,学长看不见规律。这时候最有用的一步是把这一页**摊进对话**
+  // 让模型用 page_parse 读一遍结构 —— 而不是让人再点一次同样的失败。
+  const peek = stage === "no_grid" || stage === "not_timetable";
   const what = jwMode === "scores" ? "成绩" : "课表";
   jwSay(`<div class="jw-warn">${esc(msg)}</div>
     <div class="jw-links"><button id="lnJwRetry">${lost ? "① 重新打开登录页" : "再读一次"}</button>
+    ${peek ? '<button id="lnJwPeek">让学长看这一页的表格结构</button>' : ""}
     <button id="lnJwManual3">我自己贴${what}文字/截图</button></div>`);
   $("lnJwRetry").addEventListener("click", () => lost ? jwOpenLogin() : jwRead(false));
+  const pk = $("lnJwPeek");
+  if (pk) pk.addEventListener("click", jwPeekPage);
   $("lnJwManual3").addEventListener("click", () => scheduleManualImport(jwMode));
+}
+
+// 把"认不出表头"这一种失败交回对话:填好一句点名要 page_parse 的话,
+// 发出去之后学长读的是**同学自己那张页**(只读,不写文件、不导航)。
+function jwPeekPage() {
+  $("jwOverlay").classList.remove("show");
+  $("scheduleOverlay").classList.remove("show");
+  $("input").value = "这一页学长没认出表头。请用 page_parse 读一下我现在开着的那张教务页,"
+    + "把读到的**表头每一列**与前三行列给我看,再一起判断哪一列才是成绩、哪一列是学分"
+    + "(先别存任何东西)。\n";
+  $("input").focus();
+  $("input").style.height = "auto";
+  toast("发出去学长就会把这一页的表格结构读回来 —— 它只读,不改你的教务页");
 }
 
 const JW_DAYS = { 1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "日" };
@@ -7007,6 +7211,14 @@ function jwConfirm() {
     jwParsed = null;
     if (!isScores) {
       scheduleData = r.schedule || scheduleData;
+      renderSchedule();
+    } else {
+      // 导入完直接把人放到「成绩」那一档:他刚点完确认,想看的就是那几个数变了没有。
+      scoreStats = r.stats || null;
+      scoreBusy = false;
+      scoreSem = "";
+      scheduleTab = "scores";
+      scSyncTabs();
       renderSchedule();
     }
     $("jwOverlay").classList.remove("show");
@@ -7380,6 +7592,7 @@ document.addEventListener("keydown", (e) => {
    Qoder/ZCode 同款:对话一长,右侧细条按「问」分刻度,hover 出该问的预览、
    点击跳过去。刻度从 DOM 现收(每条 .msg.user 就是一问的边界),不做滚动
    联动高亮 —— 那要滚动监听常开,收益配不上打扰;少做也是诚实。 */
+let railTickMarked = -1;      // 跳过去的那一问(重建刻度时要点亮回去)
 function rebuildChatRail() {
   const chat = $("chat"), rail = $("chatRail");
   const users = Array.from(chat.querySelectorAll(".msg.user .bubble"));
@@ -7397,12 +7610,23 @@ function rebuildChatRail() {
   users.forEach((b, i) => {
     const tick = document.createElement("div");
     tick.className = "tick";
+    tick.dataset.i = String(i);
     tick.title = `第 ${i + 1} 问 · 点开看全部`;
     tick.addEventListener("click", turnPopToggle);
     tick.addEventListener("mouseenter", () => showRailPop(b, i));
     tick.addEventListener("mouseleave", hideRailPop);
     rail.appendChild(tick);
   });
+  scTickMark(railTickMarked);      // 重建刻度后把"刚跳过去的那一问"重新点亮
+}
+// 跳过去的那一问在刻度上一直亮着(不只是 hover 才看得见):一长条对话里
+// "我刚跳到哪儿"没有标记,人就只剩滚动这一条路。
+function scTickMark(i) {
+  railTickMarked = i;
+  const rail = $("chatRail");
+  if (!rail) return;
+  rail.querySelectorAll(".tick").forEach(t =>
+    t.classList.toggle("on", Number(t.dataset.i) === i));
 }
 function showRailPop(bubble, i) {
   const pop = $("railPop");
@@ -7447,6 +7671,7 @@ function turnPopToggle() {
         bubble.scrollIntoView({ block: "start", behavior: "smooth" });
         wrap.classList.add("flash");
         setTimeout(() => wrap.classList.remove("flash"), 1900);
+        scTickMark(i);              // 刻度上留下"跳到这儿了"的那一枚
       }
       pop.classList.remove("turns"); pop.hidden = true;
     });
@@ -8242,8 +8467,9 @@ $("boardOverlay").addEventListener("click", (e) => {
 
 /* ---------------- 收起/展开左侧栏(Ctrl+B) ----------------
    状态记在 localStorage(与主题、"只提醒一次"那两条同一个偏好家):收不收这一列是
-   纯界面习惯,不该为它敲一次桥。图标与说明必须跟着事实翻 —— 一个画着「◀」的按钮
-   在栏已经收起之后还画「◀」,用户就无法判断再点一次会发生什么。 */
+   纯界面习惯,不该为它敲一次桥。按钮的样子必须跟着事实翻 —— 一个画着"栏还开着"的
+   图标在栏已经收起之后还画同一个,用户就无法判断再点一次会发生什么(v0.9.113 起
+   那颗在对话区左上角,图标里那一小半跟着实际状态明暗)。 */
 const SIDE_KEY = "gcode-side";
 function sideWantClosed() {
   try { return localStorage.getItem(SIDE_KEY) === "closed"; } catch (e) { return false; }
@@ -8251,16 +8477,82 @@ function sideWantClosed() {
 function applySide(closed) {
   document.querySelector(".app").classList.toggle("side-closed", !!closed);
   const b = $("btnSideToggle");
-  if (b && b.firstChild) b.firstChild.textContent = closed ? "▶" : "◀";
-  if (b) b.title = closed ? "展开左侧栏(Ctrl+B)" : "收起左侧栏(Ctrl+B)";
-  const cap = $("sideCap");
-  if (cap) cap.textContent = closed ? "展开栏" : "收起栏";
+  if (b) {
+    b.classList.toggle("on", !!closed);
+    b.title = closed ? "展开左侧栏(Ctrl+B)" : "收起左侧栏(Ctrl+B)";
+    b.setAttribute("aria-expanded", closed ? "false" : "true");
+  }
   try { localStorage.setItem(SIDE_KEY, closed ? "closed" : "open"); } catch (e) {}
 }
 function toggleSide() {
   applySide(!document.querySelector(".app").classList.contains("side-closed"));
 }
 $("btnSideToggle").addEventListener("click", toggleSide);
+
+/* ---------------- 无边框窗口的自绘控件(p5/p6) ----------------
+   开机问一次 `win_state`(它读窗口自己的样式位,不读配置):真没有系统标题栏才摆
+   −□✕ 与边缘把手,否则整套装着不出现 —— 网页版/别的后端没有这套,拒绝也就看不见。
+   关闭那一颗**只转给窗口自己的关闭流程**:关窗等于问一句还是藏进托盘,归托盘偏好管,
+   前端不许替同学决定(更不许碰 `allow_exit`)。 */
+let winBorderless = false, winMaxed = false;
+function winApi() {
+  const api = window.pywebview && window.pywebview.api;
+  return (api && api.win_state) ? api : null;
+}
+function winSync(maxed) {
+  winMaxed = !!maxed;
+  const b = $("winMax");
+  if (b) { b.title = winMaxed ? "还原窗口" : "最大化"; b.textContent = winMaxed ? "❐" : "□"; }
+}
+function winInit() {
+  const api = winApi();
+  if (!api) return;                       // 浏览器里开的前端:没有桥,也不摆窗口控件
+  api.win_state().then(r => {
+    winBorderless = !!(r && r.ok && r.borderless);
+    const bar = $("winBtns"), rz = $("rz");
+    if (bar) bar.hidden = !winBorderless;
+    if (rz) rz.hidden = !winBorderless;
+    if (!winBorderless) return;
+    winSync(r.maximized);
+    $("winMin").addEventListener("click", () => api.win_minimize());
+    $("winMax").addEventListener("click", () => api.win_zoom().then(x => winSync(x && x.maximized)));
+    $("winClose").addEventListener("click", () => api.win_close());
+    const drag = $("tbDrag");
+    if (drag) drag.addEventListener("dblclick",
+      () => api.win_zoom().then(x => winSync(x && x.maximized)));
+    rzBind($);
+  }).catch(() => {});
+}
+
+// 边缘把手:按下记起点,move 只报"又走了多少"(增量式,两边不必同步一份绝对尺寸);
+// rAF 合流 —— 鼠标一次移动可能来好几个事件,逐个敲桥会排队,窗口就会"跳"。
+function rzBind(dollar) {
+  const api = winApi();
+  if (!api) return;
+  let edge = "", lx = 0, ly = 0, queued = false, dx = 0, dy = 0;
+  const flush = () => {
+    queued = false;
+    if (!edge || (!dx && !dy)) return;
+    const gx = dx, gy = dy;
+    dx = 0; dy = 0;
+    api.win_resize(edge, gx, gy).catch(() => {});
+  };
+  dollar("rz").querySelectorAll("[data-e]").forEach(el => {
+    el.addEventListener("mousedown", (ev) => {
+      if (ev.button !== 0) return;
+      edge = el.dataset.e; lx = ev.screenX; ly = ev.screenY;
+      dx = 0; dy = 0;
+      ev.preventDefault();
+    });
+  });
+  window.addEventListener("mousemove", (ev) => {
+    if (!edge) return;
+    dx += ev.screenX - lx; dy += ev.screenY - ly;
+    lx = ev.screenX; ly = ev.screenY;
+    if (!queued) { queued = true; requestAnimationFrame(flush); }
+  });
+  window.addEventListener("mouseup", () => { edge = ""; if (queued) flush(); });
+}
 
 /* ---------------- 后台命令面板(用户看图 p5 点名要的「终端面板」) ----------------
    它**只读**。命令是学长在对话里经权限确认之后跑起来的;在这个面板里放一个输入框
@@ -8412,6 +8704,9 @@ window.addEventListener("DOMContentLoaded", () => {
     // 被静默跳过 —— 于是深色界面顶着一条系统白标题栏、那行字也停在没有工作区名的老样子。
     // 用户看图 p3/p4 点的就是这一条。这里补一次,开机就能染上色。
     applyTheme(document.documentElement.classList.contains("dark"), false);
+    // 无边框控件也要在桥就绪之后问:`win_state` 读的是窗口自己的样式位,
+    // DOMContentLoaded 那一刻 `pywebview.api` 还没注入,问了也是空。
+    winInit();
     pywebview.api.get_info().then(info => {
     $("ver").textContent = "v" + info.version;
     renderWorkspacePill(info);

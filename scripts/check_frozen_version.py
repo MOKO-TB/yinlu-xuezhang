@@ -122,7 +122,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "get_env_info", "invalidate_env_info", "SESSION_LIST_LIMIT",
                             # v0.9.112:终端面板与自动化面板的三个门面(漏 get_terminal
                             # = 那一屏永远空;漏 set_job_enabled = 开关点了没处去)
-                            "get_terminal", "get_automation", "set_job_enabled"
+                            "get_terminal", "get_automation", "set_job_enabled",
+                            # v0.9.113:无边框那五颗门面 + 课表面板里的成绩读数
+                            # (漏 win_close = 无边框时用户没有任何办法关窗;
+                            #  漏 get_score_stats = 「成绩」那一档永远在读不到)
+                            "win_state", "win_minimize", "win_zoom", "win_close",
+                            "win_resize", "get_score_stats"
                             ),
     # v0.9.39 p2:标题栏整模块。漏收 = 桥里那句 `from minicode import window_chrome`
     # 在装好的包里 ImportError,而它被前端那个 try/catch 吞掉 → 表现为"改了个寂寞"。
@@ -133,7 +138,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                                # 主题写(漏收 = 深色界面顶上还是系统那条白)
                                "TITLEBAR_MODE", "TITLEBAR_DARK", "TITLEBAR_LIGHT",
                             # v0.9.112 p7:开机静默子进程的模态错误框(漏收 = 弹窗又回到用户脸上)。
-                            "silence_child_error_dialogs"),
+                            "silence_child_error_dialogs",
+                            # v0.9.113 p5/p6/p7:无边框之后补回来的三件 —— 最大化让出
+                            # 任务栏、边缘缩放由界面发起、"到底有没有标题栏"读样式位。
+                            # 漏收 = 装好的包里无边框窗盖住任务栏、八条边拖不动。
+                            "maximize_bounds", "work_area", "window_rect",
+                            "_apply_edge", "resize_edge", "EDGES",
+                            "style_of", "is_borderless", "is_maximized"),
     # v0.9.39 p1:剪贴板整模块。漏收 = 装好的包里右键粘贴永远走不到本机这条,
     # 那条「xx 想要查看复制到剪贴板的文本和图像」的横条照旧弹(功能"看起来在",
     # 只是每次都违和),所以连 bmp_from_dib 一起钉 —— 它是图片那半的唯一出口。
@@ -306,7 +317,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # (漏收 usage_gaps = 派出去之前那句「本机还缺」永远不出现,
                         #  而警语只剩子代理自己撞上的那一半)
                         "usage_gaps", "gap_note"),
-    "minicode.web_profile": ("网页版不开放会话导出", "search_sessions",
+    "minicode.web_profile": ("网页版不开放会话导出",
+                             # v0.9.113:成绩那一屏与窗口控件对访客整组拒绝(漏了就是
+                             # 网页版能把主人的服务器窗口最小化/关掉、看见主人的成绩单)
+                             "网页版不开放成绩导入与「我的成绩」",
+                             "网页版不开放窗口控件", "get_score_stats", "win_resize",
+                             "search_sessions",
                              # v0.9.23:教务导入需要本机浏览器窗口,网页版必须挡掉
                              "教务课表导入",
                              # v0.9.25:桌面提醒开的是本机通知,网页版同样挡掉
@@ -447,8 +463,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
     #      或 scores 工具在包里不存在,绩点永远要手贴) ----
     "minicode.scores": ("load", "save", "clear", "view", "courses_for_gpa",
                         "parse_score_table", "parse_scores_with_model",
-                        "scores_tool", "SCORES_FILE"),
-    "minicode.scores_import": ("ScoresFlow",),
+                        "scores_tool", "SCORES_FILE",
+                        # v0.9.113 p3/p4:课表面板「成绩」那一档的数(与 gpa 同源)+
+                        # 真机表头的三种形状。漏 stats = 那六个格子永远是「—」;
+                        # 漏 _cols_of/semester_hint_of = 认列又退回"含关键字就认"。
+                        "stats", "_cols_of", "_find_header", "_looks_like_header",
+                        "semester_hint_of", "_header_echo", "STATS_ROW_LIMIT"),
+    # v0.9.113:成绩那一屏的取材改成了"逐张页逐帧",转出去的名字也要在包里
+    "minicode.scores_import": ("ScoresFlow", "_read_scores"),
     # ---- v0.9.18:注入防御(provenance 是函数内 import,必须核它真进包了) ----
     "minicode.provenance": ("wrap", "strip_marks", "is_external",
                             "contains_external", "log_escalation"),
@@ -683,7 +705,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                                  # v0.9.24:通用取材 + 「先认版式再挑文法」那条路
                                  "_parse_any", "page",
                             # v0.9.112 p1:成绩读不到的根 —— 每一步先接管那张页(会话按线程分格)。
-                            "anchor_existing", "no_page_msg"),
+                            "anchor_existing", "no_page_msg",
+                            # v0.9.113 p3:接管到了**框架页**不等于看到了成绩表 ——
+                            # 逐张候选页 × 逐帧都翻。漏收 = 又回到"第一帧有表就交差"。
+                            "page_targets", "candidate_pages", "dumps", "scans",
+                            "_page_urls", "MAX_PAGES"),
     # ---- v0.9.24:结构化解析从"只对着强智"泛化成独立一层(漏收 = 向导和 page_parse 都炸) ----
     "minicode.site_parse": ("parse_page", "parse_qiangzhi_grid", "parse_generic_grid",
                             "_entry_generic", "_entry_qiangzhi", "_weekday_header",
@@ -697,7 +723,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                          "FRAME_MAX_CHARS",
                          # v0.9.98:标签页可见可管(漏收 = browser_status 退回
                          # 只报"能不能用",开了几页、各看什么又变成黑箱)
-                         "list_tabs", "close_tab"),
+                         "list_tabs", "close_tab",
+                         # v0.9.113:登录后的教务往往同时开着框架页与真表页,而
+                         # adopt_page 只拿第一张匹配的 —— 先列出有几张才谈逐张试。
+                         "page_targets"),
     # ---- v0.9.24:MCP 三种传输(stdio 之外只有网址的服务器也连得上) ----
     # v0.9.62:校历补录助手(漏收 = 「贴通知录考试周」在包里做不到,
     # 考试周数据继续空置,A5 考试闭环继续卡着)
@@ -756,6 +785,19 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.94 p3/p5:权限档位改成界面自己画的浮层菜单(原生 select 的白字在深色
     # 模式下看不见)。漏 permPill = 顶栏那个按钮整个没了;漏 permMenu = 点了没菜单
     "permPill", "permMenu", "PERM_META",
+    # v0.9.113 p5/p6/p7:无边框那一套(漏一条 = 装好的包里那三颗/那 8 条把手没了,
+    # 而窗口已经没标题栏了 —— 人就真的关不掉、也缩不了)
+    "pywebview-drag-region", "winInit", "win_state", "win_minimize", "win_zoom",
+    "win_close", "win_resize", "rzBind", 'data-e="se"', "tb-drag", "winBtns",
+    # v0.9.113 p1/p2:收起栏搬到对话区左上角(漏 = 那颗又搬回入口栏,人找不到)
+    'id="btnSideToggle"', 'class="tb-ico"', 'classList.toggle("on", !!closed)',
+    # v0.9.113 p3/p4:课表面板「成绩」那一档(漏 = 那六个数与学期下拉整个不在包里)
+    "scScoresPanel", "scStatCard", "scStatsGet", "get_score_stats", 'data-tab="scores"',
+    "esc(String(v))",
+    # v0.9.113 p8/p9:右缘导航离边留距 + 浅色看得见 + 跳过去那一枚一直亮
+    "--rail-tick", "right:12px", "scTickMark",
+    # v0.9.113 ①:认不出表头时那颗"摊给学长看"(漏 = 失败又变回死路)
+    "jwPeekPage", "让学长看这一页的表格结构",
     # v0.9.94 p6:会话轮次导航条(右侧细刻度 + hover 预览)
     "chat-rail", "rebuildChatRail", "showRailPop",
     # v0.9.94 p7/p8:附件图片点开看 + 左右切换(以前放进去的照片根本没法查看)

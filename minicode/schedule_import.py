@@ -36,6 +36,7 @@ XKB_URL = "https://jw.educationgroup.cn/gzasc_jsxsd/xskb/xskb_list.do"
 HOST_HINT = "educationgroup.cn"   # 教务页所在站点(接管页面时按它找)
 FRAME_HINT = "xskb"               # 学期课表所在帧的 URL 片段
 MODEL_TEXT_CHARS = 16000          # 兜底交给模型的页面文字上限
+MAX_PAGES = 6                     # 逐张页试的上限(每张都要连一次 CDP 并遍历所有帧)
 
 # 旧名字留着当门面:v0.9.23 的测试/冻结清单/脚本都吃这几个,含义一字不改。
 _entry = _entry_qiangzhi
@@ -210,6 +211,81 @@ class ImportFlow:
                         "那个窗口)。请点「① 打开登录页」→ 在弹出的窗口里登录并点开查询"
                         "结果页 → 再点读取。")}
 
+    # ---- 逐张页取材(v0.9.113:别再在第一帧的布局表上短路)
+    def candidate_pages(self) -> list[dict]:
+        """浏览器里还开着的教务页有哪几张(找不到这个能力时回空 = 老路子)。"""
+        brs = self.browser
+        fn = getattr(brs, "page_targets", None)
+        if not callable(fn):
+            return []
+        got: list[dict] = []
+        for hint in self._anchor_hints():
+            with contextlib.suppress(Exception):
+                hits = fn(hint) or []
+            for h in hits:
+                url = str((h or {}).get("url") or "")
+                if url and url not in [g["url"] for g in got]:
+                    got.append({"url": url, "title": str((h or {}).get("title") or "")})
+            if got:
+                break          # 第①步真正开过的站点找到了,就不去接别的站点了
+        return got[:MAX_PAGES]
+
+    def dumps(self) -> list[dict]:
+        """**当前这张页**里每一个帧的整页 dump(帧里套帧都算),带上这帧是谁。
+
+        与 `page()` 的分工:`page()` 是"第一帧有表就交差",这条是"每帧都交回来,
+        挑哪一张由认表的人说了算"。谁都能有布局表(菜单/头部),所以"挑"这件事
+        必须放在看得懂业务表头的那一层,不能放在取材这一层。
+        """
+        brs = self.browser
+        out: list[dict] = []
+        for hit in brs.read_frames(TABLE_JS):
+            dump = load_dump(hit.get("value"))
+            if not dump:
+                continue
+            dump = dict(dump)
+            dump["_frame"] = str(hit.get("url") or "")
+            dump["_truncated"] = bool(hit.get("truncated"))
+            out.append(dump)
+        return out
+
+    def _page_urls(self) -> list[str]:
+        """该逐张试的那几张教务页(没有这项能力时回 `[""]` = 就用当前那张)。"""
+        urls = [g["url"] for g in self.candidate_pages()]
+        if urls:
+            return urls[:MAX_PAGES]
+        info = getattr(self.browser, "current_info", None)
+        cur = ""
+        if callable(info):
+            with contextlib.suppress(Exception):
+                cur = str((info() or {}).get("url") or "")
+        return [cur]
+
+    def scans(self) -> list[dict]:
+        """逐张候选页 × 逐帧取材 —— 登录后的教务不止一张页,不能只读第一张。
+
+        为什么非要逐张:正方登录后人往往停在框架页(`framework/xsMain.jsp`),
+        成绩/课表页在它套的**子 iframe** 里,或者干脆是另一张标签/弹窗。
+        v0.9.112 那一路按站点接管,拿回来的正是框架页:它有表(菜单那些),
+        于是报回来的是「这一页没有认出成绩表」而不是「读不到页」—— 看着像解析的锅,
+        其实是取材拿错了页。接管只脱手不关页(adopted),逐张试不动用户的标签。
+        """
+        brs = self.browser
+        out: list[dict] = []
+        seen: set[str] = set()
+        for url in self._page_urls():
+            if url in seen:
+                continue
+            seen.add(url)
+            if url:
+                with contextlib.suppress(Exception):
+                    brs.adopt_page(url, mode=self.mode)
+            for dump in self.dumps():
+                dump = dict(dump)
+                dump["_page"] = url
+                out.append(dump)
+        return out
+
     # ---- 第 2 步
     def read(self, *, goto_table: bool = True) -> dict:
         """读当前那张教务页的学期课表并确定性解析。不写任何文件。"""
@@ -262,10 +338,20 @@ class ImportFlow:
 
         两条路都跑完仍没认出课表时,回"至少读到了表"的那条 —— 它给的失败原因
         比"什么都没有"更有用(结构变了 vs 页面没开对,是两件不同的事)。
+        v0.9.113 补的第三步:老两条都空时,再逐张页逐帧翻一遍(`scans()`)。
+        `page()` 是"第一帧有表就交差",框架页的菜单表会挡在真表前面 ——
+        课表这条路平时靠导航躲过了,一旦导航没成(或被别的标签抢了回来)就同样瞎。
         """
         results: list[dict] = []
         for dump in (self.grid(), self.page()):
-            if not dump:
+            if not dump or not _rows_of(dump):
+                continue
+            res = parse_page(dump)
+            if res.get("ok"):
+                return res
+            results.append(res)
+        for dump in self.scans():          # 前两条都空才逐张页翻(别给顺路的那次多花几秒)
+            if not dump or not _rows_of(dump):
                 continue
             res = parse_page(dump)
             if res.get("ok"):
@@ -356,12 +442,17 @@ class ImportFlow:
         return None
 
     def page_text(self) -> str:
+        """逐张页逐帧取正文,取**最长**的那一帧 —— 模型兜底也不该只看见框架页。"""
         brs = self.browser
         best = ""
-        for hit in brs.read_frames(TEXT_JS):
-            val = str(hit.get("value") or "")
-            if len(val) > len(best):
-                best = val
+        for url in self._page_urls():
+            if url:
+                with contextlib.suppress(Exception):
+                    brs.adopt_page(url, mode=self.mode)
+            for hit in brs.read_frames(TEXT_JS):
+                val = str(hit.get("value") or "")
+                if len(val) > len(best):
+                    best = val
         return best[:MODEL_TEXT_CHARS]
 
 
