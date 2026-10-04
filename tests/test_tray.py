@@ -282,14 +282,21 @@ def test_ensure_icon_creates_the_icon_only_once(monkeypatch):
     assert len(created) == 1 and c.icon is created[0]
 
 
-def test_choose_hide_falls_back_to_quit(monkeypatch):
-    """藏不下去就退出,而不是"点了 X 没反应"。"""
+def test_choose_hide_without_an_icon_keeps_the_window(monkeypatch):
+    """藏不下去**不许退出**。旧兜底是"藏不了就 quit",v0.9.114 的现场:托盘菜单里那颗
+    图标的 arity 不合 pystray 的构造契约 → 图标建不起来 → 同学点「最小化到托盘」得到的是
+    "程序自己没了、托盘里啥也没有"。现在回 `ok:false` + 一句原因,前端那条
+    `r.ok === false` 会把它 toast 出来 —— 既不是"点了没反应",也不是替他决定退出。
+    "偏好=最小化、不问就藏"那条路仍然会退出(它没法在 UI 线程里同步回话),
+    见下面 test_close_path_when_icon_fails_inside_closing。
+    """
     c, _ui = _controller()
     monkeypatch.setattr(c, "_ensure_icon", lambda: False)
     quit_calls = []
     monkeypatch.setattr(c, "quit", lambda: quit_calls.append(1))
-    assert c.choose("hide")["ok"] is True
-    assert quit_calls == [1]
+    r = c.choose("hide")
+    assert r["ok"] is False and "tray.log" in r["msg"], r
+    assert quit_calls == [], "选「收起来」却退出,就是把会话窗口送给进程一起没了"
 
 
 def test_close_path_when_icon_fails_inside_closing():

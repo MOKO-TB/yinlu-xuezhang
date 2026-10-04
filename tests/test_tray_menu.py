@@ -196,3 +196,79 @@ def test_quit_stops_the_menu_refresher_thread(fake_pystray):
     c._start_menu_refresher(c.icon)
     c._menu_stop.set()
     assert c._menu_stop.is_set()
+
+
+# -------------------------------------------------- 真库的构造契约(这轮翻车的地方)
+
+def test_the_real_pystray_accepts_every_action_we_build(monkeypatch):
+    """**替身把 bug 藏了一整轮**:上面的 `Item` 什么都收,所以 arity 错了测试照样绿,
+    而真 pystray 在 `MenuItem.action` 赋值处按 `__code__.co_argcount` 分流
+    (0/1 自己包、2 原样收、**其他 `raise ValueError(action)`**)。v0.9.114 那句
+    `lambda i=None, it=None, k=key` 是三个参数 → 图标建不起来 → `hide_to_tray()` 回
+    False → 用户点「最小化到托盘」结果程序自己退了(现场就在他的 tray.log 里)。
+    这条针拿**真的 `pystray._base`** 建菜单:它不解析后端、不开线程,所以 CI 上也跑。
+    """
+    import pystray._base as real
+
+    mod = types.ModuleType("pystray")
+    mod.Menu = real.Menu
+    mod.MenuItem = real.MenuItem
+    mod.Icon = Icon
+    monkeypatch.setitem(sys.modules, "pystray", mod)
+
+    c, _ui = _controller()
+    c.recent_fn = lambda: [(f"{i}.md", f"会话{i}") for i in range(3)]
+    menu = c._build_menu()          # arity 不对的话,这一行当场 ValueError
+    assert isinstance(menu, real.Menu)
+    # 真 MenuItem 不把 action 露成公开属性(它是 `_action` + 一个 submenu 属性),
+    # 所以这里按私有名字看——测试摸库的内部形状可以,产品代码摸就不行。
+    subs = [it for it in menu.items if isinstance(getattr(it, "_action", None), real.Menu)]
+    assert len(subs) == 1 and len(subs[0]._action.items) == 3
+
+
+def test_no_action_takes_more_positional_args_than_pystray_allows(fake_pystray):
+    """同一件事的第二遍保险:连 `pystray` 都装不出来的机器上也要能拦住。"""
+    import inspect
+
+    def arity(fn) -> int:
+        code = getattr(fn, "__code__", None)
+        if code is None:
+            return 0
+        return code.co_argcount - (1 if inspect.ismethod(fn) else 0)
+
+    c, _ui = _controller()
+    c.recent_fn = lambda: [("a.md", "甲"), ("b.md", "乙")]
+    offenders = []
+
+    def walk(menu):
+        for it in menu.items:
+            if isinstance(it.action, Menu):
+                walk(it.action)
+            elif arity(it.action) > 2:
+                offenders.append(it.text)
+            if it.checked is not None and arity(it.checked) > 1:
+                offenders.append(f"{it.text}(checked)")
+
+    walk(c._build_menu())
+    assert not offenders, f"这些动作的形参多于 pystray 允许的个数:{offenders}"
+
+
+def test_hide_that_cannot_build_an_icon_keeps_the_window_and_says_why(fake_pystray):
+    """藏不了≠退出。同学点的是"收起来",旧兜底却把进程一起送走 —— 现在必须留着窗口
+    并把原因交回前端(前端那条 `r.ok === false` 会 toast 出来)。"""
+    c, _ui = _controller()
+    quit_calls = []
+    c.hide_to_tray = lambda: False
+    c.quit = lambda: quit_calls.append(1)
+    r = c.choose("hide")
+    assert r["ok"] is False and "tray.log" in r["msg"], r
+    assert quit_calls == [], "选「最小化」却退出,就是把会话窗口送给进程一起没了"
+
+
+def test_exit_still_exits(fake_pystray):
+    """上一条不许把"真退出"也改成不退出 —— 那颗钮的意思就是退出。"""
+    c, _ui = _controller()
+    quit_calls = []
+    c.quit = lambda: quit_calls.append(1)
+    assert c.choose("exit") == {"ok": True, "action": "exit"}
+    assert quit_calls == [1]

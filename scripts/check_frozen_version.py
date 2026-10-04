@@ -258,6 +258,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
         # 勾看着是开、开机不响,而谁也说不清为什么)
         "startup_stale", "repair_startup_shortcut", "check_stale_startup",
         "install", "close_choice", "read_pref", "write_pref",
+        # v0.9.114 补刀:「最近会话」那一项的点击动作工厂。漏收的代价不是"少一根针"
+        # 而是"这轮那个害人的写法又回来了":pystray 只收 0/1/2 个位置参数的 callable,
+        # 3 个直接 ValueError → 整颗图标建不起来 → 同学点「最小化到托盘」= 程序没了。
+        "_recent_opener",
                       "TrayController", "hide_to_tray", "_ensure_icon",
                       "_ensure_parent",
                       # v0.9.25:桌面提醒(漏收 = 最小化后课前提醒彻底没声)

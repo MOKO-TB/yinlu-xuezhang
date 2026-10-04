@@ -946,9 +946,14 @@ class TrayController:
         if remember:
             write_pref(False, "minimize" if action == "hide" else "exit")
         if action == "hide":
-            if not self.hide_to_tray():
-                self.quit()
-            return {"ok": True, "action": "hide"}
+            if self.hide_to_tray():
+                return {"ok": True, "action": "hide"}
+            # 藏不了就**别退出**:同学点的是"收起来",不是"关掉"。窗口这会儿已经被
+            # FormClosing 拦下(args.Cancel),留着它 + 一句原因,比"程序自己没了、
+            # 托盘里啥也没有"诚实 —— v0.9.114 那次就是走这条旧兜底把用户的会话窗口
+            # 连着进程一起送走了(根因见 _recent_opener 那段)。
+            return {"ok": False,
+                    "msg": "托盘图标没建起来,窗口先留着没动 —— 原因写在数据目录的 tray.log"}
         self.quit()
         return {"ok": True, "action": "exit"}
 
@@ -1003,10 +1008,7 @@ class TrayController:
         if recent:
             items.append(pystray.MenuItem(
                 "最近会话", pystray.Menu(*[
-                    pystray.MenuItem(
-                        f"{n + 1}. {title}",
-                        # 默认参数把当次循环的值钉住:闭包直接抓 i 会变成"五条都是最后一条"
-                        lambda i=None, it=None, k=key: self._tray_open(f"session:{k}"))
+                    pystray.MenuItem(f"{n + 1}. {title}", self._recent_opener(key))
                     for n, (key, title) in enumerate(recent)])))
         items += [
             pystray.MenuItem("设置(模型与密钥)",
@@ -1021,6 +1023,21 @@ class TrayController:
             pystray.MenuItem("退出引路学长", self._tray_quit),
         ]
         return pystray.Menu(*items)
+
+    def _recent_opener(self, key: str):
+        """「最近会话」那一条的点击动作:**必须只收两个位置参数**。
+
+        pystray 在 `MenuItem.action` 赋值处按 `__code__.co_argcount` 分流:0 和 1 它
+        自己包一层,2 原样收下,**其他一律 `raise ValueError(action)`**
+        (`pystray/_base.py:_assert_action`)。所以"用默认参把循环变量钉住"这个惯常
+        写法在这里会连带把整颗图标炸掉:v0.9.114 那句 `lambda i=None, it=None, k=key`
+        是三个参数,表现就是用户报的「选了最小化到托盘,程序自己退了、托盘里啥也没有」
+        —— 图标建不起来 → `hide_to_tray()` 回 False → 旧兜底当场 quit。
+        工厂函数每次调用捕获一个 key,既满足 arity,也不会"五条都是最后一条"。
+        """
+        def act(icon=None, item=None) -> None:
+            self._tray_open(f"session:{key}")
+        return act
 
     def set_recent_provider(self, fn) -> None:
         """桥把"最近几条会话怎么取"交给托盘 —— 托盘自己不持有桥(它只拿得到一个 callable)。"""
