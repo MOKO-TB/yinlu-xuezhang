@@ -256,6 +256,10 @@ class PublicApi:
         """提问卡的回答(「发送回复」/「按推荐继续」)。只转发,判定与记账都在桥里。"""
         return self._b.ask_reply(payload)
 
+    def plan_review_reply(self, payload) -> dict:
+        """计划核对单的三种回答(批准 / 改一条 / 重排)。判定与写回都在桥与 planning 里。"""
+        return self._b.plan_review_reply(payload)
+
     def undo(self) -> dict:
         return self._b.undo()
 
@@ -320,6 +324,15 @@ class PublicApi:
     def set_job_enabled(self, job_id: str, on: bool) -> dict:
         """开/关一个定时任务(关掉的不再自动到期跑,记账与这一屏仍列得出来)。"""
         return self._b.set_job_enabled(job_id, on)
+
+    def add_automation(self, label: str = "", prompt: str = "", cadence: str = "daily",
+                       weekday=None, hour=None, minute=0) -> dict:
+        """「新建自动化」:登记一条自己的定时任务(存本机 jobs-user.json)。"""
+        return self._b.add_automation(label, prompt, cadence, weekday, hour, minute)
+
+    def remove_automation(self, job_id: str = "") -> dict:
+        """删掉自己登记的那一条(内置任务删不掉,只能用开关停用)。"""
+        return self._b.remove_automation(job_id)
 
     def get_board(self) -> dict:
         """跨会话看板:几件事在跑、哪几件等你的决定、最近做完了什么(只读)。"""
@@ -467,6 +480,18 @@ class PublicApi:
                   channel: str = "app") -> dict:
         """技能面板「添加技能」:写一个 skills/<name>/SKILL.md。"""
         return self._b.add_skill(name, description, body, channel)
+
+    def export_skill_pack(self, name: str = "") -> dict:
+        """技能面板「打包分享」:把这个技能连资料打成一份 zip。"""
+        return self._b.export_skill_pack(name)
+
+    def import_skill_pack(self) -> dict:
+        """选一份分享包看清单(路径由本机文件对话框拿,一个字都不写)。"""
+        return self._b.import_skill_pack()
+
+    def apply_skill_pack(self, nonce: str = "") -> dict:
+        """按看过的那份清单落盘(同名先备份)。"""
+        return self._b.apply_skill_pack(nonce)
 
     def get_kb_candidates(self, status: str = "") -> dict:
         """技能面板「候选」tab:知识库候选清单(待审核在前)。"""
@@ -664,11 +689,18 @@ class Bridge:
         # 「此刻有没有一张卡等人答」(跨会话看板 B1 用,见 _wait_event)
         self._ask_open = False
         self._confirm_open = False
+        # 计划核对单(v0.9.114):**又一条独立的锁与事件** —— 与提问卡分家不是洁癖,
+        # 共用会让"点了核对单的批准"被当成对上一个提问的答复。
+        self._plan_lock = threading.Lock()
+        self._plan_event = threading.Event()
+        self._plan_answer: dict = {}
+        self._plan_open = False
         self._closing = False             # 关窗中:等前端回答的线程据此收口
         # 标题栏(p2):前端报过一次主题之后就记着,切工作区时只改字不重染
         self._chrome_dark: bool | None = None
         ui.confirm_handler = self.confirm_tool
         ui.ask_handler = self.ask_user
+        ui.plan_review_handler = self.plan_review
         # 停止键与关窗都要能叫醒"正在等用户点"的那两条线程(见 _wait_event)。
         ui.abandon_pending = self.abandon_pending
         self.open_session()                  # 第一个会话
@@ -1095,6 +1127,40 @@ class Bridge:
             self.ui.push("info", text=result.get("msg") or "技能已添加")
         return result
 
+    # ------------------------------------------------------------ 技能分享包(v0.9.114)
+
+    def export_skill_pack(self, name: str = "") -> dict:
+        """把一个技能(连它的资料目录)打成一份 zip 发给同学。"""
+        from minicode import skill_pack
+        got = skill_pack.pack(self.workspace, name)
+        if got.get("ok"):
+            self.ui.push("info", text=got.get("msg") or "分享包已打好")
+        return got
+
+    def import_skill_pack(self) -> dict:
+        """选一份分享包 → **只预览**:会写到哪、有几个文件、会不会覆盖本机已有的。
+
+        路径由**本机文件对话框**拿,不接前端传来的字符串:那等于给网页/脚本
+        一个"读任意路径"的口子(与迁移包导入同一条规矩,见 `mydata_import_pick`)。
+        """
+        from minicode import skill_pack
+        window = getattr(self.ui, "window", None)
+        if window is None:
+            return {"ok": False, "msg": "窗口未就绪,选不了分享包"}
+        source = self._ask_open_path()
+        if source is None:
+            return {"ok": False, "msg": "已取消导入"}
+        return skill_pack.preview(source)
+
+    def apply_skill_pack(self, nonce: str = "") -> dict:
+        """按刚才那份预览落盘(再校验一次;同名技能先整目录备份)。"""
+        from minicode import skill_pack
+        got = skill_pack.apply(nonce)
+        if got.get("ok"):
+            self.ui.push("skills_changed", session=self._current.key)
+            self.ui.push("info", text=got.get("msg") or "技能已导入")
+        return got
+
     # ------------------------------------------------------------ 知识库候选审核
 
     def get_kb_candidates(self, status: str = "") -> dict:
@@ -1229,16 +1295,43 @@ class Bridge:
     def get_automation(self) -> dict:
         """「自动化」那一屏:本机登记了哪几个定时任务、下一次什么时候跑、上次跑出什么。
 
-        数据只有一份真源:`proactive.JOB_SPECS`(登记)+ `jobs-state.json`(跑过的账)
-        + `jobs.due/next_due`(此刻的判定)。这里不存副本 —— 之前这两个数只有两个
-        出口(命令行念一段人话、看板列几行且**从没跑过的整条不列**),界面想摆
-        "有哪几个任务"就没有地方问。
+        数据只有一份真源:`proactive.all_specs()`(代码登记的 + 同学自己加的)
+        + `jobs-state.json`(跑过的账)+ `jobs.due/next_due`(此刻的判定)。
+        这里不存副本 —— 之前这两个数只有两个出口(命令行念一段人话、看板列几行且
+        从没跑过的整条不列),界面想摆"有哪几个任务"就没有地方问。
         """
         from minicode import jobs, proactive
         return {"ok": True,
-                "jobs": jobs.facts(proactive.JOB_SPECS),
+                "jobs": jobs.facts(proactive.all_specs()),
                 "handlers": sorted(proactive.JOB_HANDLERS),
+                "max": jobs.MAX_USER_JOBS,
                 "msg": ""}
+
+    def add_automation(self, label: str = "", prompt: str = "", cadence: str = "daily",
+                       weekday=None, hour=None, minute=0) -> dict:
+        """「新建自动化」:同学自己登记一条定时任务(v0.9.114,图 p5/p6)。
+
+        存本机 `jobs-user.json`(个人数据:进 .gitignore 与打包清理清单)。
+        到点跑的是**同学写的那句话**,走的还是 `send_task` 那一条 —— 权限档位照常,
+        自动化不是绕过确认的第二条路。
+        """
+        from minicode import jobs
+        got = jobs.add_user(label, prompt, cadence, weekday, hour, minute)
+        if got.get("ok"):
+            self.ui.push("info", text=got.get("msg") or "定时任务已加上")
+        return got
+
+    def remove_automation(self, job_id: str = "") -> dict:
+        """删掉同学自己登记的一条(代码登记的那几条删不掉 —— 那边直接拒)。"""
+        from minicode import jobs, proactive
+        name = str(job_id or "").strip()
+        if any(s.id == name for s in proactive.JOB_SPECS):
+            return {"ok": False,
+                    "msg": f"「{name}」是内置任务,删不掉;要它别自动跑就用那颗开关「关掉」。"}
+        got = jobs.remove_user(name)
+        if got.get("ok"):
+            self.ui.push("info", text=got.get("msg") or "定时任务已删掉")
+        return got
 
     def set_job_enabled(self, job_id: str, on) -> dict:
         """开/关一个定时任务。效力只有一处:关掉之后 `due_jobs` 不再把它算作到期。
@@ -1248,7 +1341,7 @@ class Bridge:
         """
         from minicode import jobs, proactive
         name = str(job_id or "").strip()
-        known = {s.id for s in proactive.JOB_SPECS}
+        known = {s.id for s in proactive.all_specs()}
         if name not in known:
             return {"ok": False,
                     "msg": f"没有这个定时任务:{name or '(空)'}(认识的:"
@@ -2700,12 +2793,22 @@ class Bridge:
 
         关窗到底意味着什么(问一句/藏进托盘/真退出)归托盘那套偏好管:
         这里如果直接 `tray.quit()` 或设 `allow_exit`,就等于绕过了他自己设的规矩。
+
+        **为什么调的是 `destroy()` 而不是 `close()`**:pywebview 的 `Window` 类压根
+        没有 `close()` 这个方法(`webview/window.py` 只有 `destroy`,它内部
+        `Invoke` 到 UI 线程再 `Form.Close()`,所以托盘那道 `FormClosing` 照常生效)。
+        上一版这里写的是 `w.close()` → `AttributeError` 被下面那个 except 吞成一条
+        `{ok: false}`,而前端那一句 `api.win_close()` **不看返回值** → 表现就是
+        用户 2026-10-04 图 p7 报的「点叉没反应,另外两颗正常」。
         """
         w = self._chrome_window()
         if w is None:
             return {"ok": False, "msg": "窗口还没起来"}
+        if not hasattr(w, "destroy"):
+            return {"ok": False, "msg": f"当前窗口后端没有 destroy()({type(w).__name__}),"
+                                        "这一颗点不动 —— 请用托盘的「退出引路学长」"}
         try:
-            w.close()
+            w.destroy()
             return {"ok": True, "msg": ""}
         except Exception as exc:
             return {"ok": False, "msg": f"{type(exc).__name__}: {exc}"}
@@ -3315,6 +3418,23 @@ class Bridge:
                 "running": str(s.path) in running_paths})
         self.ui.push("sessions", items=items)
 
+    def recent_for_tray(self, limit: int = 5) -> list:
+        """托盘菜单里那一叠「最近会话」:回 [(留档名, 标题)]。
+
+        与侧栏同一份 `list_sessions`、同一个 `derive_title` —— 两处两个标题口径
+        是迟早要被打脸的那种事。当前正在看的那条也列(托盘的价值就是"跳回去")。
+        """
+        from minicode import tray as _tray
+        out = []
+        try:
+            for s in list_sessions(self.sessions_dir,
+                                   limit=max(1, int(limit)))[:_tray.MENU_RECENT]:
+                out.append((s.path.name, derive_title(s.first_user_text)
+                            or s.last_user_text or "(空会话)"))
+        except Exception:
+            return []
+        return out
+
     def _history_for_frontend(self) -> list[dict]:
         out = []
         for m in self.session.messages:
@@ -3403,6 +3523,63 @@ class Bridge:
                 return {"mode": asking.MODE_UNANSWERED, "reason": reason}
             return self._ask_answer
 
+    # 计划核对单(v0.9.114):Agent 线程阻塞在此,前端点完按钮后带回裁决
+    def plan_review(self, plan: dict) -> dict:
+        """弹一张**整单核对单**并等用户点:批准 / 改一条 / 重排。
+
+        与 `ask_user` 各一条锁各一个事件(见 __init__ 那段注释):共用就会串答案。
+        等不到回答(停止/关窗/界面死了)按 `unanswered` 收口 —— 由 planning 那一侧
+        翻成"先讲给用户听,别直接开工",**绝不替他批准**。
+        """
+        data = plan if isinstance(plan, dict) else {}
+        with self._plan_lock:
+            self._plan_event.clear()
+            self._plan_answer = {"mode": "unanswered", "reason": "没等到回答"}
+            self.ui.push("plan_review", goal=str(data.get("goal") or ""),
+                         steps=[{"n": s.get("n"), "title": str(s.get("title") or ""),
+                                 "verify": str(s.get("verify") or "")}
+                                for s in (data.get("steps") or []) if isinstance(s, dict)])
+            if not self._wait_event(self._plan_event, open_flag="_plan_open"):
+                reason = ("窗口正在关闭" if self._closing else "你按了停止")
+                self._push_ask_trace("计划核对单没等到回答,按未确认处理")
+                return {"mode": "unanswered", "reason": reason}
+            got = dict(self._plan_answer or {})
+        self._push_ask_trace(self._plan_review_trace(got))
+        return got
+
+    def _plan_review_trace(self, verdict: dict) -> str:
+        """卡片关掉之后聊天区留下一行"你当时怎么点的"(与提问卡同一条规矩:
+        这句话由后端组,前端只摆 —— 两处各拼一份就是两份真相)。"""
+        mode = str((verdict or {}).get("mode") or "")
+        if mode == "approve":
+            return "计划核对:你点了「批准」,学长按这张单子开工。"
+        if mode == "edit":
+            return (f"计划核对:你改了第 {(verdict.get('step') or '?')} 步,"
+                    "学长按改后的这一版走。")
+        if mode == "revise":
+            return "计划核对:你点了「重排」,这张单子没通过,学长会重出一版再问。"
+        return "计划核对:没等到你的回答,学长不会擅自开工。"
+
+    def plan_review_reply(self, payload) -> dict:
+        """前端三颗按钮的落点。payload:{mode, step?, text?, note?}。"""
+        from minicode import planning
+        try:
+            data = json.loads(payload) if isinstance(payload, str) else (payload or {})
+        except (ValueError, TypeError):
+            return {"ok": False, "msg": "回话格式不对,没记下来"}
+        if not isinstance(data, dict):
+            return {"ok": False, "msg": "回话格式不对,没记下来"}
+        mode = str(data.get("mode") or "")
+        if mode not in planning.REVIEW_MODES:
+            return {"ok": False, "msg": f"未知的回答方式「{mode}」"}
+        if mode == "edit" and not str(data.get("text") or "").strip():
+            return {"ok": False, "msg": "改一条要带上改成什么"}
+        self._plan_answer = {"mode": mode, "step": data.get("step"),
+                             "text": str(data.get("text") or ""),
+                             "note": str(data.get("note") or "")}
+        self._plan_event.set()
+        return {"ok": True}
+
     def _push_ask_trace(self, text: str) -> None:
         """答完在聊天区留一行痕(v0.9.96 拍的 D2:卡片关掉不是消失)。
 
@@ -3460,7 +3637,7 @@ class Bridge:
                 if parts else "学长的提问已回答。")
 
     def abandon_pending(self, reason: str = "") -> None:
-        """停止键 / 关窗时叫醒正在等待的线程(确认框与提问卡各一次)。
+        """停止键 / 关窗时叫醒正在等待的线程(确认框、提问卡、计划核对单各一次)。
 
         由 `GuiUI.request_stop` 与 `Bridge.close` 调:那两处是"用户已经不打算再答了"
         的确凿时刻。不叫醒的话挂住的不是这一次,而是**下一切** —— 锁在后面那条
@@ -3471,6 +3648,9 @@ class Bridge:
         self._ask_answer = {"mode": asking.MODE_UNANSWERED,
                             "reason": str(reason or "没等到回答")}
         self._ask_event.set()
+        self._plan_answer = {"mode": "unanswered",
+                             "reason": str(reason or "没等到回答")}
+        self._plan_event.set()
 
     def _permission_detail_text(self, tool: Tool, args: dict) -> str:
         if tool.name == "bash":

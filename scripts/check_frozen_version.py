@@ -127,7 +127,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # (漏 win_close = 无边框时用户没有任何办法关窗;
                             #  漏 get_score_stats = 「成绩」那一档永远在读不到)
                             "win_state", "win_minimize", "win_zoom", "win_close",
-                            "win_resize", "get_score_stats"
+                            "win_resize", "get_score_stats",
+                            # v0.9.114:自动化新建/删除、计划核对单、技能分享包、
+                            # 托盘那叠最近会话的取法
+                            "add_automation", "remove_automation", "plan_review",
+                            "plan_review_reply", "_plan_review_trace",
+                            "export_skill_pack", "import_skill_pack",
+                            "apply_skill_pack", "recent_for_tray"
                             ),
     # v0.9.39 p2:标题栏整模块。漏收 = 桥里那句 `from minicode import window_chrome`
     # 在装好的包里 ImportError,而它被前端那个 try/catch 吞掉 → 表现为"改了个寂寞"。
@@ -195,6 +201,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.37:实时耗时表(漏 live_rows = 时间线一行时刻都没有;漏 live_abandon =
     # 按了停止还在转圈,那一行永远装作在跑)
     "minicode.gui_ui": ("confirm_tool",  # v0.9.60:label 参数要能传到 handler
+                        # v0.9.114:核对单在界面适配器上的那个方法
+                        # (漏收 = 工具侧 getattr 拿不到,静默不弹卡)
+                        "plan_review", "plan_review_handler",
                         "live_rows", "live_now", "live_abandon", "_live_begin",
                         "_live_end", "LIVE_CAP",
                         # v0.9.90:长命令的实时那一行(漏收 = bash 那边 getattr 拿不到方法,
@@ -274,7 +283,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                       "start_in_tray",
                       # v0.9.28:action=log 读看门狗运行日志(漏收 = 「提醒为什么
                       # 没发」在装好的包里永远只能靠猜)
-                      "wd_log_tail", "watchdog_log_path"),
+                      "wd_log_tail", "watchdog_log_path",
+                      # v0.9.114 图 p8/p9:托盘菜单照 Qoder 重排(漏 _build_menu =
+                      # 那三颗新按钮整个不在;漏 set_recent_provider = 桥交不进来的
+                      # 取法,「最近会话」那一叠永远不出现)
+                      "_build_menu", "_recent_sessions", "_tray_open",
+                      "_refresh_menu", "set_recent_provider", "MENU_RECENT"),
     # v0.9.72:通知点击直达整模块(漏收 = 装好的包里点通知没反应、协议注册
     # 不发生、激活监听不起来 —— 用户看到的还是"通知只有字,点了等于没点")
     "minicode.activate": ("KIND_PANELS", "panel_uri", "parse_uri",
@@ -322,6 +336,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                              # 网页版能把主人的服务器窗口最小化/关掉、看见主人的成绩单)
                              "网页版不开放成绩导入与「我的成绩」",
                              "网页版不开放窗口控件", "get_score_stats", "win_resize",
+                             # v0.9.114:新建/删除定时任务、批准学长的计划、
+                             # 往服务器技能目录里写别人发来的技能
+                             "网页版不开放新建/删除定时任务", "plan_review_reply",
+                             "网页版不开放技能分享包", "add_automation",
+                             "apply_skill_pack",
                              "search_sessions",
                              # v0.9.23:教务导入需要本机浏览器窗口,网页版必须挡掉
                              "教务课表导入",
@@ -449,6 +468,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.101 ③B1:JobSpec 多了 `label`(看板那一行给人看的名);漏收 = 装好的包里
     # 看板只能列出 mood_weekly_review 这种内部 id。
     "minicode.jobs": ("JobSpec", "label", "due", "due_jobs", "load_state", "last_run",
+                      # v0.9.114 自动化「新建」:同学自己登记的那几条存在
+                      # jobs-user.json,由 proactive.all_specs() 并进任务表。
+                      # 漏收的表现是"看 + 开关"照旧像在工作,而加完重启就没了。
+                      "user_path", "load_user", "save_user", "user_specs",
+                      "add_user", "remove_user", "spec_of", "USER_FILE",
+                      "MAX_USER_JOBS",
                       "runs_of", "mark_run", "log_outcome", "STATE_FILE",
                       # v0.9.79:定时任务可观测(漏收 = 装好的包里「这周任务
                       # 跑没跑、为什么没跑」永远答不上来)
@@ -670,6 +695,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # ---- v0.9.16/17/20:主动推荐 + 新版本检查 + 今日简报(合并成一个键,
     #      避免 dict 重复键 last-wins 让早先的 needle 悄悄漏检) ----
     "minicode.proactive": ("check_once", "fetch_latest", "start_loop", "clean_title",
+                           # v0.9.114:任务表 = 代码登记的 + 同学自己加的
+                           # (漏 all_specs = 新建的那几条在装好的包里根本不跑)
+                           "all_specs", "_job_user",
                            "check_update", "push_briefing", "start_tick_loop",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
@@ -710,6 +738,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # 逐张候选页 × 逐帧都翻。漏收 = 又回到"第一帧有表就交差"。
                             "page_targets", "candidate_pages", "dumps", "scans",
                             "_page_urls", "MAX_PAGES"),
+    # v0.9.114 新功能③:技能分享包。整模块新的 —— 漏收的表现不是报错,而是
+    # 装好的包里技能详情那颗「打包分享」点了没反应(桥里那句 import 在方法体内)。
+    "minicode.skill_pack": ("pack", "preview", "apply", "skill_dir_of",
+                            "stash_existing", "MANIFEST",
+                            "MAX_FILES", "BACKUP_DIR", "_slug", "_key_is_safe"),
     # ---- v0.9.24:结构化解析从"只对着强智"泛化成独立一层(漏收 = 向导和 page_parse 都炸) ----
     "minicode.site_parse": ("parse_page", "parse_qiangzhi_grid", "parse_generic_grid",
                             "_entry_generic", "_entry_qiangzhi", "_weekday_header",
@@ -766,6 +799,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "permissions_trust", "PERMISSIONS_FILE", "TRUST_FILE"),
     "minicode.planning": ("plan_state", "dispatch_text", "notify_plan",
                           "in_progress", "running",
+                          # v0.9.114 新功能①:计划核对单(漏 review_plan = plan 写完
+                          # 什么都不弹,那张"批准/改一条/重排"的卡整个不在包里)
+                          "review_plan", "REVIEW_MODES", "_apply_review_edit",
                           # v0.9.81:计划与子代理对上号(漏收 = task 的 step 参数
                           # 在装好的包里静默失效,计划面板看不出哪一步正由谁在做)
                           "dispatch_start", "dispatch_end", "_as_step_no",
@@ -797,6 +833,26 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.113 p8/p9:右缘导航离边留距 + 浅色看得见 + 跳过去那一枚一直亮
     "--rail-tick", "right:12px", "scTickMark",
     # v0.9.113 ①:认不出表头时那颗"摊给学长看"(漏 = 失败又变回死路)
+    "jwPeekPage", "让学长看这一页的表格结构",
+    # v0.9.114 p1:三颗窗口按钮画成 SVG 且宽高写在 CSS(只给属性会被 flex 吃成 0)
+    ".tb-ico svg{ display:block; width:17px; height:17px;", "winCall",
+    'classList.toggle("maxed", winMaxed)',
+    # v0.9.114 p2:「选学期」自绘浮层 + 系统画的部分跟着主题
+    "scSemBtn", "scSemMenu", "function scSemToggle", "color-scheme:dark",
+    # v0.9.114 p3:入口栏不出滚动条(但 overflow-y:auto 必须留着)
+    "scrollbar-width:none",
+    # v0.9.114 p5/p6:自动化「新建」那张表单
+    "jbForm", "jbSave", "jbSetCadence", "jbRenderDays", "add_automation",
+    "autoNew", "remove_automation", "jb-tag",
+    # v0.9.114 新功能①:计划核对单
+    "planReviewOverlay", "renderPlanReview", "prReply", "plan_review_reply",
+    # v0.9.114 新功能③:技能分享包两颗
+    "btnSkillPack", "btnSkillPackImport", "skPackExport", "skPackImport",
+    "export_skill_pack", "apply_skill_pack",
+    # v0.9.114 p8/p9:托盘推的 open_panel 在界面侧有落点
+    'name === "new_task"', 'name === "providers"', '"session:"',
+    # 上一轮那颗死钮的教训钉在包里:关闭那颗必须真的发出去且回话有人看
+    'winCall(api.win_close(), "关闭")',
     "jwPeekPage", "让学长看这一页的表格结构",
     # v0.9.94 p6:会话轮次导航条(右侧细刻度 + hover 预览)
     "chat-rail", "rebuildChatRail", "showRailPop",

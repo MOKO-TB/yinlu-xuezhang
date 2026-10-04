@@ -840,6 +840,37 @@ JOB_HANDLERS: "dict[str, object]" = {
 }
 
 
+def all_specs() -> "list[_jobs.JobSpec]":
+    """代码登记的那几个 + 同学自己在面板里加的那几个(v0.9.114,图 p5/p6)。
+
+    每次**现读盘**:面板里刚加完就能看到"下一班什么时候",不用重启进程。
+    """
+    return list(JOB_SPECS) + _jobs.user_specs()
+
+
+def _job_user(bridge, spec) -> str:
+    """用户自己登记的定时任务:把写好的那句话交给学长跑一遍。
+
+    走 `bridge.send_task` 而不是另起一条通道 —— 这样**权限档位照常生效**:
+    到点要跑的事如果涉及改文件,照样弹确认框等你点头(没人点就这一班不跑)。
+    自动化不许成为绕过确认的第二条路。当前会话正忙时不排队也不插队:
+    记一句「跳过」并照常记账,等下一班 —— 免得每 5 分钟重试一次把会话挤满。
+    """
+    text = str(getattr(spec, "prompt", "") or "").strip()
+    if not text:
+        return "没跑:这条任务没写要做什么"
+    if not hasattr(bridge, "send_task"):
+        return "没跑:这一侧没有可发任务的会话(只在桌面版有)"
+    res = bridge.send_task(text)
+    if not isinstance(res, dict):
+        return "没跑:学长这边没接上"
+    if not res.get("ok"):
+        return f"跳过:{str(res.get('msg') or '当前跑不了')[:60]}"
+    # 结论里**不回抄同学写的那句话**:`jobs-state.json` 的 result 会顺带进
+    # watchdog.log,而这条模块的规矩一直是"内容不进日志"(上面 _run_due_jobs 那段)。
+    return f"已交给学长跑这一条({len(text)} 字)"
+
+
 def _run_due_jobs(bridge, now=None) -> list[str]:
     """过一遍任务表,到期的跑一次并记账;返回真跑过的任务 id 列表。
 
@@ -852,18 +883,22 @@ def _run_due_jobs(bridge, now=None) -> list[str]:
     - 整段拿 `_push_lock` 串行:两条心跳同时到期时不会双跑(handler 自己的
       推送去重另有一层,这层管的是"任务表这一格只记一次")。
     """
-    if not JOB_SPECS:
+    specs = all_specs()
+    if not specs:
         return []
     now = now or datetime.now()
     ran: list[str] = []
     with _push_lock:
-        for spec in _jobs.due_jobs(JOB_SPECS, now=now):
+        for spec in _jobs.due_jobs(specs, now=now):
             handler = JOB_HANDLERS.get(spec.id)
-            if handler is None:
-                _jobs.log_outcome(spec, ran=False, why="没接线")
-                continue
             try:
-                result = str(handler(bridge) or "")
+                if handler is not None:
+                    result = str(handler(bridge) or "")
+                elif getattr(spec, "prompt", ""):
+                    result = str(_job_user(bridge, spec) or "")
+                else:
+                    _jobs.log_outcome(spec, ran=False, why="没接线")
+                    continue
             except Exception as e:
                 result = f"异常 {type(e).__name__}"
             landed = _jobs.mark_run(spec.id, when=now, result=result)

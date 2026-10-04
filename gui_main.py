@@ -254,6 +254,9 @@ def main() -> None:
             background_color="#FDF6EC",
         )
     ui.attach(window)
+    # 托盘菜单里那叠「最近会话」的取法交给托盘(v0.9.114,图 p8/p9):
+    # 托盘不持有桥,只拿这一个 callable;存模块级是因为桥比托盘先起来(见 tray.set_recent_provider)。
+    tray.set_recent_provider(bridge.recent_for_tray)
     # 主动推荐看门狗(官网新通知/校历临近):daemon 线程,延迟 15 秒开跑,
     # 任何异常都在模块里吞掉 —— 这是个锦上添花的功能,绝不阻塞/拖垮窗口
     from minicode import proactive

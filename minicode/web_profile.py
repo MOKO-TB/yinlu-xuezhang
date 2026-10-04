@@ -290,6 +290,11 @@ class PublicFacade:
             "get_skill_body": lambda **k: _refuse("网页版不开放技能面板"),
             "get_skill_channels": lambda **k: _refuse("网页版不开放技能面板"),
             "add_skill": lambda **k: _refuse("网页版不开放技能面板"),
+            # 分享包会往**服务器**的技能目录里写一个别人发来的技能(下一轮对话
+            # 就会照着它做事)—— 比"加一个技能"更该拒。
+            "export_skill_pack": lambda **k: _refuse("网页版不开放技能分享包(请在桌面版打包)"),
+            "import_skill_pack": lambda **k: _refuse("网页版不开放技能分享包(导入会写服务器本机)"),
+            "apply_skill_pack": lambda **k: _refuse("网页版不开放技能分享包(导入会写服务器本机)"),
             # 工作区是服务器自己的目录选择:访客不能改(5 个方法整组拒绝)
             "get_workspaces": lambda **k: _refuse("网页版不开放工作区管理"),
             # 计划面板读的是服务器工作区的 plans/plan.md,而访客侧压根没有 plan 工具
@@ -306,6 +311,16 @@ class PublicFacade:
         self._handlers.update({n: (lambda **k: _refuse(_reason)) for n in (
             "schedule_import_open", "schedule_import_read", "schedule_import_model",
             "schedule_import_confirm", "schedule_import_clear")})
+        # 「新建自动化」写的是**服务器本机**那份 jobs-user.json,而且到点会以主人的
+        # 身份发一条任务给学长跑 —— 访客既不该能往主人机器上塞日程,更不该借他的
+        # 额度与确认通道做事。整组拒绝(开关那颗上面已一起拒了)。
+        _job_reason = "网页版不开放新建/删除定时任务(那是服务器本机的日程,请用桌面版)"
+        self._handlers.update({n: (lambda **k: _refuse(_job_reason)) for n in (
+            "add_automation", "remove_automation")})
+        # 计划核对单更不能让访客点:那一下等于**替主人批准**学长要做的整件事,
+        # 而真正在跑的会话是主人的。
+        self._handlers["plan_review_reply"] = lambda **k: _refuse(
+            "网页版不开放批准计划(那张核对单是给这台机器的主人看的)")
         # 成绩那一屏读的是**这台机器上主人本人**的成绩存档(含每一门课的分数与绩点),
         # 导入更要本机浏览器窗口让人自己登录。两个都不给,并且要给一句人话 ——
         # 别让前端把方法名当错误码显示出来。

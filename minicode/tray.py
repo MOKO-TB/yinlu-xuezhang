@@ -60,6 +60,7 @@ NOTIFY_COOLDOWN = 90          # 同一条(同类同正文)多久内不重复弹
 _ICON_WARMUP = 0.6            # 刚建好托盘图标就通知,系统可能还没收下这个句柄
 
 _CONTROLLER = None            # 单窗口应用:一个控制器就够
+_RECENT_PROVIDER = None       # 桥交来的"最近几条会话"取法(托盘菜单那一叠,见 set_recent_provider)
 _LOCK = threading.Lock()
 
 
@@ -96,6 +97,10 @@ LOG_CAP_LINES = 500            # v0.9.66:与 watchdog.log 同款滚动,别让诊
 # 参数校验先把它挡在门外,用户以为功能没做。
 NOTIFY_ACTIONS = ("status", "on", "off", "test", "startup_on", "startup_off",
                   "log", "jobs", "tray_log", "gui_log")
+
+# 托盘菜单里「最近会话」那一叠:摆几条、多久重摆一次(v0.9.114,图 p8/p9)。
+MENU_RECENT = 5
+MENU_REFRESH_SECONDS = 20
 
 
 def log_tail(lines: int = 30) -> list[str]:
@@ -858,6 +863,10 @@ class TrayController:
         self.allow_exit = False       # True = 这一次别拦
         self._asking = False          # 前端确认框已经弹出去了(防连点 X)
         self._icon_lock = threading.Lock()   # 只建一个托盘图标(见 _ensure_icon)
+        # 托盘菜单里「最近会话」那一叠的取法由桥交进来(v0.9.114):托盘不持有桥,
+        # 只拿一个 callable —— 否则这里会开始猜桥的结构。
+        self.recent_fn = None
+        self._menu_stop = threading.Event()
 
     # ---------------------------------------------------------------- 安装
 
@@ -965,25 +974,113 @@ class TrayController:
                 import pystray
                 from PIL import Image
                 image = Image.open(resource_path("assets", "gcode.ico"))
-                menu = pystray.Menu(
-                    pystray.MenuItem("显示主窗口", self._tray_show, default=True),
-                    pystray.MenuItem("桌面提醒(课前/简报/待办/通知)",
-                                     self._tray_toggle_notify,
-                                     checked=lambda item: notify_enabled()),
-                    pystray.MenuItem("测试一条桌面通知", self._tray_test_notify),
-                    pystray.MenuItem("开机自动启动", self._tray_toggle_startup,
-                                     checked=lambda item: startup_present()),
-                    pystray.MenuItem("点 X 时先问我", self._tray_reset_ask),
-                    pystray.MenuItem("退出引路学长", self._tray_quit),
-                )
-                icon = pystray.Icon("yinluxs", image, "引路学长", menu, visible=True)
+                icon = pystray.Icon("yinluxs", image, "引路学长",
+                                    self._build_menu(), visible=True)
             except Exception as e:
                 log(f"托盘图标创建失败: {type(e).__name__}: {e}")
                 return False
             self.icon = icon
         threading.Thread(target=self._run_icon, args=(icon,), daemon=True).start()
+        self._start_menu_refresher(icon)
         log("托盘图标已就绪")
         return True
+
+    # ------------------------------------------------------------ 菜单(v0.9.114 照 Qoder 重排)
+
+    def _build_menu(self):
+        """托盘那颗图标右键的菜单:窗口动作在最上、最近会话居中、设置与退出压底。
+
+        以前只有"显示主窗口 + 四个偏好开关",想开个新会话得先把窗口点在眼前再找按钮;
+        图 p8/p9 拿 Qoder 的菜单对比,要的就是"从托盘直接落到那件事上"。
+        """
+        import pystray
+        items = [
+            pystray.MenuItem("显示主窗口", self._tray_show, default=True),
+            pystray.MenuItem("新建任务",
+                             lambda i=None, it=None: self._tray_open("new_task")),
+        ]
+        recent = self._recent_sessions()
+        if recent:
+            items.append(pystray.MenuItem(
+                "最近会话", pystray.Menu(*[
+                    pystray.MenuItem(
+                        f"{n + 1}. {title}",
+                        # 默认参数把当次循环的值钉住:闭包直接抓 i 会变成"五条都是最后一条"
+                        lambda i=None, it=None, k=key: self._tray_open(f"session:{k}"))
+                    for n, (key, title) in enumerate(recent)])))
+        items += [
+            pystray.MenuItem("设置(模型与密钥)",
+                             lambda i=None, it=None: self._tray_open("providers")),
+            pystray.MenuItem("桌面提醒(课前/简报/待办/通知)",
+                             self._tray_toggle_notify,
+                             checked=lambda item: notify_enabled()),
+            pystray.MenuItem("测试一条桌面通知", self._tray_test_notify),
+            pystray.MenuItem("开机自动启动", self._tray_toggle_startup,
+                             checked=lambda item: startup_present()),
+            pystray.MenuItem("点 X 时先问我", self._tray_reset_ask),
+            pystray.MenuItem("退出引路学长", self._tray_quit),
+        ]
+        return pystray.Menu(*items)
+
+    def set_recent_provider(self, fn) -> None:
+        """桥把"最近几条会话怎么取"交给托盘 —— 托盘自己不持有桥(它只拿得到一个 callable)。"""
+        self.recent_fn = fn
+        self._refresh_menu()
+
+    def _recent_sessions(self) -> list:
+        """[(留档名或序号, 标题)]。取不到就回空 —— 空的话整条「最近会话」不摆,
+        而不是摆五条"(空)"骗人。"""
+        fn = getattr(self, "recent_fn", None)
+        if not callable(fn):
+            return []
+        try:
+            rows = fn() or []
+        except Exception as e:
+            log(f"托盘读最近会话失败: {type(e).__name__}")
+            return []
+        out = []
+        for row in rows[:MENU_RECENT]:
+            try:
+                key, title = row
+            except (TypeError, ValueError):
+                continue
+            title = str(title or "").strip().replace("\n", " ")
+            if not title:
+                continue
+            out.append((str(key), title[:26] + "…" if len(title) > 26 else title))
+        return out
+
+    def _refresh_menu(self) -> None:
+        icon = self.icon
+        if icon is None:
+            return
+        try:
+            icon.menu = self._build_menu()   # 赋值即 update_menu(win32 要重建 HMENU)
+        except Exception as e:
+            log(f"托盘菜单没刷新: {type(e).__name__}")
+
+    def _start_menu_refresher(self, icon) -> None:
+        """win32 的托盘菜单是**建好就缓存**的(pystray 只在 update_menu 时重建),
+        所以「最近会话」那一叠要定时重摆一次。20 秒一轮、daemon,退出时停。"""
+        def loop():
+            while not self._menu_stop.wait(MENU_REFRESH_SECONDS):
+                try:
+                    icon.menu = self._build_menu()
+                except Exception:
+                    return
+        threading.Thread(target=loop, daemon=True, name="tray-menu").start()
+
+    def _tray_open(self, panel: str) -> None:
+        """托盘里点「新建任务 / 设置 / 某条会话」:先把窗带到眼前,再把动作交给界面。
+
+        托盘**不碰桥**:它推的还是 `open_panel` 那一个事件,界面侧只有一个出口
+        (`openPanel`)。多一条"托盘直接调桥"的路,就会有两处决定"什么算新任务"。
+        """
+        self._on_ui_thread(self._show_form)
+        try:
+            self.ui.push("open_panel", panel=panel)
+        except Exception as e:
+            log(f"托盘动作没送到界面({panel}): {type(e).__name__}")
 
     def _run_icon(self, icon) -> None:
         try:
@@ -1047,6 +1144,7 @@ class TrayController:
     def quit(self) -> None:
         """真正退出:停托盘 → 关窗口 → webview.start() 返回 → bridge.close() 收尾。"""
         self.allow_exit = True
+        self._menu_stop.set()          # 那条 20 秒重摆菜单的线程先停,别再碰 icon
         icon, self.icon = self.icon, None
         if icon is not None:
             try:
@@ -1088,10 +1186,24 @@ def install(window, ui) -> TrayController | None:
     """接管窗口关闭动作;失败返回 None(退回"X = 退出"的老行为)。"""
     global _CONTROLLER
     controller = TrayController(window, ui)
+    if _RECENT_PROVIDER is not None:
+        controller.recent_fn = _RECENT_PROVIDER   # 桥比托盘先起来,这里补挂上去
     if not controller.install():
         return None
     _CONTROLLER = controller
     return controller
+
+
+def set_recent_provider(fn) -> None:
+    """桥交来"最近几条会话怎么取"(v0.9.114 托盘那一叠「最近会话」)。
+
+    为什么走模块级:启动顺序是 `create_app` 先出桥、`webview.start` 之后才建托盘,
+    所以交进来的 callable 得先存着,等 controller 建出来再挂 —— 两头都不假设顺序。
+    """
+    global _RECENT_PROVIDER
+    _RECENT_PROVIDER = fn
+    if _CONTROLLER is not None:
+        _CONTROLLER.set_recent_provider(fn)
 
 
 def start_in_tray() -> bool:

@@ -454,6 +454,65 @@ def _write_plan(ctx: ToolContext, plan: dict) -> None:
     notify_plan(ctx)           # 计划只有这一个落盘出口:write/update 都顺带刷新面板
 
 
+REVIEW_MODES = ("approve", "edit", "revise", "unanswered")
+
+
+def _apply_review_edit(ctx: ToolContext, verdict: dict) -> str:
+    """「改一条」:把改后的那一句写回 plan.md,再告诉模型按新单子走。
+
+    只动**标题**:状态归 `action=update`,依赖与整体顺序归重写一版 —— 一颗按钮
+    同时改三处,后面查"这一步为什么变成这样"就查不清了。
+    """
+    text = str(verdict.get("text") or "").strip()
+    try:
+        n = int(verdict.get("step"))
+    except (TypeError, ValueError):
+        return "\n(「改一条」没带上步骤编号,这次改动没落盘 —— 请直接说要改第几步。)"
+    if not text:
+        return f"\n(第 {n} 步改成了空话,这次改动没落盘 —— 空标题的计划没法执行。)"
+    p = plan_path(ctx)
+    if not p.exists():
+        return "\n(计划文件不在,这一处改动没处落。)"
+    plan = parse_plan(p.read_text(encoding="utf-8"))
+    hit = [s for s in plan["steps"] if s["n"] == n]
+    if not hit:
+        return f"\n(第 {n} 步不在这张计划里,改动没落盘。现有:{[s['n'] for s in plan['steps']]})"
+    old = hit[0]["title"]
+    hit[0]["title"] = text[:200]
+    _write_plan(ctx, plan)
+    return (f"\n用户把第 {n} 步从「{old}」改成「{hit[0]['title']}」,已按改后的写回 "
+            f"{PLAN_REL.as_posix()}。请按**改后的这一版**执行,不要照你原来那份走。")
+
+
+def review_plan(ctx: ToolContext, goal: str, steps: list) -> str:
+    """计划刚写完:把**整张单子**摊给人核对(批准 / 改一条 / 重排)。
+
+    与 `ask_user` 分家(v0.9.114 用户点名):那是问路,这是批单。
+    没有可弹卡的一侧(命令行 / 网页版 / 桥没接)就**直接放行** —— 闸门不许
+    把不需要它的人卡住;等不到回答时按"没确认"收口,而不是替他批准。
+    """
+    review = getattr(getattr(ctx, "ui", None), "plan_review", None)
+    if not callable(review):
+        return ""
+    try:
+        verdict = review({"goal": goal, "steps": steps}) or {}
+    except Exception as exc:                    # 卡弹不出来不该把整轮带崩
+        return f"\n(核对单没弹成:{type(exc).__name__};先把计划讲给用户,别直接开工。)"
+    mode = str(verdict.get("mode") or "unanswered")
+    if mode == "approve":
+        return "\n用户已在界面上**批准这张计划**,可以按顺序开工(每完成一步照旧 update 标记)。"
+    if mode == "edit":
+        return _apply_review_edit(ctx, verdict)
+    if mode == "revise":
+        note = str(verdict.get("note") or "").strip()
+        return ("\n用户点了「重排」:这张单子**没通过**。请照他写的意见重新 "
+                "plan(action=write) 一版再走一遍核对 —— 这一轮别开工。"
+                + (f"\n他写的意见:{note[:500]}" if note
+                   else "\n(他没写具体意见 —— 先问一句哪里不对,别自己猜着重排。)"))
+    return ("\n(这张核对单没等到回答,按**未确认**处理:先把计划讲给用户,"
+            "拿到他一句话的同意再开工。)")
+
+
 def _plan_write(ctx: ToolContext, goal: str, steps: list) -> str:
     goal = (goal or "").strip()
     if not goal:
@@ -500,7 +559,9 @@ def _plan_write(ctx: ToolContext, goal: str, steps: list) -> str:
             + gate
             + scheduling_view({"steps": clean})
             + "\n请把计划展示给用户并等待确认;确认后逐步执行,"
-              "每完成一步用 action=update 标记 done。")
+              "每完成一步用 action=update 标记 done。"
+            # 整单核对单:桌面版当场弹一张卡(批准/改一条/重排),别处照旧走对话
+            + review_plan(ctx, goal, clean))
 
 
 def _plan_read(ctx: ToolContext) -> str:

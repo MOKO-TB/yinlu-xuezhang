@@ -22,6 +22,8 @@ class GuiUI:
         self.stop_requested = False       # 停止按钮:在下一个输出增量处抛中断
         self.confirm_handler = None       # Bridge.confirm_tool,由 create_app 注入
         self.ask_handler = None           # Bridge.ask_user,同一条注入形状(v0.9.96)
+        # Bridge.plan_review:计划核对单那一条通道,与提问分家(v0.9.114)
+        self.plan_review_handler = None
         self.abandon_pending = None       # 停止/关窗时叫醒正在等回答的那两条线程
         self.on_llm_failure = None        # 模型的看门狗,由桥注入(见 GuiUI.llm_error)
         self._send_lock = threading.Lock()
@@ -74,6 +76,19 @@ class GuiUI:
         if self.ask_handler is None:
             return {"mode": "unanswered", "reason": "这个界面没接提问通道"}
         return self.ask_handler(questions, note, label)
+
+    def plan_review(self, plan: dict) -> dict:
+        """弹一张**整单核对单**并等人点(批准 / 改一条 / 重排,v0.9.114)。
+
+        与上面那条 `ask_user` 分家不是重复建设:那是"问路"(这一步该怎么走),
+        这是"批单"(这一整张单子要不要照做)。共用一条通道,界面就没法说清
+        "此刻等你的是一个问题还是一张计划"。
+        没接上通道(命令行、网页版、桥没注入)回 `unanswered` —— 调用方据此
+        放行或改口,绝不凭空造一个"用户批准了"。
+        """
+        if self.plan_review_handler is None:
+            return {"mode": "unanswered", "reason": "这个界面没接计划核对单"}
+        return self.plan_review_handler(plan)
 
     def _check_stop(self) -> None:
         if self.stop_requested:

@@ -114,7 +114,27 @@ def test_win_close_does_not_quit_the_tray_or_allow_exit():
     src = inspect.getsource(Bridge.win_close)
     body = src.split('"""')[2] if src.count('"""') >= 2 else src
     assert "allow_exit" not in body and "quit" not in body
-    assert "w.close()" in body, "关闭那颗没转给窗口自己的关闭流程"
+    assert "destroy()" in body, "关闭那颗没转给窗口自己的关闭流程"
+
+
+@pytest.mark.parametrize("name", ["win_state", "win_minimize", "win_zoom",
+                                  "win_close", "win_resize"])
+def test_the_bridge_only_calls_window_methods_that_actually_exist(name):
+    """**这一条就是 v0.9.113 那颗点不动的 ✕ 的教训**(用户图 p7)。
+
+    上一版 `win_close` 调的是 `w.close()` —— pywebview 的 `Window` 类**根本没有
+    `close()`**(只有 `destroy()`),于是 AttributeError 被 except 吞成一条
+    `{ok:false}`,而前端那句不看返回值 → 表现是"点了没反应,另外两颗正常"。
+    单看源码文本的针(上一轮我自己写的 `"w.close()" in body`)把 bug 钉成了规格,
+    所以这里改成对着**真类**核:桥在窗口对象上点的每个方法名都必须存在。
+    """
+    import webview
+
+    src = inspect.getsource(getattr(Bridge, name))
+    body = src.split('"""')[2] if src.count('"""') >= 2 else src   # 别把说明里的例子当代码
+    used = set(re.findall(r"\bw\.([a-z_]+)\(", body))
+    missing = [m for m in sorted(used) if not hasattr(webview.Window, m)]
+    assert not missing, f"{name} 调了 Window 上不存在的方法:{missing}"
 
 
 def test_zoom_sets_bounds_before_maximizing():
@@ -150,7 +170,14 @@ def test_window_controls_ask_the_window_before_showing():
     assert "winInit();" in HTML
     assert 'bar.hidden = !winBorderless' in HTML
     assert 'rz.hidden = !winBorderless' in HTML
-    assert "$(\"winClose\").addEventListener(\"click\", () => api.win_close())" in HTML
+    # 点下去不看返回值 = "点了没反应"没人知道(图 p7 那条)。三颗都必须过 winCall,
+    # 失败要在界面上说一句。
+    assert '$("winClose").addEventListener("click", () => winCall(api.win_close(), "关闭"))' in HTML
+    assert '$("winMin").addEventListener("click", () => winCall(api.win_minimize(), "最小化"))' in HTML
+    assert "function winCall(p, what)" in HTML
+    # 最大化那颗换的是**类**不是 textContent:三颗现在是 SVG,写文字会把图标抹掉
+    assert 'b.classList.toggle("maxed", winMaxed)' in HTML
+    assert 'b.textContent = winMaxed' not in HTML
 
 
 def test_edge_handles_match_the_backend_edges():

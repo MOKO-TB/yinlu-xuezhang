@@ -85,6 +85,9 @@ SHIP_NEVER: tuple[StateFile, ...] = (
     StateFile("monitor-pref.json", FILE, "任务监控栏的开合与折叠偏好"),
     StateFile("jobs-pref.json", FILE,
               "定时任务的开关(哪几个被关掉):带去别人机器会把他的日程按你的关掉"),
+    StateFile("jobs-user.json", FILE,
+              "你自己登记的定时任务(名字/节奏/到点要学长跑的那句话):"
+              "写的是本机日程与你的话,带去别人机器等于把你的安排塞给他"),
     StateFile("onboarding.json", FILE, "首次运行向导的「不再显示」"),
     StateFile("notify-pref.json", FILE, "桌面提醒开关与类别偏好"),
     StateFile("pushed-today.json", FILE,
@@ -102,6 +105,8 @@ SHIP_NEVER: tuple[StateFile, ...] = (
     StateFile("web-usage.log", FILE, "网页版问答记录:含发问内容与来源 IP,更不能外发"),
     StateFile("web-sessions", DIR, "网页版会话留档:局域网问答版记的本机对话"),
     StateFile("migrate-backup", DIR, "导入迁移包前的原件备份:本人文件副本"),
+    StateFile("skill-backup", DIR,
+              "导入技能分享包覆盖同名技能之前,那一份原件的备份:本人文件副本"),
     StateFile("campus-choices.json", FILE,
               "地图歧义答案:用户亲口认过的对应关系,属个人使用记录"),
     StateFile("campus-choices.json.tmp", FILE, "原子写的半截文件"),

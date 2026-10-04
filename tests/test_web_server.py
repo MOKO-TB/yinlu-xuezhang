@@ -216,7 +216,15 @@ def test_owner_only_methods_refused(server):
                  # v0.9.101 ①R1:审查视图写的是服务器工作区里的文件,访客看不见后果
                  "undo_step", "undo_all", "undo_records",
                  "set_sandbox", "set_permission_mode", "consolidate_memory",
-                 "pick_attachments"):
+                 "pick_attachments",
+                 # v0.9.113/114 新增的门面,一个一个补进来:这一列就是
+                 # "加了门面却忘了给网页版表态"的闸(漏一个的表现是访客能改主人的机器)。
+                 "get_score_stats",                      # 主人本人的成绩单
+                 "win_state", "win_minimize", "win_zoom", "win_close",
+                 "win_resize",                           # 动的是服务器那个窗口
+                 "add_automation", "remove_automation",  # 往服务器本机日程里塞东西
+                 "plan_review_reply",                    # 替主人批准学长要做的整件事
+                 "export_skill_pack", "import_skill_pack", "apply_skill_pack"):
         status, payload = client.post(name, {})
         assert status == 200, name
         assert payload.get("ok") is False, f"{name} 竟然放行了:{payload}"

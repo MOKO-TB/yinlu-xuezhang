@@ -44,6 +44,9 @@ class JobSpec:
     # 给人看的名(跨会话看板那一行用它):没有就退回 id。加字段是补账,
     # 不是改行为 —— 老代码一律按 id 记账与调度,一块表都不动。
     label: str = ""
+    # 同学自己登记的任务要跑的那句话(v0.9.114,图 p5/p6)。代码里登记的那几个
+    # 用 handler 函数,这一份是"把这句话交给学长跑"—— 空串 = 不是用户任务。
+    prompt: str = ""
 
     def __post_init__(self) -> None:
         if self.cadence not in CADENCES:
@@ -281,6 +284,116 @@ def set_enabled(job_id: str, on: bool) -> dict:
     return {"ok": True, "disabled": read_disabled(), "msg": ""}
 
 
+# ---------------------------------------------------------------- 用户自己登记的任务
+#
+# 图 p5/p6 点名的缺口:这一屏以前只能"看 + 关",要加一条得改 Python。
+# 存 `jobs-user.json`(本机个人数据 —— 进 .gitignore 与打包清理清单),
+# 开关沿用上面那一份 `jobs-pref.json` 的 disabled(一套机制,不新起第二份)。
+
+USER_FILE = "jobs-user.json"
+MAX_USER_JOBS = 20
+MAX_PROMPT = 2000
+
+
+def user_path() -> Path:
+    return app_path(USER_FILE)
+
+
+def load_user() -> list[dict]:
+    """同学自己加的任务定义。读不出来 = 一条都没有(不猜、不建默认)。"""
+    try:
+        raw = json.loads(user_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    items = raw.get("items") if isinstance(raw, dict) else None
+    return [x for x in items if isinstance(x, dict)] if isinstance(items, list) else []
+
+
+def save_user(items: list[dict]) -> tuple[bool, str]:
+    """原子写(.tmp → replace):这是同学自己配的清单,写坏了没有第二份能恢复。"""
+    try:
+        user_path().parent.mkdir(parents=True, exist_ok=True)
+        tmp = user_path().with_name(user_path().name + ".tmp")
+        tmp.write_text(json.dumps(
+            {"items": items,
+             "_说明": "你自己登记的定时任务。删掉这个文件就全没了;"
+                     "代码里登记的那几个不受影响,开关在 jobs-pref.json。"},
+            ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(user_path())
+    except OSError as e:
+        return False, f"写不进去({type(e).__name__}),本机原有清单保持不动。"
+    return True, ""
+
+
+def spec_of(row: dict) -> "JobSpec | None":
+    """一行清单 → JobSpec。坏行回 None,由调用方如实报数 —— 不替同学猜一个节奏。"""
+    try:
+        wd = row.get("weekday")
+        hr = row.get("hour")
+        return JobSpec(id=str(row.get("id") or ""),
+                       cadence=str(row.get("cadence") or "daily"),
+                       weekday=None if wd in (None, "") else int(wd),
+                       hour=None if hr in (None, "") else int(hr),
+                       minute=int(row.get("minute") or 0),
+                       every=int(row.get("every") or 1),
+                       label=str(row.get("label") or ""),
+                       prompt=str(row.get("prompt") or ""))
+    except (ValueError, TypeError):
+        return None
+
+
+def user_specs() -> list[JobSpec]:
+    return [s for s in (spec_of(r) for r in load_user()) if s is not None]
+
+
+def add_user(label: str = "", prompt: str = "", cadence: str = "daily",
+             weekday=None, hour=None, minute=0) -> dict:
+    """加一条自己的定时任务:**先按 JobSpec 校验、过了才落盘**(校验不过一个字不写)。"""
+    text = str(prompt or "").strip()
+    name = str(label or "").strip()[:40]
+    if not name:
+        return {"ok": False, "msg": "先给这条任务起个名 —— 列表里要点的是它。"}
+    if not text:
+        return {"ok": False, "msg": "要学长做什么还没写 —— 空任务我不替你编。"}
+    if len(text) > MAX_PROMPT:
+        return {"ok": False, "msg": f"内容 {len(text)} 字,超过上限 {MAX_PROMPT} 字。"}
+    rows = load_user()
+    if len(rows) >= MAX_USER_JOBS:
+        return {"ok": False, "msg": f"最多 {MAX_USER_JOBS} 条自己的任务,先删一条再加。"}
+    try:
+        spec = JobSpec(id="_check", cadence=str(cadence or "daily"),
+                       weekday=None if weekday in (None, "") else int(weekday),
+                       hour=None if hour in (None, "") else int(hour),
+                       minute=int(minute or 0), label=name, prompt=text)
+    except (ValueError, TypeError) as exc:
+        return {"ok": False, "msg": f"时间没填对:{exc}"}
+    ids = {str(r.get("id")) for r in rows}
+    n = 1
+    while f"u{n}" in ids:
+        n += 1
+    row = {"id": f"u{n}", "label": spec.label, "cadence": spec.cadence,
+           "weekday": spec.weekday, "hour": spec.hour, "minute": spec.minute,
+           "prompt": text, "created": datetime.now().strftime(TIME_FMT)}
+    ok, msg = save_user(rows + [row])
+    if not ok:
+        return {"ok": False, "msg": msg}
+    return {"ok": True, "id": row["id"],
+            "msg": f"已加上「{spec.label}」({rhythm_text(spec)})—— "
+                   "到点它会把你写的那句话交给学长跑一遍。"}
+
+
+def remove_user(job_id: str) -> dict:
+    """删一条自己的任务(代码登记的那几条删不掉,由 set_job_enabled 那边拒)。"""
+    rows = load_user()
+    left = [r for r in rows if str(r.get("id")) != str(job_id)]
+    if len(left) == len(rows):
+        return {"ok": False, "msg": f"你自己登记的任务里没有 {job_id} —— 没删任何东西。"}
+    ok, msg = save_user(left)
+    if not ok:
+        return {"ok": False, "msg": msg}
+    return {"ok": True, "msg": "已删掉这一条(记账里那几次的记录还留着)。"}
+
+
 def next_due(spec: JobSpec, now: datetime,
              last: datetime | None) -> datetime | None:
     """下一次大概什么时候该跑。
@@ -328,6 +441,9 @@ def facts(specs: list[JobSpec], now: datetime | None = None,
             "label": spec.label or spec.id,
             "cadence": spec.cadence,
             "rhythm": rhythm_text(spec),
+            # 这条是同学自己加的还是代码登记的:界面据此才敢给「删掉」那颗
+            # (内置的那几条删不掉,给了就是引导人点一次失败)。
+            "user": bool(getattr(spec, "prompt", "")),
             "hour": spec.hour, "minute": spec.minute,
             "weekday": spec.weekday, "every": spec.every,
             "enabled": spec.id not in off,
