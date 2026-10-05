@@ -1,21 +1,27 @@
-"""项目级权限白名单(§6 第 4 条「项目级白名单」那半句)。
+"""项目级权限规则(§6 第 4 条「项目级白名单」起步,v0.9.116 补上 ask/deny)。
 
-用户在项目根放一份 `permissions.json`,把"每次都要问一遍"的动作预先批下来。
-它**只替换权限档位那一次确认** —— 红线链一条都不越过:灾难命令硬拒、敏感路径、
+用户在项目根放一份 `permissions.json`,把"每次都要问一遍"的动作预先批下来,
+也可以反过来写"这条必须问我"或"这条不许做"。
+
+**它能替换的只有档位那一次确认** —— 红线链一条都不越过:灾难命令硬拒、敏感路径、
 工作区外路径、凭据文件、脚本内容扫描、外部内容升级门,全都在它前面就已经 return。
+反过来它只会**收紧**,不会放松:`deny` 比红线更严时照旧拒,`ask` 把免确认档拉回来问。
 
-三件事必须先讲清楚,因为**这份文件本身就是一个攻击面**:
+四件事必须先讲清楚,因为**这份文件本身就是一个攻击面**:
 
 1. **写了不等于生效,核对过才生效**。批准记在本机的用户级 `perms-trust.json`
    里(按工作区绝对路径记那份文件的 sha256)。文件内容改一个字节,哈希就对不上,
-   整份白名单立刻失效、回到逐次确认。要的是这两条路都走不通:
-   ①clone 别人的仓库,里面正好带了一份 `permissions.json`(作者批的权限不该是你的);
-   ②网页/文件里的注入内容鼓动模型自己 `write_file` 一份来给自己发通行证。
-   两者与"用户自己想批权限"在文件层面**长得一模一样**,所以不能靠文件内容自证,
-   只能靠"用户在会话之外另外点一次头"。
-2. **不预授权红线**:白名单里出现绝对路径、`..` 上跳、敏感目录名,这些规则
-   在装载时就被拒掉并说明原因 —— 而不是留到运行时看红线是否挡得住。
-3. **生效时留痕**:每一次按白名单放行都往安全日志里记一行(与注入防御
+   整份规则立刻失效、回到逐次确认。要的是这两条路都走不通:
+   ①clone 别人的仓库,里面正好带了一份 `permissions.json`(作者批的权限不该是你的,
+   作者写的 deny 规则也不该能瘫痪你的工作流);②网页/文件里的注入内容鼓动模型自己
+   `write_file` 一份来给自己发通行证。两者与"用户自己想批权限"在文件层面
+   **长得一模一样**,所以不能靠文件内容自证,只能靠"用户在会话之外另外点一次头"。
+2. **不预授权红线**:规则里出现绝对路径、`..` 上跳、敏感目录名,装载时就被拒掉并
+   说明原因 —— 而不是留到运行时看红线是否挡得住。这条对 `deny`/`ask` 同样适用:
+   那些路径**本来就进不去**,写一条拒绝只会让人以为"是这条规则拦的"。
+3. **可预授权的命令首词只限构建类**(`SAFE_COMMAND_HEADS`),这一条**只管 allow**:
+   预授权 rm 会开后门,而**拒绝/加严 rm 不会**。deny/ask 的规则不限首词。
+4. **生效时留痕**:每一次按规则放行、加严、拒绝都往安全日志里记一行(与注入防御
    `_log_security_ask` 同一份日志),界面上也推一条 info。静默放行等于没有审计。
 """
 from __future__ import annotations
@@ -33,6 +39,11 @@ from minicode.sandbox import SENSITIVE_DIRS
 PERMISSIONS_FILE = "permissions.json"
 TRUST_FILE = "perms-trust.json"
 MAX_RULES = 50                      # 一份项目文件里最多收多少条(超了截断并说明)
+# 一条规则能声明的决定。数组名仍叫 `allow`(历史形状,老文件零改动),条目里用
+# `decision` 说要问还是要拒 —— 不改数组名是有意的:那会让 README/SECURITY/
+# config.example/《使用说明》四处口径一起漂,而漂掉的权限文档比难听的字段名危险。
+DECISION_ALLOW, DECISION_ASK, DECISION_DENY = "allow", "ask", "deny"
+DECISIONS = (DECISION_ALLOW, DECISION_ASK, DECISION_DENY)
 
 # 能被预先批下来的命令首词:**与 accept_edits 档同一份名单**(permission.py 引用这里,
 # 不在两处各抄一遍)。为什么只能在这一份上收口:白名单若允许 `command_prefix: "rm"`,
@@ -98,6 +109,7 @@ class Rule:
     kind: str                 # "path" | "path_prefix" | "command_prefix"
     pattern: str              # 已归一(路径类为小写相对 posix;命令类为首词)
     index: int                # 第几条(给人指认用)
+    decision: str = DECISION_ALLOW     # allow=免确认;ask=必须问;deny=直接拒
 
     def matches(self, name: str, args: dict) -> bool:
         if self.tool != name:
@@ -112,15 +124,17 @@ class Rule:
         return target.startswith(self.pattern)
 
     def describe(self) -> str:
-        if self.kind == "command_prefix":
-            return f"允许以 `{self.pattern}` 开头的命令"
-        word = "这个路径" if self.kind == "path" else "这个目录下的文件"
-        return f"允许对 {word} `{self.pattern}` 的操作"
+        subject = (f"以 `{self.pattern}` 开头的命令" if self.kind == "command_prefix"
+                   else (f"路径 `{self.pattern}`" if self.kind == "path"
+                         else f"`{self.pattern}` 目录下的文件"))
+        return {DECISION_DENY: f"拒绝动 {subject}",
+                DECISION_ASK: f"{subject} 必须当面确认"}[self.decision] \
+            if self.decision != DECISION_ALLOW else f"允许对 {subject} 的操作"
 
 
 @dataclass
 class Spec:
-    """一个工作区的白名单装载结果(含没生效时该说的原因)。"""
+    """一个工作区的规则装载结果(含没生效时该说的原因)。"""
 
     workspace: Path
     sha: str = ""
@@ -133,14 +147,32 @@ class Spec:
     def effective(self) -> bool:
         return bool(self.rules) and self.trusted
 
-    def decide(self, name: str, args: dict) -> str:
-        """命中就返回"按第几条放行的人话",否则空串。"""
+    def hit(self, name: str, args: dict, decision: str) -> str:
+        """命中某一种决定就返回"按第几条办的人话",否则空串。
+
+        三种决定**分头扫**,不是"第一条匹配的用它的决定":同一条路径上若既写了
+        allow 又写了 deny,后者才是用户该得到的结果 —— 拒绝优先,与 Claude/Codex
+        的 `deny > ask > allow` 同一条尺,也和红线排在一切放行之前同构。
+        """
         if not self.effective:
             return ""
         for rule in self.rules:
-            if rule.matches(name, args):
+            if rule.decision == decision and rule.matches(name, args):
                 return f"permissions.json 第 {rule.index} 条:{rule.describe()}"
         return ""
+
+    def decide(self, name: str, args: dict) -> str:
+        """命中 allow 规则(免确认放行)时的人话,否则空串。"""
+        return self.hit(name, args, DECISION_ALLOW)
+
+    def summary(self) -> str:
+        """清单里各类规则各有几条(给 `permissions` 那一屏用,别再数两遍)。"""
+        if not self.rules:
+            return "没有规则"
+        n = {d: sum(1 for r in self.rules if r.decision == d) for d in DECISIONS}
+        bits = [f"{v} 条 {k}" for k, v in n.items() if v]
+        return "、".join(bits)
+
 
 
 def file_path(workspace: Path) -> Path:
@@ -231,27 +263,39 @@ def parse_rules(raw: Any, known_tools: set[str]) -> tuple[list[Rule], list[str]]
             continue
         key = keys[0]
         pattern = str(item[key]).strip()
+        # decision:缺省 allow(老文件一条都不用改);认不了的值**丢这条并说明**,
+        # 不猜它想干什么 —— 把 "deny" 打成 "denay" 然后悄悄当 allow 放行,是这类
+        # 字段最贵的一种坏法。
+        decision = str(item.get("decision") or DECISION_ALLOW).strip().lower()
+        if decision not in DECISIONS:
+            problems.append(f"第 {i} 条的 decision {item.get('decision')!r} 不认识,"
+                            f"只认 {'、'.join(DECISIONS)},已忽略这条")
+            continue
         if key in _PATH_KEYS:
             why = _targets_redline(pattern)
             if why:
-                problems.append(f"第 {i} 条被拒:模式 {pattern!r} {why}")
+                problems.append(f"第 {i} 条被拒:模式 {pattern!r} {why}"
+                                + ("(红线本来就拦住,这条写了也不会是它在拦)"
+                                   if decision != DECISION_ALLOW else ""))
                 continue
             norm = _norm_rel(pattern).rstrip("/") or _norm_rel(pattern)
             if not norm or norm.startswith("/"):
                 problems.append(f"第 {i} 条模式 {pattern!r} 归一后是空的,已忽略")
                 continue
-            rules.append(Rule(bare, key, norm, i))
+            rules.append(Rule(bare, key, norm, i, decision))
         else:
             head = command_head(pattern)
             if not head:
                 problems.append(f"第 {i} 条的 command_prefix {pattern!r} 取不出首词,已忽略")
                 continue
-            if head not in SAFE_COMMAND_HEADS:
+            # 首词白名单**只管 allow**:预授权 rm 会开后门,拒绝/加严 rm 不会。
+            if head not in SAFE_COMMAND_HEADS and decision == DECISION_ALLOW:
                 problems.append(f"第 {i} 条被拒:{pattern!r} 不是可预授权的构建类命令"
                                 f"(只认 {'、'.join(sorted(SAFE_COMMAND_HEADS))} 这类首词;"
-                                "删除/强制类命令不许预先批,必须当场确认)")
+                                "删除/强制类命令不许预先批,必须当场确认。"
+                                "想拒绝它请给这条加 \"decision\": \"deny\",那条不限首词)")
                 continue
-            rules.append(Rule(bare, "command_prefix", head, i))
+            rules.append(Rule(bare, "command_prefix", head, i, decision))
     if len(raw) > MAX_RULES:
         problems.append(f"只取前 {MAX_RULES} 条(文件里写了 {len(raw)} 条)")
     return rules, problems
@@ -312,20 +356,23 @@ def _spec_of(ctx: Any) -> Spec:
 
 
 def _digest_lines(spec: Spec) -> str:
-    lines = [f"· 规则:{len(spec.rules)} 条"
-             + ("(已生效 —— 命中就免确认)" if spec.effective else
+    lines = [f"· 规则:{len(spec.rules)} 条({spec.summary()})"
+             + ("(已生效 —— 命中 allow 就免确认)" if spec.effective else
                 f"(未生效:{spec.reason or '原因未报'})")]
     if spec.sha:
         lines.append(f"· 文件指纹 sha256 {spec.sha[:16]}…"
-                     " —— 批准时记的就是这个,改一个字白名单整份失效")
+                     " —— 批准时记的就是这个,改一个字整份规则失效")
     for p in spec.problems:
         lines.append(f"· 装载时拒掉:{p}")
     if spec.rules:
         lines.append("· 清单:")
         lines += [f"    {r.index}. {r.tool} —— {r.describe()}" for r in spec.rules]
-    lines.append("· 边界:白名单只替换「权限档位本该问一次」那一步;敏感路径、工作区外、"
-                 "凭据文件、脚本内容扫描、外部内容升级门、灾难命令都在它前面,越不过去。")
+    lines.append("· 边界:allow 只替换「权限档位本该问一次」那一步;敏感路径、工作区外、"
+                 "凭据文件、脚本内容扫描、外部内容升级门、灾难命令都在它前面,越不过去。"
+                 "**ask 与 deny 反过来是加严**:ask 会把 full/accept_all 省掉的那一问要回来,"
+                 "deny 在读只放行之前就拒,两者都只能更严、不能更松。")
     return "\n".join(lines)
+
 
 
 def permissions(ctx, action: str = "show") -> str:
@@ -363,7 +410,16 @@ def permissions_trust(ctx, action: str = "trust") -> str:
     if not spec.rules:
         return "错误: 这份白名单里没有一条能用的规则(见 permissions 的拒收清单),不批准空清单。"
     trust(Path(ws), spec.sha, len(spec.rules))
+    n_ask = sum(1 for r in spec.rules if r.decision == DECISION_ASK)
+    n_deny = sum(1 for r in spec.rules if r.decision == DECISION_DENY)
+    tail = []
+    if spec.rules and any(r.decision == DECISION_ALLOW for r in spec.rules):
+        tail.append("命中 allow 的动作**不再问你**(只到「权限档位本该问一次」这一层,红线链照旧)")
+    if n_ask:
+        tail.append(f"{n_ask} 条 ask 会**把问题要回来**,连 full / accept_all 也要问")
+    if n_deny:
+        tail.append(f"{n_deny} 条 deny 会在读只放行之前就拒掉")
     return (f"已批准这 {len(spec.rules)} 条规则(记的是内容指纹 "
             f"{spec.sha[:16]}…):{spec.workspace}\n"
-            "从现在起命中它们的动作**不再问你**,但只到「权限档位本该问一次」这一层 —— "
-            "红线链照旧。文件改一个字就自动失效,要重新批准再说一声。")
+            + ";".join(tail) + "。文件改一个字就自动失效,要重新批准再说一声。")
+

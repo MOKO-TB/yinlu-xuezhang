@@ -50,12 +50,15 @@ HARD_REJECT_NOTE = (
     "请向用户如实说明你想做什么、被哪条红线挡住、需要什么权限,由他决定;"
     "**不要换一种写法绕过它** —— 绕过红线不是完成任务的备选路径。")
 
-# 这三类 ASK 不接受 permission_request 钩子代答(H3,v0.9.115):凭据文件、仓库
-# `.git`、以及"本回合接触过外部内容"之后升格的敏感动作。共同点是它们在自己的
-# 注释里就写着"权限档位、项目白名单、本轮总是允许都不替它背书" —— 最后一道是
+# 这几类 ASK 不接受 permission_request 钩子代答(H3,v0.9.115;v0.9.116 补第四条)。
+# 前三条凭据文件、仓库 `.git`、"本回合接触过外部内容"后升格的敏感动作,共同点是它们
+# 在自己的注释里就写着"权限档位、项目白名单、本轮总是允许都不替它背书" —— 最后一道是
 # **人的眼睛**。把它换成一条命令的 stdout,等于给注入防御装了个内部开关:
 # 钩子的输出会受它刚读到的内容影响,而那正是这几类要防的东西。
-NON_DELEGABLE_ASKS = ("credential", "git", "external")
+# 第四条 `project_rule` 是同一个道理的另一面:用户在 permissions.json 里写 ask 的
+# **唯一目的**就是"这一类我要亲自看",让另一条预先配好的命令代答,等于用一只手
+# 拆掉另一只手刚装的门。
+NON_DELEGABLE_ASKS = ("credential", "git", "external", "project_rule")
 
 FAIL_STREAK_NOTE = ("同一个工具调用已经连续失败 3 次,结果都一样,继续原样重试没有意义。"
                     "这一次不许再调用工具。请向用户如实说明:卡在哪一步、每次失败的具体原因"
@@ -879,8 +882,7 @@ class Agent:
             # 硬拒根本不叫钩子(方案 H1 红线②):先只读跑一次门只为拿这个判断。
             # check() 自己会清 ask_note/project_allow_reason,重复调没有副作用。
             if self.gate.check(tool, args) == REJECT:
-                self.ui.tool_rejected_hard(tool, args)
-                return HARD_REJECT_NOTE
+                return self._reject_note(tool, args)
             pre = self._run_config_hook("pre_tool", tool, args)
             if pre is not None:
                 self._hook_ms = int(pre.get("elapsed_ms") or 0)
@@ -895,8 +897,7 @@ class Agent:
 
         decision = self.gate.check(tool, args)
         if decision == REJECT:
-            self.ui.tool_rejected_hard(tool, args)
-            return HARD_REJECT_NOTE
+            return self._reject_note(tool, args)
 
         if decision == ASK:
             note = getattr(self.gate, "ask_note", "") or ""
@@ -1274,6 +1275,29 @@ class Agent:
         # `_note_low_rated_prior` 里写它),谁覆盖谁就有一句会静默消失。
         self._pending_prior = (self._pending_prior + "\n" + line).strip()
 
+    def _reject_note(self, tool, args: dict) -> str:
+        """被 REJECT 时回给模型的话,并画那张"硬拒"卡。
+
+        两种拒要说两种话:红线拒(危险动作,只有用户能放开档位/沙箱)与**项目规则拒**
+        (用户自己写进 `permissions.json` 的一条 deny)。说反了的代价很实在:模型会
+        劝用户去翻 config,而那条规则就在项目根的一个文件里。
+        两种拒都不许绕过 —— 红线那句写"不要换一种写法绕过它",规则那句写"改/删那条
+        或撤销批准",因为后者确实有正当的解法,而前者不该有。
+        """
+        self.ui.tool_rejected_hard(tool, args)
+        why = getattr(self.gate, "reject_reason", "") or ""
+        if not why:
+            return HARD_REJECT_NOTE
+        try:
+            from minicode import provenance
+            provenance.log_escalation("project_deny", tool.name, args, why, "no")
+        except Exception:
+            pass
+        return ("错误: 这一步被这个项目的 permissions.json 拒了 —— 不是安全红线,"
+                f"是你自己批准过的规则({why})。要放开只能由用户改/删那一条规则,"
+                "或用 permissions_trust 撤销整份批准,并请他重新核对;"
+                "**不要换一种写法绕过它**。")
+
     def _matched_config_hook(self, kind: str, tool, args: dict) -> bool:
         """这一步会不会跑某条钩子 —— **不启动进程**,只为红线预检服务。"""
         cfg = getattr(getattr(self, "ctx", None), "config", None)
@@ -1422,7 +1446,8 @@ class Agent:
         if not isinstance(cfg_hooks, dict):
             return None
         try:
-            return hooks.run_hook(kind, cfg_hooks, tool.name, args, result)
+            return hooks.run_hook(kind, cfg_hooks, tool.name, args, result,
+                                  workspace=str(getattr(self.ctx, "workspace", "") or ""))
         except Exception as e:      # 钩子本身崩了也如实算 pre 拦截/post 失败
             return {"ok": False, "blocked": kind == "pre_tool",
                     "output": f"{type(e).__name__}: {e}"}

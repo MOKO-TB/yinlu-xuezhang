@@ -444,8 +444,16 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.tools.catalog_files": ("tools", "perms_tools",
                          # v0.9.98:worktree 只读工具(漏收 = 模型看不到,
                          # "再开一份工作"只剩嘴上说)
-                         "worktree_tools"),
-    "minicode.tools.fs": ("repo_outline", "write_file", "edit_file"),
+                         "worktree_tools",
+                         # v0.9.116 L3:钩子配方两只(漏收 = 工具描述里许诺着"有现成
+                         # 配方可以挂",包里根本没有)
+                         "hooks_tools"),
+    "minicode.tools.fs": ("repo_outline", "write_file", "edit_file",
+                          # v0.9.116 #49a:行尾与编码保真那几只手。漏 `_dominant_eol`
+                          # 或 `_write_exact` 的表现最阴:CRLF/GBK 文件照写不误,只是
+                          # 又变回"整份转 UTF-8/LF"那个被抱怨的老毛病。
+                          "_dominant_eol", "_write_exact", "_decode_full",
+                          "_unreadable", "_existing_form"),
     "minicode.worktree": ("worktree_facts", "suggest", "parse_worktree_list",
                           "build_add_command", "suggest_copy_path",
                           "worktree_tool",
@@ -839,7 +847,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.permspec": ("load", "parse_rules", "Rule", "Spec", "decide",
                           "command_head", "SAFE_COMMAND_HEADS", "trust", "revoke",
                           "approved_sha", "trust_path", "permissions",
-                          "permissions_trust", "PERMISSIONS_FILE", "TRUST_FILE"),
+                          "permissions_trust", "PERMISSIONS_FILE", "TRUST_FILE",
+                          # v0.9.116 L2:ask/deny 的三条命脉。漏 `hit` = 门只查得到
+                          # allow,用户写的"必须问我/不许做"在包里静默失效 —— 比没有
+                          # 这条功能更糟,因为文件确实躺在项目根上。
+                          "hit", "summary", "DECISIONS"),
+    # v0.9.116 L3:内置钩子配方(整只模块新加;漏 apply = 挂不上,漏 list_line =
+    # 连"有没有挂着"都答不出)
+    "minicode.hook_packs": ("preview", "apply", "list_line", "TEMPLATES",
+                            "_render_spec", "_write_helper"),
     "minicode.planning": ("plan_state", "dispatch_text", "notify_plan",
                           "in_progress", "running",
                           # v0.9.114 新功能①:计划核对单(漏 review_plan = plan 写完

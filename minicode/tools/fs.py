@@ -16,14 +16,106 @@ _PATH_ERRORS = (PathOutsideWorkspace, PathBlocked)
 
 
 def _decode(data: bytes) -> str:
+    return _decode_full(data)[0]
+
+
+def _decode_full(data: bytes) -> "tuple[str, str]":
+    """解出文本**与它用的编码**(#49a 的另一面)。
+
+    旧写法是"UTF-8 失败就按 GBK 解",但写回时一律 UTF-8 —— 同学那份 GBK 中文稿
+    被学长改一行就整份转成 UTF-8,记事本打开变乱码。这与行尾那件事是同一个毛病,
+    而且更坏:行尾错了 `git diff` 会显示"每一行都改过",编码错了是**字直接不对了**。
+    所以读侧记下用了哪种编码,写侧沿同一种回去。
+    """
     try:
-        return data.decode("utf-8")
+        return data.decode("utf-8"), "utf-8"
     except UnicodeDecodeError:
-        return data.decode("gbk", errors="replace")
+        return data.decode("gbk", errors="replace"), "gbk"
+
+
+def _unreadable(text: str) -> bool:
+    """解出来带替换符(U+FFFD)= 有字节我们没读懂。改下去就是把猜的写进用户文件。"""
+    return "\ufffd" in text
 
 
 def _read_text(p: Path) -> str:
     return _decode(p.read_bytes())
+
+
+def _read_text_full(p: Path) -> "tuple[str, str]":
+    return _decode_full(p.read_bytes())
+
+
+
+# ---------------------------------------------------------------- 行尾保真(#49a)
+#
+# 两件不同的毛病一起修:
+# ① 写侧 —— `write_text(..., newline="\n")` 把同学那份 CRLF 文件整份转成 LF,
+#    他的 `git diff` 于是写着"每一行都改过"。
+# ② 读侧匹配 —— `edit_file` 拿 `text.count(old_string)` 做**逐字**匹配,而文件里是
+#    `\r\n`、模型从 read_file 看到的是 `\n`(`splitlines` 把行尾全剥了),所以 CRLF
+#    文件上的多行 old_string **今天根本匹配不上**,只会得到"未在文件中找到"。
+# 合起来的修法:纯一种行尾的文件,匹配在归一化后的文本上做,写回时按**它自己原来那种**
+# 行尾还原 —— 未触碰的行字节完全不变。混用行尾的文件不整体重写(那是别人有意或
+# 历史留下的混排,统一它不是学长该替用户做的决定),保持逐字匹配的旧行为。
+def _dominant_eol(text: str) -> "str | None":
+    """这份文本通篇用的是哪一种行尾;混用或只有一行没有行尾 → None(不替它决定)。"""
+    found: "set[str]" = set()
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\r":
+            found.add("\r\n" if text[i + 1:i + 2] == "\n" else "\r")
+            i += 2 if text[i + 1:i + 2] == "\n" else 1
+        elif ch == "\n":
+            found.add("\n")
+            i += 1
+        else:
+            i += 1
+        if len(found) > 1:
+            return None
+    return found.pop() if found else None
+
+
+def _to_lf(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _write_exact(p: Path, text: str, enc: str = "utf-8") -> None:
+    """按字节落盘:不让任何一层的换行翻译再动一次已经算清楚的行尾与编码。"""
+    p.write_bytes(text.encode(enc, errors="strict"))
+
+
+def _eol_note(eol: "str | None") -> str:
+    return {"\r\n": "，沿用原文件的 CRLF 行尾", "\r": "，沿用原文件的 CR 行尾"}.get(eol or "", "")
+
+
+def _form_note(eol: "str | None", enc: str) -> str:
+    """把"沿用了什么"说出来 —— 悄悄沿用与悄悄改掉同样糟,用户看 diff 时得知道为什么。"""
+    tail = _eol_note(eol)
+    if enc != "utf-8":
+        tail += f"，并沿用原文件的 {enc} 编码"
+    return tail
+
+
+def _mixed_eol_hint(text: str, needle: str) -> bool:
+    """该不该说出"这份文件行尾混用"那句:只在真混用、且要匹配的东西跨行时才说。
+    单行 needle 与行尾无关,提它就是无端插一句。"""
+    return "\n" in needle and _dominant_eol(text) is None and "\r\n" in text
+
+
+def _existing_form(p: Path) -> "tuple[str | None, str]":
+    """已存在那份文件用的行尾与编码。二进制-sniff 命中就回 (None, utf-8):
+    那份东西本来不该按文本改,行尾与编码都无从"沿用"。"""
+    try:
+        raw = p.read_bytes()
+    except OSError:
+        return None, "utf-8"
+    if b"\x00" in raw[:BINARY_SNIFF_BYTES]:
+        return None, "utf-8"
+    text, enc = _decode_full(raw)
+    return _dominant_eol(text), enc
+
 
 
 def _format_lines(lines: list[str], start: int) -> str:
@@ -64,16 +156,29 @@ def read_file(ctx: ToolContext, path: str, offset: int = 1, limit: int | None = 
 
 
 def write_file(ctx: ToolContext, path: str, content: str) -> str:
-    """写入(创建或覆盖)一个文本文件。"""
+    """写入(创建或覆盖)一个文本文件。行尾与编码都沿用原文件那一种(#49a)。"""
     try:
         p = resolve_path(ctx, path, for_write=True)
     except _PATH_ERRORS as e:
         return f"错误: {e}"
-    action = "覆盖" if p.exists() else "创建"
+    exists = p.exists()
+    prev_eol, prev_enc = _existing_form(p) if exists else (None, "utf-8")
+    action = "覆盖" if exists else "创建"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content, encoding="utf-8", newline="\n")
+    out = _to_lf(content).replace("\n", prev_eol) if prev_eol in ("\r\n", "\r") else content
+    try:
+        _write_exact(p, out, prev_enc)
+    except (UnicodeEncodeError, LookupError) as e:
+        # 模型给的字这份编码装不下(GB2312 里没有的字很常见):不降级成 UTF-8,
+        # 那等于替用户决定"你的稿子换个编码吧"。
+        return (f"错误: 这些字用 {prev_enc} 编码写不下({type(e).__name__}),"
+                "这个文件没被改动。要么让我按 UTF-8 重写(整份编码会变,要你点头),"
+                "要么换掉那些字。")
     n_lines = content.count("\n") + (0 if content.endswith("\n") or not content else 1)
-    return f"已{action}文件 {path}({n_lines} 行,{len(content)} 字符)。"
+    return (f"已{action}文件 {path}({n_lines} 行,{len(content)} 字符)。"
+            + _form_note(prev_eol, prev_enc))
+
+
 
 
 def _nearest_lines(text: str, old_string: str, keep: int = 2,
@@ -123,29 +228,52 @@ def edit_file(ctx: ToolContext, path: str, old_string: str, new_string: str,
     if old_string == new_string:
         return "错误: old_string 与 new_string 相同,没有需要修改的内容。"
 
-    text = _read_text(p)
-    count = text.count(old_string)
+    text, enc = _read_text_full(p)
+    if _unreadable(text):
+        return ("错误: 这份文件里有读不出来的字节(多半是 GBK 之外的编码),"
+                "学长不猜着改 —— 改下去会把猜出来的字永久写进你的文件。"
+                "可以先把它另存成 UTF-8(记事本另存时选 UTF-8),再来找我改。")
+    # 纯一种行尾的文件:匹配在归一化(\n)后的文本上做 —— 模型从 read_file 看到的
+    # 就是 \n,拿 \n 去逐字比 CRLF 文件永远不中(那是 #49a 的第二面)。
+    # 混用行尾的文件:保持逐字匹配的原样,不替它把整份统一掉。
+
+    eol = _dominant_eol(text)
+    folded = eol in ("\r\n", "\r")
+    hay = _to_lf(text) if folded else text
+    needle = _to_lf(old_string) if folded else old_string
+    repl = _to_lf(new_string) if folded else new_string
+    count = hay.count(needle)
     if count == 0:
         # 反馈"最接近的行"而不是只说没找到:模型拿着行号与相似度一回合就能
         # 自我修正,省掉"再 read_file 一遍"的整轮等待。只报告,绝不替它猜着改。
-        hints = _nearest_lines(text, old_string)
+        hints = _nearest_lines(hay, needle)
         extra = "".join(f"\n  第 {n} 行(相似度 {ratio:.0%}):{line}"
                         for n, ratio, line in hints)
         return ("错误: old_string 未在文件中找到(空格、缩进与换行必须完全一致)。"
                 + ("文件里最接近的几行:" + extra if hints else
-                   "文件里找不到相近的行 —— 可能要改的是别的文件,先 read_file 核对。"))
+                   "文件里找不到相近的行 —— 可能要改的是别的文件,先 read_file 核对。")
+                + ("" if not _mixed_eol_hint(text, needle) else
+                   "\n(这份文件的行尾是 CRLF/LF 混用,学长不替它统一 —— "
+                   "old_string 要按原文逐字给,含 \\r\\n 的那种。)")
+                )
     if count > 1 and not replace_all:
-        starts = _match_lines(text, old_string)
+        starts = _match_lines(hay, needle)
         shown = ", ".join(f"第 {n} 行" for n in starts[:6])
         more = f"(共 {len(starts)} 处)" if len(starts) > 6 else ""
         return (f"错误: old_string 在文件中出现 {count} 次,不唯一({shown}{more})。"
                 "请补充更多上下文使其唯一,或设置 replace_all=true 全部替换。")
 
-    new_text = text.replace(old_string, new_string) if replace_all \
-        else text.replace(old_string, new_string, 1)
-    p.write_text(new_text, encoding="utf-8", newline="\n")
+    new_text = hay.replace(needle, repl) if replace_all else hay.replace(needle, repl, 1)
+    if folded:
+        new_text = new_text.replace("\n", eol)   # 按原文件那种行尾还原
+    try:
+        _write_exact(p, new_text, enc)
+    except (UnicodeEncodeError, LookupError) as e:
+        return (f"错误: 改完的内容用 {enc} 编码装不下({type(e).__name__}),"
+                "文件一个字都没动。要么换掉那几个字,要么由你把文件先转成 UTF-8。")
     n = count if replace_all else 1
-    return f"已编辑 {path}(替换 {n} 处)。"
+    return f"已编辑 {path}(替换 {n} 处)。" + _form_note(eol, enc)
+
 
 
 # ---------------------------------------------------------------- 结构大纲

@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-from minicode import permspec, worktree as wt
+from minicode import hook_packs, permspec, worktree as wt
 from minicode.tools import fs, search, shell
 from minicode.tools.base import Tool
 
@@ -257,6 +257,62 @@ def perms_tools() -> list[Tool]:
                 },
             },
             handler=permspec.permissions_trust,
+        ),
+    ]
+
+
+def hooks_tools() -> list[Tool]:
+    """内置钩子配方(L3,v0.9.116):查与挂分两只,理由与 perms_tools 那一对同一份。
+
+    写的是**用户级 config.json** 的 hooks 字段 —— 那是任意命令执行的口子,所以
+    `hooks_apply` 必须 read_only=False(要弹框),且只接受 `hooks` 预览时给的一次性
+    凭据;而"用户明确说要挂哪条"这件事由提示词管(描述里写着不许自己决定去挂)。
+    """
+    return [
+        Tool(
+            name="hooks",
+            description=(
+                "看**工具钩子**现状与可挂的内置配方:现在 config.json 里挂着哪几条、"
+                "有哪两条配方(git 命令审计 / 改完 Python 跑一次 pytest)、挂上去各会"
+                "发生什么、风险是什么。preview 会把命令原文与范围摊开并给一次性的凭据,"
+                "但 preview 本身**不写任何东西**。用户问「我配了钩子吗」「有没有现成的"
+                "自动化可以开」时用。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "preview"],
+                               "description": "list 看现状与清单;preview 摊开一条配方"},
+                    "template": {"type": "string",
+                                 "description": "preview 要哪条配方(git-audit / run-tests)"},
+                },
+                "required": ["action"],
+            },
+            handler=lambda ctx, action="list", template="": (
+                hook_packs.preview(ctx, template) if str(action).strip().lower() == "preview"
+                else hook_packs.list_line(ctx)),
+            read_only=True,
+        ),
+        Tool(
+            name="hooks_apply",
+            description=(
+                "把一条已 preview 过的钩子配方**挂进用户 config.json**(先备份旧配置,"
+                "run-tests 还会写一只可见的助手脚本)。必须由用户明确说「挂上这条」"
+                "并给出 preview 里那个凭据才调用 —— **绝不要自己决定去开自动化**,"
+                "更不许没 preview 就凭记忆填 nonce。挂上之后立刻生效,不用重启;"
+                "要摘回来说一声。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "template": {"type": "string",
+                                 "description": "配方名,须与 preview 的那一条一致"},
+                    "nonce": {"type": "string",
+                              "description": "preview 给的一次性凭据(十分钟有效)"},
+                },
+                "required": ["template", "nonce"],
+            },
+            handler=hook_packs.apply,
         ),
     ]
 

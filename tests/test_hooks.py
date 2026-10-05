@@ -309,11 +309,12 @@ class _StubGate:
     参数 —— 否则"用户点过头的内容"与"被执行的内容"是两回事。
     """
 
-    def __init__(self, *decisions, ask_kind: str = ""):
+    def __init__(self, *decisions, ask_kind: str = "", reject_reason: str = ""):
         self.decisions = list(decisions)
         self.seen = []
         self.ask_note = ""
         self.ask_kind = ask_kind        # H3:真门会在这里写"是哪条口开的";替身照写
+        self.reject_reason = reject_reason   # L2:被项目规则拒时那条规则的人话
         self.project_allow_reason = ""
         self.turn_allowed = []          # 被升成"本轮总是允许"的工具名
         self.outside_approved = []      # [(session?)] —— 代答不许升长期授权,记在这
@@ -769,6 +770,32 @@ def test_lint_after_edit_loop_closes(tmp_path):
     assert "lint 通过" not in out
 
 
+# ------------------------------------------- L2(v0.9.116):项目规则的两副面孔
+
+def test_project_rule_ask_is_never_answered_by_the_hook(tmp_path):
+    """用户写 ask 就是为了亲自看一眼 —— 另一条预先配好的钩子替他答,等于自己拆自己装的门。"""
+    cmd = _json_hook(tmp_path, {"decision": "allow", "reason": "一律放行"}, name="pr.py")
+    gate = _StubGate(ASK, ask_kind="project_rule")
+    agent, s, ui = _hook_agent(tmp_path, {"permission_request": {"command": cmd}}, gate=gate)
+    agent._execute(_call(pattern="x"))
+    assert len(ui.confirms) == 1, "project_rule 那条 ask 必须问人"
+    assert agent._hook_ms is None, "连叫都不该叫钩子"
 
 
+def test_project_deny_and_redline_reject_say_different_things(tmp_path, monkeypatch):
+    """两种拒绝说两种话:一种"这事危险、只有用户能放开",一种"这是你自己写的规则拦的"。"""
+    from minicode import provenance
+    logged = []
+    monkeypatch.setattr(provenance, "log_escalation",
+                        lambda *a: logged.append(a))
+    gate = _StubGate(REJECT, reject_reason="permissions.json 第 2 条:拒绝动 路径 `a.md`")
+    agent, s2, ui = _hook_agent(tmp_path, {}, gate=gate)
+    out = agent._execute(_call(pattern="x"))
+    assert "permissions.json" in out and "不是安全红线" in out
+    assert "安全策略硬拒绝" not in out, "别把用户写的规则说成系统红线"
+    assert "不要换一种写法绕过它" in out
+    assert logged and logged[0][0] == "project_deny", "规则拒也要留痕"
 
+    gate2 = _StubGate(REJECT)          # 没有 reject_reason = 红线
+    agent2, s3, ui2 = _hook_agent(tmp_path, {}, gate=gate2)
+    assert agent2._execute(_call(pattern="x")) == HARD_REJECT_NOTE

@@ -24,10 +24,17 @@ from minicode.tools.base import Tool
 
 
 def build_default_registry() -> list[Tool]:
-    """54 个内置工具(子代理的 `task` 由 `app_setup` 装配时再接一个)。"""
+    """内置工具清单(子代理的 `task` 由 `app_setup` 装配时再接一个)。
+
+    这里**不写条数**:同一个数在三处(HANDOFF §1、README、这句 docstring)迟早会漂,
+    而漂掉的那处正是"看着一切正常、装好的包里少一只工具"的来源。当前条数由
+    `tests/test_registry_split.py` 拿实测钉住,文档数以 `check_docs.py --collect` 对账。
+    """
     return [
         *catalog_files.tools(),
         *catalog_files.perms_tools(),
+        # v0.9.116 L3:钩子配方两只,挨着权限那组(都是"用户点头才改配置"的一族)
+        *catalog_files.hooks_tools(),
         # v0.9.98:git 工作副本(隔离工作区 W1),挨着项目权限那组
         *catalog_files.worktree_tools(),
         *catalog_web.tools(),

@@ -255,3 +255,109 @@ def test_no_workspace_is_stated_not_guessed(tmp_path):
     ws = tmp_path / "nowhere"
     spec = permspec.load(ws, TOOLS)
     assert not spec.effective and "没有 permissions.json" in spec.reason
+
+
+# ---------------------------------------------------------------- deny / ask(v0.9.116)
+#
+# 这一组钉的不是"能不能写这两种规则",而是**顺序**:拒绝在读只放行之前、
+# 强制确认在档位之前。位置错了这两种决定就都是装饰品,而装饰品比没有更糟 ——
+# 用户以为自己在文件里写了"必须问我"。
+
+from minicode.permission import REJECT      # noqa: E402
+
+
+def _trusted(tmp_path, rules):
+    ws = _workspace(tmp_path, rules)
+    spec = permspec.load(ws, TOOLS)
+    permspec.trust(ws, spec.sha, len(spec.rules))
+    return ws, spec
+
+
+def test_decision_defaults_to_allow_so_old_files_are_unchanged():
+    rules, problems = permspec.parse_rules(
+        [{"tool": "write_file", "path": "notes/a.md"}], TOOLS)
+    assert len(rules) == 1 and rules[0].decision == "allow" and problems == []
+
+
+def test_unknown_decision_drops_the_rule_instead_of_guessing():
+    """把 deny 打成 denay 就悄悄当 allow 放行,是这类字段最贵的一种坏法。"""
+    rules, problems = permspec.parse_rules(
+        [{"tool": "write_file", "path": "a.md", "decision": "denay"}], TOOLS)
+    assert rules == [] and any("decision" in x for x in problems)
+
+
+def test_deny_outranks_allow_on_the_same_target(tmp_path, trust_file):
+    ws, _ = _trusted(tmp_path, [
+        {"tool": "write_file", "path_prefix": "notes", "decision": "allow"},
+        {"tool": "write_file", "path": "notes/secret.md", "decision": "deny"}])
+    gate = _gate(ws, mode="accept_all")
+    assert gate.check(_tool("write_file"), {"path": "notes/secret.md"}) == REJECT
+    assert "第 2 条" in gate.reject_reason, "要指得出是哪条规则拒的"
+    # 同目录别的文件仍按 allow 免确认 —— deny 不是"整份作废"
+    assert gate.check(_tool("write_file"), {"path": "notes/ok.md"}) == ALLOW
+
+
+def test_deny_reaches_a_read_only_tool_before_the_readonly_allow(tmp_path, trust_file):
+    ws, _ = _trusted(tmp_path, [
+        {"tool": "read_file", "path": "notes/private.txt", "decision": "deny"}])
+    gate = _gate(ws, mode="full")
+    assert gate.check(_tool("read_file", read_only=True),
+                      {"path": "notes/private.txt"}) == REJECT
+
+
+def test_ask_rule_survives_full_mode_and_names_the_door(tmp_path, trust_file):
+    ws, _ = _trusted(tmp_path, [
+        {"tool": "bash", "command_prefix": "pytest", "decision": "ask"}])
+    gate = _gate(ws, mode="full")
+    assert gate.check(_tool("bash"), {"command": "pytest -q"}) == ASK
+    assert gate.ask_kind == "project_rule", "H3 靠这个字段决定不许谁代答"
+
+
+def test_untrusted_ask_and_deny_rules_do_nothing(tmp_path, trust_file):
+    """攻击面与 allow 同一条:clone 来的仓库带一份 deny 清单,没核对批准就一条不生效
+    —— 否则别人可以用"拒绝一切"瘫痪你的工作流,和用"放行一切"开后门一样坏。"""
+    ws = _workspace(tmp_path, [
+        {"tool": "read_file", "path": "a.txt", "decision": "deny"}])
+    gate = _gate(ws, mode="full")
+    assert gate.check(_tool("read_file", read_only=True), {"path": "a.txt"}) == ALLOW
+
+
+def test_deny_may_name_an_unsafe_command_head_while_allow_may_not():
+    """首词白名单只管 allow:预授权 rm 会开后门,拒绝 rm 不会。"""
+    rules, problems = permspec.parse_rules([
+        {"tool": "bash", "command_prefix": "rm", "decision": "deny"},
+        {"tool": "bash", "command_prefix": "rm", "decision": "allow"}], TOOLS)
+    assert [r.decision for r in rules] == ["deny"]
+    assert any("不是可预授权" in x for x in problems)
+
+
+def test_redline_pattern_is_refused_even_in_a_deny_rule():
+    """红线类路径写一条拒绝照样装载时拒收:那些本来进不去,留着只会让人误以为是
+    这条规则在拦 —— 而规则没批准时它其实什么都没拦。"""
+    rules, problems = permspec.parse_rules(
+        [{"tool": "read_file", "path": ".ssh/id_rsa", "decision": "deny"}], TOOLS)
+    assert rules == [] and any("敏感目录" in x for x in problems)
+    assert any("这条写了也不会是它在拦" in x for x in problems)
+
+
+def test_summary_counts_each_decision(tmp_path, trust_file):
+    ws = _workspace(tmp_path, [
+        {"tool": "write_file", "path": "a.md"},
+        {"tool": "bash", "command_prefix": "pytest", "decision": "ask"},
+        {"tool": "read_file", "path": "b.txt", "decision": "deny"}])
+    spec = permspec.load(ws, TOOLS)
+    out = spec.summary()
+    assert "1 条 allow" in out and "1 条 ask" in out and "1 条 deny" in out
+
+
+def test_trust_says_what_will_still_be_asked(tmp_path, trust_file):
+    """批准那一刻给用户的承诺必须与规则一致 —— 旧文案对所有规则都说"不再问你"。"""
+    ws, _ = _trusted(tmp_path, [
+        {"tool": "bash", "command_prefix": "pytest", "decision": "ask"}])
+
+    class _Ctx:
+        workspace = ws
+
+    out = permspec.permissions_trust(_Ctx(), "trust")
+    assert "把问题要回来" in out
+    assert "不再问你" not in out, "这份清单里一条 allow 都没有"

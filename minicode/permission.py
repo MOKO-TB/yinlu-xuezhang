@@ -413,6 +413,9 @@ class PermissionGate:
         self._ask_note = ""
         self._ask_kind = ""
         self.project_allow_reason = ""
+        # 被项目规则(deny)拒掉时那条规则的人话;红线拒的时候它是空串 —— 两种拒绝
+        # 该说的话完全不同:一个是"这事危险,系统拦的",一个是"这是你写的规则拦的"。
+        self.reject_reason = ""
         if name == "bash":
             reason = check_disaster_command(args.get("command", ""))
             if reason:
@@ -455,8 +458,17 @@ class PermissionGate:
                 if gate != ALLOW:
                     return gate
 
+        # 项目规则里的 **deny** 排在读只放行之前:否则 `read_file` 这类工具上写的
+        # 一条拒绝永远是装饰。它只能比红线更严,不会更松 —— allow/ask 在下面各自
+        # 的位置,同一个 Spec 分两处问是因为"拒绝要趁早、加严要在档位之前"。
+        denied = self.project.hit(name, args, "deny")
+        if denied:
+            self.reject_reason = denied
+            return REJECT
+
         if tool.read_only:
             return ALLOW
+
         # `.git` 一层:往 `.git/hooks/` 写一行脚本 = 给以后每次 git 操作装一个本机
         # 自动入口。这一条特意排在档位判断**之前**,所以 accept_edits / accept_all /
         # full 都放不过它,项目白名单与「本轮总是允许」也够不着(那两条都在下面才生效)。
@@ -474,8 +486,17 @@ class PermissionGate:
             if why:
                 return self._ask("external", f"⚠ 本回合此前接触过外部内容({self._external_source}),"
                            f"{why}。这一步可能是外部内容诱导的,请确认它确实是你要的。")
+        # 项目规则里的 ask 排在**档位之前、红线与升级门之后**:.git 与"接触过外部
+        # 内容"那两句警告比"这条规则要我确认"更该让用户看到,所以不抢在它们前面;
+        # 但必须赶在 full/accept_all 提前 ALLOW 之前,否则 ask 就是装饰品。
+        asked = self.project.hit(name, args, "ask")
+        if asked:
+            return self._ask("project_rule",
+                             f"这份项目的规则要求这一步当面确认({asked})—— "
+                             "它比权限档位更严,full 与 accept_all 都省不掉这一问。")
         mode = self.config.permission_mode
         if mode == "full":
+
             # 完全访问:沙箱内的操作全部放行(敏感路径/灾难命令在上面已被硬拒)。
             # 工作区外路径已在前面 ASK 过一次,这里只放行剩余情况。
             return ALLOW

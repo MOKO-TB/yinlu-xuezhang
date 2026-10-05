@@ -127,7 +127,8 @@ def matched(kind: str, hooks_cfg: dict | None, tool: str,
 
 
 def run_hook(kind: str, hooks_cfg: dict | None, tool: str = "",
-             args: dict | None = None, result: str | None = None) -> "dict | None":
+             args: dict | None = None, result: str | None = None,
+             workspace: str = "") -> "dict | None":
     """跑一条钩子;没配置该类返回 None(调用方直接跳过,零开销)。
 
     五类钩子共用这一份形状:`pre_tool`(拦/改写这一步)、`post_tool`(回灌正文)、
@@ -168,7 +169,7 @@ def run_hook(kind: str, hooks_cfg: dict | None, tool: str = "",
     else:
         payload = args
 
-    cmd, tmp = _render(cmd_tpl, tool, payload, payload_key)
+    cmd, tmp = _render(cmd_tpl, tool, payload, payload_key, workspace)
     seconds, timeout_note = _timeout_for(spec)
     on_error = str(spec.get("on_error") or "block").strip().lower()
     started = time.perf_counter()
@@ -250,10 +251,18 @@ def run_hook(kind: str, hooks_cfg: dict | None, tool: str = "",
             "exit_code": exit_code}
 
 
-def _render(cmd: str, tool: str, payload: dict | None,
-            payload_key: str) -> "tuple[str, Path | None]":
-    """模板替换:{tool} 进命令行,{args_file}/{result_file} 落临时文件。"""
+def _render(cmd: str, tool: str, payload: dict | None, payload_key: str,
+            workspace: str = "") -> "tuple[str, Path | None]":
+    """模板替换:{tool} 与 {workspace} 进命令行,{args_file}/{result_file} 落临时文件。
+
+    `{workspace}` 是 L3(v0.9.116)补的:钩子命令由 `subprocess(shell=True)` 起,**继承
+    本进程的 cwd** —— 源码态 cwd 一般就是工作区,而打包版 GUI 的 cwd 是安装目录。
+    没有这个占位符,"改完跑一次 pytest"这类配方会在错误的目录里跑,而且**只在装好的包里
+    发作**(开发态一切正常),那是最难查的一类坏。
+    """
     text = str(cmd or "").replace("{tool}", tool)
+    if "{workspace}" in text:
+        text = text.replace("{workspace}", str(workspace or ""))
     tmp: Path | None = None
     if "{" + payload_key + "}" in text and payload is not None:
         fd = tempfile.NamedTemporaryFile(

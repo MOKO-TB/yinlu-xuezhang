@@ -33,6 +33,8 @@ ORDER = [
     "repo_outline",
     # v0.9.87:项目级权限白名单(看 = 只读,批准 = 要确认),紧挨着文件/命令那组
     "permissions", "permissions_trust",
+    # v0.9.116 L3:钩子配方(查/预览 = 只读,挂上 = 要确认),挨着权限那组走
+    "hooks", "hooks_apply",
     # v0.9.98:git 工作副本(隔离工作区 W1),挨着项目权限那组
     "worktree",
     "web_crawl", "web_search", "browser_open", "browser_eval", "browser_snapshot",
@@ -97,12 +99,12 @@ def test_registry_returns_the_same_tools_in_the_same_order():
 
 
 def test_order_pin_is_not_stale():
-    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且正好 52 个不重名。
+    """防"测试自己抄错了":这份 ORDER 必须与运行期结果互为镜像,且不重名。
 
     v0.9.96 加 `ask_user` 时它的位置就钉在 `plan` 后面 —— 模型每轮拿到的 tools 数组
     是这个顺序,挪位置等于改行为面,所以新工具插在谁后面都要在这里写明。
     """
-    assert len(ORDER) == len(set(ORDER)) == 56
+    assert len(ORDER) == len(set(ORDER)) == 58      # v0.9.116:56 + hooks/hooks_apply
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

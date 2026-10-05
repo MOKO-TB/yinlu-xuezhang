@@ -7,7 +7,8 @@ def test_registry_contents():
     assert names == ["read_file", "write_file", "edit_file", "bash",
                      "bash_status", "bash_kill", "py_script",
                      "glob", "grep", "repo_outline",
-                     "permissions", "permissions_trust", "worktree",
+                     "permissions", "permissions_trust",
+                     "hooks", "hooks_apply", "worktree",
                      "web_crawl", "web_search",
                      "browser_open", "browser_eval", "browser_snapshot",
                      "browser_click", "browser_fill", "browser_screenshot",
@@ -38,6 +39,8 @@ def test_read_only_flags():
         "bash_kill": False,            # 终止进程是动手面,必须用户点头
         "permissions": True,           # 只是看一眼这个项目批了什么
         "permissions_trust": False,    # 批准 = 从此免确认放行,必须用户点过头
+        "hooks": True,               # 看一眼挂着什么/预览配方,不改任何东西
+        "hooks_apply": False,        # 写用户 config.json = 装自动执行入口,必须点头
         # 开一份 Git 工作副本会在仓库旁边建目录并动 git —— 它是**写类**动作,
         # 而注册表目前标的是 read_only=True(全表唯一一个写盘却免确认的工具)。
         # 这条口径可疑,已记 HANDOFF §6 等拍板;这里先照**实测值**钉住,不改行为。
