@@ -104,6 +104,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # 弹条这个 bug 装了包还在);get_skill_body 是同一轮补的
                             # 漏转发(桥里有、门面没接 → 桌面版点技能卡片只有 TypeError)
                             "read_clipboard", "get_skill_body",
+                            # v0.9.117:用量示意改版门面(漏收 = 桌面版点开
+                            # 用量弹窗只有 TypeError,老圆环图已经退休)
+                            "get_usage_dashboard",
                             # v0.9.39 p2:标题栏染色 + 改字(漏 set_chrome = 深色界面顶上
                             # 仍顶着一条白标题栏,用户点名的就是那一条;开关都不通,
                             # 前端只会静默什么也不做)
@@ -880,7 +883,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # v0.9.114 W0/W5/W6:三列迁移 + 按模型画像(漏 _model_profile
                        # = 风云榜四卡没有数据来源;漏 _extra_totals = 头部累计耗时
                        # 与会话数永远 0 —— 不是没数据,是没人去数)
-                       "_model_profile", "_extra_totals"),
+                       "_model_profile", "_extra_totals",
+                       # v0.9.117 用量示意改版:区间解析 + 仪表盘一揽子聚合
+                       # (漏 resolve_range = 五档区间没法定起止;漏 dashboard =
+                       # 新弹窗整页空,老 statistics 还在,只是没人喂新版面)
+                       "resolve_range", "dashboard"),
 }
 
 # ---- 包内前端(v0.9.94 起):界面那半边不在 PYZ 里,它由 packaging/gcode.spec 的
@@ -982,7 +989,13 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     "fmtCost", "fmtDur",
     "act-reason", "act-reason-cap", "act-reason-body", "💭 思考",
     '×${item.group_n} 同款调用', "same-batch",
-    "累计耗时", "有账的会话", "缓存命中(端点不回报)",
+    "累计耗时", "有账的会话",
+    # v0.9.114 的旧针「缓存命中(端点不回报)」在 v0.9.117 随改版退役 —— 那句话
+    # 在界面上没有了:缓存命中现在端点回报就记账,没回报显示「未记录」。
+    # v0.9.117 用量示意改版:两栏仪表盘 + 全期热力图 2D/3D + 五档区间
+    # (漏一条 = 装好的包里用量弹窗还是旧圆环那副样子,或热力图切不过去)
+    "get_usage_dashboard", "usageCustom", "buildHeatGrid", "renderHeat3D",
+    "TOKEN 总数", "uh-grid", "每日明细", "模型明细",
 )
 
 

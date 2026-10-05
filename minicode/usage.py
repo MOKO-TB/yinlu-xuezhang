@@ -4,7 +4,8 @@
 2026-08-09-gui-token-statistics-design.md),但按引路学长的形态收敛:
 - 只记**服务端返回的真实 usage**(prompt/completion/total);usage 为 None
   就不记账,绝不估算——不虚构数字是底线;
-- 不记 cache 命中分母(校园内网服务不返回缓存明细);
+- cache 命中分母不记(v0.9.117 起补 `cached_tokens` 一列:端点**回报了才**
+  落,0 是"端点说了零命中",NULL 是"端点根本没说",两回事);
 - 库文件放 app_path("token-usage.db"),跟随 exe(绿色便携)。
 
 W0(v0.9.114 观测线)补的三列,服务「跨会话总账」(dsh-watcher Insights 的地基):
@@ -50,7 +51,8 @@ def _conn() -> sqlite3.Connection:
             "  total_tokens INTEGER NOT NULL DEFAULT 0,"
             "  session_id TEXT NOT NULL DEFAULT '',"
             "  elapsed_ms INTEGER, retries INTEGER NOT NULL DEFAULT 0,"
-            "  ttft_ms INTEGER, reasoning_tokens INTEGER)"
+            "  ttft_ms INTEGER, reasoning_tokens INTEGER,"
+            "  cached_tokens INTEGER)"
         )
         _migrate_columns(_CONN)
         _CONN.execute(
@@ -65,12 +67,16 @@ def _conn() -> sqlite3.Connection:
 # W5/W6 再补两列:ttft_ms(首字延迟)与 reasoning_tokens(思考 token)都是
 # **端点回报了才有**的实测,NULL = 未记录 —— 绝不当 0(0 是"瞬间首字/零思考",
 # NULL 是"端点根本没说",两回事)。
+# v0.9.117 补 cached_tokens(缓存命中),同一个 NULL 口径 —— llm 层早在
+# v0.9.114 就把 prompt_tokens_details.cached_tokens 抓进了 turn.usage,
+# 这一列只是把那份事实落进账本。
 _NEW_COLUMNS = (
     ("session_id", "TEXT NOT NULL DEFAULT ''"),
     ("elapsed_ms", "INTEGER"),
     ("retries", "INTEGER NOT NULL DEFAULT 0"),
     ("ttft_ms", "INTEGER"),
     ("reasoning_tokens", "INTEGER"),
+    ("cached_tokens", "INTEGER"),
 )
 
 
@@ -97,7 +103,8 @@ def set_db_path(path: Path | None) -> None:
 def record_usage(provider: str, model: str, usage: dict | None,
                  session_id: str = "", elapsed_ms: int | None = None,
                  retries: int = 0, ttft_ms: int | None = None,
-                 reasoning_tokens: int | None = None) -> bool:
+                 reasoning_tokens: int | None = None,
+                 cached_tokens: int | None = None) -> bool:
     """追加一条真实 token 用量;usage 缺失/非法时静默跳过(绝不记账估算值)。
 
     W0 起多带三个可选事实:`session_id`(留档文件名,空串=没有留档的运行)、
@@ -105,6 +112,7 @@ def record_usage(provider: str, model: str, usage: dict | None,
     次数)。W5/W6 再带两个**端点回报了才有**的实测:`ttft_ms`(首字延迟)与
     `reasoning_tokens`(思考 token)—— None 就是「未记录」,绝不落 0
     (0 是"瞬间首字/零思考",None 是"端点根本没说",两回事)。
+    v0.9.117 再带 `cached_tokens`(缓存命中),同一个 NULL 口径。
     这些都不改变"usage 缺失就不记账"的底线 —— 没有用量时其余的数也不落库,
     宁缺毋错。返回是否真的记了账。失败只返回 False,绝不影响对话主流程。
     """
@@ -125,11 +133,12 @@ def record_usage(provider: str, model: str, usage: dict | None,
                 "INSERT INTO token_usage "
                 "(ts, date, provider, model, prompt_tokens, completion_tokens, "
                 " total_tokens, session_id, elapsed_ms, retries, ttft_ms, "
-                " reasoning_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " reasoning_tokens, cached_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, day, str(provider or ""), str(model or ""),
                  prompt, completion, total, str(session_id or ""),
                  _as_int(elapsed_ms), max(0, _as_int(retries) or 0),
-                 _as_int(ttft_ms), _as_int(reasoning_tokens)),
+                 _as_int(ttft_ms), _as_int(reasoning_tokens),
+                 _as_int(cached_tokens)),
             )
             _conn().commit()
         return True
@@ -311,6 +320,11 @@ def _model_profile(days: int) -> dict[tuple[str, str], dict]:
     from datetime import date as _date, timedelta as _td
 
     start = (_date.today() - _td(days=days - 1)).isoformat()
+    return _profile_between(start, _date.today().isoformat())
+
+
+def _profile_between(d0: str, d1: str) -> dict[tuple[str, str], dict]:
+    """_model_profile 的区间版:v0.9.117 dashboard 的起止日期不再固定是"近 N 天"。"""
     with _LOCK:
         rows = _conn().execute(
             "SELECT provider, model,"
@@ -319,8 +333,8 @@ def _model_profile(days: int) -> dict[tuple[str, str], dict]:
             "       COALESCE(SUM(ttft_ms), 0),"
             "       SUM(CASE WHEN reasoning_tokens IS NOT NULL THEN 1 ELSE 0 END),"
             "       COALESCE(SUM(reasoning_tokens), 0)"
-            " FROM token_usage WHERE date >= ? GROUP BY provider, model",
-            (start,)).fetchall()
+            " FROM token_usage WHERE date BETWEEN ? AND ? GROUP BY provider, model",
+            (d0, d1)).fetchall()
     out: dict[tuple[str, str], dict] = {}
     for provider, model, elapsed, retries, ttft_n, ttft_sum, r_n, r_sum in rows:
         out[(str(provider or ""), str(model or ""))] = {
@@ -351,3 +365,216 @@ def _rows(days: int) -> list[dict]:
              "requests": r[6]}
             for r in cur.fetchall()
         ]
+
+
+# ------------------------------------------------------------ 仪表盘(v0.9.117)
+
+RANGE_KINDS = ("day", "week", "month", "all", "custom")
+
+
+def resolve_range(kind: str, start: str | None = None,
+                  end: str | None = None) -> "tuple[str, str] | None":
+    """区间语义 → (起, 止) ISO 日期(含两端);认不出返回 None,绝不猜。
+
+    周=近 7 天、月=近 30 天 —— 与老弹窗「今日/近 7 天/近 30 天」同一把尺,
+    不另发明日历口径;all 的起点是库里最早那天。custom 两端都要是合法
+    ISO 日期且起≤止,止落在未来收敛到今天:起比今天还晚说明整段无意义,
+    返回 None 让调用方明说「区间不合法」,而不是画一块空图。
+    """
+    from datetime import date as _date, timedelta as _td
+
+    kind = str(kind or "")
+    today = _date.today()
+    if kind == "day":
+        return today.isoformat(), today.isoformat()
+    if kind == "week":
+        return (today - _td(days=6)).isoformat(), today.isoformat()
+    if kind == "month":
+        return (today - _td(days=29)).isoformat(), today.isoformat()
+    if kind == "all":
+        with _LOCK:
+            row = _conn().execute("SELECT MIN(date) FROM token_usage").fetchone()
+        first = str(row[0] or "") if row else ""
+        return (first or today.isoformat()), today.isoformat()
+    if kind == "custom":
+        if not (isinstance(start, str) and isinstance(end, str)
+                and start.strip() and end.strip()):
+            return None
+        try:
+            s = _date.fromisoformat(start.strip())
+            e = _date.fromisoformat(end.strip())
+        except ValueError:
+            return None
+        if s > e or s > today:
+            return None
+        if e > today:
+            e = today
+        return s.isoformat(), e.isoformat()
+    return None
+
+
+def dashboard(kind: str = "week", start: str | None = None,
+              end: str | None = None) -> dict:
+    """用量示意改版(v0.9.117)的一揽子数据面,一次查询出齐全页所需。
+
+    - `summary`:区间汇总,含 cached_tokens/reasoning_tokens 的 NULL 口径
+      (全区间端点都没回报 → None =「未记录」,绝不落 0);
+    - `days`:按天明细,对话数 = 当天 distinct 有账会话(跨供应商去重);
+    - `models`:按模型聚合,带 share 占比、W5/W6 实测画像(风云榜从这份行
+      里挑)与估算费用 —— 与 statistics 同一把 pricing 尺;
+    - `providers`:按供应商分组(用量示意页的来源卡);provider 为空的行
+      如实归 "" 组,前端标「未记供应商」;
+    - `tiles`/`meta`:四块统计砖(近7天/近30天/日均/有账会话)与开始使用/
+      活跃天数 —— **全期口径,不随区间变**,与热力图(全期)同一理由:
+      那几块讲的是"这个库的一生",不是"这个区间"。
+    任何一层读挂了返回 {"ok": False, "msg": ...},绝不拿半份账凑页面。
+    """
+    from datetime import date as _date, timedelta as _td
+
+    try:
+        rng = resolve_range(kind, start, end)
+        if rng is None:
+            return {"ok": False,
+                    "msg": "统计区间不合法(认得:日/周/月/总计/自定义,"
+                           "自定义要起≤止的合法日期)"}
+        d0, d1 = rng
+        today = _date.today()
+        with _LOCK:
+            rows = _conn().execute(
+                "SELECT date, provider, model,"
+                "       COALESCE(SUM(prompt_tokens), 0),"
+                "       COALESCE(SUM(completion_tokens), 0),"
+                "       COALESCE(SUM(total_tokens), 0),"
+                "       SUM(cached_tokens),"
+                "       SUM(CASE WHEN cached_tokens IS NOT NULL THEN 1 ELSE 0 END),"
+                "       SUM(reasoning_tokens),"
+                "       SUM(CASE WHEN reasoning_tokens IS NOT NULL THEN 1 ELSE 0 END),"
+                "       COUNT(*)"
+                " FROM token_usage WHERE date BETWEEN ? AND ?"
+                " GROUP BY date, provider, model", (d0, d1)).fetchall()
+            day_rows = _conn().execute(
+                "SELECT date,"
+                "       COALESCE(SUM(prompt_tokens), 0),"
+                "       COALESCE(SUM(completion_tokens), 0),"
+                "       COALESCE(SUM(total_tokens), 0),"
+                "       SUM(cached_tokens), SUM(reasoning_tokens), COUNT(*),"
+                "       COUNT(DISTINCT CASE WHEN session_id != ''"
+                "            THEN session_id END)"
+                " FROM token_usage WHERE date BETWEEN ? AND ?"
+                " GROUP BY date ORDER BY date", (d0, d1)).fetchall()
+            sessions = _conn().execute(
+                "SELECT COUNT(DISTINCT CASE WHEN session_id != ''"
+                "            THEN session_id END)"
+                " FROM token_usage WHERE date BETWEEN ? AND ?", (d0, d1)
+            ).fetchone()[0]
+            meta = _conn().execute(
+                "SELECT MIN(date), COUNT(DISTINCT date),"
+                "       COUNT(DISTINCT CASE WHEN session_id != ''"
+                "            THEN session_id END),"
+                "       COALESCE(SUM(CASE WHEN date >= ? THEN total_tokens END), 0),"
+                "       COALESCE(SUM(CASE WHEN date >= ? THEN total_tokens END), 0)"
+                " FROM token_usage",
+                ((today - _td(days=6)).isoformat(),
+                 (today - _td(days=29)).isoformat())).fetchone()
+            heat = _conn().execute(
+                "SELECT date, COALESCE(SUM(total_tokens), 0) FROM token_usage"
+                " GROUP BY date ORDER BY date").fetchall()
+        # 画像查询自带加锁(_profile_between 内部自己 with _LOCK)—— 必须放在
+        # 上面的锁块**外面**:threading.Lock 不可重入,锁里再锁就是自己等自己。
+        profile = _profile_between(d0, d1)
+    except sqlite3.Error as e:
+        return {"ok": False, "msg": f"读用量数据失败:{type(e).__name__}: {e}"}
+
+    summary = {"prompt": 0, "completion": 0, "total": 0, "requests": 0}
+    model_totals: dict[tuple[str, str], dict] = {}
+    for (date, provider, model, p, c, t, cache_sum, cache_n,
+         r_sum, r_n, n) in rows:
+        summary["prompt"] += int(p or 0)
+        summary["completion"] += int(c or 0)
+        summary["total"] += int(t or 0)
+        summary["requests"] += int(n or 0)
+        key = (str(provider or ""), str(model or ""))
+        item = model_totals.setdefault(key, {
+            "key": f"{key[0]}/{key[1]}" if key[0] else key[1],
+            "provider": key[0], "model": key[1],
+            "prompt": 0, "completion": 0, "total": 0, "requests": 0,
+            "_cache_sum": 0, "_cache_n": 0, "_r_sum": 0, "_r_n": 0})
+        item["prompt"] += int(p or 0)
+        item["completion"] += int(c or 0)
+        item["total"] += int(t or 0)
+        item["requests"] += int(n or 0)
+        item["_cache_sum"] += int(cache_sum or 0)
+        item["_cache_n"] += int(cache_n or 0)
+        item["_r_sum"] += int(r_sum or 0)
+        item["_r_n"] += int(r_n or 0)
+
+    # NULL 口径:整个区间一次实测都没有 → None(未记录);有样本才给和。
+    cache_sum_all = sum(m["_cache_sum"] for m in model_totals.values())
+    cache_n_all = sum(m["_cache_n"] for m in model_totals.values())
+    r_sum_all = sum(m["_r_sum"] for m in model_totals.values())
+    r_n_all = sum(m["_r_n"] for m in model_totals.values())
+    summary["cached_tokens"] = cache_sum_all if cache_n_all else None
+    summary["cached_samples"] = cache_n_all
+    summary["reasoning_tokens"] = r_sum_all if r_n_all else None
+    summary["reasoning_samples"] = r_n_all
+    summary["sessions"] = int(sessions or 0)
+
+    models = []
+    for key, m in model_totals.items():
+        m.pop("_cache_sum"), m.pop("_cache_n"), m.pop("_r_sum"), m.pop("_r_n")
+        p = profile.get(key, {})
+        m["elapsed_ms"] = p.get("elapsed_ms", 0)
+        m["retries"] = p.get("retries", 0)
+        samples = p.get("ttft_samples", 0)
+        m["ttft_samples"] = samples
+        m["ttft_ms"] = (p.get("ttft_sum_ms", 0) // samples) if samples else None
+        m["reasoning_samples"] = p.get("reasoning_samples", 0)
+        m["reasoning_tokens"] = (p.get("reasoning_tokens", 0)
+                                 if p.get("reasoning_samples") else None)
+        m.pop("requests", None)      # 与 statistics 同一取舍:模型行不摆请求数
+        models.append(m)
+    models.sort(key=lambda m: (-m["total"], m["key"]))
+    for m in models:
+        m["share"] = (round(m["total"] / summary["total"] * 100, 1)
+                      if summary["total"] else 0.0)
+    # 估算费用:与 statistics 同一把 pricing 尺,费用口径两视图不岔开。
+    try:
+        from minicode import pricing
+        summary.update(pricing.summarize(models))
+    except Exception:
+        pass
+
+    # 来源卡:按供应商聚合(模型数按 distinct 口径,同一供应商的模型不重数)。
+    prov: dict[str, dict] = {}
+    for m in models:
+        item = prov.setdefault(m["provider"],
+                               {"provider": m["provider"], "total": 0,
+                                "models": set()})
+        item["total"] += m["total"]
+        item["models"].add(m["model"])
+    providers = [{"provider": k, "total": v["total"],
+                  "share": (round(v["total"] / summary["total"] * 100, 1)
+                            if summary["total"] else 0.0),
+                  "models": len(v["models"])}
+                 for k, v in prov.items()]
+    providers.sort(key=lambda x: (-x["total"], x["provider"]))
+
+    days_out = [{"date": r[0], "prompt": int(r[1] or 0),
+                 "completion": int(r[2] or 0), "total": int(r[3] or 0),
+                 "cached_tokens": int(r[4]) if r[4] is not None else None,
+                 "reasoning_tokens": int(r[5]) if r[5] is not None else None,
+                 "requests": int(r[6] or 0), "sessions": int(r[7] or 0)}
+                for r in day_rows]
+    return {"ok": True,
+            "range": {"kind": str(kind or ""), "start_date": d0,
+                      "end_date": d1},
+            "summary": summary, "models": models, "providers": providers,
+            "days": days_out,
+            "heatmap": [{"date": r[0], "total": int(r[1] or 0)}
+                        for r in heat],
+            "tiles": {"d7": int(meta[3] or 0), "d30": int(meta[4] or 0),
+                      "daily_avg": int(int(meta[4] or 0) / 30),
+                      "sessions": int(meta[2] or 0)},
+            "meta": {"first_date": str(meta[0]) if meta[0] else None,
+                     "active_days": int(meta[1] or 0),
+                     "today": today.isoformat()}}

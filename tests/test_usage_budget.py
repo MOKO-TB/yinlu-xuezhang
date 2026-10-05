@@ -89,3 +89,24 @@ def test_get_token_usage_carries_today_and_budget(tmp_path, monkeypatch):
     assert out["ok"] is True
     assert out["today"]["total"] == 150
     assert out["today"]["budget"]["enabled"] is True and out["today"]["budget"]["limit"] == 5000
+
+
+def test_get_usage_dashboard_carries_today_and_budget(tmp_path, monkeypatch):
+    """v0.9.117 用量示意改版门面:dashboard 一揽子 + 同一份今日预算。"""
+    from minicode.gui_bridge import Bridge
+    from minicode import usage as usage_mod
+    monkeypatch.setattr(usage_mod, "db_path", lambda: tmp_path / "u.db")
+    usage_mod.set_db_path(tmp_path / "u.db")
+    usage_mod.record_usage("p", "test-model", {"prompt_tokens": 100,
+                                               "completion_tokens": 50})
+    cfg = Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",
+                                     api_key="k", model="test-model")],
+                 active_provider_id="t", daily_token_budget=5000)
+    bridge = Bridge.__new__(Bridge)
+    bridge.config = cfg
+    out = bridge.get_usage_dashboard("week")
+    assert out["ok"] is True
+    assert out["summary"]["total"] == 150
+    assert out["today"]["total"] == 150
+    assert out["today"]["budget"]["enabled"] is True
+    assert out["today"]["budget"]["limit"] == 5000

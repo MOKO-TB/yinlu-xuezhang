@@ -289,6 +289,8 @@ class PublicFacade:
             # 导出会在服务器上落文件(访客看不见也管不着),不开放
             "export_session": lambda **k: _refuse("网页版不开放会话导出"),
             "get_token_usage": lambda **k: _refuse("网页版不开放用量统计"),
+            # v0.9.117 用量示意改版的新门面:同一本账,同一句拒绝
+            "get_usage_dashboard": lambda **k: _refuse("网页版不开放用量统计"),
             # 技能面板读技能全文 = 一个文件读取原语,且技能目录在应用侧,不对外开放
             "get_skills": lambda **k: _refuse("网页版不开放技能面板"),
             "get_skill_body": lambda **k: _refuse("网页版不开放技能面板"),

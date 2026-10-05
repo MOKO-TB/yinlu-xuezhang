@@ -211,6 +211,7 @@ def test_owner_only_methods_refused(server):
                  "test_model", "fetch_models",
                  "set_session_model", "export_session",
                  "get_token_usage",
+                 "get_usage_dashboard",   # v0.9.117 用量示意改版:同一本账,访客同样不开放
                  "get_skills", "get_skill_body", "get_skill_channels", "add_skill",
                  "get_plan",
                  # v0.9.101 ①R1:审查视图写的是服务器工作区里的文件,访客看不见后果

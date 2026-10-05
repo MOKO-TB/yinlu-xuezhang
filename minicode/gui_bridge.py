@@ -450,6 +450,11 @@ class PublicApi:
         """每日 token 用量统计(弹窗圆环图数据源)。"""
         return self._b.get_token_usage(days)
 
+    def get_usage_dashboard(self, kind: str = "week", start: str | None = None,
+                            end: str | None = None) -> dict:
+        """用量示意改版(v0.9.117)数据源:区间聚合 + 今日预算。"""
+        return self._b.get_usage_dashboard(kind, start, end)
+
     def get_skills(self) -> dict:
         """技能面板:内置/应用/工作区三个渠道里的技能清单。"""
         return self._b.get_skills()
@@ -1046,6 +1051,24 @@ class Bridge:
                                      for m in (usage.statistics(1).get("models")
                                                or [])[:8]],
                         "budget": budget}
+        return out
+
+    def get_usage_dashboard(self, kind: str = "week", start: str | None = None,
+                            end: str | None = None) -> dict:
+        """用量示意改版(v0.9.117)的数据面:usage.dashboard 一揽子 + 今日预算。
+
+        区间语义(日/周/月/总计/自定义)由 usage.resolve_range 定,前端只传
+        名字与可选起止;账面口径(缓存/思考的 NULL=未记录、缺价不当 $0)与
+        get_token_usage 同源。网页版在 web_profile 有同名的明拒表态 ——
+        访客看不到主人的账,与 get_token_usage 同一条规矩。
+        """
+        from minicode import usage
+        out = usage.dashboard(str(kind or "week"), start, end)
+        if not out.get("ok"):
+            return out
+        out["today"] = {"total": usage.today_total(),
+                        "budget": usage.budget_state(int(getattr(self.config,
+                                                                "daily_token_budget", 0) or 0))}
         return out
 
     # ------------------------------------------------------------ 技能面板

@@ -401,3 +401,125 @@ def test_unreported_ttft_and_reasoning_stay_none_not_zero(tmp_path):
         assert m["reasoning_samples"] == 0 and m["reasoning_tokens"] is None
     finally:
         usage.set_db_path(None)
+
+
+# ------------------------------------------------- v0.9.117 缓存列 + 仪表盘
+
+def test_cached_tokens_landed_when_reported(tmp_path):
+    """缓存列同一个 NULL 口径:7=端点给的数,0=端点明说零命中,None=没说。"""
+    import sqlite3
+    usage.record_usage("p", "m", {"prompt_tokens": 10, "completion_tokens": 5},
+                       cached_tokens=7)
+    usage.record_usage("p", "m", {"prompt_tokens": 10, "completion_tokens": 5},
+                       cached_tokens=0)
+    usage.record_usage("p", "m", {"prompt_tokens": 10, "completion_tokens": 5})
+    with sqlite3.connect(str(usage.db_path())) as conn:
+        vals = [r[0] for r in conn.execute(
+            "SELECT cached_tokens FROM token_usage ORDER BY ts")]
+    assert vals == [7, 0, None]
+
+
+def test_old_database_gains_cached_tokens_column(tmp_path):
+    """pre-0.9.117 老库(无缓存列)挂进来自动补列:老行照读、新行照记。"""
+    import sqlite3
+    p = tmp_path / "old.db"
+    conn = sqlite3.connect(p)
+    conn.execute(
+        "CREATE TABLE token_usage ("
+        "  ts INTEGER NOT NULL, date TEXT NOT NULL,"
+        "  provider TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',"
+        "  prompt_tokens INTEGER NOT NULL DEFAULT 0,"
+        "  completion_tokens INTEGER NOT NULL DEFAULT 0,"
+        "  total_tokens INTEGER NOT NULL DEFAULT 0)")
+    conn.commit()
+    conn.close()
+    usage.set_db_path(p)
+    try:
+        assert usage.record_usage("p", "m",
+                                  {"prompt_tokens": 2, "completion_tokens": 1},
+                                  cached_tokens=0)
+        d = usage.dashboard("all")
+        assert d["ok"] and d["summary"]["cached_tokens"] == 0   # 端点说了零 → 0
+    finally:
+        usage.set_db_path(None)
+
+
+def test_dashboard_shape_and_range_semantics(tmp_path):
+    """仪表盘一揽子:区间语义/会话跨天去重/占比/来源卡/全期砖/热力图,一次钉全。
+
+    历史行用原始 SQL 回填(record_usage 只记"今天"),四天有账:今天、昨天、
+    31 天前、100 天前 —— 周/月档吃不到后两天的量,全期砖与热力图吃得到。
+    """
+    import sqlite3
+    from datetime import date as _date, timedelta as _td
+
+    today = _date.today()
+    day = lambda delta: (today - _td(days=delta)).isoformat()
+    usage.record_usage("zhipu", "glm",
+                       {"prompt_tokens": 900, "completion_tokens": 100},
+                       session_id="s1", ttft_ms=500, cached_tokens=400)
+    usage.record_usage("zhipu", "glm",
+                       {"prompt_tokens": 150, "completion_tokens": 50},
+                       session_id="s1")
+    usage.record_usage("other", "o", {"prompt_tokens": 100,
+                                      "completion_tokens": 0})
+    with sqlite3.connect(str(usage.db_path())) as conn:
+        for delta, total, sid in ((1, 250, "s1"), (31, 999, "s2"), (100, 50, "")):
+            conn.execute(
+                "INSERT INTO token_usage (ts, date, provider, model,"
+                " prompt_tokens, completion_tokens, total_tokens, session_id)"
+                " VALUES (0, ?, 'zhipu', 'glm', ?, 0, ?, ?)",
+                (day(delta), total, total, sid))
+        conn.commit()
+
+    d = usage.dashboard("week")
+    assert d["ok"]
+    assert d["range"] == {"kind": "week", "start_date": day(6),
+                          "end_date": day(0)}
+    s = d["summary"]
+    assert (s["prompt"], s["completion"], s["total"], s["requests"]) == \
+        (1400, 150, 1550, 4)
+    assert s["cached_tokens"] == 400 and s["cached_samples"] == 1
+    assert s["reasoning_tokens"] is None and s["reasoning_samples"] == 0
+    assert s["sessions"] == 1            # s1 跨两天只算一次;无留档的不进来
+    assert s["cost_usd"] is None         # glm/o 都没价目:未知,不当 $0
+    assert set(s["unpriced_models"]) == {"glm", "o"}
+    assert [(m["key"], m["share"]) for m in d["models"]] == [
+        ("zhipu/glm", 93.5), ("other/o", 6.5)]
+    assert d["models"][0]["ttft_samples"] == 1 and d["models"][0]["ttft_ms"] == 500
+    assert d["providers"] == [
+        {"provider": "zhipu", "total": 1450, "share": 93.5, "models": 1},
+        {"provider": "other", "total": 100, "share": 6.5, "models": 1}]
+    assert [(x["date"], x["total"], x["sessions"]) for x in d["days"]] == [
+        (day(1), 250, 1), (day(0), 1300, 1)]
+    # 全期口径的砖与热力图:讲"这个库的一生",不随区间缩水
+    assert d["tiles"] == {"d7": 1550, "d30": 1550, "daily_avg": 51,
+                          "sessions": 2}
+    assert d["meta"]["first_date"] == day(100)
+    assert d["meta"]["active_days"] == 4
+    assert [(h["date"], h["total"]) for h in d["heatmap"]] == [
+        (day(100), 50), (day(31), 999), (day(1), 250), (day(0), 1300)]
+
+    # 同一份账的三种切法
+    assert usage.dashboard("day")["summary"]["total"] == 1300
+    assert usage.dashboard("all")["summary"]["total"] == 2599
+    d = usage.dashboard("custom", day(1), day(0))
+    assert d["ok"] and d["summary"]["total"] == 1550
+    # 区间不合法:倒着/胡写/整段未来/陌生档 —— 明说不合法,绝不猜一个区间
+    assert not usage.dashboard("custom", day(0), day(1))["ok"]
+    assert not usage.dashboard("custom", "不是日期", day(0))["ok"]
+    assert not usage.dashboard("bad")["ok"]
+    # 合法但没账的窗:ok + 诚实的 0,不是报错
+    d = usage.dashboard("custom", day(9), day(3))
+    assert d["ok"] and d["summary"]["total"] == 0 and d["days"] == []
+    # 止落在未来收敛到今天,照常出数
+    assert usage.dashboard("custom", day(6), "2099-01-01")["summary"]["total"] == 1550
+
+
+def test_dashboard_empty_db_is_an_honest_zero(tmp_path):
+    """空库:ok、全 0、first_date=None、热力图空 —— 一页能画的空图,不是报错。"""
+    d = usage.dashboard("all")
+    assert d["ok"]
+    assert d["summary"]["total"] == 0 and d["models"] == []
+    assert d["meta"]["first_date"] is None and d["meta"]["active_days"] == 0
+    assert d["heatmap"] == [] and d["days"] == []

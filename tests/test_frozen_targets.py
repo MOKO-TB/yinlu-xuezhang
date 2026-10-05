@@ -54,3 +54,14 @@ def test_every_needle_exists_in_its_module_source():
         haystack = _code_names(compile(source, mod, "exec"))
         stale += [f"{mod}:{n}" for n in needles if n not in haystack]
     assert not stale, f"冻结针已过期(打包后必然红,现在先修):{stale}"
+
+
+def test_every_frontend_needle_exists_in_index_html():
+    """前端针同样要在提交前红:check_frozen 只在打完包之后跑得动,而前端每次
+    改版都可能让旧针过期(v0.9.117 就撞过一次 ——「缓存命中(端点不回报)」
+    随用量弹窗改版从界面上消失,没人红过,直到打包那天才会炸)。"""
+    from check_frozen_version import FRONTEND_TARGETS
+
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    stale = [n for n in FRONTEND_TARGETS if n not in html]
+    assert not stale, f"前端冻结针已过期(打包后必然红,现在先修):{stale}"

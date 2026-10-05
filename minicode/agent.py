@@ -405,6 +405,10 @@ class Agent:
                 # 绝不落 0 —— 0 是"瞬间首字/零思考",NULL 是"端点根本没说"。
                 ttft_ms=(ttft if isinstance(ttft, int) and ttft >= 0 else None),
                 reasoning_tokens=u.get("reasoning_tokens"),
+                # v0.9.117:缓存命中同口径落账 —— llm 层早就把
+                # prompt_tokens_details.cached_tokens 抓进了 turn.usage,
+                # 这里只补"进账本"那一跳;端点没说就是 None(未记录)。
+                cached_tokens=u.get("cached_tokens"),
             )
             if logged:
                 self._llm_retries = 0

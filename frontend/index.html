@@ -1454,7 +1454,9 @@ try {
   .sess-hit b{ color:var(--primary-text); }
 
   /* ---------------- 用量统计弹窗 ---------------- */
-  #usageOverlay .dialog{ width:680px; max-width:94vw; }
+  /* v0.9.117 用量示意改版:两栏仪表盘版式,弹窗放宽(窄窗口媒体查询在
+     .udash 那一段,收成单栏) */
+  #usageOverlay .dialog{ width:1080px; max-width:96vw; }
   /* p1(v0.9.12):近30天时内容很长,不能把整个弹窗拉到屏幕外 ——
      弹窗限高,内部自行滚动(头部/按钮常驻,中间的圆环列表滚动) */
   #usageOverlay .dialog{ max-height:86vh; display:flex; flex-direction:column; }
@@ -1934,22 +1936,138 @@ try {
                         overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
                         font-variant-numeric:tabular-nums; }
   .usage-card .uc-sub{ font-size:10.5px; color:var(--text-3); margin-top:2px; }
-  .usage-days{ display:grid; grid-template-columns:repeat(auto-fill,minmax(84px,1fr));
-               gap:8px; margin-bottom:14px; }
-  .usage-day{ display:flex; flex-direction:column; align-items:center; gap:7px;
-              background:var(--glass-lite); border:1px solid var(--line-soft);
-              border-radius:var(--r-m); padding:10px 4px 8px; }
-  .usage-ring{ width:56px; height:56px; border-radius:50%; position:relative;
-               box-shadow:inset 0 0 0 1px rgba(0,0,0,.05); }
-  .usage-ring .rc{ position:absolute; inset:7px; border-radius:50%;
-                   background:var(--glass-strong); display:grid; place-content:center;
-                   text-align:center; }
-  .usage-ring .rc b{ font-size:10.5px; }
-  .usage-ring .rc span{ display:block; font-size:7.5px; color:var(--text-3);
-                        text-transform:uppercase; }
-  .usage-day .dm{ font-size:10.5px; font-weight:700; color:var(--text-2); }
-  .usage-day .dm i{ display:block; font-style:normal; font-weight:400;
-                    color:var(--text-3); font-size:9.5px; }
+  /* v0.9.117:圆环日的旧版式(.usage-days/.usage-ring)随改版退休,
+     新版面用每日明细表 + 热力图(见下方 .udash 一段)。 */
+  /* v0.9.117 用量示意改版:两栏仪表盘。左栏=统计砖/模型Top3/热力图/风云榜,
+     右栏=大数字+估算费用+日预算条+来源卡+明细表(每日/模型两页签)。
+     版式对齐 TokenTracker;日预算条只在真的配了预算时出现,不画假的。 */
+  .udash{ display:grid; grid-template-columns:320px minmax(0,1fr); gap:12px;
+          align-items:start; }
+  @media (max-width:1020px){ .udash{ grid-template-columns:1fr; } }
+  .udash-l,.udash-r{ display:flex; flex-direction:column; gap:12px; min-width:0; }
+  .ucard{ background:var(--glass-lite); border:1px solid var(--line-soft);
+          border-radius:var(--r-m); padding:12px; min-width:0; }
+  .ucard-head{ display:flex; align-items:center; gap:8px; font-size:12.5px;
+               font-weight:700; color:var(--text-2); }
+  .ucard-head .sp{ flex:1; }
+  .uh-tz{ font-weight:400; font-size:10px; color:var(--text-3); }
+  .umode{ display:flex; border:1px solid var(--line-soft);
+          border-radius:var(--r-full); overflow:hidden; }
+  .umode button{ background:transparent; border:none; padding:2px 10px;
+                 font-size:11px; font-weight:700; color:var(--text-2);
+                 cursor:pointer; }
+  .umode button.on{ background:var(--primary); color:#fff; }
+  .utiles{ display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
+  .utiles .cell{ background:var(--glass-strong); border:1px solid var(--line-soft);
+                 border-radius:var(--r-m); padding:8px 10px; min-width:0; }
+  .utiles .cell b{ display:block; font-size:17px; letter-spacing:-.3px;
+                   font-variant-numeric:tabular-nums; }
+  .utiles .cell span{ color:var(--text-3); font-size:10.5px; }
+  .utop3{ margin-top:10px; display:flex; flex-direction:column; gap:5px; }
+  .utop-row{ display:flex; align-items:center; gap:8px; font-size:12px; }
+  .utop-row i{ width:16px; height:16px; border-radius:50%; display:grid;
+               place-content:center; font-style:normal; font-size:10px;
+               font-weight:700; background:var(--line-soft); color:var(--text-2);
+               flex:none; }
+  .utop-row i.r1{ background:var(--primary); color:#fff; }
+  .utop-row span{ flex:1; overflow:hidden; text-overflow:ellipsis;
+                  white-space:nowrap; }
+  .utop-row em{ font-style:normal; font-weight:700;
+                font-variant-numeric:tabular-nums; }
+  .ufoot{ margin-top:10px; padding-top:8px; border-top:1px solid var(--line-soft);
+          font-size:10.5px; color:var(--text-3); }
+  .uheat-wrap{ display:flex; gap:5px; margin-top:10px; }
+  .uh-wd{ display:grid; grid-template-rows:repeat(7,11px); gap:3px;
+          margin-top:15px; flex:none; }
+  .uh-wd i{ font-style:normal; font-size:8.5px; line-height:11px;
+            color:var(--text-3); text-align:center; }
+  .uh-scroll{ overflow-x:auto; flex:1; min-width:0; }
+  .uh-inner{ position:relative; }
+  .uh-months{ position:relative; height:13px; }
+  .uh-months i{ position:absolute; top:0; font-style:normal; font-size:9.5px;
+                color:var(--text-3); white-space:nowrap; }
+  .uh-grid{ display:grid; grid-template-rows:repeat(7,11px);
+            grid-auto-flow:column; grid-auto-columns:11px; gap:3px; }
+  .uh-cell{ width:11px; height:11px; border-radius:2.5px; display:inline-block; }
+  .uh-cell.none{ background:transparent; }
+  .uh-cell.l0{ background:rgba(127,140,141,.16); }
+  .uh-cell.l1{ background:#b9e6b4; }
+  .uh-cell.l2{ background:#7fcb7c; }
+  .uh-cell.l3{ background:#3f9e5d; }
+  .uh-cell.l4{ background:#1e7d43; }
+  .uh-legend{ display:flex; align-items:center; gap:3px; margin-top:9px;
+              font-size:10px; color:var(--text-3); justify-content:flex-end; }
+  .uheat-zone{ position:relative; overflow-x:auto; margin-top:10px; }
+  .uheat-zone #uheat3d{ display:block; margin:0 auto; }
+  .uh-tip{ position:absolute; z-index:5; background:var(--glass-strong);
+           border:1px solid var(--line-soft); border-radius:6px; padding:3px 8px;
+           font-size:10.5px; pointer-events:none; white-space:nowrap;
+           box-shadow:0 4px 14px rgba(0,0,0,.18); }
+  .ubig-label{ font-size:11px; letter-spacing:.14em; color:var(--text-3);
+               text-transform:uppercase; }
+  .ubig{ font-size:44px; font-weight:800; letter-spacing:-1.5px; line-height:1.15;
+         font-variant-numeric:tabular-nums; }
+  .ubig-cost{ color:var(--success); font-weight:700; font-size:13.5px;
+              margin-top:2px; }
+  .ubig-cost.is-unknown{ color:var(--text-3); font-weight:600; }
+  .ubudget{ margin-top:10px; }
+  .ubudget-bar{ height:7px; border-radius:99px; background:var(--line-soft);
+                overflow:hidden; }
+  .ubudget-bar i{ display:block; height:100%; border-radius:99px;
+                  background:var(--success); }
+  .ubudget-bar i.near{ background:var(--warning); }
+  .ubudget-bar i.over{ background:var(--danger); }
+  .ubudget span{ display:block; margin-top:4px; font-size:10.5px;
+                 color:var(--text-3); }
+  .uprovs{ display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+           gap:8px; margin-top:12px; }
+  .uprov{ background:var(--glass-strong); border:1px solid var(--line-soft);
+          border-radius:var(--r-m); padding:8px 10px; min-width:0; }
+  .uprov b{ display:block; font-size:12.5px; overflow:hidden;
+            text-overflow:ellipsis; white-space:nowrap; }
+  .uprov i{ display:block; font-style:normal; font-size:16px; font-weight:800;
+            margin-top:2px; font-variant-numeric:tabular-nums; }
+  .uprov span{ display:block; font-size:10px; color:var(--text-3); }
+  .ustrip{ display:grid; grid-template-columns:repeat(6,1fr); gap:6px;
+           margin-top:12px; }
+  .ustrip .cell{ background:var(--glass-strong); border:1px solid var(--line-soft);
+                 border-radius:var(--r-m); padding:6px 8px; text-align:center;
+                 min-width:0; }
+  .ustrip .cell b{ display:block; font-size:12px; overflow:hidden;
+                   text-overflow:ellipsis; white-space:nowrap;
+                   font-variant-numeric:tabular-nums; }
+  .ustrip .cell span{ font-size:9.5px; color:var(--text-3); }
+  .utab{ cursor:pointer; font-size:12.5px; color:var(--text-3); padding:2px 2px;
+         border-bottom:2px solid transparent; }
+  .utab.on{ color:var(--text-1); border-bottom-color:var(--primary); }
+  .utable{ width:100%; border-collapse:collapse; margin-top:8px; font-size:11.5px; }
+  .utable th{ text-align:left; color:var(--text-3); font-weight:600;
+              font-size:10.5px; padding:4px 8px;
+              border-bottom:1px solid var(--line-soft); }
+  .utable td{ padding:5px 8px; border-bottom:1px solid var(--line-soft);
+              color:var(--text-2); font-variant-numeric:tabular-nums; }
+  .utable td.dt{ white-space:nowrap; }
+  .utable td b{ color:var(--text-1); }
+  .utable .unrec{ color:var(--text-3); font-size:10.5px; }
+  .utable tbody tr:hover{ background:var(--glass-strong); }
+  .usage-refresh{ background:transparent; border:1px solid var(--line-soft);
+                  border-radius:var(--r-full); width:26px; height:26px;
+                  color:var(--text-2); cursor:pointer; font-size:13px;
+                  flex:none; }
+  .usage-refresh:hover{ border-color:var(--primary); color:var(--primary); }
+  .usage-custom{ display:flex; align-items:center; gap:8px; margin-top:8px;
+                 font-size:11.5px; color:var(--text-3); flex-wrap:wrap; }
+  /* display:flex 会压过 hidden 属性的浏览器默认样式,得显式按回来 */
+  .usage-custom[hidden]{ display:none; }
+  .usage-custom input[type=date]{ background:var(--glass-strong);
+                                  border:1px solid var(--line-soft);
+                                  border-radius:8px; padding:4px 8px;
+                                  color:var(--text-1); font-size:11.5px; }
+  .usage-custom button{ border:1px solid var(--line-soft);
+                        background:var(--glass-strong); border-radius:8px;
+                        padding:4px 12px; color:var(--text-1); cursor:pointer;
+                        font-size:11.5px; }
+  .usage-custom button:hover{ border-color:var(--primary); color:var(--primary); }
   .usage-empty{ color:var(--text-3); font-size:12px; text-align:center;
                 padding:18px 0 6px; }
   .usage-table{ width:100%; border-collapse:collapse; font-size:12px; }
@@ -1960,10 +2078,6 @@ try {
                    border-bottom:1px solid var(--line-soft); }
   .usage-table td:first-child{ text-align:left; }
   .usage-table td b{ color:var(--text-1); }
-  .usage-legend{ display:flex; flex-wrap:wrap; gap:6px 14px; margin:4px 0 10px; }
-  .usage-legend span{ display:inline-flex; align-items:center; gap:5px;
-                      color:var(--text-2); font-size:11px; }
-  .usage-legend i{ width:8px; height:8px; border-radius:50%; display:inline-block; }
 
 /* ---------------- @ 文件引用补全(v0.9.64) ---------------- */
 .at-menu {
@@ -2670,12 +2784,20 @@ try {
 <div class="overlay" id="usageOverlay">
   <div class="dialog">
     <div class="usage-head">
-      <h3>📊 每日 token 消耗</h3>
+      <h3>📊 Token 用量</h3>
       <div class="usage-range" id="usageRange">
-        <button data-days="1">今日</button>
-        <button data-days="7" class="on">近 7 天</button>
-        <button data-days="30">近 30 天</button>
+        <button data-rk="day">日</button>
+        <button data-rk="week" class="on">周</button>
+        <button data-rk="month">月</button>
+        <button data-rk="all">总计</button>
+        <button data-rk="custom">自定义</button>
       </div>
+      <button class="usage-refresh" id="btnUsageRefresh" title="重新读取">⟳</button>
+    </div>
+    <div class="usage-custom" id="usageCustom" hidden>
+      <label>从<input type="date" id="usageFrom"></label>
+      <label>到<input type="date" id="usageTo"></label>
+      <button id="btnUsageApply">应用</button>
     </div>
     <div id="usageBody"></div>
     <div class="btns"><button class="b-no" id="btnUsageClose">关闭</button></div>
@@ -4562,26 +4684,7 @@ function saveProvItems(silent) {
 
 $("btnProvSave").addEventListener("click", () => saveProvItems(false));
 
-/* ---------------- 每日 token 用量统计(圆环图) ---------------- */
-const USAGE_COLORS = ["#3FBDAE", "#5A8FD8", "#B79CFF", "#E8B86D", "#7FD1C8",
-                      "#E58FB1", "#6BBF73", "#D89B6A"];
-function usageColor(key) {
-  let h = 2166136261;
-  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return USAGE_COLORS[(h >>> 0) % USAGE_COLORS.length];
-}
-function donutGradient(models) {
-  const vis = (models || []).filter(m => Number(m.total) > 0);
-  const total = vis.reduce((s, m) => s + Number(m.total), 0);
-  if (total <= 0) return "conic-gradient(var(--line-soft) 0% 100%)";
-  let cur = 0;
-  const segs = vis.map((m, i) => {
-    const from = cur;
-    cur = (i === vis.length - 1) ? 100 : cur + (m.total / total) * 100;
-    return `${usageColor(m.key)} ${from.toFixed(3)}% ${cur.toFixed(3)}%`;
-  });
-  return `conic-gradient(${segs.join(", ")})`;
-}
+/* ---------------- Token 用量(v0.9.117 用量示意改版) ---------------- */
 function fmtTok(n) {
   n = Number(n) || 0;
   if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
@@ -5078,20 +5181,33 @@ function loadProjects() {
   pywebview.api.get_recent_projects().then(renderProjects).catch(() => {});
 }
 
-let usageDays = 7;
-function openUsageDlg(days) {
-  if (days) usageDays = days;
+let usageKind = "week";
+let heatMode = "2d";
+function openUsageDlg() {
   $("usageOverlay").classList.add("show");
   loadUsage();
 }
 function loadUsage() {
   $("usageBody").innerHTML = '<div class="usage-empty">正在读取本地统计…</div>';
-  pywebview.api.get_token_usage(usageDays).then(s => {
+  pywebview.api.get_usage_dashboard(usageKind,
+      ($("usageFrom") && $("usageFrom").value) || "",
+      ($("usageTo") && $("usageTo").value) || "").then(s => {
     if (!s.ok) { $("usageBody").innerHTML = `<div class="usage-empty">${esc(s.msg || "读取失败")}</div>`; return; }
     renderUsage(s);
   }).catch(e => {
     $("usageBody").innerHTML = `<div class="usage-empty">读取失败:${esc(String(e).slice(0, 80))}</div>`;
   });
+}
+function fmtInt(n) {
+  // 明细表与大数字的千分位口径(1,234,567)—— 给"数",不给"约数"。
+  return Number(n || 0).toLocaleString("en-US");
+}
+function rangeLabel(r) {
+  // 区间一行字:10月1日 – 10月5日;总计档标"全部"。
+  if (!r || !r.start_date) return "";
+  const cn = s => { const [y, m, d] = s.split("-"); return `${Number(m)}月${Number(d)}日`; };
+  if (r.kind === "day") return cn(r.start_date);
+  return `${cn(r.start_date)} – ${cn(r.end_date)}${r.kind === "all" ? " · 全部" : ""}`;
 }
 function fmtCost(n) {
   // 费用显示:小于 1 美元给 4 位小数(几美分的单子两位数全是 0,看不出差别)。
@@ -5106,34 +5222,132 @@ function fmtDur(ms) {
   if (ms < 3600000) return `${(ms / 60).toFixed(1)} 分钟`;
   return `${(ms / 3600).toFixed(1)} 小时`;
 }
-function renderUsage(s) {
-  const sum = s.summary;
-  const legend = (s.models || []).map(m =>
-    `<span><i style="background:${usageColor(m.key)}"></i>${esc(m.model || m.key)}</span>`).join("");
-  const days = (s.days || []).map(d => {
-    const label = d.date.slice(5).replace("-", "/");
-    const aria = `${d.date},共 ${d.total} token`;
-    return `<div class="usage-day" title="${aria}">
-      <div class="usage-ring" role="img" aria-label="${aria}" style="background:${donutGradient(d.models)}">
-        <div class="rc"><b>${d.total ? fmtTok(d.total) : "0"}</b><span>tok</span></div>
-      </div>
-      <div class="dm">${label}<i>${d.requests || 0} 次</i></div>
-    </div>`;
-  }).join("");
-  // W2 估算费用:主数字只显示有价可依的部分;缺行显示「未知」,绝不当 $0 ——
-  // 把不知道的记成零是最会骗人的诚实。缓存那份端点不返回明细,标「未计」。
-  const cost = sum.cost_usd;
-  const costCell = (cost === null || cost === undefined)
-    ? `<div class="cell"><b>未知</b><span>估算费用 · 价目缺行</span></div>`
-    : `<div class="cell"><b>${fmtCost(cost)}</b><span>估算费用 · 非账单</span></div>`;
-  // W3 头部第二行:累计耗时/有账的会话数/缓存命中。缓存端点不回报 → 如实
-  // 「未记录」:0 是"一次都没命中",未记录是"端点根本没说",不能把没说画成 0。
-  const durCell = `<div class="cell"><b>${fmtDur(sum.elapsed_ms)}</b><span>累计耗时</span></div>`;
-  const sessCell = `<div class="cell"><b>${sum.sessions || 0}</b><span>有账的会话</span></div>`;
-  const cacheCell = `<div class="cell"><b>未记录</b><span>缓存命中(端点不回报)</span></div>`;
-  // W3 风云榜:冠军卡全部从**实测列**里挑 —— 没有首字/思考实测的模型不参选,
-  // 一张卡都凑不齐时整段不渲染(不摆空牌);榜首并列时只认先到的那一个。
-  const models = s.models || [];
+// ---------------- 热力图(全期,周日开头的周列 × 星期行) ----------------
+const HEAT_LVLS = ["rgba(127,140,141,.16)", "#b9e6b4", "#7fcb7c", "#3f9e5d",
+                   "#1e7d43"];
+function heatLevel(v, max) {
+  // 五档色阶:sqrt 摊开,小用量也有可见的深浅差
+  if (!(v > 0) || !(max > 0)) return 0;
+  return Math.min(4, 1 + Math.floor(4 * Math.sqrt(v / max)));
+}
+function buildHeatGrid(heat) {
+  if (!heat || !heat.length) return null;
+  const map = new Map(heat.map(h => [h.date, Number(h.total) || 0]));
+  const max = Math.max(...heat.map(h => Number(h.total) || 0));
+  const toDate = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+  const iso = dt => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+  const first = heat[0].date, last = heat[heat.length - 1].date;
+  const start = toDate(first); start.setDate(start.getDate() - start.getDay());
+  const nCols = Math.floor((toDate(last) - start) / 864e5 / 7) + 1;
+  const cols = [], labels = {};
+  for (let c = 0; c < nCols; c++) {
+    const col = [];
+    for (let r = 0; r < 7; r++) {
+      const dt = new Date(start); dt.setDate(dt.getDate() + c * 7 + r);
+      const key = iso(dt);
+      if (key < first || key > last) { col.push(null); continue; }
+      const v = Number(map.get(key) || 0);
+      col.push({date: key, total: v, level: heatLevel(v, max)});
+    }
+    const real = col.find(x => x);
+    if (real) {
+      const prevReal = cols.length && cols[cols.length - 1].find(x => x);
+      if (!prevReal || Number(prevReal.date.slice(5, 7)) !== Number(real.date.slice(5, 7)))
+        labels[c] = `${Number(real.date.slice(5, 7))}月`;
+    }
+    cols.push(col);
+  }
+  return {cols, labels, max};
+}
+function renderHeat2D(g) {
+  const step = 14;                       // 11px 格 + 3px 缝
+  const months = Object.entries(g.labels).map(([c, t]) =>
+    `<i style="left:${c * step}px">${t}</i>`).join("");
+  let grid = "";
+  g.cols.forEach(col => col.forEach(cv => {
+    grid += cv
+      ? `<i class="uh-cell l${cv.level}" title="${cv.date} · ${fmtInt(cv.total)} token"></i>`
+      : '<i class="uh-cell none"></i>';
+  }));
+  const wd = "日一二三四五六".split("").map(c => `<i>${c}</i>`).join("");
+  return `<div class="uheat-wrap"><div class="uh-wd">${wd}</div>
+    <div class="uh-scroll"><div class="uh-inner" style="width:${g.cols.length * step}px">
+      <div class="uh-months" style="width:${g.cols.length * step}px">${months}</div>
+      <div class="uh-grid">${grid}</div>
+    </div></div></div>`;
+}
+function renderHeat3D(g, canvas, tip) {
+  // 等距立方体(正交投影,零依赖 Canvas):底面菱形网格,方块按前后对角线
+  // 排序绘制(画家算法);高度按用量开方缩放。坐标全部乘 dpr,悬停命中检测
+  // 直接用 Path2D 反查 —— 模糊归属和猜出来的数据都不要。
+  const dpr = window.devicePixelRatio || 1;
+  const tw = 15 * dpr, th = 7.5 * dpr, maxH = 34 * dpr, baseH = 3 * dpr;
+  const nCols = g.cols.length;
+  const cssW = (nCols + 7) * 7.5 + 26, cssH = (nCols + 7) * 3.75 + 60;
+  canvas.width = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  canvas.style.width = cssW + "px";
+  canvas.style.height = cssH + "px";
+  const ctx = canvas.getContext("2d");
+  const orgX = 14 * dpr, orgY = maxH + 18 * dpr;
+  const px = (x, y) => [orgX + (x - y) * tw / 2, orgY + (x + y) * th / 2];
+  // 每档三面色:顶(原色)/左(中)/右(深)
+  const FACE = {
+    0: ["rgba(127,140,141,.20)", "rgba(127,140,141,.10)", "rgba(127,140,141,.07)"],
+    1: ["#b9e6b4", "#8fce8a", "#79b576"],
+    2: ["#7fcb7c", "#5fae5e", "#4c944c"],
+    3: ["#3f9e5d", "#338650", "#2a7044"],
+    4: ["#1e7d43", "#186737", "#11522b"]
+  };
+  const dia = (cx, cy) => `${cx},${cy - th / 2} ${cx + tw / 2},${cy} ${cx},${cy + th / 2} ${cx - tw / 2},${cy}`;
+  const cubes = [];
+  for (let s = 0; s <= nCols - 1 + 6; s++) {
+    for (let x = Math.max(0, s - 6); x <= Math.min(nCols - 1, s); x++) {
+      const y = s - x;
+      const cv = g.cols[x][y];
+      if (!cv) continue;
+      const [cx, cy] = px(x, y);
+      const has = cv.total > 0;
+      const h = has ? baseH + (maxH - baseH) * Math.sqrt(cv.total / (g.max || 1)) : 0;
+      const top = new Path2D(dia(cx, cy - h));
+      if (has) {
+        const left = new Path2D();
+        left.moveTo(cx - tw / 2, cy - h); left.lineTo(cx, cy - h + th / 2);
+        left.lineTo(cx, cy + th / 2); left.lineTo(cx - tw / 2, cy);
+        left.closePath();
+        const right = new Path2D();
+        right.moveTo(cx, cy - h + th / 2); right.lineTo(cx + tw / 2, cy - h);
+        right.lineTo(cx + tw / 2, cy); right.lineTo(cx, cy + th / 2);
+        right.closePath();
+        ctx.fillStyle = FACE[cv.level][1]; ctx.fill(left);
+        ctx.fillStyle = FACE[cv.level][2]; ctx.fill(right);
+        cubes.push({top, left, right, cv});
+      }
+      ctx.fillStyle = FACE[has ? cv.level : 0][0]; ctx.fill(top);
+    }
+  }
+  canvas.onmousemove = ev => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = (ev.clientX - rect.left) * dpr, my = (ev.clientY - rect.top) * dpr;
+    for (let i = cubes.length - 1; i >= 0; i--) {         // 近 → 远,先命中先得
+      const c = cubes[i];
+      if (ctx.isPointInPath(c.top, mx, my) || ctx.isPointInPath(c.left, mx, my)
+          || ctx.isPointInPath(c.right, mx, my)) {
+        tip.hidden = false;
+        tip.textContent = `${c.cv.date} · ${fmtInt(c.cv.total)} token`;
+        tip.style.left = Math.min(ev.clientX - rect.left + 12, cssW - 110) + "px";
+        tip.style.top = Math.max(0, ev.clientY - rect.top - 24) + "px";
+        return;
+      }
+    }
+    tip.hidden = true;
+  };
+  canvas.onmouseleave = () => { tip.hidden = true; };
+}
+function championCards(models) {
+  // W3 风云榜(原样内嵌进新版面左栏末尾):冠军卡全部从**实测列**里挑 ——
+  // 没有首字/思考实测的模型不参选,一张卡都凑不齐时整段不渲染(不摆空牌);
+  // 榜首并列时只认先到的那一个。
   const cards = [];
   const timed = models.filter(m => m.ttft_samples > 0
                                  && m.ttft_ms !== null && m.ttft_ms !== undefined);
@@ -5172,7 +5386,7 @@ function renderUsage(s) {
                 line: `${ranked.length} 个模型在思考`,
                 sub: "悬停看完整排名",
                 tip: ranked.map(m => `${m.model || m.key}: ${fmtTok(m.reasoning_tokens)} 思考 token`).join("\n")});
-  const cardsHtml = cards.length ? `
+  return cards.length ? `
     <div class="usage-cards">${cards.map(c => `
       <div class="usage-card" title="${esc(c.tip || c.line)}">
         <div class="uc-head"><span>${c.icon}</span><i>${esc(c.tag)}</i></div>
@@ -5181,7 +5395,80 @@ function renderUsage(s) {
         <div class="uc-line" style="font-weight:700">${esc(c.line)}</div>
         ${c.sub ? `<div class="uc-sub">${esc(c.sub)}</div>` : ""}
       </div>`).join("")}</div>` : "";
-  const rows = (s.models || []).map(m => `<tr title="${esc(m.key)} · ${m.total} token`
+}
+function wireUdash(g) {
+  // 热力图 2D/3D 切换 + 明细两页签(每次 loadUsage 重画后重新接线)
+  document.querySelectorAll("#heatMode button").forEach(b =>
+    b.addEventListener("click", () => {
+      heatMode = b.dataset.m;
+      document.querySelectorAll("#heatMode button").forEach(x =>
+        x.classList.toggle("on", x === b));
+      const zone = document.getElementById("uheatZone");
+      if (!zone || !g) return;
+      zone.innerHTML = heatMode === "3d"
+        ? '<canvas id="uheat3d"></canvas><div class="uh-tip" id="uhTip" hidden></div>'
+        : renderHeat2D(g);
+      if (heatMode === "3d")
+        renderHeat3D(g, document.getElementById("uheat3d"),
+                     document.getElementById("uhTip"));
+    }));
+  document.querySelectorAll("#usageBody .utab").forEach(t =>
+    t.addEventListener("click", () => {
+      document.querySelectorAll("#usageBody .utab").forEach(x =>
+        x.classList.toggle("on", x === t));
+      document.getElementById("utabDaily").hidden = t.dataset.t !== "daily";
+      document.getElementById("utabModels").hidden = t.dataset.t !== "models";
+    }));
+}
+function renderUsage(s) {
+  const sum = s.summary, tiles = s.tiles || {}, meta = s.meta || {};
+  const models = s.models || [];
+  const g = buildHeatGrid(s.heatmap);
+  let heatHtml;
+  if (!g)
+    heatHtml = '<div class="usage-empty" style="padding:10px 0 4px">暂无记录——发出第一句对话后,热力图会长出来。</div>';
+  else if (heatMode === "3d")
+    heatHtml = '<canvas id="uheat3d"></canvas><div class="uh-tip" id="uhTip" hidden></div>';
+  else
+    heatHtml = renderHeat2D(g);
+  // W2 估算费用:主数字只显示有价可依的部分;缺行显示「未知」,绝不当 $0 ——
+  // 把不知道的记成零是最会骗人的诚实。
+  const cost = sum.cost_usd;
+  const costLine = (cost === null || cost === undefined)
+    ? '<div class="ubig-cost is-unknown">未知 · 估算费用 · 价目缺行</div>'
+    : `<div class="ubig-cost">${fmtCost(cost)} · 估算费用 · 非账单</div>`;
+  // C1 日预算:真的配了预算才画条,没配不占位(不画假的)。
+  const budget = (s.today || {}).budget;
+  let budgetBar = "";
+  if (budget && budget.enabled) {
+    const pct = Math.min(100, Math.round((budget.ratio || 0) * 100));
+    const tag = budget.level === "over" ? "已超支"
+              : budget.level === "near" ? "接近上限" : "";
+    budgetBar = `<div class="ubudget" title="今天已用 ${fmtInt(budget.spent)} / 预算 ${fmtInt(budget.limit)} token">
+      <div class="ubudget-bar"><i class="${budget.level}" style="width:${pct}%"></i></div>
+      <span>今日预算 ${fmtInt(budget.spent)} / ${fmtInt(budget.limit)}${tag ? " · " + tag : ""}</span></div>`;
+  }
+  // 来源卡:全部 + 按供应商的前三家(provider 列,即"这钱走的是哪家的门")
+  const provCards = `<div class="uprov"><b>全部</b><i>100.00%</i><span>${models.length} 个模型</span></div>`
+    + (s.providers || []).slice(0, 3).map(p =>
+        `<div class="uprov" title="${esc(p.provider || "未记供应商")} · ${fmtInt(p.total)} token">
+          <b>${esc(p.provider || "未记供应商")}</b><i>${Number(p.share).toFixed(2)}%</i><span>${p.models} 个模型</span></div>`).join("");
+  const strip = `<div class="ustrip">
+    <div class="cell"><b>${fmtInt(sum.requests)}</b><span>请求</span></div>
+    <div class="cell"><b>${fmtTok(sum.prompt)}</b><span>输入</span></div>
+    <div class="cell"><b>${fmtTok(sum.completion)}</b><span>输出</span></div>
+    <div class="cell"><b>${sum.cached_tokens == null ? "未记录" : fmtTok(sum.cached_tokens)}</b><span>缓存</span></div>
+    <div class="cell"><b>${sum.reasoning_tokens == null ? "未记录" : fmtTok(sum.reasoning_tokens)}</b><span>推理</span></div>
+    <div class="cell"><b>${fmtDur(sum.elapsed_ms)}</b><span>累计耗时</span></div>
+  </div>`;
+  const dayRows = (s.days || []).slice().reverse().map(d => `<tr>
+      <td class="dt">${esc(d.date)}</td>
+      <td><b>${fmtInt(d.total)}</b></td><td>${fmtInt(d.prompt)}</td>
+      <td>${fmtInt(d.completion)}</td>
+      <td>${d.cached_tokens == null ? '<span class="unrec">未记录</span>' : fmtInt(d.cached_tokens)}</td>
+      <td>${d.reasoning_tokens == null ? '<span class="unrec">未记录</span>' : fmtInt(d.reasoning_tokens)}</td>
+      <td>${d.sessions || 0}</td></tr>`).join("");
+  const modelRows = models.map(m => `<tr title="${esc(m.key)} · ${m.total} token`
       + `${m.rate_note ? " · " + esc(m.rate_note) : ""}">
       <td><b>${esc(m.model || m.key)}</b><br><small style="color:var(--text-3)">${esc(m.provider || "")}</small></td>
       <td>${fmtTok(m.prompt)}</td><td>${fmtTok(m.completion)}</td>
@@ -5190,36 +5477,85 @@ function renderUsage(s) {
   const unpriced = s.unpriced_models || [];
   const foot = [];
   if (unpriced.length) foot.push(`未标价(没算进总数,不是 $0):${unpriced.map(esc).join("、")}`);
-  foot.push("缓存命中端点不返回明细,未计;价目是公开挂牌价的本地快照,滞后于官方页、"
-    + "不含折扣 —— 估算,非账单。要改价:「我的数据 → 设置与偏好」里的 pricing-override.json");
-  $("usageBody").innerHTML = `
-    <div class="usage-sum">
-      <div class="cell"><b>${fmtTok(sum.total)}</b><span>总 Token · ${sum.requests} 次请求</span></div>
-      <div class="cell"><b>${fmtTok(sum.prompt)}</b><span>输入</span></div>
-      <div class="cell"><b>${fmtTok(sum.completion)}</b><span>输出</span></div>
-      <div class="cell"><b>${fmtTok(Math.round(sum.completion / (sum.prompt || 1) * 100))}%</b><span>输出/输入</span></div>
-      ${costCell}
-      ${durCell}
-      ${sessCell}
-      ${cacheCell}
+  foot.push("缓存命中是端点回报了才记的,没回报显示「未记录」;价目是公开挂牌价的本地快照,"
+    + "滞后于官方页、不含折扣 —— 估算,非账单。要改价:「我的数据 → 设置与偏好」里的 pricing-override.json");
+  const tile = (v, cap) => `<div class="cell"><b>${v}</b><span>${cap}</span></div>`;
+  $("usageBody").innerHTML = `<div class="udash">
+    <div class="udash-l">
+      <div class="ucard">
+        <div class="utiles">
+          ${tile(fmtTok(tiles.d7), "近 7 天")}
+          ${tile(fmtTok(tiles.d30), "近 30 天")}
+          ${tile(fmtTok(tiles.daily_avg), "日均(近 30 天)")}
+          ${tile(fmtInt(tiles.sessions), "有账的会话")}
+        </div>
+        <div class="utop3">${models.slice(0, 3).map((m, i) => `
+          <div class="utop-row" title="${esc(m.key)} · ${fmtInt(m.total)} token${m.rate_note ? " · " + esc(m.rate_note) : ""}">
+            <i class="r${i + 1}">${i + 1}</i><span>${esc(m.model || m.key)}</span>
+            <em>${Number(m.share || 0).toFixed(1)}%</em>
+          </div>`).join("") || '<div class="usage-empty" style="padding:6px 0 0">暂无记录</div>'}</div>
+        <div class="ufoot">${meta.first_date
+          ? `开始使用 ${esc(meta.first_date)} · 活跃 ${meta.active_days || 0} 天` : "还没有账"}</div>
+      </div>
+      <div class="ucard">
+        <div class="ucard-head">热力图<span class="sp"></span><span class="uh-tz">本地时区</span>
+          <span class="umode" id="heatMode"><button data-m="2d"${heatMode === "2d" ? ' class="on"' : ""}>2D</button><button data-m="3d"${heatMode === "3d" ? ' class="on"' : ""}>3D</button></span></div>
+        <div class="uheat-zone" id="uheatZone">${heatHtml}</div>
+        ${g ? '<div class="uh-legend">少' + HEAT_LVLS.map((c, i) =>
+              `<i class="uh-cell l${i}" style="background:${c}"></i>`).join("") + '多</div>' : ""}
+      </div>
+      <div class="ucard"><div class="ucard-head">风云榜</div>
+        ${championCards(models) || '<div class="usage-empty" style="padding:6px 0 0">没有首字/思考的实测 —— 有账才摆榜,不摆空牌。</div>'}</div>
     </div>
-    ${cardsHtml}
-    ${legend ? `<div class="usage-legend">${legend}</div>` : ""}
-    <div class="usage-days">${days}</div>
-    ${rows ? `<table class="usage-table"><thead><tr><th>模型</th><th>输入</th><th>输出</th><th>合计</th><th>费用(估)</th></tr></thead><tbody>${rows}</tbody></table>`
-           : '<div class="usage-empty">暂无记录——发出第一句对话后,这里会出现真实的用量统计。</div>'}
-    <div class="usage-empty" style="padding-top:2px">${foot.join("<br>")}</div>`;
+    <div class="udash-r">
+      <div class="ucard">
+        <div class="ubig-label">TOKEN 总数 · ${esc(rangeLabel(s.range))}</div>
+        <div class="ubig">${fmtInt(sum.total)}</div>
+        ${costLine}${budgetBar}
+        <div class="uprovs">${provCards}</div>
+        ${strip}
+      </div>
+      <div class="ucard">
+        <div class="ucard-head"><span class="utab on" data-t="daily">每日明细</span><span class="utab" data-t="models">模型明细</span></div>
+        <div id="utabDaily">${dayRows
+          ? `<table class="utable"><thead><tr><th>日期</th><th>总计</th><th>输入</th><th>输出</th><th>缓存</th><th>推理</th><th>对话数</th></tr></thead><tbody>${dayRows}</tbody></table>`
+          : '<div class="usage-empty">暂无记录——发出第一句对话后,这里会出现真实的用量统计。</div>'}</div>
+        <div id="utabModels" hidden>${modelRows
+          ? `<table class="usage-table"><thead><tr><th>模型</th><th>输入</th><th>输出</th><th>合计</th><th>费用(估)</th></tr></thead><tbody>${modelRows}</tbody></table>`
+          : '<div class="usage-empty">暂无记录</div>'}</div>
+        <div class="usage-empty" style="padding-top:6px;text-align:left">${foot.join("<br>")}</div>
+      </div>
+    </div>
+  </div>`;
+  if (g && heatMode === "3d")
+    renderHeat3D(g, document.getElementById("uheat3d"),
+                 document.getElementById("uhTip"));
+  wireUdash(g);
 }
 $("btnUsage").addEventListener("click", () => openUsageDlg());
 $("btnUsageClose").addEventListener("click", () => $("usageOverlay").classList.remove("show"));
+$("btnUsageRefresh").addEventListener("click", () => loadUsage());
 $("usageRange").addEventListener("click", (e) => {
-  const btn = e.target.closest("button[data-days]");
+  const btn = e.target.closest("button[data-rk]");
   if (!btn) return;
-  usageDays = Number(btn.dataset.days);
+  usageKind = btn.dataset.rk;
   document.querySelectorAll("#usageRange button").forEach(b =>
     b.classList.toggle("on", b === btn));
+  const custom = usageKind === "custom";
+  $("usageCustom").hidden = !custom;
+  if (custom && !$("usageFrom").value) {
+    // 第一次切自定义:默认近 30 天,省得两格空的不知道填什么
+    const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const t = new Date(), f = new Date();
+    f.setDate(f.getDate() - 29);
+    $("usageFrom").value = iso(f);
+    $("usageTo").value = iso(t);
+  }
   loadUsage();
 });
+$("btnUsageApply").addEventListener("click", () => loadUsage());
+["usageFrom", "usageTo"].forEach(id =>
+  $(id).addEventListener("keydown", e => { if (e.key === "Enter") loadUsage(); }));
 
 /* ---------------- 技能与渠道(p3/p4,v0.9.12) ---------------- */
 let skillTab = "skills";          // 当前 tab:skills=技能列表 / channels=渠道目录
