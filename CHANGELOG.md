@@ -6,10 +6,14 @@
 
 想看某一轮**为什么**长成这样、踩了什么坑:读 `HANDOFF.md` §2 与 `docs/handoff/milestones.md`(那里是按轮写的流水账,这里是索引)。
 
+## v0.9.117
+- v0.9.117 用量示意改版:两栏仪表盘 + 全期热力图 2D/3D + 缓存命中落账 —— usage.py 第6列 cached_tokens(llm 层早已抓进 turn.usage,补「进账本」一跳;NULL 口径:端点说了零命中记0、没说记未记录)+ resolve_range 五档区间(认不出明说不合法,绝不猜)+ dashboard 一揽子聚合(按天distinct留档会话跨天去重/模型share/供应商分组/全期统计砖与热力图);⚠ 自死锁:锁内调 _profile_between(自己也抢锁)= threading.Lock 不可重入自己等自己,挪锁外;前端 usageOverlay 重做 1080px 两栏(统计砖/Top3/热力图2D=GitHub周列×星期行五档绿、3D=零依赖Canvas等距立方体画家算法+Path2D悬停/风云榜内嵌;大数字+估算费用口径不动+日预算条配了才画+来源卡+每日/模型两页签);⚠ display:flex 盖 hidden 第二次撞(v0.9.94 chat-rail 同型),.usage-custom[hidden] 显式写回;前端冻结针旧针「缓存命中(端点不回报)」随改版过期但无人护(只在打包后跑)——补 test_every_frontend_needle_exists_in_index_html 提交前红;web_profile 明拒+owner清单同补;冻结针 usage+2 gui_bridge+1 前端+8;《使用说明》96条;真实库 pywebview 桩+浏览器截图过目(2D/3D/页签);测试+6,全量 3164 passed/1 skipped(collect 3165);v0.9.112 行按规矩搬 milestones  · 2026-10-05
+
 ## v0.9.116
 - v0.9.116 按推荐前三一起实施:L1 行尾与编码保真(修得比 §6 #49a 登记的更宽)/ L2 项目规则可写 ask 与 deny(P0 命令策略最后一格)/ L3 内置钩子配方(把上轮造的能力从「能用」变「能开」)  · 2026-10-05
 
 ## v0.9.115
+- docs(changelog): 收入 v0.9.115 与 v0.9.116 —— 顺手把两份该在库里的文档补上  · 2026-10-05
 - v0.9.115 工具钩子升级 H1~H4+H6:从「只会拦」到「能改能问」—— pre 挪到权限门之前(门永远只看最终真要执行的那份参数,改写后重跑一遍;硬拒根本不叫钩子,靠新增的 matched() 不启动进程的认领判定 + 一次只读预检) / 退出码三种命运分家(0=跑成、2=明确拒绝、其它非零与超时=钩子自己坏了走 on_error,默认 block;连着三次没跑成才提醒一次,真在拒绝的钩子不算坏) / permission_request 代答划三道闸(credential·git·external 三类门根本不叫钩子,判定用新加的 ask_kind 结构字段而不是对中文文案做匹配;没跑成一律退回问人 —— on_error 在这类上完全不适用,坏掉的策略钩子既不配替人拒也不配替人放;代答必留痕并写明「用户没有点过头」,只这一条这一回合,不升本轮总是允许、不落盘) / 两个非工具事件 session_start·user_prompt_submit 只能往这一次请求里附一句话(走 _pending_prior 与差评避让并列追加、互不覆盖;不改写也不拦用户发言,deny 当场说出"没生效";子代理 is_sub=True 不叫;新规矩:非工具类事件不许被 tools/paths 筛成永不触发) / post 载荷补 args 才闭得上 H6「写完就自查」那条环(以前只有 {tool,result},而那句 result 是给活人看的不是接口,加键是追加、老钩子不用改) / hook_ms 单列落档,不折进 elapsed_ms(那把尺的口径是 handler 全程、连确认框等待都不算),时间线显示「用时 5s(钩子 0.4s)」,LOCAL_KEYS 一并收住不外发 / HARD_REJECT 从「请勿重试」改成给说话的对象并明写不许换写法绕过,收 §6 #49(d) / matcher 补 command_prefix·args_match,timeout 按条配(默认 10、上限 120,被压回要说一句 —— 10 秒跑不了真测试是 P2 那条闭环此前的死结) / 结构化决策只认"整段 stdout 是 JSON 对象",从混排文本里猜一段 JSON 等于让用户一次格式失误变成一次静默改道;updated_output 是追加不替换,原文被吞就是真没了  · 2026-10-05
 
 ## v0.9.114
@@ -451,4 +455,4 @@
 ## v0.3.0
 - 初始提交:引路学长 v0.3.0 —— Windows 桌面编程引路智能体(GUI+CLI 同核引擎)  · 2026-09-12
 
-<!-- 生成自 git 提交 b90124f;此后的提交还没收进来 -->
+<!-- 生成自 git 提交 4e1f403;此后的提交还没收进来 -->
