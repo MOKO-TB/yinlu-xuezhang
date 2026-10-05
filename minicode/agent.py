@@ -37,6 +37,26 @@ WRAP_UP_NOTE = ("工具调用轮数已经用完,这一次不许再调用工具�
                 "下一步建议做什么。不要重复已经说过的内容。")
 
 FAIL_STREAK_LIMIT = 3      # 同一个调用连续失败几次就止损(与 B0「第 3 次搜空才催」同节奏)
+HOOK_BAD_STREAK = 3        # 同一只钩子连着三次"没跑成"就提醒用户一次(不是拦)
+
+# 红线硬拒的回话。抽成常量是因为 H1 之后它有两个出口(钩子之前的预检、
+# 改写之后重跑门),两处说的话必须一字不差 —— 两处各写一遍迟早对不上。
+# 后半句是 #49d:硬拒过去只丢一句"请勿重试",模型手里没有出口,于是要么原地
+# 打转、要么换个写法试探绕过 —— 后者比前者危险。给的是**说话的对象**(向用户
+# 申请),不是**绕过的通道**。
+HARD_REJECT_NOTE = (
+    "错误: 该操作被安全策略硬拒绝(可能造成不可恢复的破坏),这一步没有执行,不要重试。"
+    "这条路只有用户本人能放开(改 config.json 的权限档/沙箱开关,或项目白名单)。"
+    "请向用户如实说明你想做什么、被哪条红线挡住、需要什么权限,由他决定;"
+    "**不要换一种写法绕过它** —— 绕过红线不是完成任务的备选路径。")
+
+# 这三类 ASK 不接受 permission_request 钩子代答(H3,v0.9.115):凭据文件、仓库
+# `.git`、以及"本回合接触过外部内容"之后升格的敏感动作。共同点是它们在自己的
+# 注释里就写着"权限档位、项目白名单、本轮总是允许都不替它背书" —— 最后一道是
+# **人的眼睛**。把它换成一条命令的 stdout,等于给注入防御装了个内部开关:
+# 钩子的输出会受它刚读到的内容影响,而那正是这几类要防的东西。
+NON_DELEGABLE_ASKS = ("credential", "git", "external")
+
 FAIL_STREAK_NOTE = ("同一个工具调用已经连续失败 3 次,结果都一样,继续原样重试没有意义。"
                     "这一次不许再调用工具。请向用户如实说明:卡在哪一步、每次失败的具体原因"
                     "(以上面的工具回话为准,不要凭印象编)、以及可选的下一步"
@@ -50,12 +70,19 @@ TOKEN_LIMIT_NOTE = ("本会话累计 token 消耗已到 session_token_limit 上�
 class Agent:
     def __init__(self, llm: LLMClient, registry: list[Tool], session: Session,
                  gate: PermissionGate, ui: TerminalUI, ctx: ToolContext,
-                 max_steps: int = 0):
+                 max_steps: int = 0, is_sub: bool = False):
         self.llm = llm
         self.registry = registry
         self.session = session
         self.gate = gate
         self.ui = ui
+        # H4:`session_start`/`user_prompt_submit` 说的是一次**用户开的会话**。子代理
+        # 拿到的是任务文本、活几轮就结束,不是会话 —— 让它也叫这两个事件,一条
+        # "每次开会话说一句"的钩子就会在每路子代理上各叫一遍(而用户只会觉得
+        # "我只配了一次")。这个旗标是这件事唯一的闸口,由 subagents 显式传 False 侧。
+        self._is_sub = bool(is_sub)
+        self._started = False      # session_start 只叫一次(一个实例 = 一次会话)
+
         self.ctx = ctx
         # 单回合工具调用轮数上限:唯一的数在 config.py 的 `max_steps` 字段里。
         # 这里不写第二个默认值 —— 显式传参(子代理那一档)优先,没传就回 config。
@@ -66,6 +93,9 @@ class Agent:
         self._real_prompt: tuple[int, int] | None = None
         self._undo_stack: list[dict] = []
         self._undo_seq = 0         # 快照的稳定编号:摘掉中间一条不会让别的错位
+        # 钩子健康计数(按 kind):连着几次"没跑成"就说一次话。不跨会话累计 ——
+        # 它是"这轮你一直在叫一条坏命令"的提醒,不是故障台账。
+        self._hook_bad: dict[str, int] = {}
         # 「这一处改动是在第几问之后做的」——编辑重发要按这个回退文件(R3)。
         # `_epoch` 管的是另一件事:压过一次历史后前面的提问被折进摘要,序号整体前移,
         # 老记录上那个号就不再对得上任何东西 —— 纪元不同的记录一律不许按号回退。
@@ -80,6 +110,8 @@ class Agent:
         # W10:本步实测毫秒(handler 全程)。_execute 每步开头清零;替身/子类
         # 覆盖 _execute 时这里保底 None —— add_tool_result 拿到 None 不带键。
         self._step_ms = None
+        self._hook_ms = None      # 同一条保底:H2 的钩子实测毫秒,没跑钩子就不带键
+
         # 身上这份 system prompt 是哪一天建的。system prompt 里烧着日期与"今天/明天
         # 的课",而本应用是托盘常驻的 —— 记下建它的那天,回合开头一比对就知道过没过期。
         self._prompt_date = date.today()
@@ -114,6 +146,9 @@ class Agent:
         # 数出来的还是它的序号 —— 两种入口拿到同一个坐标。
         self._turn_ordinal = sum(1 for m in self.session.messages
                                  if m.get("role") == "user")
+        # H4:开会话的第一问之前叫一次 session_start,此后每问叫一次 user_prompt_submit。
+        # 放在消息入会话**之后** —— 钩子读到的 args 里就该带着用户刚说的那句话。
+        self._fire_start_hooks(user_input, add_user)
 
         # 一轮总时限:只圈"这一轮一共转了多少次",不圈单条命令(那是沙箱的
         # timeout_seconds)也不圈单次请求(那是 request_timeout_seconds)。
@@ -183,7 +218,8 @@ class Agent:
                     result = (f"错误: 工具 {call.name} 执行时抛了 "
                               f"{type(e).__name__}: {str(e)[:200]}")
                 self.session.add_tool_result(call.id, call.name, result,
-                                             elapsed_ms=self._step_ms)
+                                             elapsed_ms=self._step_ms,
+                                             hook_ms=self._hook_ms)
                 if self._fail_streak_hit(call):
                     # 连续 N 次一模一样的失败:再原样重试只是烧 token(撞上
                     # max_steps/时间限才停)。收一次尾,把"接下来怎么办"交给
@@ -811,6 +847,8 @@ class Agent:
         # W10:每步先清零 —— 早退路径(工具不存在/参数坏/被拒/钩子拦)不残留
         # 上一步的实测,add_tool_result 拿到 None 就不带 elapsed_ms 键。
         self._step_ms = None
+        self._hook_ms = None      # 同上:这一步没跑钩子就不带 hook_ms
+
         tool = self._tool_map.get(call.name)
         if tool is None:
             return (f"错误: 未找到工具 '{call.name}'。"
@@ -829,27 +867,72 @@ class Agent:
         if "reason" in props:
             reason = str(args.pop("reason", "") or "")
 
+        # ---- H1(v0.9.115):pre 钩子挪到权限门**之前**。
+        # 理由只有一条:钩子现在能改写这一步的参数,而门看的必须是最终真要执行
+        # 的那份 —— 否则"用户点过头的内容"和"被执行的内容"就是两回事。
+        # 没认领的钩子时 `matched` 为假,下面整块跳过:门的调用次数、回话、卡片
+        # 全与基线逐字节相同(方案 §五.1 的第一条口径)。
+        hook_ctx = ""
+        rewrite_note = ""
+        ask_extra = ""          # H3:钩子代答过一次"允许"就要一路跟到回话里
+        if self._matched_config_hook("pre_tool", tool, args):
+            # 硬拒根本不叫钩子(方案 H1 红线②):先只读跑一次门只为拿这个判断。
+            # check() 自己会清 ask_note/project_allow_reason,重复调没有副作用。
+            if self.gate.check(tool, args) == REJECT:
+                self.ui.tool_rejected_hard(tool, args)
+                return HARD_REJECT_NOTE
+            pre = self._run_config_hook("pre_tool", tool, args)
+            if pre is not None:
+                self._hook_ms = int(pre.get("elapsed_ms") or 0)
+                self._note_hook_health("pre_tool", tool.name, pre)
+                if pre.get("blocked"):
+                    return self._hook_blocked_text(pre)
+                hook_ctx = str(pre.get("context") or "")
+                original = dict(args)
+                args, rewrite_note = self._apply_hook_input(tool, args, pre)
+                if rewrite_note:
+                    self._log_hook_rewrite(tool, args, original, rewrite_note)
+
         decision = self.gate.check(tool, args)
         if decision == REJECT:
             self.ui.tool_rejected_hard(tool, args)
-            return ("错误: 该操作被安全策略硬拒绝(可能造成不可恢复的破坏),"
-                    "已阻止执行,请勿重试。")
+            return HARD_REJECT_NOTE
+
         if decision == ASK:
             note = getattr(self.gate, "ask_note", "") or ""
-            # 无升级警示时按原调用路径走(不传 note):既有三参数实现/测试代理
-            # 不受影响,而且这是"未接触外部内容时行为与基线一致"的前提。
-            if note:
-                choice = self.ui.confirm_tool(tool, args, reason or self._narration, note)
-                self._log_security_ask(tool, args, note, choice)
+            kind = getattr(self.gate, "ask_kind", "") or ""
+            # ---- H3(v0.9.115):弹框之前,给 permission_request 钩子一次表态的机会。
+            # 三类红线级的门不进来(见 NON_DELEGABLE_ASKS);钩子没跑成也不进来
+            # —— 失败的归宿是"照旧问人",既不替人拒也不替人放。
+            answer = self._ask_via_permission_hook(tool, args, kind)
+            if answer and answer[0] == "deny":
+                return ("错误: 这一步被你配的 permission_request 钩子拒了 —— "
+                        f"**不是用户拒的**,用户根本没看到这一问。钩子给的理由:"
+                        f"{answer[1] or '(没写)'}。请如实告诉用户是钩子拦的(别把它说成"
+                        "用户的决定),并问他要不要改那条钩子或换个做法。")
+            if not answer:
+                # 无升级警示时按原调用路径走(不传 note):既有三参数实现/测试代理
+                # 不受影响,而且这是"未接触外部内容时行为与基线一致"的前提。
+                if note:
+                    choice = self.ui.confirm_tool(tool, args, reason or self._narration, note)
+                    self._log_security_ask(tool, args, note, choice)
+                else:
+                    choice = self.ui.confirm_tool(tool, args, reason or self._narration)
+                if choice == "always":
+                    self.gate.approve_for_turn(tool.name)
+                elif choice != "yes":
+                    return "用户拒绝了本次工具调用。请停止重试,询问用户希望如何处理。"
+                # 用户放行后记住工作区外路径:「允许」管本回合;「总是允许」升为
+                # 会话级(不落盘,换工作区/重启即失效)
+                self.gate.approve_outside(tool, args, session=(choice == "always"))
             else:
-                choice = self.ui.confirm_tool(tool, args, reason or self._narration)
-            if choice == "always":
-                self.gate.approve_for_turn(tool.name)
-            elif choice != "yes":
-                return "用户拒绝了本次工具调用。请停止重试,询问用户希望如何处理。"
-            # 用户放行后记住工作区外路径:「允许」管本回合;「总是允许」升为
-            # 会话级(不落盘,换工作区/重启即失效)
-            self.gate.approve_outside(tool, args, session=(choice == "always"))
+                # 「允许」只这一条、只这一回合:不落盘、不升 always —— 钩子替用户
+                # 点一次头不等于替他签一份长期授权。工作区外路径仍要记本回合。
+                self.gate.approve_outside(tool, args, session=False)
+                ask_extra = ("(这一步本该弹确认框,由你配的 permission_request 钩子答了"
+                             "\"允许\"(%s 那条门)—— **用户没有点过头**,别把这次放行说成用户批准的。)"
+                             % kind)
+
 
         # 项目白名单放行(v0.9.87):用户当场没点过头的一步必须留两处痕 ——
         # 安全日志一行 + 界面一条 info。静默放行等于没有审计。
@@ -858,13 +941,9 @@ class Agent:
             self._note_project_allow(tool, args, by_project)
 
         self._note_low_rated_prior(tool, args)
-        # pre 钩子(F3,v0.9.100):用户 config 配置的命令级审计;非零退出 = 拦截。
-        # 放在 tool_start 之前 —— 与"参数坏/硬拒绝不出卡片"的口径一致,拒绝
-        # 不该先画一张"正在执行"的卡。
-        pre = self._run_config_hook("pre_tool", tool, args)
-        if pre is not None and pre.get("blocked"):
-            return (f"错误: 该步被工具钩子拦下(pre_tool 非零退出)。"
-                    f"钩子输出:{pre.get('output') or '(无)'}")
+        # pre 钩子已在权限门之前跑过(H1,v0.9.115)。这里只剩一件事要守:
+        # 改写过的参数必须在快照之前定稿 —— 快照、卡片、handler 拿到的是同一份,
+        # 而"原本要做什么"落在安全日志里(_log_hook_rewrite),不是丢了。
         self._snapshot_before_mutation(tool, args)
         self.ui.tool_start(tool, args)
         t0 = time.monotonic()
@@ -882,8 +961,21 @@ class Agent:
         self._mark_after_mutation(tool, args, result)
         # post 钩子:失败不拦截,在结果尾部如实附一行(一行,不刷屏)
         post = self._run_config_hook("post_tool", tool, args, result=result)
-        if post is not None and not post.get("ok"):
-            result = result + f"\n(工具钩子 post_tool 失败:{post.get('output') or '原因不明'})"
+        post_ctx = ""
+        if post is not None:
+            self._hook_ms = (self._hook_ms or 0) + int(post.get("elapsed_ms") or 0)
+            self._note_hook_health("post_tool", tool.name, post)
+            if not post.get("ok"):
+                result = result + f"\n(工具钩子 post_tool 失败:{post.get('output') or '原因不明'})"
+            # 钩子要回灌的正文(lint/测试的失败原文)**追加**在结果里,不替换 ——
+            # 原结果被吞掉就是真没了,这个项目不写"我把它换成了别的"这种账。
+            # 放在 `_truncate` **之前**:绕过它等于给一条外部命令开了无上限的出口。
+            # 副作用是它可能一起被围栏包住(对 web_crawl 那类结果)—— 宁可把自家
+            # 附注多标一层"外部内容",也不让无上限的正文逃过截断。
+            body = str(post.get("updated_output") or "")
+            if body:
+                result = result + f"\n〔post_tool 钩子回灌〕\n{body}"
+            post_ctx = str(post.get("context") or "")
         result = self._truncate(result)
         result = self._mark_repeat_empty(tool, args, result)
         result = self._py_syntax_feedback(tool, args, result)
@@ -896,6 +988,12 @@ class Agent:
             note = getattr(self.gate, "note_external", None)
             if callable(note):
                 note(tool.name, args)
+        # 两句钩子附注留在围栏**之外**:它们是我方本地附注,不该被标成外部内容;
+        # 而改写那一句必须活着到模型面前 —— 它被截掉等于用户点过头的事没人告知。
+        for extra in (post_ctx, hook_ctx, rewrite_note, ask_extra):
+            if extra:
+                result = result + ("\n" + extra if extra.startswith("(") else
+                                   f"\n(工具钩子附注:{extra})")
         return result
 
     # ---------------------------------------------------- 信号回灌(v0.9.39 B0/B1)
@@ -1127,6 +1225,192 @@ class Agent:
             if p.id != active and p.has_key and p.enabled and p.enabled_models():
                 return p.id
         return ""
+
+    def _fire_start_hooks(self, user_input: str, add_user: bool) -> None:
+        """`session_start`(一次会话一回)与 `user_prompt_submit`(一问一回)—— H4。
+
+        两样只做一件事:往 `_pending_prior` 那条**只活在这次请求里**的通道**追加**
+        一句话。为什么不写进 system prompt:①system 是整段 KV Cache 前缀,而
+        `_refresh_clock` 会按天/按指令指纹重建它 —— 钩子那句一旦被重建掉,表现是
+        "我配的话有时生效有时不生效",比根本不生效难查十倍;②system 在留档里,
+        会话正文中间冒出一段没人承认写过的话,不好看。
+        **代价照实说**:这一句只到下一次请求为止,**不是常驻上下文** —— 与 Claude 的
+        SessionStart(整段会话都带着)不同,这里不假装等价。要常驻得先解决"谁能往
+        system prompt 里说话"这笔账,不在这一格。
+        """
+        if self._is_sub:
+            return
+        cfg = getattr(getattr(self, "ctx", None), "config", None)
+        cfg_hooks = getattr(cfg, "hooks", None)
+        if not isinstance(cfg_hooks, dict) or not cfg_hooks:
+            return
+        if not self._started:
+            self._started = True
+            self._collect_event_hook("session_start", "", cfg_hooks)
+        # 「重新生成」(add_user=False)不算用户又开了一次口:同一句话叫两遍
+        # user_prompt_submit,钩子会以为自己收到了两条新指令。
+        if add_user:
+            self._collect_event_hook("user_prompt_submit", str(user_input or ""), cfg_hooks)
+
+    def _collect_event_hook(self, kind: str, text: str, cfg_hooks: dict) -> None:
+        """跑一类事件钩子,只收它要附的那句话。它不是闸:坏了、超时、拦不住都照跑这一轮。"""
+        from minicode import hooks
+        payload = {"event": kind}
+        if kind == "user_prompt_submit":
+            payload["prompt"] = text
+        try:
+            got = hooks.run_hook(kind, cfg_hooks, "", args=payload)
+        except Exception:
+            return                       # 附不上话就算了,不许因为读配置断掉这一轮
+        if got is None:
+            return
+        self._note_hook_health(kind, "", got)
+        bits = [b for b in (str(got.get("context") or ""),
+                            "" if got.get("ok") else str(got.get("output") or "")) if b]
+        if not bits:
+            return
+        line = "〔%s 钩子〕%s" % (kind, " / ".join(bits))
+        # **追加**而不是赋值:`_pending_prior` 另有住户(差评避让那条线在
+        # `_note_low_rated_prior` 里写它),谁覆盖谁就有一句会静默消失。
+        self._pending_prior = (self._pending_prior + "\n" + line).strip()
+
+    def _matched_config_hook(self, kind: str, tool, args: dict) -> bool:
+        """这一步会不会跑某条钩子 —— **不启动进程**,只为红线预检服务。"""
+        cfg = getattr(getattr(self, "ctx", None), "config", None)
+        cfg_hooks = getattr(cfg, "hooks", None)
+        if not isinstance(cfg_hooks, dict):
+            return False
+        from minicode import hooks
+        try:
+            return hooks.matched(kind, cfg_hooks, tool.name, args)
+        except Exception:
+            return False      # 预检判不了就当没有钩子:门照样会在后面跑第二遍
+
+    def _hook_blocked_text(self, pre: dict) -> str:
+        """pre 拦下这一步时回给模型的话。
+
+        两种拦下要分开说:钩子**声明拒绝**(exit 2 或 decision:deny)与钩子**没跑成**
+        (非零退出/超时,on_error=block)。前者用户该问的是"这一步为什么要换做法",
+        后者该问的是"你那条钩子坏了" —— 混成一句,他就只能两条都试。
+        """
+        out = pre.get("output") or "(无输出)"
+        if pre.get("declared"):
+            return (f"错误: 该步被工具钩子拦下(pre_tool 声明拒绝)。"
+                    f"钩子给的理由:{out}")
+        return (f"错误: 该步被工具钩子拦下(pre_tool 没跑成,按 on_error=block 处理)。"
+                f"钩子情况:{out}")
+
+    def _apply_hook_input(self, tool, args: dict,
+                          pre: dict) -> "tuple[dict, str]":
+        """采纳钩子对这一步参数的改写。返回(要执行的参数, 那句要留痕的话)。
+
+        只查"这条调用本来就该满足的形状"(必填齐、键都在这只工具的 schema 里),
+        **不查业务合法性、不查权限** —— 那是 handler 与 `gate.check` 的事,在这里
+        复刻第二套判定迟早跟门对不上(方案 H1 契约红线①:门必须看最终参数,
+        所以这里只换 `args`,下面那道门照原样再跑一遍)。
+        """
+        new = pre.get("updated_input")
+        if not isinstance(new, dict) or not new:
+            return args, ""
+        schema = tool.parameters or {}
+        props = schema.get("properties") or {}
+        required = [str(k) for k in (schema.get("required") or [])]
+        missing = [k for k in required if k not in new]
+        unknown = [k for k in new if props and k not in props]
+        if missing or unknown:
+            bits = []
+            if missing:
+                bits.append("少了必填的 " + "、".join(missing))
+            if unknown:
+                bits.append("多出这只工具没有的参数 " + "、".join(sorted(unknown)))
+            return args, ("(pre_tool 钩子想改写这一步的参数,但那份参数不合这只工具的"
+                          "参数形状:" + "、".join(bits) + "。这一步按原参数执行。)")
+        if new == args:
+            return args, ""
+        keys = sorted(k for k in set(new) | set(args) if new.get(k) != args.get(k))
+        return new, ("(这一步的参数由 pre_tool 钩子改写,改动项:"
+                     + "、".join(keys) + "。原始参数已记入安全日志。)")
+
+    def _log_hook_rewrite(self, tool, new_args: dict, old_args: dict,
+                          note: str) -> None:
+        """改写留痕的第二处(第一处是卡片画的是改写后的参数,第三处是模型回话)。
+
+        走 `provenance.log_escalation` 同一个方 —— 它本来就是"敏感动作事后线索"
+        那本账(方案 M6),再开一份钩子专记迟早两本账对不上。写失败静默:
+        留痕不能拖垮对话。
+        """
+        try:
+            from minicode import provenance
+            provenance.log_escalation(
+                "hook_rewrite", tool.name, new_args,
+                f"{note} 原参数:"
+                f"{json.dumps(old_args, ensure_ascii=False)[:400]}",
+                "applied")
+        except Exception:
+            pass
+
+    def _ask_via_permission_hook(self, tool, args: dict, kind: str) -> "tuple[str, str] | None":
+        """问人之前先问一句钩子(H3,v0.9.115)。回 ("allow"|"deny", 理由) 或 None=照常弹框。
+
+        三道闸门,少一道就做出一个"机器替人点头"的产品:
+
+        ① `NON_DELEGABLE_ASKS` 那三类门**根本不叫钩子** —— 凭据、仓库 `.git`、
+           刚接触过外部内容的升格确认。它们的共同点正是各自注释里那句"权限档位、
+           项目白名单、本轮总是允许都不替它背书";而钩子读得到的输入里就包含这一步
+           要做的事,那条命令的输出又可能受外部内容影响 —— 最后一道换成 stdout
+           的一个字,注入防御就只剩纸了。
+        ② 只有钩子**真跑成并明确表过态**才算数(`declared`)。没跑成、超时、
+           退出码既不是 0 也不是 2、JSON 里没有 decision —— 一律退回问人。
+           这一类与 pre/post 最大的不同:`on_error` 在这里**不适用**,失败的归宿
+           既不是拦也不是放,而是"照旧弹框"。一条坏掉的策略钩子既不配替人拒绝、
+           更不配替人放行。
+        ③ 代答必留痕:安全日志一行(`provenance.log_escalation`,不开第二本账)
+           + 回给模型那句"用户没有点过头"。少了第③处,事后就查不到这一步是谁应的。
+        """
+        if kind in NON_DELEGABLE_ASKS:
+            return None
+        if not self._matched_config_hook("permission_request", tool, args):
+            return None
+        got = self._run_config_hook("permission_request", tool, args)
+        if got is None:
+            return None
+        self._hook_ms = (self._hook_ms or 0) + int(got.get("elapsed_ms") or 0)
+        self._note_hook_health("permission_request", tool.name, got)
+        decision = str(got.get("decision") or "")
+        if not got.get("declared") or decision not in ("allow", "deny"):
+            return None
+        reason = str(got.get("output") or "")
+        try:
+            from minicode import provenance
+            provenance.log_escalation(
+                "hook_answer", tool.name, args,
+                f"门:{kind or '(按档位)'} 钩子代答:{decision} 理由:{reason[:200]}",
+                "yes" if decision == "allow" else "no")
+        except Exception:
+            pass
+        return decision, reason
+
+    def _note_hook_health(self, kind: str, tool_name: str, got: dict) -> None:
+        """同一只钩子连着三次没跑成 → 提醒用户一次,然后清零。
+
+        只算"没跑成"(`declared` 为假的那种):一条真在拒绝的钩子工作得好好的,
+        把它算进"坏了"三次就叫用户去修,那是骗人。提醒完**不改变任何判定** ——
+        拦还是拦、放还是放,由 on_error 说;这里只是把这件事说到用户听得见的地方。
+        """
+        if got.get("ok") or got.get("declared"):
+            self._hook_bad.pop(kind, None)
+            return
+        n = self._hook_bad.get(kind, 0) + 1
+        self._hook_bad[kind] = n
+        if n < HOOK_BAD_STREAK:
+            return
+        self._hook_bad[kind] = 0
+        try:
+            self.ui.info(f"你配的工具钩子({kind})连着 {HOOK_BAD_STREAK} 次没跑成,"
+                         f"最近一次:{str(got.get('output') or '')[:160]}。"
+                         "它没跑成时按 on_error 办(默认拦下),该修的那条在 config.json 的 hooks 里")
+        except Exception:
+            pass
 
     def _run_config_hook(self, kind: str, tool, args: dict,
                          result: str | None = None) -> "dict | None":

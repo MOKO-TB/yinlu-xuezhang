@@ -115,7 +115,8 @@ class Session:
         self._append(msg)
 
     def add_tool_result(self, call_id: str, name: str, content: str,
-                        elapsed_ms: int | None = None) -> None:
+                        elapsed_ms: int | None = None,
+                        hook_ms: int | None = None) -> None:
         msg: dict = {"role": "tool", "tool_call_id": call_id, "content": content}
         # W10:这一步的实测毫秒(handler 全程)随留档走 —— 重启后时间线的
         # 耗时不再靠 ts 秒级差还原(0.2s 的调用会漂成 0s/1s/2s)。没有实测
@@ -123,6 +124,12 @@ class Session:
         if (isinstance(elapsed_ms, int) and not isinstance(elapsed_ms, bool)
                 and elapsed_ms >= 0):
             msg["elapsed_ms"] = elapsed_ms
+        # H2(v0.9.115):钩子的实测毫秒**单列一个键**,不并进 elapsed_ms。
+        # 那个的口径是"handler 全程"(确认框等待都不算在内),把钩子耗时折进去
+        # 等于当场改掉那把尺的定义 —— 时间线上"这一步跑了多久"就不是它自己了。
+        if (isinstance(hook_ms, int) and not isinstance(hook_ms, bool)
+                and hook_ms > 0):
+            msg["hook_ms"] = hook_ms
         self._append(msg)
 
     def clear(self) -> None:
@@ -409,7 +416,7 @@ def _content_text(content) -> str:
 # 留档有、协议没有的本地键:发往端点前逐个剥掉 —— 严格端点对未知字段报 400,
 # 而且一次没剥干净,表现是"下一轮"莫名 400,回溯不到这一轮。新增留档键时
 # 必须来这里登记(与 _messages_for_request 那道出口闸同一处)。
-LOCAL_KEYS = ("ts", "reasoning", "reasoning_chars", "elapsed_ms")
+LOCAL_KEYS = ("ts", "reasoning", "reasoning_chars", "elapsed_ms", "hook_ms")
 
 
 def outbound(messages: list[dict]) -> list[dict]:

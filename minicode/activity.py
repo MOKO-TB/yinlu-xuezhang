@@ -194,6 +194,12 @@ def _call_index(messages) -> tuple[dict, dict, list]:
                 ms = m.get("elapsed_ms")
                 if isinstance(ms, int) and not isinstance(ms, bool) and ms >= 0:
                     result_ms[cid] = ms
+                # H2:钩子的实测毫秒挂在**这次调用**上(它是这一步的属性,
+                # 不是又要一份按 cid 平行的表 —— 少一份平行表就少一次对不上)。
+                hm = m.get("hook_ms")
+                if (cid in calls and isinstance(hm, int)
+                        and not isinstance(hm, bool) and hm > 0):
+                    calls[cid]["hook_ms"] = hm
     return calls, results, order, result_ts, result_ms
 
 
@@ -627,7 +633,15 @@ def _dur_text(entry: dict) -> str:
     d = entry.get("dur")
     if d is None:
         d = _dur(entry)
-    return "" if d is None else f"{d}s"
+    if d is None:
+        return ""        # 既没实测也没时刻锚:这一格不显示,更不拿钩子那截凑一个数
+    hm = entry.get("hook_ms")
+    if isinstance(hm, int) and not isinstance(hm, bool) and hm > 0:
+        # 钩子耗时**单列一截**,不并进 d:那一格问的是"这一步跑了多久"
+        # (handler 全程,连确认框等待都不算),钩子跑在它之外 —— 折进去等于
+        # 当场改掉那把尺的定义,而这栏的全部本钱就是尺子说得准。
+        return f"{d}s(钩子 {hm / 1000:.1f}s)"
+    return f"{d}s"
 
 
 def _ts_epoch(ts: str) -> "float | None":
@@ -803,6 +817,8 @@ def timeline(messages, workspace=None, live=None, busy=True) -> dict:
                          "args": args,
                          "status": status, "badge": _badge(status),
                          "start": None, "end": None, "dur": None,
+                         # H2:这一步的钩子实测毫秒(没跑钩子就没有这个键,前端不显示)
+                         "hook_ms": call.get("hook_ms"),
                          # W9:同批下发的批号(同一条 assistant ≥2 调用才有)
                          "batch": call.get("batch"),
                          # 并行子代理内部的每一步挂在下面(v0.9.92);形状先给齐,
@@ -852,10 +868,12 @@ def timeline(messages, workspace=None, live=None, busy=True) -> dict:
             # 显示行(合并行在内)一律要净:args/result 只给 action 用,
             # 算完就剥 —— 不剥的话页面原文会整段躺进面板载荷(隐私和体积
             # 都是账,来源栏那次的教训)。合并行是副本,必须在这里单独剥。
-            for k in ("args", "result", "cid", "raw", "turn_title", "end", "dur"):
+            for k in ("args", "result", "cid", "raw", "turn_title", "end", "dur",
+                      "hook_ms"):
                 r.pop(k, None)
         for r in items:
-            for k in ("args", "result", "cid", "raw", "turn_title", "end", "dur"):
+            for k in ("args", "result", "cid", "raw", "turn_title", "end", "dur",
+                      "hook_ms"):
                 r.pop(k, None)
         turns.append({"n": n, "title": title,
                       "calls": len(items), "errors": counts["failed"],

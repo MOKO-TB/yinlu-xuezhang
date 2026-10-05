@@ -178,6 +178,24 @@ class PermissionGate:
         """上一次 check() 为什么强制确认(给确认框多打一行用)。"""
         return self._ask_note
 
+    @property
+    def ask_kind(self) -> str:
+        """上一次 check() 的 ASK 是**哪条门**开的口(见 `_ask`)。"""
+        return self._ask_kind
+
+    def _ask(self, kind: str, note: str = "") -> str:
+        """每一次"要问人"都说清是哪条门在问,并且当场把话备好。
+
+        H3(v0.9.115)之前只有 `ask_note` 那份**给人看**的中文,于是"哪几类不许由
+        工具钩子代答"只能靠匹配文案 —— 那正是分层指令文件 §四.1 拒绝过的姿势:
+        改一个字,判定就悄悄失效,而且没人会红。所以这里收成一个结构字段:
+        `credential` / `git` / `external` 三类由代码点名"必须问人",与文案无关。
+        """
+        self._ask_kind = kind
+        if note:
+            self._ask_note = note
+        return ASK
+
     def _note(self, text: str) -> None:
         self._ask_note = text
 
@@ -372,8 +390,7 @@ class PermissionGate:
                 self._note(why)
                 return REJECT
             if level == SB_ASK:
-                self._note(f"{why}\n{KNOWN_LIMITS['script']}(文件:{p.name})")
-                return ASK
+                return self._ask("script", f"{why}\n{KNOWN_LIMITS['script']}(文件:{p.name})")
         return ALLOW
 
     def _outside_path_gate(self, name: str, args: dict) -> str:
@@ -383,11 +400,10 @@ class PermissionGate:
                                              str(args.get("command", "")))
         if not token:
             return ALLOW
-        self._note(f"这条命令引用了工作区外的路径 {token} —— 沙箱默认只让它在工作区内活动。"
+        return self._ask("outside_command", f"这条命令引用了工作区外的路径 {token} —— 沙箱默认只让它在工作区内活动。"
                    "确认不是你要的请点拒绝;点「总是允许」则本会话内记住这个路径"
                    "(不落盘,换工作区或重启即失效);需要长期放开请在 config.json 打开 "
                    "sandbox.allow_outside_workspace。")
-        return ASK
 
     # ------------------------------------------------------------ 主判定
 
@@ -395,6 +411,7 @@ class PermissionGate:
         # 子代理的工具名带类型前缀(如 "explore·bash"),取末段判断
         name = tool.name.rsplit("·", 1)[-1]
         self._ask_note = ""
+        self._ask_kind = ""
         self.project_allow_reason = ""
         if name == "bash":
             reason = check_disaster_command(args.get("command", ""))
@@ -409,21 +426,20 @@ class PermissionGate:
                 if level == BLOCKED:
                     return REJECT
                 if level == OUTSIDE and not self.sandbox.path_allowed(path):
-                    return ASK          # 沙箱边界不因权限档位而放开
+                    return self._ask("outside_path")   # 沙箱边界不因权限档位而放开
             # 凭据文件:工作区内也不免确认(full 档同样拦),而且不因
             # "本轮总是允许"而连续静默放行 —— 每个动作都重新确认。
             cred = self._credential_hit(name, args)
             if cred is not None:
-                self._note("⚠ 这是一个含密钥/凭据的文件——模型读它,能带出去的只有"
+                return self._ask("credential", "⚠ 这是一个含密钥/凭据的文件——模型读它,能带出去的只有"
                            "密钥本身。如果这一步不是你要求的,请点拒绝。")
-                return ASK
             if name == "bash":
                 level, why = check_command(self.sandbox.policy,
                                            args.get("command", ""))
                 if level == SB_REJECT:
                     return REJECT
                 if level == SB_ASK and self.config.permission_mode != "full":
-                    return ASK
+                    return self._ask("sandbox_command")
                 if level == SB_ASK and self.config.permission_mode == "full":
                     pass                # full 档:沙箱内可配命令放行(见下)
                 if not self.sandbox.policy.enabled:
@@ -431,7 +447,8 @@ class PermissionGate:
                 # 命令里引用了工作区外的路径:与 read_file 越界同一口径
                 if self.sandbox.policy.enabled:
                     if self._outside_path_gate(name, args) == ASK:
-                        return ASK
+                        return ASK      # 是哪条门开的口由 _outside_path_gate 自己标
+
             # 脚本内容一层:py_script 与 bash 里跑的 python 脚本都要先扫
             if self.sandbox.policy.enabled and name in ("py_script", "bash"):
                 gate = self._script_gate(name, args)
@@ -446,19 +463,17 @@ class PermissionGate:
         # 只读不算:看提交历史、读 HEAD 是正常需求,拦了只会把日常用法变吵。
         git_hit = self._git_hit(name, args)
         if git_hit is not None:
-            self._note(f"⚠ 这一步动的是仓库的 `.git`(命中:{git_hit})—— 那里放的不是代码,"
+            return self._ask("git", f"⚠ 这一步动的是仓库的 `.git`(命中:{git_hit})—— 那里放的不是代码,"
                        "是仓库历史与**每次提交/合并都会自动执行的钩子**。写进去等于给以后每次 "
                        "git 操作装一个自动入口,权限档位、项目白名单、「本轮总是允许」都不替它"
                        "背书。不是你要的请点拒绝。")
-            return ASK
         # 外部内容升级门:优先级高于权限档位(与沙箱红线同一心智模型)。
         # 只在**本回合接触过外部内容**后生效,没接触时行为与基线逐字节一致。
         if self._touched_external:
             why = self._is_sensitive_action(name, args)
             if why:
-                self._note(f"⚠ 本回合此前接触过外部内容({self._external_source}),"
+                return self._ask("external", f"⚠ 本回合此前接触过外部内容({self._external_source}),"
                            f"{why}。这一步可能是外部内容诱导的,请确认它确实是你要的。")
-                return ASK
         mode = self.config.permission_mode
         if mode == "full":
             # 完全访问:沙箱内的操作全部放行(敏感路径/灾难命令在上面已被硬拒)。
@@ -489,7 +504,7 @@ class PermissionGate:
         if hit:
             self.project_allow_reason = hit
             return ALLOW
-        return ASK
+        return self._ask("mode")
 
     @staticmethod
     def _is_workspace_build_command(args: dict) -> bool:

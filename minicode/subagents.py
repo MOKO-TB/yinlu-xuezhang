@@ -399,6 +399,9 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
             # 静默那一路(`_QuietUI`)本来就吞掉 tool_start/tool_done,现在进度走同一条闸。
             ctx=dc_replace(ctx, ui=ui),
             max_steps=MAX_SUB_STEPS,
+            # H4:子代理不叫 session_start/user_prompt_submit —— 它拿到的是任务文本,
+            # 不是一次用户开的会话;叫了会让"每次开一句话说一句"的钩子每路各冒一次。
+            is_sub=True,
         )
         if undo_stack is not None:
             sub_agent._undo_stack = undo_stack      # 与主代理共用,见 docstring

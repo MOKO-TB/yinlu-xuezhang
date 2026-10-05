@@ -247,7 +247,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.model_probe": ("list_models", "explain_status", "remember"),
     # ---- v0.9.100:工具钩子(漏收 = 装好的包里 pre 拦截/post 附行静默消失,
     # 用户配了钩子以为在审计,其实什么都没跑) ----
-    "minicode.hooks": ("run_hook", "_render", "HOOK_TIMEOUT"),
+    # v0.9.115 H1:漏 matched 的后果比漏 run_hook 更隐蔽 —— 红线预检拿不到"有没有
+    # 钩子认领这一步",异常被兜成 False,于是**整条钩子一步都不跑**,而 config 里明明写着。
+    "minicode.hooks": ("run_hook", "_render", "HOOK_TIMEOUT", "matched",
+                       "EXIT_DENY", "HOOK_TIMEOUT_MAX",
+                       # v0.9.115 H4:非工具类事件那张名单(漏收 = `deny 没生效` 那句
+                       # 提醒不再说出,用户配了拒绝钩子却拦住任何东西都没有)
+                       "EVENT_KINDS"),
+
     # ---- v0.9.22:安装版可用性(数据目录写探针 + 诊断下发) ----
     "minicode.app_setup": (
         # v0.9.100 F1 + v0.9.101 ④L1/L3:两级指令文件。漏 user_agents_prompt_section =
@@ -537,7 +544,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "_credential_hit", "_same_site",
                             # v0.9.104:上面那一层接到门里的那只手(漏收 = 判定还在
                             # sandbox 里,但 PermissionGate 不叫它 → 四档一律照旧放行)
-                            "_git_hit"),
+                            "_git_hit",
+                            # v0.9.115 H3:"是哪条门开的口"这个结构字段(漏收 = agent 取
+                            # 不到 ask_kind → 三类红线级的 ASK 被当成普通一问交给了钩子,
+                            # 于是凭据文件与 `.git` 由一条命令替用户点头 —— 正是最坏那种)
+                            "_ask", "ask_kind"),
     "minicode.kb": ("crawl_credibility", "host_is_trusted",
                     "CRAWLED_UNVERIFIED",
                     # v0.9.39 B0:"没查到"这句话与判它的那一处必须同时在包里 ——
@@ -641,6 +652,19 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # v0.9.39 B0/B1:两个挂钩 + 那条"只活在一次请求里"的先验
                        "_messages_for_request", "_note_low_rated_prior",
                        "_mark_repeat_empty",
+                       # v0.9.115 H1/H3:钩子接进门里的那几只手。漏 `_matched_config_hook`
+                       # = 红线预检永远拿不到"有没有钩子认领",整条 pre 不跑;漏
+                       # `_apply_hook_input` = 改写无声失效(钩子自称改了而执行的是原参数);
+                       # 漏 `_ask_via_permission_hook`/`NON_DELEGABLE_ASKS` = 代答要么整个
+                       # 不生效,要么连那三类红线级的门也一起替用户点头。
+                       "_matched_config_hook", "_apply_hook_input", "_hook_blocked_text",
+                       "_log_hook_rewrite", "_note_hook_health",
+                       "_ask_via_permission_hook", "NON_DELEGABLE_ASKS",
+                       "HARD_REJECT_NOTE", "HOOK_BAD_STREAK",
+                       # v0.9.115 H4:两个事件钩子(漏 `_collect_event_hook` = 事件照叫、
+                       # 附的那句话永远进不了请求;漏 `_fire_start_hooks` = 整类事件不跑)
+                       "_fire_start_hooks", "_collect_event_hook",
+
                        # v0.9.40 D0/D2:跨天重建 + 撞上限后的收尾调用
                        "_refresh_clock", "_wrap_up",
                        # v0.9.77:失败连击止损(漏收 = 装好的包里同一个调用
