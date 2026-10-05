@@ -996,6 +996,8 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # (漏一条 = 装好的包里用量弹窗还是旧圆环那副样子,或热力图切不过去)
     "get_usage_dashboard", "usageCustom", "buildHeatGrid", "renderHeat3D",
     "TOKEN 总数", "uh-grid", "每日明细", "模型明细",
+    # v0.9.118 3D 全屏透视(漏一条 = 入口按钮不见,或全屏转不起来)
+    "perspOverlay", "btnPerspOpen", "drawPersp", "PERSP_LEVELS",
 )
 
 
