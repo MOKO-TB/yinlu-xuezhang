@@ -6,7 +6,11 @@
 
 想看某一轮**为什么**长成这样、踩了什么坑:读 `HANDOFF.md` §2 与 `docs/handoff/milestones.md`(那里是按轮写的流水账,这里是索引)。
 
+## v0.9.119
+- v0.9.119 分支审查(N1 收官):worktree action=branch + 对话型 /review <分支> —— branch_overview(五条只读 git:rev-parse 验分支/merge-base 定分叉点/rev-list 计数/log --oneline 清单/diff numstat+name-status 文件账,降序封顶另有 N)+ branch_file_diff(单文件 diff,行数封顶 BRANCH_DIFF_LIMIT,二进制照 git 原话转述)+ _safe_rev(名字安全闸:以 - 开头/带空白不收,挡选项注入;git 全走参数列表不经 shell);基准必须是 merge-base 而非 HEAD(主线分叉后新走的提交不算分支的账,测试钉死);⚠ 两个真 bug 都是真实端到端跑出来的:①自审退化 —— 人就在这条分支上时 merge-base=分支顶点审出全 0,修=自动改用 main/master 当参考线并带说明,默认线不存在则如实说已完全包含在当前线里;rev-parse 输出带换行,tip 不 strip 则 base==tip 永远比不中(实测踩过);②worktree_tool 的 path 参数语义是仓库路径,单文件 diff 撞了它 —— 新增专用 file 参数,handler 键名三处对齐;对话型 /review(slash_commands 表,CLI expand_with_args/GUI 桥映射两端自动生效,main.py 零改动);schema enum/描述与 ACTIONS 对账(现成闸自动覆盖);测试 +8(解析器纯函数+真 git 分支端到端+错误口径);冻结针 worktree +6;《使用说明》98 条;README 命令行补 /review;§7 基线 3165→3172;v0.9.114 行按规矩搬 milestones  · 2026-10-06
+
 ## v0.9.118
+- docs(changelog): 收入 v0.9.118 Token 三维透视  · 2026-10-05
 - v0.9.118 Token 三维透视:3D 全屏旋转分析模式(P1/P2)—— 用户再点单:p1 热力图卡「⤢ 点击进入 3D 全屏旋转分析模式」入口 + p2 全屏透视(左栏全期统计+五档等级贺辞,右侧可旋转缩放悬停 3D);p3 的统计砖/Top3/每日明细 v0.9.117 已交付本轮只补全屏。纯前端零后端改动:openPersp 拉 get_usage_dashboard("all") 同一本账;drawPersp 零依赖 Canvas 可旋转引擎(yaw 绕竖轴+pitch 斜投影,depth=y1·cosφ+z·sinφ 画家算法,自适应取景先投包围盒8角任何角度不裁边);交互:拖拽旋转/滚轮缩放/▷ 自动旋转(用户一上手就停)/↺ 复位/四套配色/悬停 point-in-poly 反查出日期+等级+TOKEN+贺辞;左栏现算自全期账(总量/费用缺价照实未知/活跃占比/最长连续(零用量天断段)/单日峰值;等级五档 活跃层→锻造之城 带进度段);⚠ 过程事故记档:多次把真实回显误判成臆造、也真臆造过两条命令回显——关键状态一律最小命令读磁盘定真相;&& 链第一条不匹配会静默短路,别把空输出当文件里没有;前端冻结针+4;《使用说明》97条;真浏览器交互验证(默认/拖拽/悬停/色板/复位/自动旋转 yaw 实测推进);全量 3163 passed+changelog 待收(collect 3165 不变);v0.9.113 行按规矩搬 milestones  · 2026-10-05
 
 ## v0.9.117
@@ -459,4 +463,4 @@
 ## v0.3.0
 - 初始提交:引路学长 v0.3.0 —— Windows 桌面编程引路智能体(GUI+CLI 同核引擎)  · 2026-09-12
 
-<!-- 生成自 git 提交 29149d4;此后的提交还没收进来 -->
+<!-- 生成自 git 提交 b11e07c;此后的提交还没收进来 -->
