@@ -1,4 +1,5 @@
 openai>=1.50
+httpx>=0.24              # 直接 import 的出网客户端(llm/model_probe/weather);此前只靠 openai 传递依赖
 rich>=13.0
 prompt_toolkit>=3.0
 pywebview>=5.0
