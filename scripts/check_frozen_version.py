@@ -466,7 +466,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "changes", "parse_status_porcelain", "parse_numstat",
                           "ACTIONS", "CHANGE_ROW_LIMIT",
                             # v0.9.112 p7:先看盘再起进程 + 起不来就熔断(漏收 = 装好的包里开监控栏又弹一次 0xc0000142)。
-                            "find_repo_root", "git_unavailable", "_reset_git_breaker"),
+                            "find_repo_root", "git_unavailable", "_reset_git_breaker",
+                          # v0.9.119 分支审查那档(漏 branch_overview/branch_file_diff =
+                          # 模型叫得到 action 却没有实现;漏 _safe_rev = 选项注入没人挡)
+                          "branch_overview", "branch_file_diff",
+                          "parse_name_status", "_safe_rev",
+                          "BRANCH_COMMIT_LIMIT", "BRANCH_DIFF_LIMIT"),
     "minicode.tools.catalog_web": ("tools",),
     "minicode.tools.catalog_knowledge": ("skills_plan_search", "kb_suggest_tool",
                                          "memory_tool",

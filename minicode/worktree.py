@@ -193,8 +193,12 @@ def worktree_facts(path: Path | None = None) -> dict:
 # git 看得见这些文件,所以这里把**看得见的部分**补上,同时把**仍然退不掉**写在回话里:
 # 它不是审查视图的第二份真相,是那份账外面的一整片黑。
 CHANGE_ROW_LIMIT = 30          # 一屏列几个文件(与看板 ROW_LIMIT 同一类节制)
+BRANCH_COMMIT_LIMIT = 10       # 分支审查的提交清单列几条(另有 N 条没列)
+BRANCH_DIFF_LIMIT = 400        # 分支审查单文件 diff 最多回几行(超了明说截断)
 # action → 一句人话。错误提示与工具描述都从这份表来(加一类时只改这里与参数 enum)。
-ACTIONS = {"list": "看有哪几份副本、各自干净不干净", "suggest": "算新开副本的落点与命令", "changes": "列相对 HEAD 改了哪些文件"}
+ACTIONS = {"list": "看有哪几份副本、各自干净不干净", "suggest": "算新开副本的落点与命令",
+           "changes": "列相对 HEAD 改了哪些文件",
+           "branch": "审查一个分支相对分叉点的改动"}
 
 
 _STATUS_LABELS = {"?": "未跟踪", "A": "新增", "M": "改", "D": "删除",
@@ -278,6 +282,160 @@ def changes(root: Path | None = None) -> dict:
             "no_line_counts": not ok2}
 
 
+# ---------------------------------------------------- 分支审查(N1,v0.9.119)
+#
+# 「相对 HEAD 的改动」那档看的是**这份工作副本自己**;分支审查看的是**另一条
+# 线**:某个分支相对分叉点(merge-base)改了哪些文件、提交清单、行数合计 ——
+# 审查一个 PR/feature 分支时,模型需要的就是这份概览 + 逐文件 diff。
+# 同一档纪律:全部只读;git 给不出的(二进制行数)明说给不出,不补 0。
+
+def _safe_rev(rev: str) -> str | None:
+    """分支名安全闸:空、以 - 开头、带空白的一律不收。
+
+    所有 git 调用都走参数列表(不经 shell),这里挡的是**选项注入**:
+    `--upload-pack=x` 这类以 - 开头的"分支名"会被 git 当成它自己的选项。
+    带空白的 git 本来也不认。
+    """
+    rev = (rev or "").strip()
+    if not rev or rev.startswith("-") or any(c.isspace() for c in rev):
+        return None
+    return rev
+
+
+def parse_name_status(text: str) -> dict:
+    """`git diff --name-status` → {路径: 状态}。改名行 `R100 旧 -> 新` 取新名
+    (人要看的是现在的名字);状态字母照 git 原样(A/M/D/R…),不翻译 ——
+    这里是喂给审查者的原始事实,翻译是回话层的事。"""
+    out: dict = {}
+    for line in (text or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        out[parts[-1].strip()] = parts[0][:1]
+    return out
+
+
+def _branch_base(root: Path | None, branch: str) -> dict:
+    """分支审查共用的前半段:仓库核验 → 名字安全闸 → 解析 → 分叉点。
+
+    返回 {"ok": True, root, rev, tip, base} 或 {"ok": False, msg}。
+    tip/base 都 strip 过(实测:rev-parse 的输出带换行,不 strip 永远比不中)。
+    """
+    here = Path(root).resolve() if root else None
+    if here is None or not here.is_dir():
+        return {"ok": False, "msg": f"目录不存在:{here}"}
+    if find_repo_root(here) is None:
+        return {"ok": False,
+                "msg": "当前工作区不是 git 仓库(往上没找到 .git,没有分支可比)"}
+    if not is_git_repo(here):
+        return {"ok": False, "msg": "当前工作区不是 git 仓库(没有分支可比)"}
+    rev = _safe_rev(branch)
+    if rev is None:
+        return {"ok": False,
+                "msg": "分支名不合法(不以 - 开头、不含空白,比如 feat/login-fix)"}
+    ok, tip = _git(["rev-parse", "--verify", f"{rev}^{{commit}}"], cwd=here)
+    if not ok:
+        return {"ok": False, "msg": f"分支不存在或写错了:{rev}(git 原话:{tip})"}
+    ok, base = _git(["merge-base", "HEAD", rev], cwd=here)
+    if not ok:
+        return {"ok": False, "msg": f"算不出分叉点(merge-base):{base}"}
+    return {"ok": True, "root": here, "rev": rev,
+            "tip": tip.strip(), "base": base.strip()}
+
+
+def branch_overview(root: Path | None, branch: str) -> dict:
+    """一个分支相对分叉点(merge-base)改了什么 —— 只读,五条 git 命令。
+
+    为什么以 merge-base 为基准而不是 HEAD:审查的是"这条分支自己带来的改动",
+    主线在分叉之后自己新走的提交不该算进它的账。git 给不出的(二进制行数)
+    照 parse_numstat 的口径留 None;不是仓库/分支不存在都如实说,不猜。
+    """
+    r = _branch_base(root, branch)
+    if not r.get("ok"):
+        return r
+    here, rev = r["root"], r["rev"]
+    tip, base = r["tip"], r["base"]
+    # 退化情形:人当前就在这条分支上(或它已完全并进当前线),merge-base 就是
+    # 分支顶点 —— 区间为空,"审自己"审不出东西。这时自动改用默认线(main/master)
+    # 当参考线,并在结果里带一句说明;两条默认线都不存在就如实说,不猜。
+    note = ""
+    if base == tip:
+        for cand in ("main", "master"):
+            ok2, _ = _git(["rev-parse", "--verify", f"{cand}^{{commit}}"], cwd=here)
+            if not ok2:
+                continue
+            ok3, b2 = _git(["merge-base", cand, rev], cwd=here)
+            if ok3 and b2.strip() != tip:
+                base = b2.strip()
+                note = f"当前就在 {rev} 上(或它已并入当前线),参考线自动改用 {cand}"
+                break
+        if base == tip:
+            return {"ok": False,
+                    "msg": f"分支 {rev} 已完全包含在当前线里(merge-base 就是分支顶点):"
+                           "从当前线算不出它的改动 —— 切到别的分支再审。"}
+    ok, ahead = _git(["rev-list", "--count", f"{base}..{rev}"], cwd=here)
+    if not ok:
+        return {"ok": False, "msg": f"数不出提交个数:{ahead}"}
+    ok, log = _git(["log", "--oneline", "--no-decorate", f"{base}..{rev}"], cwd=here)
+    if not ok:
+        return {"ok": False, "msg": f"提交清单读不出来:{log}"}
+    commits = []
+    for line in log.splitlines():
+        if line.strip():
+            sha, _, subject = line.partition(" ")
+            commits.append({"sha": sha, "subject": subject})
+    ok, ns = _git(["diff", "--name-status", f"{base}..{rev}"], cwd=here)
+    if not ok:
+        return {"ok": False, "msg": f"文件清单读不出来:{ns}"}
+    states = parse_name_status(ns)
+    ok, num = _git(["diff", "--numstat", f"{base}..{rev}"], cwd=here)
+    counts = parse_numstat(num) if ok else {}
+    rows = []
+    for path, state in states.items():
+        got = counts.get(path) or {}
+        rows.append({"path": path, "state": state,
+                     "added": got.get("added"), "removed": got.get("removed"),
+                     "binary": bool(got.get("binary"))})
+    rows.sort(key=lambda r: (-((r["added"] or 0) + (r["removed"] or 0)), r["path"]))
+    return {"ok": True, "repo": str(here), "branch": rev, "base": base,
+            "note": note,
+            "commits_total": int(ahead.strip() or 0),
+            "commits": commits[:BRANCH_COMMIT_LIMIT],
+            "commits_more": max(0, len(commits) - BRANCH_COMMIT_LIMIT),
+            "files": rows[:CHANGE_ROW_LIMIT], "total": len(rows),
+            "more": max(0, len(rows) - CHANGE_ROW_LIMIT),
+            "added": sum(r["added"] or 0 for r in rows),
+            "removed": sum(r["removed"] or 0 for r in rows),
+            "uncounted": sum(1 for r in rows if r["added"] is None),
+            "no_line_counts": not ok}
+
+
+def branch_file_diff(root: Path | None, branch: str, path: str) -> dict:
+    """一个文件在该分支上的完整 diff(相对分叉点)—— 只读,三条 git 命令。
+
+    行数封顶 BRANCH_DIFF_LIMIT:超了截断并明说"另有 N 行没列",不静默;
+    二进制文件 git 会说"Binary files ... differ",照原话转述,不假装能看。
+    """
+    r = _branch_base(root, branch)
+    if not r.get("ok"):
+        return r
+    here, rev, base = r["root"], r["rev"], r["base"]
+    p = (path or "").strip().strip('"')
+    if not p:
+        return {"ok": False,
+                "msg": "要给 file(仓库内相对路径),才看得到单文件 diff"}
+    ok, out = _git(["diff", f"{base}..{rev}", "--", p], cwd=here)
+    if not ok:
+        return {"ok": False, "msg": f"diff 读不出来:{out}"}
+    lines = out.splitlines()
+    return {"ok": True, "path": p, "branch": rev, "base": base,
+            "diff": "\n".join(lines[:BRANCH_DIFF_LIMIT]),
+            "lines": min(len(lines), BRANCH_DIFF_LIMIT),
+            "lines_total": len(lines),
+            "truncated": len(lines) > BRANCH_DIFF_LIMIT,
+            "binary": "binary files" in out.lower()}
+
+
 def suggest(repo: Path, branch: str, exists: bool | None = None) -> dict:
     """给出开副本的**完整建议**:落点、命令、要不要重名处理。
 
@@ -304,7 +462,7 @@ def suggest(repo: Path, branch: str, exists: bool | None = None) -> dict:
 
 
 def worktree_tool(ctx, action: str = "list", branch: str = "",
-                  path: str = "", exists=None) -> str:
+                  path: str = "", exists=None, file: str = "") -> str:
     """worktree 工具处理器:只报事实与建议,建副本的命令由 bash 带确认执行。"""
     root = Path(str(path).strip()) if str(path).strip() else \
         getattr(ctx, "workspace", None)
@@ -342,6 +500,52 @@ def worktree_tool(ctx, action: str = "list", branch: str = "",
                      "所以看得见不等于退得掉:能逐处退的只有那份账里的。要退这里多出来的那些,"
                      "得你自己下 `git restore -- <文件>`(未跟踪的只能自己删),那是丢东西的动作,"
                      "我不替你做,也不替你决定哪些该丢。")
+        return "\n".join(lines)
+    if action == "branch":
+        rev = _safe_rev(str(branch or ""))
+        if rev is None:
+            return ("错误: 分支名不合法(不以 - 开头、不含空白),比如 feat/login-fix;"
+                    "不带 branch 回概览,带 branch=<名> 加 file=<仓库内相对路径>"
+                    "看单文件完整 diff。")
+        if str(file or "").strip():
+            r = branch_file_diff(root, rev, str(file).strip())
+            if not r.get("ok"):
+                return f"错误: {r['msg']}"
+            head = (f"分支 {rev} 相对分叉点 {r['base'][:12]} 的"
+                    f"{r['path']} diff(共 {r['lines_total']} 行"
+                    + (f",这里列前 {r['lines']} 行,另有 "
+                       f"{r['lines_total'] - r['lines']} 行没列)"
+                       if r["truncated"] else ")"))
+            return head + "\n" + r["diff"]
+        r = branch_overview(root, rev)
+        if not r.get("ok"):
+            return f"错误: {r['msg']}"
+        lines = ([f"({r['note']})"] if r.get("note") else []) + \
+                [f"{r['repo']} 分支 {rev} 相对分叉点 {r['base'][:12]}:"
+                 f"{r['commits_total']} 个提交、{r['total']} 个文件,"
+                 f"合计 +{r['added']} / −{r['removed']} 行"
+                 + (f"(其中 {r['uncounted']} 个没有行数 —— 二进制 git 不数,不当 0)"
+                    if r["uncounted"] else "")]
+        if r["commits"]:
+            lines.append(f"提交(列前 {len(r['commits'])} 条"
+                         + (f",另有 {r['commits_more']} 条没列)" if r["commits_more"]
+                            else "):"))
+            for c in r["commits"]:
+                lines.append(f"  - {c['sha']} {c['subject']}")
+        if r["files"]:
+            lines.append(f"文件(列前 {len(r['files'])} 个"
+                         + (f",另有 {r['more']} 个没列)" if r["more"] else "):"))
+            for f in r["files"]:
+                if f.get("binary"):
+                    n = "二进制,git 没给行数"
+                elif f["added"] is None:
+                    n = "没行数(git 没说,不编 0)"
+                else:
+                    n = f"+{f['added']} / −{f['removed']} 行"
+                lines.append(f"  - {f['state']} {f['path']} · {n}")
+        lines.append("要细看哪个文件:同一个 action 带 branch=<分支名> 与 "
+                     "file=<仓库内相对路径>,回给完整 diff(行数封顶,超了明说截断)。"
+                     "审查意见你自己给 —— 这一步只把事实摆齐,不改任何文件。")
         return "\n".join(lines)
     if action != "list":
         return (f"错误: 不认识的 action「{action}」。可用:"

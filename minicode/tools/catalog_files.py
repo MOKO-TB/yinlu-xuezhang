@@ -330,6 +330,9 @@ def worktree_tools() -> list[Tool]:
                 "各在哪个分支、有没有未提交改动(逐行都有 git 现查的事实撑着);"
                 "action=changes 列**相对 HEAD 改了哪些文件**(含命令与编辑器改的,那些不在"
                 "「本轮改动」那份账里;看得见但退不掉,这句由后端带着回);"
+                "action=branch 审查一个分支相对分叉点(merge-base)的改动:提交清单、"
+                "文件账与行数合计,同一个 action 带 file=<仓库内相对路径> 看单文件完整 "
+                "diff(行数封顶,超了明说截断)—— 全部只读,审查意见由你给,工具只摆事实;"
                 "action=suggest 给 branch(如 login-fix)算出落点与**要执行的命令**:"
                 "命令必须走 bash 执行(会弹确认框,绝不偷偷建目录),建好后告诉用户"
                 "点顶栏「📁 工作区」把它选成工作区。三条口径照实说:①副本是普通"
@@ -341,15 +344,18 @@ def worktree_tools() -> list[Tool]:
             parameters={
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["list", "suggest", "changes"],
+                    "action": {"type": "string", "enum": ["list", "suggest", "changes", "branch"],
                                "description": "list=现状(默认,查当前工作区);"
                                               "suggest=给 branch 算落点与命令"},
                     "branch": {"type": "string",
-                               "description": "suggest 用:副本对应的分支名(如 login-fix)"},
+                               "description": "suggest 用:副本对应的分支名(如 login-fix);"
+                                              "branch 档用:要审查的分支名(如 origin/main)"},
                     "path": {"type": "string",
                              "description": "可选:仓库路径;不填=当前工作区"},
                     "exists": {"type": "boolean",
                                "description": "suggest 用:分支已存在时传 true,改成直接检出而不是新建"},
+                    "file": {"type": "string",
+                             "description": "branch 档用:看这个分支里这个文件的完整 diff(仓库内相对路径)"},
                 },
             },
             handler=wt.worktree_tool,
