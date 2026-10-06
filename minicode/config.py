@@ -514,14 +514,21 @@ def _config_from_raw(raw: dict) -> Config:
 
 
 def load_config(path: Path = CONFIG_PATH) -> Config:
-    """CLI 用:配置缺失/为空直接提示退出。"""
+    """CLI 用:配置缺失/为空直接提示退出。
+
+    这三句一律走 **stderr**:它们是启动诊断,不是数据。`--json` 那条路上 stdout
+    只能有一份 JSON(见 minicode/headless.py 开头第 1 条),而**全新安装的第一次
+    调用**恰好会走到这里 —— 打包态实测过:模板生成那两句话混进 stdout,
+    `json.loads(stdout)` 当场就废,而这正是无头模式唯一对外的承诺。
+    """
     if not path.exists():
         if EXAMPLE_CONFIG_PATH.exists():
             shutil.copy(EXAMPLE_CONFIG_PATH, path)
-            print(f"已从模板生成 {path}")
-            print("默认使用内置校园模型,直接重新启动即可;如需接入 MCP 服务器请编辑该文件。")
+            print(f"已从模板生成 {path}", file=sys.stderr)
+            print("默认使用内置校园模型,直接重新启动即可;如需接入 MCP 服务器请编辑该文件。",
+                  file=sys.stderr)
         else:
-            print(f"缺少配置文件: {path}")
+            print(f"缺少配置文件: {path}", file=sys.stderr)
         sys.exit(1)
 
     try:

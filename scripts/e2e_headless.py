@@ -47,9 +47,14 @@ def _supports_headless(env: dict) -> bool:
 
     同一只手:`eval_behavior.py --live` 拿不到可用凭据时走 `ENV_PROBLEM=2` 那条出口,
     只报一次、不刷一片红。"这个包太旧"与"无头模式坏了"必须是两个样子。
+
+    ⚠ 这里**只认退出码,不认 stdout 空不空** —— 第一次跑这支脚本时被坑过一回:
+    全新装的包还没有 `config.json`,`load_config` 会从模板生成它并打两句话,而那是在
+    UI 建起来之前发生的(改道 stderr 之前)。"stdout 纯净"是要验的东西,不能拿来当
+    "这个包支持无头"的判据,否则一次首运行就把自己的探针判成假红。
     """
     probe = _run(["--output-format", "bogus", "探针"], os.getcwd(), env)
-    return probe.returncode == EXIT_ARGS and not probe.stdout.strip()
+    return probe.returncode == EXIT_ARGS
 
 
 def main() -> int:

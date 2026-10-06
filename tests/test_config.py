@@ -303,3 +303,25 @@ def test_deny_reason_covers_builtin_key_home():
     import pathlib
     r = deny_reason(pathlib.Path.home() / ".yinluxs" / "builtin_key.json")
     assert "密钥永不进包" in r
+
+
+def test_first_run_config_generation_never_writes_to_stdout(tmp_path, monkeypatch, capsys):
+    """全新安装的第一次 `--json` 调用,stdout 必须仍然只有那一份 JSON。
+
+    打包态实测抓出来的:配置缺失时 `load_config` 会从模板生成并打两句话,而那些话
+    走的是 stdout —— 它出现在 UI 建起来之前,静默 UI 拦不到。这条针钉的就是
+    "启动诊断一律 stderr"这一整类,不是某一句话。
+    """
+    from minicode import config as config_mod
+    target = tmp_path / "config.json"
+    monkeypatch.setattr(config_mod, "EXAMPLE_CONFIG_PATH",
+                        tmp_path / "config.example.json")
+    (tmp_path / "config.example.json").write_text('{"base_url":"https://x/v1"}',
+                                                  encoding="utf-8")
+    with pytest.raises(SystemExit) as out:
+        config_mod.load_config(target)
+    assert out.value.code == 1
+    cap = capsys.readouterr()
+    assert cap.out == "", f"stdout 漏了启动诊断,无头模式那份 JSON 会解不开:{cap.out!r}"
+    assert "已从模板生成" in cap.err
+    assert target.is_file(), "模板该照旧生成,只是话要说给 stderr"
