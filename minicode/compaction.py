@@ -125,6 +125,86 @@ def context_breakdown(agent, session, config, window: int, used: int,
     }
 
 
+# ---------------------------------------------------------- microcompact
+# 竞品在这一档上有三份现成的名字:ZCode 的 microcompact(`local_tool_result_clear`,
+# 按时间或 token 压力清旧工具输出)、Claude Code 的"MCP 大输出 >25k 转存文件、只回
+# 路径"、Codex 的 `tool_output_token_limit`。我们此前一份都没有:`TOOL_RESULT_RENDER_CAP`
+# 只裁**送进摘要的那份原文**,活跃上下文里的历史工具结果每轮整份重发 —— 一次 `grep`
+# 回 3000 字,后面每一步都重发这 3000 字,是"越用越贵"里最大的一笔。
+#
+# 三条硬规矩,少一条都不如不做:
+#   ① **只清成功的只读结果**。失败那条是模型下一步的依据(清了它就会拿同一份参数
+#      再撞一次墙);写类结果里带着"我改了什么"的凭据与路径,更不能碰。
+#   ② **绝不动留档**。这一步只在 `_messages_for_request` 那个出口上做副本 ——
+#      磁盘上那份必须完整,不然「导出/审计/重启恢复」看到的就是一次被删过的对话。
+#   ③ **量小就不动**。省几百字却把 KV Cache 前缀打断一次是亏的,所以有下限闸;
+#      一旦清了,后面每一步算出来的都是同一批(窗口不滑动到正在用的那几条上),
+#      前缀只在"第一次扫到"那一步破,之后照旧稳定命中 —— 与 D1 的"内容变了才破"同一套取舍。
+
+MICRO_KEEP_RECENT = 6      # 最近这几条只读结果原样留着(模型多半还在用)
+MICRO_MIN_CHARS = 1200     # 短于这个的不动:省不了几个字,却白破一次前缀
+MICRO_FLOOR_TOKENS = 3000  # 整批可回收的量不到这个数,这一次请求一个字都不改
+
+
+def micro_placeholder(chars: int) -> str:
+    """占位那句。要带上"原文多长"和"想要就重新调用" —— 悄悄藏起来是最坏的一种省。"""
+    return (f"[这一步的只读结果约 {chars} 字,已从本次请求里省略;"
+            "原文仍在会话留档里。还需要它的话重新调用同一个工具即可]")
+
+
+def tool_names_by_call(messages: list[dict]) -> dict[str, str]:
+    """`tool_call_id` → 工具名。工具结果那条消息**只有 call_id、没有 name**,
+    所以谁产生的这份结果只能回头看它对应的那次 `tool_calls`。"""
+    out: dict[str, str] = {}
+    for m in messages:
+        for call in (m.get("tool_calls") or []):
+            fn = call.get("function") or {}
+            if call.get("id"):
+                out[str(call["id"])] = str(fn.get("name") or "")
+    return out
+
+
+def microcompact(messages: list[dict], read_only: set[str]) -> tuple[list[dict], int, int]:
+    """把老的只读工具结果换成占位句。返回(要发的消息, 清了几条, 省下多少字)。
+
+    `read_only` 是**去掉档位前缀**的工具名集合(子代理的工具叫 `explore·grep`)。
+    传入的 list 不被修改;不满足条件时原样返回同一个对象(调用方据此判断"没动过")。
+    """
+    from minicode import toolsum
+
+    def bare(name: str) -> str:
+        return str(name or "").rsplit("·", 1)[-1]
+
+    names = tool_names_by_call(messages)
+    eligible = []          # (下标, 原字符数)
+    for i, m in enumerate(messages):
+        if m.get("role") != "tool":
+            continue
+        content = m.get("content")
+        if not isinstance(content, str) or len(content) < MICRO_MIN_CHARS:
+            continue
+        if bare(names.get(str(m.get("tool_call_id") or ""), "")) not in read_only:
+            continue
+        if toolsum.is_failure(content):
+            continue
+        eligible.append(i)
+    if len(eligible) <= MICRO_KEEP_RECENT:
+        return messages, 0, 0
+    targets = eligible[:len(eligible) - MICRO_KEEP_RECENT]
+    saved_chars = sum(len(messages[i]["content"]) - len(
+        micro_placeholder(len(messages[i]["content"]))) for i in targets)
+    # 用"字"估"词元"就够了:这道闸只挡"值不值得动",精确尺子是上面那把 estimate_tokens。
+    if saved_chars // 4 < MICRO_FLOOR_TOKENS:
+        return messages, 0, 0
+    out = list(messages)
+    for i in targets:
+        old = out[i]["content"]
+        new = dict(out[i])
+        new["content"] = micro_placeholder(len(old))
+        out[i] = new
+    return out, len(targets), saved_chars
+
+
 class Summarizer(Protocol):
     def stream_chat(self, messages: list[dict], tools: list, **kwargs): ...
 

@@ -141,12 +141,14 @@ class Handler(BaseHTTPRequestHandler):
             refuse_probe(self)          # 探测不占剧本、不进 SEEN_REQUESTS
             return
         script = _script()
-        if script == "browser":
-            try:                       # 记下请求体,后面断言工具结果真回了模型
-                SEEN_REQUESTS.append(
-                    json.dumps(json.loads(raw.decode("utf-8", "replace")), ensure_ascii=False))
-            except Exception:
-                SEEN_REQUESTS.append(raw.decode("utf-8", "replace"))
+        # **每个剧本都记请求体**。以前这一句只在 `browser` 分支里,于是默认那条路
+        # 上"工具结果到底回填给模型没有"根本没有凭据可断 —— 只能看文件写没写出来,
+        # 而那是磁盘上的事实,不是对话里的事实。
+        try:
+            SEEN_REQUESTS.append(
+                json.dumps(json.loads(raw.decode("utf-8", "replace")), ensure_ascii=False))
+        except Exception:
+            SEEN_REQUESTS.append(raw.decode("utf-8", "replace"))
         REQ_COUNT["n"] += 1
         if script == "browser":
             # 浏览器剧本:第一回合开页面,第二回合收尾(不记 usage 断言)
@@ -222,6 +224,12 @@ def main() -> None:
         else:
             assert (workspace / "e2e_demo.txt").read_text(encoding="utf-8") == "hello e2e", \
                 "工具未真正写出文件"
+            # 文件写出来只是半个事实:**这一轮模型真的收到了那句回话**才是另一半。
+            # 回填断的是第二个请求体(第一个请求里根本没有工具结果)。
+            assert len(SEEN_REQUESTS) > 1, \
+                f"模型只被请求了 {len(SEEN_REQUESTS)} 次(工具调用没走完)"
+            assert "已创建文件" in SEEN_REQUESTS[1], \
+                "write_file 的回话没回填给模型 —— 它会在什么都不知道的情况下继续编"
             # v0.9.03:真 usage(12+6)必须被记进本地统计
             stats = usage_mod.statistics(1)
             assert stats["ok"] and stats["summary"]["total"] == 18, stats["summary"]

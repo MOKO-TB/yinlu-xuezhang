@@ -258,6 +258,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # 提醒不再说出,用户配了拒绝钩子却拦住任何东西都没有)
                        "EVENT_KINDS"),
 
+    # ---- v0.9.120:无头模式(`--json`)----
+    # 漏 HeadlessUI / EXIT_ASK_REFUSED 的表现不是报错,而是**装好的包里那条路上
+    # 没人替你把确认挡住**:同一份 CLI 在源码里会拒,在包里悄悄放行 —— 换入口
+    # 不该换权限,这条判断只能有一处。漏 _brief 则是反过来的坏法:工具参数正文
+    # (可能是同学的课件原文或凭据)整包进那份常被贴进 CI 日志的输出。
+    "minicode.headless": ("HeadlessUI", "pop_output_flags", "exit_code_for",
+                          "build_result", "render", "status_for", "_brief",
+                          "OUTPUT_FORMATS", "EXIT_ASK_REFUSED", "UsageError"),
+
     # ---- v0.9.22:安装版可用性(数据目录写探针 + 诊断下发) ----
     "minicode.app_setup": (
         # v0.9.100 F1 + v0.9.101 ④L1/L3:两级指令文件。漏 user_agents_prompt_section =
@@ -348,7 +357,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.106 Q2:占用明细那一处真相搬进 compaction(面板与命令行读同一份);
     # 漏收 = 装好的包里 /history 又退回"只有一个总数"的老样子
     "minicode.compaction": ("clip_history", "schema_tokens", "HISTORY_HEAD_CAP",
-                            "context_breakdown"),
+                            "context_breakdown",
+                            # v0.9.120 microcompact:漏收的表现不是报错,而是装好的包里
+                            # 长对话又变回"每一步整份重发旧工具结果"(省字那笔账静默失效),
+                            # 以及那三个数漂了没人对账。
+                            "microcompact", "micro_placeholder",
+                            "tool_names_by_call", "MICRO_KEEP_RECENT",
+                            "MICRO_MIN_CHARS", "MICRO_FLOOR_TOKENS"),
     "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill",
                         # v0.9.63:技能使用账(漏收 = 装好的包里用了技能不记账,
                         # 「哪些技能真有人用」永远没有答案)
@@ -1003,6 +1018,10 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     "TOKEN 总数", "uh-grid", "每日明细", "模型明细",
     # v0.9.118 3D 全屏透视(漏一条 = 入口按钮不见,或全屏转不起来)
     "perspOverlay", "btnPerspOpen", "drawPersp", "PERSP_LEVELS",
+    # v0.9.120 用量面板右上角那颗刷新按钮:选择器必须带 `.usage-head` 前缀才压得住
+    # `.dialog button{padding:8px 20px}`(单类名特异性更低)。漏回来 = 那颗又撑成
+    # 42×26 的横胶囊、图标落在右半边 —— 界面细节没人会去重查,所以钉在包里。
+    ".usage-head .usage-refresh{",
 )
 
 

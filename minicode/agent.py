@@ -14,7 +14,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from minicode.compaction import compact, estimate_tokens, schema_tokens
+from minicode.compaction import compact, estimate_tokens, microcompact, schema_tokens
 from minicode.llm import LLMClient, ToolCall
 from minicode.model_catalog import context_window_for
 from minicode.permission import ASK, REJECT, PermissionGate
@@ -114,6 +114,9 @@ class Agent:
         # 覆盖 _execute 时这里保底 None —— add_tool_result 拿到 None 不带键。
         self._step_ms = None
         self._hook_ms = None      # 同一条保底:H2 的钩子实测毫秒,没跑钩子就不带键
+        # microcompact 那句"省略了多少"每回合最多说一次(它每一步都成立,
+        # 每一步都说就成了刷屏)。
+        self._micro_noted = False
 
         # 身上这份 system prompt 是哪一天建的。system prompt 里烧着日期与"今天/明天
         # 的课",而本应用是托盘常驻的 —— 记下建它的那天,回合开头一比对就知道过没过期。
@@ -143,6 +146,7 @@ class Agent:
         self._refresh_clock()      # 跨天了先重建日期与课表段,再收这条新消息
         self._note_daily_budget()  # C1:日预算接近/超支,当天各提醒一次
         self.gate.new_turn()
+        self._micro_noted = False   # 新的一问,那句"省略了多少"还可以再说一次
         if add_user:
             self.session.add_user(user_input, content)
         # 这一回合是第几问(1 起)。`add_user=False`(重新生成)时那句提问本来就在,
@@ -329,6 +333,17 @@ class Agent:
         # v0.9.66:剥掉本地记账字段(ts) —— 留档里的键比协议多,严格端点会对
         # 未知字段报 400。拷贝剥离,不动 session.messages 本体。
         msgs = session_outbound(msgs)
+        # microcompact:老的**只读**结果换成占位句(见 compaction.py 那一段的三条硬规矩)。
+        # 挂在 outbound **之后**是刻意的 —— outbound 已经拷过一份新 dict,这里改的是副本,
+        # `session.messages` 与磁盘上那份留档一个字都不动。只读名单每步现算:注册表会被
+        # MCP 热重载换掉,缓存在这里就是"新工具永远不算只读"那种静默错位。
+        read_only = {t.name.rsplit("·", 1)[-1] for t in self.registry if t.read_only}
+        msgs, self._micro_cleared, self._micro_saved = microcompact(msgs, read_only)
+        if self._micro_cleared and not self._micro_noted:
+            self._micro_noted = True
+            self.ui.info(f"本次请求省略了 {self._micro_cleared} 条较早的只读结果"
+                         f"(约 {self._micro_saved} 字)—— 留档里仍是全文,"
+                         "它真需要时会重新调用。")
         out = list(msgs)
         # 后台命令的现状(v0.9.85):挂在**请求末尾**的一条临时消息,与撞上限时那句
         # WRAP_UP_NOTE 同一个手法 —— 不写进留档,也不动系统提示词(那是整段前缀,

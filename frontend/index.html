@@ -2050,11 +2050,15 @@ try {
   .utable td b{ color:var(--text-1); }
   .utable .unrec{ color:var(--text-3); font-size:10.5px; }
   .utable tbody tr:hover{ background:var(--glass-strong); }
-  .usage-refresh{ background:transparent; border:1px solid var(--line-soft);
-                  border-radius:var(--r-full); width:26px; height:26px;
+  /* 选择器必须带 .usage-head 前缀:单类名(.usage-refresh)的特异性压不住
+     `.dialog button{padding:8px 20px}`,漏进来的左右内边距把 26×26 的圆撑成
+     42×26 的胶囊,⟳ 落在胶囊右半边 —— 看着就是"图标没居中"。 */
+  .usage-head .usage-refresh{ background:transparent; border:1px solid var(--line-soft);
+                  border-radius:var(--r-full); width:26px; height:26px; padding:0;
+                  display:flex; align-items:center; justify-content:center; line-height:1;
                   color:var(--text-2); cursor:pointer; font-size:13px;
                   flex:none; }
-  .usage-refresh:hover{ border-color:var(--primary); color:var(--primary); }
+  .usage-head .usage-refresh:hover{ border-color:var(--primary); color:var(--primary); }
   .usage-custom{ display:flex; align-items:center; gap:8px; margin-top:8px;
                  font-size:11.5px; color:var(--text-3); flex-wrap:wrap; }
   /* display:flex 会压过 hidden 属性的浏览器默认样式,得显式按回来 */

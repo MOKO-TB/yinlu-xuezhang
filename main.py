@@ -4,16 +4,19 @@
   python main.py               交互式 REPL
   python main.py "任务描述"     一次性执行后退出
   echo "任务" | python main.py 从管道读取一条任务执行后退出
+  python main.py --json "..."  无头:stdout 只有一份 JSON,退出码说清结局
 """
 from __future__ import annotations
 
 import re
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from minicode.app_setup import apply_retention, create_agent
 from minicode.config import load_config
+from minicode import headless
 from minicode import model_probe
 from minicode.paths import SESSIONS_DIR
 from minicode import workspace as ws
@@ -729,22 +732,49 @@ def main() -> None:
         raise SystemExit(0)
 
     config = load_config()
+    # 输出格式先摘出来:留在 argv 里会被当成一次性任务的一部分
+    # (`unmanagle_slash_command` 是把剩下的参数整个 join 起来当提问的)。
+    try:
+        out_fmt, argv_for_ws = headless.pop_output_flags(sys.argv[1:])
+    except headless.UsageError as e:
+        print(f"错误: {e}", file=sys.stderr)
+        raise SystemExit(headless.EXIT_ARGS)
     # 模型能力探测(窗口/是否支持视觉):有缓存立即生效,没有就后台问一次
     model_probe.ensure_async(config.base_url, config.api_key, config.model)
-    explicit_ws, rest_argv = pop_workspace_flag(sys.argv[1:])
+    explicit_ws, rest_argv = pop_workspace_flag(argv_for_ws)
     workspace = startup_workspace(explicit_ws)
     ui = TerminalUI(config, workspace)
-    ui.banner(key_ok=config.api_key_configured)
-    _warn_library_health(workspace, ui)
+    # --json:外面再包一层静默 UI。横幅/进度/错误一律改道 stderr,要人点头的
+    # 入口全部答"不",结局由退出码与那一份 JSON 说 —— 见 minicode/headless.py。
+    hui = headless.HeadlessUI(ui) if out_fmt == "json" else None
+    active = hui or ui
+    active.banner(key_ok=config.api_key_configured)
+    _warn_library_health(workspace, active)
 
-    agent, session = create_agent(config, workspace, ui)
+    agent, session = create_agent(config, workspace, active)
     # 留档保留策略:配置里有这个数才动手,默认 0 = 一个都不删(话术与 GUI 走同一个函数)
-    apply_retention(config, ui, current=session.log_path)
+    apply_retention(config, active, current=session.log_path)
 
     try:
-        _repl(config, workspace, ui, agent, session, argv=rest_argv)
+        _repl(config, workspace, active, agent, session, argv=rest_argv,
+              hui=hui)
     finally:
         agent.close()      # 关掉 MCP 子进程,不留孤儿
+
+
+def run_json(config, agent, session, hui, task: str) -> None:
+    """无头那一条路:跑一轮,把结局攒成一份 JSON 交给 stdout,按结局退出。
+
+    放在 main 这一侧而不是 headless 里:它要的是"什么时候开始跑"这种进程级
+    事实;headless 只管形状与判断,这样它能被测试直接调。
+    """
+    started = time.perf_counter()
+    agent.run_turn(task)
+    result = headless.build_result(hui, agent, session, config, task=task,
+                                   elapsed_ms=int((time.perf_counter() - started) * 1000),
+                                   fmt="json")
+    print(headless.render(result), flush=True)
+    raise SystemExit(result["exit_code"])
 
 
 def _warn_library_health(workspace: Path, ui: TerminalUI) -> None:
@@ -761,12 +791,23 @@ def _warn_library_health(workspace: Path, ui: TerminalUI) -> None:
         ui.error(notice)
 
 
-def _repl(config, workspace, ui, agent, session, argv=None) -> None:
+def _repl(config, workspace, ui, agent, session, argv=None, hui=None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
     # 一次性模式:命令行参数或管道输入(斜杠命令同样支持)
     task = unmanagle_slash_command(argv) if argv else None
     if task is None and not sys.stdin.isatty():
         task = sys.stdin.read().strip() or None
+    if hui is not None:
+        # --json 只在一次性模式里有意义:REPL 里静默不渲染不叫"无头",叫"看不见"。
+        if not task:
+            print("错误: --json 需要一条任务(命令行参数或管道输入)。", file=sys.stderr)
+            raise SystemExit(headless.EXIT_ARGS)
+        if task.startswith("/"):
+            # 斜杠命令的输出是给人看的一段话 —— 让它进来,stdout 那份 JSON 就废了。
+            print("错误: --json 只跑一条任务,不跑斜杠命令。", file=sys.stderr)
+            raise SystemExit(headless.EXIT_ARGS)
+        run_json(config, agent, session, hui, task)
+        return
     if task is not None:
         if task.startswith("/workspace"):
             cmd_workspace(task, config, workspace, ui, agent, rebuild=False)
