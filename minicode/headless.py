@@ -40,6 +40,21 @@ class UsageError(Exception):
     """参数层面的错:说清哪儿不对,以 EXIT_ARGS 退出,不进 Agent 一步。"""
 
 
+def ensure_utf8_stdout() -> None:
+    """把 stdout 钉成 UTF-8 —— **管道场景下这是契约的一部分**。
+
+    打包态真跑抓出来的:`_fix_console_encoding()` 设的是**控制台**代码页(65001),
+    而 `subprocess.capture_output` 拿到的是管道,`sys.stdout` 于是按本地编码(cp936)
+    建流 —— 那份 JSON 里的中文路径与中文回答全被编成 GBK。消费方用 UTF-8 严格解码
+    就直接抛;而用 `errors="replace"` 的宽容解码会**静默**得到一串替换符,
+    `Path(session_file).is_file()` 判 False,看着像"留档莫名其妙丢了"。
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError, OSError):
+        pass          # 被换掉的 stdout(测试里的 StringIO 等)不支持这条,不能因此跑不动
+
+
 def pop_output_flags(argv: list[str]) -> tuple[str, list[str]]:
     """摘出输出格式旗标,其余参数原样返回(留给一次性任务)。
 

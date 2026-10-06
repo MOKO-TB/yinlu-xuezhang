@@ -153,6 +153,8 @@ python main.py --workspace "D:\我的资料"   # 指定工作区启动(路径不
 第 3 码是这条路上的安全边界:**换入口不换权限** —— confirm 档该弹框的步骤,无头模式一律
 按"不点头"处理并把它说出来(文件不会被写出来),而不是替你批一次从此不问。
 `--output-format` 认不出的值直接报错,不静默退回纯文本。
+**第一次运行例外**:全新安装还没有 `config.json` 时,CLI 会先从模板生成它并以退出码 1 结束
+(就是那句"直接重新启动即可")—— 这是 CLI 一直以来的首启行为,无头模式不绕过它;第二次起才是上面那套契约。
 
 CLI 命令:`/help` `/clear` `/model`(供应商列表)`/history` `/resume [<n>]` `/find [<关键词>]`(搜自己的历史会话)`/undo`(清单;`diff <编号>` 看改动、`<编号>`·`last`·`all` 才动手,动手都要点头)`/compact`
 `/sandbox` `/permission [档位]`(四档权限 + 项目白名单生不生效)`/think [档位]`(思考档位)`/instructions`(这一轮读到了哪几层指令:内置 + 用户级 + 项目级,各几行、有没有被截)`/rewind <第几问> [files|talk|both]`(退到那一问之前:文件与对话一起退,默认 both;留档不删)`/workspace [路径|default]` `/memory` `/remember` `/dream` `/skills` `/kb`(知识库统计)`/plan`

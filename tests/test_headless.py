@@ -395,3 +395,22 @@ def test_every_exit_code_is_documented():
     for name in ("EXIT_RUNTIME", "EXIT_ASK_REFUSED", "EXIT_LIMITED",
                  "EXIT_INTERRUPTED"):
         assert f"{name} = " in src, f"{name} 没有一句它是干什么的"
+
+
+def test_stdout_is_pinned_to_utf8_because_a_pipe_is_not_a_console(monkeypatch):
+    """打包态真跑抓到的:`_fix_console_encoding` 设的是控制台代码页,对管道无效。
+
+    不钉这一条,那份 JSON 会按 cp936 上线 —— 中文回答与中文路径当场变乱码,
+    而宽容解码的消费者会静默拿到一串替换符(表现是"留档文件明明报了路径却说没有")。
+    """
+    import io
+    buf = io.BytesIO()
+    stream = io.TextIOWrapper(buf, encoding="gbk", errors="replace")
+    monkeypatch.setattr(sys, "stdout", stream)
+    headless.ensure_utf8_stdout()
+    print(r"D:\引路学长\sessions\session_1.jsonl")
+    stream.flush()
+    raw = buf.getvalue()
+    assert raw.decode("utf-8").strip().endswith("session_1.jsonl"), raw[:60]
+    with pytest.raises(UnicodeDecodeError):
+        raw.decode("ascii")      # 证明出去的是多字节 UTF-8,不是被转义成 \uXXXX

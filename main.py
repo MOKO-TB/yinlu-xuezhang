@@ -739,6 +739,10 @@ def main() -> None:
     except headless.UsageError as e:
         print(f"错误: {e}", file=sys.stderr)
         raise SystemExit(headless.EXIT_ARGS)
+    if out_fmt == "json":
+        # 那份 JSON 必须按 UTF-8 出去:控制台代码页对管道无效,默认会按 cp936 建流,
+        # 中文回答与中文路径当场变乱码(打包态真跑抓到的)。
+        headless.ensure_utf8_stdout()
     # 模型能力探测(窗口/是否支持视觉):有缓存立即生效,没有就后台问一次
     model_probe.ensure_async(config.base_url, config.api_key, config.model)
     explicit_ws, rest_argv = pop_workspace_flag(argv_for_ws)

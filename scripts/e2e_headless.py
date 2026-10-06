@@ -48,13 +48,16 @@ def _supports_headless(env: dict) -> bool:
     同一只手:`eval_behavior.py --live` 拿不到可用凭据时走 `ENV_PROBLEM=2` 那条出口,
     只报一次、不刷一片红。"这个包太旧"与"无头模式坏了"必须是两个样子。
 
-    ⚠ 这里**只认退出码,不认 stdout 空不空** —— 第一次跑这支脚本时被坑过一回:
-    全新装的包还没有 `config.json`,`load_config` 会从模板生成它并打两句话,而那是在
-    UI 建起来之前发生的(改道 stderr 之前)。"stdout 纯净"是要验的东西,不能拿来当
-    "这个包支持无头"的判据,否则一次首运行就把自己的探针判成假红。
+    ⚠ 要跑**两次**才对:全新装的包第一次运行必然走到 `load_config` 从模板生成
+    `config.json` 并 `sys.exit(1)`(那句"直接重新启动即可"是 CLI 一直以来的首启行为,
+    与人无关),所以第一次的退出码永远是 1 而不是 2。第一次就当"让人把配置生成出来",
+    第二次才是真探针。同理不能拿"stdout 空不空"当判据 —— 那是我们要验的东西。
     """
-    probe = _run(["--output-format", "bogus", "探针"], os.getcwd(), env)
-    return probe.returncode == EXIT_ARGS
+    first = _run(["--output-format", "bogus", "探针"], os.getcwd(), env)
+    if first.returncode == EXIT_ARGS:
+        return True
+    second = _run(["--output-format", "bogus", "探针"], os.getcwd(), env)
+    return second.returncode == EXIT_ARGS
 
 
 def main() -> int:
@@ -86,7 +89,11 @@ def main() -> int:
         config_path.write_text(json.dumps({"permission_mode": "accept_all"},
                                           ensure_ascii=False), encoding="utf-8")
         ws1 = tempfile.mkdtemp(prefix="headless-ok-")
+        # 假服务器的剧本计数器是模块级的:不归零,第二个用例就会直接拿到
+        # "无工具调用"那一回合,于是根本没触发 ASK —— 那 4 项红是脚本自己的 bug,
+        # 不是产品坏了(真跑起来才发现,这条只能真跑)。
         fake.SEEN_REQUESTS.clear()
+        fake.REQ_COUNT["n"] = 0
         p0 = _run(["--json", "创建 e2e_demo.txt"], ws1, env)
         doc0 = _parse(p0.stdout)
         checks = [
@@ -112,6 +119,8 @@ def main() -> int:
         config_path.write_text(json.dumps({"permission_mode": "confirm"},
                                           ensure_ascii=False), encoding="utf-8")
         ws2 = tempfile.mkdtemp(prefix="headless-ask-")
+        fake.SEEN_REQUESTS.clear()
+        fake.REQ_COUNT["n"] = 0
         p3 = _run(["--json", "创建 e2e_demo.txt"], ws2, env)
         doc3 = _parse(p3.stdout)
         checks += [
