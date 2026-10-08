@@ -141,6 +141,9 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
         shell=(argv is None), cwd=ctx.workspace,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
         env=env, creationflags=creationflags)
+    # 一挂上去,这条命令的整棵进程树就归操作系统记着(见 `win_sandbox` 那段)。
+    # 挂不上不影响命令照常跑 —— 这一层是"限制",不是"许可",更不是拒绝执行的理由。
+    job = _new_job(proc)
     out_buf: list[str] = []
     err_buf: list[str] = []
     prog = _Progress()
@@ -165,7 +168,13 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
     killed_note = ""
     if timed_out:
         # 超时也走那棵树的杀法:只杀 bash.exe 会留下一堆继续写文件的孤儿
-        _ok, killed_note = _bg_kill_tree(_BgJob("fg", proc, command))
+        _ok, killed_note = _bg_kill_tree(_BgJob("fg", proc, command, job=job))
+    else:
+        # 正常跑完:句柄一定要关,否则每条命令泄漏一个 kernel object。
+        # 关的时候 job 里若还有活着的研究进程,Windows 会一并终止 —— 这就是
+        # "命令已经退出、它起的后台服务还在"那一种残留的收法。
+        if job is not None:
+            job.close()
     for r in readers:
         r.join(JOIN_AFTER_EXIT)
     lost = "" if not any(r.is_alive() for r in readers) else \
@@ -305,9 +314,14 @@ class _BgJob:
     经典的坑(全量 pytest 的进度条正好大量走 stderr)。
     """
 
-    def __init__(self, job_id: str, proc, command: str, env_note: str = ""):
+    def __init__(self, job_id: str, proc, command: str, env_note: str = "",
+                 job=None):
         self.id = job_id
         self.proc = proc
+        # 这条命令自己的 Job Object(`win_sandbox.Job`,或 None = 这台机器上没启用)。
+        # 挂在任务上而不是全局一个:每条命令的生死独立,`bash_kill` 关掉的就是它自己那棵树。
+        self.job = job
+        self.restricted = job is not None
         self.command = " ".join(str(command).split())[:120]
         # `command` 那份是**给人看的一行**(截到 120 字);验收账要对的是**原条命令**
         # —— 计划里写的判据不会被截,拿截过的去比就永远对不上。
@@ -345,6 +359,12 @@ class _BgJob:
             self.proc.wait()              # 这条线程是守护线程,等多久都不挡退出
         except Exception:
             return                        # 等不到就交给"被看见"那三个落点补弹
+        # 跑完了也要关句柄:不关就是每条后台命令泄漏一个 kernel object,而进程树里
+        # 那个"命令退了、它起的子进程还在跑"的情况也永远收不掉(关 job 就是回收)。
+        if self.job is not None:
+            with contextlib.suppress(Exception):
+                self.job.close()
+            self.job = None
         _bg_notify_done(self)
 
     def _append(self, text: str) -> None:
@@ -410,14 +430,15 @@ def _bg_start(ctx: ToolContext, command: str, argv: list[str] | None,
             stdin=subprocess.DEVNULL, env=env, creationflags=creationflags)
     except Exception as e:
         return f"错误: 后台启动失败({type(e).__name__}: {e})"
-    job = _BgJob(job_id, proc, command, env_note)
+    job = _BgJob(job_id, proc, command, env_note, job=_new_job(proc))
     with _bg_lock:
         _bg_jobs[job_id] = job
         _bg_prune_locked()        # 在跑的不受这条影响:只清已结束且播过的历史
     threading.Thread(target=job._pump, daemon=True,
                      name=f"bg-{job_id}").start()
     return (f"已放进后台:{job_id}(pid={proc.pid}) · {job.command}\n"
-            "它不会因为这一轮结束而停止 —— 跑完了去看:`bash_status`(id 传 "
+            + _job_status_line(job.job)
+            + "它不会因为这一轮结束而停止 —— 跑完了去看:`bash_status`(id 传 "
             f"{job_id})拿输出尾部;要停:`bash_kill`(id 传 {job_id})。\n"
             "跑完的那一刻会替用户弹一条桌面通知(类别「后台命令跑完」,他在「桌面提醒」"
             "里关得掉,窗口在前台时也不重复弹)—— 所以**别把「我会告诉你」当成一定会发生**,"
@@ -426,15 +447,73 @@ def _bg_start(ctx: ToolContext, command: str, argv: list[str] | None,
             "内存缓冲里(留尾部),**学长退出或电脑重启就没了**,要留档请重定向到工作区文件。")
 
 
+def _job_status_line(job) -> str:
+    """后台任务那句"这一层在不在":说清 `bash_kill` 时会发生什么。"""
+    if job is None:
+        return ("进程约束:**未启用** —— `bash_kill` 只能靠 taskkill 数进程树,"
+                "数不到的那些学长不会替你说『已全部终止』。\n")
+    return ("进程约束:**已启用** —— 这一棵进程树由操作系统记着,`bash_kill` "
+            "会连孙子进程一起回收(单进程内存上限 2 GB、树内进程数上限 512;"
+            "**不管网络**,禁网要另一层实现)。\n")
+
+
+def _run_partial(exc: "subprocess.TimeoutExpired") -> str:
+    """超时那一刻已经读到的输出(`communicate` 抛的异常里带着它)。"""
+    return _decode(getattr(exc, "stdout", b"") or b"")
+
+
+def _new_job(proc):
+    """给这条刚起来的命令配一个 Job Object;配不上就返回 None,命令照跑。
+
+    为什么不在 `Popen` 之前建好再传(CreateProcess 的 job 参数):Python 的 subprocess
+    不暴露那个槽,所以这里有一个**启动窗口** —— 进程刚起来到被关进去之间它若已经
+    spawn 了下一代,那一代会漏在 job 外面。这个残余风险写在下面那句回话里,不假装没有。
+    """
+    from minicode import win_sandbox
+    job = win_sandbox.Job.create()
+    if job is None:
+        return None
+    if not job.attach(proc):
+        job.close()
+        return None
+    return job
+
+
+def _job_tail(job) -> str:
+    """终止那一句后面追加的"这一层到底在不在"。**未启用就写未启用**。"""
+    if job is None:
+        why = ""
+        try:
+            from minicode import win_sandbox
+            why = getattr(win_sandbox.Job, "last_error", "") or "这台机器上建不出 job"
+        except Exception:
+            why = "这一层没起来"
+        return (f"(进程约束未启用:{why} —— 只能杀直接子进程与 taskkill 数到的那棵树,"
+                "下面的进程若还活着,学长会照实说)")
+    return ("(整棵进程树由操作系统记着,已随这次终止一起回收;"
+            "启动那一瞬在 job 之外起来的进程不在此列)")
+
+
 def _bg_kill_tree(job: _BgJob) -> tuple[bool, str]:
     """终止整棵进程树。
 
     Git Bash 那条命令的直接子进程是 `bash.exe`,真正干活的是它下面的
-    python / pytest —— 只杀 bash 会留下一堆孤儿继续吃 CPU。所以 Windows 上走
-    `taskkill /T /F`(连子进程一起)。机器上没有 taskkill(极少数精简系统)时
-    只能杀直接子进程,**并如实说子进程可能还活着**,不假装杀干净。
+    python / pytest —— 只杀 bash 会留下一堆孤儿继续吃 CPU。两层一起上:
+    ① 这条命令自己的 **Job Object**(v0.9.135,`win_sandbox`):关掉句柄就是操作系统
+       把树里所有进程一起终止,不靠"数一遍 pid";
+    ② Windows 上的 `taskkill /T /F`(job 起不来的机器上仍靠它)。
+    两道都没落地的机器(没有 taskkill 也没有 job)只能杀直接子进程,**并如实说子进程
+    可能还活着**,不假装杀干净。
     """
     killed_tree = False
+    # 先关 job:这一步本身就是"整棵树回收"这个动作(KILL_ON_JOB_CLOSE),
+    # 放在 taskkill 之前是因为它更快也更确定 —— 而 taskkill 是对 job 之外那些进程的补救。
+    job_obj = getattr(job, "job", None)
+    if job_obj is not None:
+        with contextlib.suppress(Exception):
+            job_obj.close()
+            job.job = None            # 关过一次就不重复关(重复关是无害的,但状态要说准)
+        killed_tree = True
     if sys.platform == "win32":
         taskkill = shutil.which("taskkill")
         if taskkill:
@@ -451,14 +530,17 @@ def _bg_kill_tree(job: _BgJob) -> tuple[bool, str]:
     deadline = time.monotonic() + BG_KILL_WAIT
     while job.running and time.monotonic() < deadline:
         time.sleep(0.05)
+    tail = _job_tail(job_obj)
     if job.running:
         return (False, ("仍在运行:已发出终止,但它没在 "
-                        f"{int(BG_KILL_WAIT)} 秒内退出。"
+                        f"{int(BG_KILL_WAIT)} 秒内退出。" + tail
                         + ("" if killed_tree else
                            "(这台机器上没有 taskkill,只能杀直接子进程,"
                            "它下面的子进程可能还活着)")))
-    return (True, "" if killed_tree or sys.platform != "win32" else
-            "(没有 taskkill,只杀了直接子进程 —— 下面的子进程若还活着,学长无从确认)")
+    if killed_tree:
+        return (True, tail)
+    return (True, "(没有 taskkill 也没有进程约束 —— 只杀了直接子进程,"
+            "下面的子进程若还活着,学长无从确认)" if sys.platform == "win32" else "")
 
 
 def _bg_job_or_error(job_id: str) -> tuple["_BgJob | None", str]:
@@ -719,15 +801,43 @@ def py_script(ctx: ToolContext, path: str, timeout: int = 120) -> str:
     env_note = _env_note(dropped)
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
-        proc = subprocess.run(cmd, cwd=ctx.workspace, capture_output=True,
-                              timeout=timeout, env=env, creationflags=creationflags)
-    except subprocess.TimeoutExpired as e:
-        partial = _decode(e.stdout or b"")
-        return (f"错误: 脚本运行超过 {timeout} 秒被中止。已产生的输出:\n"
-                f"{partial[:TIMEOUT_OUTPUT_LIMIT]}{env_note}")
-    out = _decode(proc.stdout or b"").strip()
-    err = _decode(proc.stderr or b"").strip()
-    sections = [f"退出码: {proc.returncode}"]
+        # `subprocess.run(timeout=...)` 到点只杀**直接子进程**,而脚本里再 spawn 的
+        # 东西会留下继续吃 CPU —— 所以这里自己起进程、挂 job、再 communicate。
+        # 语义与 run 一致:同样两条管道、同样超时抛 TimeoutExpired、同样拿 returncode。
+        proc = subprocess.Popen(
+            cmd, cwd=ctx.workspace, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL, env=env, creationflags=creationflags)
+        run_job = _new_job(proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as e:
+            if run_job is not None:
+                run_job.close()               # 连整棵树一起收(见 win_sandbox)
+                with contextlib.suppress(Exception):
+                    proc.wait(timeout=BG_KILL_WAIT)
+                partial = _run_partial(e)
+                return (f"错误: 脚本运行超过 {timeout} 秒被中止,"
+                        f"整棵进程树已随这次终止一起回收(启动那一瞬在 job 之外起来的"
+                        f"进程不在此列)。已产生的输出:\n{partial[:TIMEOUT_OUTPUT_LIMIT]}"
+                        f"{env_note}")
+            if run_job is None:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    proc.wait(timeout=BG_KILL_WAIT)
+            partial = _run_partial(e)
+            return (f"错误: 脚本运行超过 {timeout} 秒被中止(进程约束未启用:"
+                    f"只能杀这一个进程,它下面的可能还活着)。已产生的输出:\n"
+                    f"{partial[:TIMEOUT_OUTPUT_LIMIT]}{env_note}")
+        if run_job is not None:
+            run_job.close()
+        proc.stdout, proc.stderr = None, None    # 与 run() 一样:取完就别再碰管道
+        rc = proc.returncode
+    except OSError as e:
+        return f"错误: 脚本没能运行({type(e).__name__}: {e})"
+    out = _decode(stdout or b"").strip()
+    err = _decode(stderr or b"").strip()
+    sections = [f"退出码: {rc}"]
     if out:
         sections.append(f"--- stdout ---\n{out}")
     if err:

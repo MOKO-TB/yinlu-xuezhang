@@ -215,9 +215,11 @@ def test_policy_roundtrip_keeps_the_switch():
 def _fake_children(monkeypatch, out=b"ok", err=b"", ret=0, wait_raises=False):
     """把 shell 起子进程的**两种方式**都换成"只记账、不真跑"的桩。
 
-    v0.9.91 起前台 `bash` 走 `Popen` + 两条管道各一个读线程(边跑边读才看得到进度),
-    `py_script` 那条仍是 `subprocess.run`。只换一种会让另一种的桩静默失效 ——
-    表现是"环境没摘干净"这类断言其实在真起进程,所以这里两个一起换。
+    v0.9.91 起前台 `bash` 走 `Popen` + 两条管道各一个读线程(边跑边读才看得到进度);
+    v0.9.135 起 `py_script` 也改成 `Popen` —— 它要在进程起来之后立刻挂进 Job Object,
+    `subprocess.run` 里没有那个时机(等它返回时进程都已经退完了,"终止整棵树"这件事
+    就发生在返回之后)。只换一种会让另一种的桩静默失效 —— 表现是"环境没摘干净"这类
+    断言其实在真起进程,所以这里两个一起换。
     """
     seen = {}
 
@@ -257,6 +259,13 @@ def _fake_children(monkeypatch, out=b"ok", err=b"", ret=0, wait_raises=False):
 
         def kill(self):
             self._dead = True
+
+        def communicate(self, timeout=None):
+            # v0.9.135 之后 py_script 走的这一只:`run(timeout=)` 到点只杀直接子进程,
+            # 换成 Popen + communicate 才能先挂 job 再超时收整棵树。
+            if wait_raises:
+                raise subprocess.TimeoutExpired(cmd="whatever", timeout=timeout)
+            return out, err
 
     monkeypatch.setattr(shell.subprocess, "run", fake_run)
     monkeypatch.setattr(shell.subprocess, "Popen", FakePopen)

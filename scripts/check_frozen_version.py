@@ -465,7 +465,19 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 带判据的步骤从此标不上 done)。
     # v0.9.102 之后补:后台跑完那一刻补进验收账(漏 _bg_note_verify = 慢验收永远
     # 标不了 done;漏 raw = 拿截成 120 字那份去比对判据,永远对不上)
+    "minicode.win_sandbox": ("Job", "Limits", "create", "attach", "close",
+                             "DEFAULT_MEMORY_BYTES", "DEFAULT_ACTIVE_PROCESS",
+                             "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
+                             "JOB_OBJECT_LIMIT_PROCESS_MEMORY",
+                             "JOB_OBJECT_LIMIT_ACTIVE_PROCESS",
+                             "JobObjectExtendedLimitInformation", "_kern",
+                             "_JOBOBJECT_EXTENDED_LIMIT_INFORMATION", "_IS_WIN"),
+    # v0.9.135 P0-5-S5a Job Object(整棵进程树可回收 + 资源上限)。漏 `_new_job` =
+    # 三层挂接全断,`bash_kill` 回到只能靠 taskkill 数;漏 `_job_tail`/`_job_status_line`
+    # = 未启用时没人说"未启用",而回话里那句"整棵进程树已随这次终止一起回收"
+    # 就成了当着面说的一句假话。
     "minicode.tools.shell": ("bg_facts", "_bg_note_verify", "raw", "recorded",
+                             "_new_job", "_job_tail", "_job_status_line",
                              # v0.9.104:跑完那一刻的回执(漏收 `_bg_notify_done` =
                              # 装好的包里后台命令跑完照样没人吭声,而描述已经在教模型
                              # "会弹一条通知" —— 那就是当着面说一句做不到的话;
