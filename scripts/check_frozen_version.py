@@ -284,8 +284,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           # 会被当成一次性任务的一部分(它进的是 argv),漏
                           # `EXIT_SCHEMA_VIOLATION` = 不合 schema 与"做成了"共用退出码 0,
                           # CI 就永远看不出那次拿到的不是结构化结果
+                          # v0.9.137:漏 `llm_failure` 说明包里还是那版"记录字段与
+                          # `llm_error` 回调同名"的 headless —— 模型一报错,stdout 那份
+                          # JSON 整个消失,而退出码 1 恰好与文档里的运行时码同数,
+                          # 只看号码一切正常,坏的是载荷。
                           "pop_output_schema", "EXIT_SCHEMA_VIOLATION",
-                          "SCHEMA_FLAG", "EXIT_INTERRUPTED", "EXIT_LIMITED"),
+                          "SCHEMA_FLAG", "EXIT_INTERRUPTED", "EXIT_LIMITED",
+                          "llm_failure"),
     # v0.9.136 结构化输出这一格的三件事:读 schema、要 schema、验 schema。
     # 漏 `load` = 旗标能传但没人核对形状(什么怪形状都会流到模型面前);
     # 漏 `validate` = "不合 schema 就明说"这句承诺没了;漏 `extract` = 代码围栏里

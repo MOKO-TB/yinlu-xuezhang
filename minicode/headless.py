@@ -149,7 +149,10 @@ class HeadlessUI:
         self.hard_rejected: list[str] = []
         self.limits: list[dict] = []
         self.interrupted = False
-        self.llm_error: str = ""
+        # 字段名不能等于回调名:`llm_error` 是 agent 要调的**方法**,而实例属性优先于
+        # 类方法 —— 同名时那句 `self.ui.llm_error(e)` 变成「'str' object is not callable」,
+        # 于是任何模型故障都不是「记一笔然后按退出码收」,而是整条进程带着 traceback 崩掉。
+        self.llm_failure: str = ""
         self.compactions: list[dict] = []
         self._pending: dict = {}
 
@@ -230,7 +233,9 @@ class HeadlessUI:
     # --------------------------------------------------- 这一轮是怎么结束的
 
     def llm_error(self, e: Exception) -> None:
-        self.llm_error = f"{type(e).__name__}: {e}"
+        # 写进 `llm_failure` 而不是那个同名字段:这条是被 agent 当回调调的,
+        # 自己盖住自己就等于「模型一报错,无头模式当场崩」。
+        self.llm_failure = f"{type(e).__name__}: {e}"
 
     def turn_interrupted(self) -> None:
         self.interrupted = True
@@ -279,7 +284,7 @@ def exit_code_for(ui: HeadlessUI, schema_violations: "list | None" = None) -> in
     """
     if ui.interrupted:
         return EXIT_INTERRUPTED
-    if ui.llm_error:
+    if ui.llm_failure:
         return EXIT_RUNTIME
     if ui.limits:
         return EXIT_LIMITED
@@ -346,7 +351,7 @@ def build_result(ui: HeadlessUI, agent, session, config, *, task: str,
         "hard_rejected": ui.hard_rejected,
         "limits": ui.limits,
         "interrupted": ui.interrupted,
-        "error": ui.llm_error or None,
+        "error": ui.llm_failure or None,
         "compactions": ui.compactions,
     }
 
@@ -354,7 +359,7 @@ def build_result(ui: HeadlessUI, agent, session, config, *, task: str,
 def status_for(ui: HeadlessUI, schema_violations: "list | None" = None) -> str:
     if ui.interrupted:
         return "interrupted"
-    if ui.llm_error:
+    if ui.llm_failure:
         return "llm_error"
     if ui.limits:
         return "limited"

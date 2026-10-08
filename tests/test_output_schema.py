@@ -150,23 +150,27 @@ def test_flag_parsing():
 
 
 def test_violation_is_the_last_exit_code_in_priority():
-    """被中断/报错/撞上限收尾时,"形状不对"只是后果,不该顶掉真因。"""
-    class UI:
-        interrupted = False
-        llm_error = ""
-        limits = []
-        asks_refused = []
+    """被中断/报错/撞上限收尾时,"形状不对"只是后果,不该顶掉真因。
 
-    ui = UI()
+    三种真结局经**回调**置起(`u.llm_error(...)` 而不是往同名字段上 setattr):
+    v0.9.137 那个「模型一报错,无头进程当场崩」就是被 setattr 版的针洗绿的。
+    """
+    for fire, want in (
+        (lambda u: u.turn_interrupted(), headless.EXIT_INTERRUPTED),
+        (lambda u: u.llm_error(RuntimeError("APITimeoutError")), headless.EXIT_RUNTIME),
+        (lambda u: u.max_steps_reached(40), headless.EXIT_LIMITED),
+        (lambda u: u.confirm_tool(type("T", (), {"name": "bash"})(),
+                                  {"command": "ls"}, "要点头"),
+         headless.EXIT_ASK_REFUSED),
+    ):
+        ui = _ui()
+        fire(ui)
+        assert headless.exit_code_for(ui, ["不合"]) == want
+        assert headless.status_for(ui, ["不合"]) != "schema_violation"
+    ui = _ui()
     assert headless.exit_code_for(ui, ["不合"]) == headless.EXIT_SCHEMA_VIOLATION
     assert headless.status_for(ui, ["不合"]) == "schema_violation"
-    ui.limits = [{"kind": "max_steps"}]
-    assert headless.exit_code_for(ui, ["不合"]) == headless.EXIT_LIMITED
-    ui.limits = []
-    ui.asks_refused = [{"name": "bash"}]
-    assert headless.exit_code_for(ui, ["不合"]) == headless.EXIT_ASK_REFUSED
-    ui.asks_refused = []
-    assert headless.exit_code_for(ui, []) == headless.EXIT_OK
+    assert headless.exit_code_for(_ui(), []) == headless.EXIT_OK
 
 
 def _ui():

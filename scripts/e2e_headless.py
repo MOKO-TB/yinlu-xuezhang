@@ -5,7 +5,10 @@
 stdout,而 `json.loads` 当场就废。这一支跑的是**真进程**,断的是那个进程的字面上
 第一个字符就是 `{`。
 
-三个结局各验一个:0 做成了 / 3 该问人却没人可问(且**没落盘**)/ 2 参数不对。
+三个结局各验一个:0 做成了 / 3 该问人却没人可问(且**没落盘**)/ 2 参数不对,
+再加一个"模型那边根本没答"的 1 —— 这一支是 v0.9.137 那个崩溃的包外闸:进程照样
+退 1(与文档里的运行时码同一个数),所以**光看退出码是好的**,坏在 stdout 那份 JSON
+整个没了、错误落成一坨 traceback。只有真进程能照出来,pytest 的 capsys 不经过真流。
 
 用法: python scripts/e2e_headless.py
 """
@@ -26,6 +29,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 import e2e_fake_server as fake          # noqa: E402  假服务器与请求体台账
 
 CLI = PROJECT_ROOT / "dist" / "引路学长" / "引路学长-CLI.exe"
+EXIT_RUNTIME = 1
 EXIT_ARGS = 2
 
 
@@ -141,6 +145,30 @@ def main() -> int:
         checks += [
             ("2 参数错:退出码 2", bad.returncode == EXIT_ARGS),
             ("2 参数错:stdout 全空(错话说给 stderr)", bad.stdout.strip() == b""),
+        ]
+
+        # ---- 结局 1:模型根本没答上话(端点指向一个没人听的端口)
+        # 这一支验的是"故障要变成一份说清故障的 JSON",而不是变成一坨 traceback。
+        # 只有内置供应商这一条 provider 时不会触发回落(§C2 只挑非活动的那条),
+        # 所以这里断的是确定性失败,不靠校园网关当天通不通。
+        env_down = {**env, "YINLUXS_LLM_BASE_URL": "http://127.0.0.1:1/v1"}
+        ws3 = tempfile.mkdtemp(prefix="headless-down-")
+        p1 = _run(["--json", "创建 e2e_demo.txt"], ws3, env_down)
+        doc1 = _parse(p1.stdout)
+        err1 = (p1.stderr or b"").decode("utf-8", "replace")
+        checks += [
+            ("1 模型故障:退出码 1(EXIT_RUNTIME,与文档同一口径)",
+             p1.returncode == EXIT_RUNTIME),
+            ("1 模型故障:stdout 仍是一份能解的 JSON(不是空,也不是 traceback)",
+             doc1 is not None),
+            ("1 模型故障:status 说的是 llm_error,ok 是 False",
+             bool(doc1) and doc1["status"] == "llm_error" and doc1["ok"] is False),
+            ("1 模型故障:error 里写着是哪一类故障",
+             bool(doc1) and str(doc1["error"] or "").startswith(("APIConnectionError",
+                                                                 "APITimeoutError",
+                                                                 "RuntimeError"))),
+            ("1 模型故障:stderr 里没有未捕获异常(那句 'str' object is not callable)",
+             "Traceback" not in err1 and "not callable" not in err1),
         ]
 
         for name, ok in checks:

@@ -147,22 +147,85 @@ def test_hard_reject_is_not_an_ask():
 
 # ---------------------------------------------------------- 结局、退出、那份 JSON
 
-@pytest.mark.parametrize("mutate, want", [
-    (lambda u: None, headless.EXIT_OK),
-    (lambda u: u.asks_refused.append({"name": "write_file"}), headless.EXIT_ASK_REFUSED),
-    (lambda u: u.limits.append({"kind": "max_steps", "limit": 40}), headless.EXIT_LIMITED),
-    (lambda u: setattr(u, "llm_error", "APITimeoutError: x"), headless.EXIT_RUNTIME),
-    (lambda u: setattr(u, "interrupted", True), headless.EXIT_INTERRUPTED),
-])
-def test_exit_code_priority(mutate, want):
+def _endings():
+    """五种「这一轮怎么结束的」一律经**回调**置起。
+
+    原来这里写的是 `setattr(u, "llm_error", "…")`,而它正是那个崩溃漏网的原因:
+    字段与同名方法打架时 setattr 照样绿,agent 调的那个却已经被实例属性盖掉了。
+    经回调置状态 = 每根针都真的把 agent 那句 `self.ui.X(...)` 跑了一遍。
+    """
+    return [
+        (lambda u: None, headless.EXIT_OK, "ok"),
+        (lambda u: u.confirm_tool(_tool(), {"path": "a.py"}, "要写文件"),
+         headless.EXIT_ASK_REFUSED, "ask_refused"),
+        (lambda u: u.max_steps_reached(40), headless.EXIT_LIMITED, "limited"),
+        (lambda u: u.llm_error(RuntimeError("APITimeoutError: 连接超时")),
+         headless.EXIT_RUNTIME, "llm_error"),
+        (lambda u: u.turn_interrupted(), headless.EXIT_INTERRUPTED, "interrupted"),
+    ]
+
+
+@pytest.mark.parametrize("fire, want", [(f, w) for f, w, _ in _endings()])
+def test_exit_code_for_each_ending(fire, want):
     ui = HeadlessUI(_Inner())
-    # 全中一遍,验的是"谁赢",不是"谁先发生"。
-    mutate(ui)
-    ui.interrupted = want == headless.EXIT_INTERRUPTED
-    ui.llm_error = "APITimeoutError: x" if want == headless.EXIT_RUNTIME else ""
-    ui.limits = [{"kind": "max_steps"}] if want == headless.EXIT_LIMITED else []
-    ui.asks_refused = [{"name": "x"}] if want == headless.EXIT_ASK_REFUSED else []
+    fire(ui)
     assert headless.exit_code_for(ui) == want
+
+
+def test_exit_code_priority_when_everything_fires_at_once():
+    """全中一遍,验的是"谁赢",不是"谁先发生"。"""
+    ui = HeadlessUI(_Inner())
+    for fire, _want, _status in _endings()[1:]:
+        fire(ui)
+    assert headless.exit_code_for(ui) == headless.EXIT_INTERRUPTED
+
+
+@pytest.mark.parametrize("fire, _code, want", _endings())
+def test_status_names_the_same_ending(fire, _code, want):
+    ui = HeadlessUI(_Inner())
+    fire(ui)
+    assert headless.status_for(ui) == want
+
+
+def test_a_model_failure_ends_the_run_instead_of_killing_it(config, ctx):
+    """回归针:模型报错时 `--json` 要的是「退出码 2 + 那一份 JSON」,不是 traceback。
+
+    `HeadlessUI` 曾把记录用的字段起名 `llm_error`,与 agent 要调的那个回调同名 ——
+    实例属性优先于类方法,于是 `self.ui.llm_error(e)` 成了 "'str' object is not
+    callable",异常处理器自己抛出去:进程 rc=1、stdout 空、JSON 里那句 error 永远没有。
+    这条从真 `Agent.run_turn` 走进真 `HeadlessUI`,任何"回调被字段盖掉"的改法都会在这里响。
+    """
+    from test_agent import FakeLLM, make_agent
+
+    llm = FakeLLM([RuntimeError("网关 502")])
+    ui = HeadlessUI(_Inner())
+    agent = make_agent(config, ctx, llm, ui)
+    agent.run_turn("说一句你好")                      # 不该抛
+    assert ui.llm_failure.startswith("RuntimeError: 网关 502")
+
+    cfg = Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",
+                                     api_key="k", model="m")], active_provider_id="t")
+    result = json.loads(headless.render(headless.build_result(
+        ui, agent, agent.session, cfg, task="说一句你好", elapsed_ms=5, fmt="json")))
+    assert result["exit_code"] == headless.EXIT_RUNTIME
+    assert result["status"] == "llm_error" and result["ok"] is False
+    assert result["error"] == "RuntimeError: 网关 502"
+
+
+def test_no_ui_callback_is_shadowed_by_a_record_field():
+    """把这一整类而不是那一个名字钉住:agent 调的每个回调,在 HeadlessUI 上必须仍可调。
+
+    这里从 agent 的源码里取名字,不手写清单 —— 手写的那份会和 agent 新加的回调脱钩,
+    而脱钩之后这道闸就只会在旧名字上响。
+    """
+    import re
+    src = (Path(__file__).resolve().parent.parent / "minicode" / "agent.py").read_text(
+        encoding="utf-8")
+    called = set(re.findall(r"self\.ui\.([a-z_]+)\(", src))
+    assert called, "没从 agent 里认出任何 ui 回调,这条闸本身失灵了"
+    ui = HeadlessUI(_Inner())
+    bad = sorted(n for n in called if not callable(getattr(ui, n, None)))
+    assert not bad, f"这些回调被同名字段盖住了:{bad}"
 
 
 def test_result_is_parseable_and_keeps_chinese():
