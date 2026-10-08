@@ -814,6 +814,7 @@ cd /d/game/mini-code
     - **数据边界**:zip 重扫 **5098** 个条目 × `SHIP_NEVER` **55** 条 → **零命中,RESULT: CLEAN**;验证跑完把应用目录里长出来的七项运行时文件(`checkpoints`、`config.json`、`model_caps.json`、`kb-hits.jsonl`、`tray.log`、`activate-port.json`、`weather-cache.json`)按**同一份清单**(`state_files.remove_from`,不是手抄名字)删净,所以现在 `dist/引路学长/` 本身也是能直接拷走分享的形状(只剩 `_internal`、`crawled`、`ms-playwright`、`config.example.json`、《使用说明.txt》、两只 exe)。
     - **一处此刻悬着的对外事实**:内置校园 Key 被网关拒(`401 … new_api_error`),见上一条第 **54** 条 —— 三件产物都是好的,但"装上就能问第一句话"今天依赖那把 Key。**别把这条当代码缺陷去查**,复现命令写在第 54 条里。
     - **全量测试对着这份树跑过**:出包前 `pytest -q` = **3533 passed / 2 skipped**,红的两项是 `test_changelog`(等 CHANGELOG 那一笔入库,入库后即对)与 `test_skill_tool_refs` —— 后者红在另一会话那份**没进版本库**的 `skills/scientific-figure-making/` 上,我不替一份不在树上的技能确认它引用的工具名对不对得上(**归属写死在这里,免得下一轮以为是本轮碰坏的**)。八道文档闸与 `ruff check .` 出包前全绿。
+    - **一条必须说清的形状:这三件产物里带着别人没入库的东西**。`§4` 那条老账说过「PyInstaller 认的是工作树,不认 HEAD」,今天正中:zip 里有 **7 个条目**属于另一会话未提交的 `skills/scientific-figure-making/`(连一份 `references/__pycache__/figure_kit.cpython-312.pyc` 一起进去了),`minicode/router.py` 那行把它加进归口表的改动也未提交。**我没有运行过那支技能**,`test_skill_tool_refs` 为它红着就是这件事的可见面。要一份"只含已入库内容"的包,得等他们提交(或把那两个目录从工作树挪走)之后**重出一次**并复跑 `check_frozen_version.py` + `e2e_headless.py`;现在这批的可用性与那份技能无关(全部包内验证都是绿着过的),只是**多带了没人验过的东西**。
     - **没做的**:P0-5 的 S5b 降权 / S5c AppContainer(第 52 条带着前置决策挂着)、指令文件第三级(子目录就近)、`--version` 本地旗标、`stream-json` 事件流;**也没推远端、没发 Release** —— 产物只在这台机器的 `dist/` 里,D 盘现有 0.9.120/129/136/137 四批共 **11 GB**(旧三批约 4.3 GB,删不删等用户点头)。
 
 ## 7. 新会话上手指南
