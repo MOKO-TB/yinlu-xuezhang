@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-from minicode import hook_packs, permspec, worktree as wt
+from minicode import hook_packs, patch, permspec, worktree as wt
 from minicode.tools import fs, search, shell
 from minicode.tools.base import Tool
 
@@ -63,6 +63,34 @@ def tools() -> list[Tool]:
                 "required": ["path", "old_string", "new_string"],
             },
             handler=fs.edit_file,
+        ),
+        Tool(
+            name="apply_patch",
+            description=(
+                "一次落一整包**统一 diff**(git diff / patch 那种带上下文的补丁),多文件、"
+                "多段一起改。**任一文件对不上就整包不落盘**并逐份说清坏在哪个 hunk ——"
+                "半包落盘意味着代码改了一半直接编译不过,那种现场比不改更糟。"
+                "适合「同时改三五个文件各几行」的重构;改一个文件的一处仍用 edit_file(更短)。"
+                "**只收这一种形状**:`@@ -旧,行数 +新,行数 @@` 的段、行首是空格/-/+;"
+                "不收 Codex 的 `*** Begin Patch` 方言、不收 rename/copy、不收二进制补丁。"
+                "上下文行号与磁盘上的对不上时会按上下文在原文件里找附近位置,找到了"
+                "**在回话里写明偏移几行**(不悄悄改);找不到就整包拒。"
+                "行尾与编码跟着原文件走(CRLF 文件打完补丁还是 CRLF)。"
+                "要预演不落盘就传 dry_run=true。"),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "patch": {"type": "string",
+                              "description": "整包统一 diff 原文(可含多个文件段)"},
+                    "dry_run": {"type": "boolean",
+                                "description": "只校验并报告会不会落盘,一个字都不写,默认 false"},
+                    "reason": {"type": "string",
+                               "description": "用一句中文向用户说明这包补丁要达成什么目的"
+                                              "(显示在权限确认框里),如:把超时参数从 config 传到调度层"},
+                },
+                "required": ["patch"],
+            },
+            handler=patch.apply_patch,
         ),
         Tool(
             name="bash",

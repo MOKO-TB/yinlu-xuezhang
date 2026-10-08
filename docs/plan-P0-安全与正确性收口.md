@@ -4,7 +4,9 @@
 > 代码基线:v0.9.131(HEAD `3ba2263`;v0.9.131 检查点落盘已于 `71ecb39` 提交)
 > 对标依据:`coding-agent-capability-matrix.md`(§9 汇总表 / §10D 差距自检)、`HANDOFF.md` §6、`docs/ROADMAP_IMPROVEMENTS.md`
 > 取证方式:本计划书里每一处「现状」都来自对当前工作树的定点 `rg` / 读码,不是引用上一轮结论。可复核的命令列在 §八。
-> 状态:**只读计划书,未改任何代码。**
+> 状态:**计划书本体未改逻辑;执行进度记在下面这一条修订里。**
+> **进度修订(2026-10-08,执行会话自记)**:第〇批文档纠正 → **v0.9.132 已交**(矩阵 §10D 四处改口 + `check_docs` 新增「§2 最新里程碑必须等于 `__version__`」第二问);第一批 → **v0.9.133 已交**(P0-1 read-before-edit + P0-2 记住批准落本机规则,测试 +44、真 Chromium e2e 14 项);第二批 → **v0.9.134 已交**(P0-3 `minicode/patch.py` + `apply_patch`,测试 +27);第三批 P0-5 → **本轮只交 S5a(Job Object 进程树回收),S5b/S5c 按本文件 §三.5 的理由继续挂着**。
+> 执行时的两处偏离计划书写法,都写在提交信息与 `HANDOFF.md` §2:① P0-1 的判定**没有**放进 `fs.py` 的 handler,而是放进 `PermissionGate`——因为「确认框是唯一的点头处」,而 handler 里弹不出框;② P0-1 **不在 `accept_all`/`full` 生效**(计划书只说"门之后",这里进一步明确:那两档对用户的承诺就是不再问,拿一枚启发式去拆承诺是另一种坏法)。
 > 修订(2026-10-08,第二会话复核):原列五条缺口,其中 **P0-4「计划模式无只读态」经复核已不成立** ——
 > v0.9.129 已落地 `SandboxState.plan_lock` + `PermissionGate.plan_locked/_plan_locked_denial` + `planning._set_plan_lock`,
 > 并有 `tests/test_plan_lock.py` / `tests/test_plan_review.py` 钉住「只读放行、写类与命令拒、档位与白名单都放不过、只有人能解、锁传得进子代理」。

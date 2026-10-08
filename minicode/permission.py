@@ -38,6 +38,10 @@ ASK = "ask"
 REJECT = "reject"
 
 WRITE_TOOLS = ("write_file", "edit_file")
+# 补丁工具的名字单独一份:它不是"一个 path"的写类工具,但**权限上同权重**
+# (门要逐份过、档位要按同一尺度放行、`agent.py` 的改动前像也按它展开)。
+# 写在这里而不是两处各写一遍字面量,是因为漏掉一处不会报错,只会静默少一道判定。
+PATCH_TOOL_NAME = "apply_patch"
 
 # 用户确认后需要记住"这个路径可以访问"的工具。
 # ocr_image 也在这里:它自己 resolve 路径交给识别引擎,不经过 resolve_path 围栏,
@@ -460,11 +464,16 @@ class PermissionGate:
                     r"\b(python|py|node|curl|wget)\b", cmd):
                 return "这条命令会带着本地内容访问一个网址"
             return None
-        if name in WRITE_TOOLS:
-            rel = self._rel_to_trust_source(args.get("path"))
-            if rel:
-                return (f"这一步会写入 {rel} —— 那个目录的内容会被以后的会话"
-                        "当可信资料读回来")
+        if name in WRITE_TOOLS or name == PATCH_TOOL_NAME:
+            # apply_patch 也算:它一包改好几个文件,"写过 kb/ 还是 skills/"这件事
+            # 与 write_file 完全同权重 —— 只认 args['path'] 的那版会漏掉整包补丁,
+            # 而那正是外部内容升格门最该拦的一种出口(一条网页里的话让模型打一包补丁
+            # 往信任源目录里写东西)。
+            for raw in self._target_paths(name, args):
+                rel = self._rel_to_trust_source(raw)
+                if rel:
+                    return (f"这一步会写入 {rel} —— 那个目录的内容会被以后的会话"
+                            "当可信资料读回来")
             return None
         # 跳域提交表单检测属 M5(P2):要看 form action 得先查 DOM,
         # 在权限门里做会阻塞主流程。本期不落,不留永不触发的死分支。
@@ -605,6 +614,73 @@ class PermissionGate:
 
     # ------------------------------------------------------------ 主判定
 
+    # ------------------------------------------------------------ 补丁动到的路径
+    # `apply_patch` 一包改好几个文件,而上面所有判定都是按"一个 `args['path']`"写的。
+    # 这里不另写一套尺子:把补丁里的每份路径套进**同一批函数**过一遍,该拒的拒、该问的问,
+    # 而且报的还是那道门自己的名字(credential / git / outside_path)。少了这一层,
+    # "补丁里藏一份 `.env`"就等于绕过了凭据门 —— 那正是最不该出现的那种洞。
+
+    def _target_paths(self, name: str, args: dict) -> list:
+        if name != PATCH_TOOL_NAME:
+            raw = (args or {}).get("path")
+            return [raw] if isinstance(raw, str) and raw.strip() else []
+        from minicode import patch as patch_mod
+        try:
+            return patch_mod.patch_paths(str((args or {}).get("patch") or ""))
+        except Exception:
+            # 读不出补丁就不在这里拦 —— handler 会去说那句"这份补丁读不出来",
+            # 而一条判不出来的路径不该被当成"没有路径"。
+            return []
+
+    def _views(self, name: str, args: dict) -> list:
+        """一份"要拿去比规则"的参数视图。非补丁工具就是它自己那一份。
+
+        `apply_patch` 一包动好几个文件,而项目规则(`permissions.json`)与档位免确认
+        都是按 `args["path"]` 匹配的 —— 不给每份文件建一份视图,用户写的
+        「deny: 不许动 kb/」对整包补丁就永远是装饰品,那比没有规则更糟(看着有)。
+        这里只换"喂给同一套匹配器的东西",**不复制任何匹配逻辑**。
+        """
+        if name != PATCH_TOOL_NAME:
+            return [args or {}]
+        return [{"path": raw} for raw in self._target_paths(name, args)]
+
+    def _project_hit(self, name: str, args: dict, decision: str) -> str:
+        for view in self._views(name, args):
+            got = self.project.hit(name, view, decision)
+            if got:
+                return got
+        return ""
+
+    def _project_allow(self, name: str, args: dict) -> str:
+        for view in self._views(name, args):
+            got = self.project.decide(name, view)
+            if got:
+                return got
+        return ""
+
+    def _patch_gate(self, args: dict) -> str | None:
+        """逐份文件过一遍敏感判定。返回 REJECT/ASK,或 None = 这层没话说。"""
+        for raw in self._target_paths(PATCH_TOOL_NAME, args):
+            kind = self._path_kind("write_file", raw)
+            if kind is not None:
+                level, path = kind
+                if level == BLOCKED:
+                    return REJECT
+                if level == OUTSIDE and not self.sandbox.path_allowed(path):
+                    return self._ask("outside_path")
+            if self._credential_hit("write_file", {"path": raw}) is not None:
+                return self._ask("credential", f"⚠ 这包补丁要动 {raw} —— 那是含密钥/凭据"
+                                 "的文件。模型读它能带出去的只有密钥本身;如果这一步不是"
+                                 "你要求的,请点拒绝。")
+            git_hit = self._git_hit("write_file", {"path": raw})
+            if git_hit is not None:
+                return self._ask("git", f"⚠ 这包补丁动的是仓库的 `.git`(命中:{git_hit})"
+                                 " —— 那里放的不是代码,是仓库历史与**每次提交/合并都会"
+                                 "自动执行的钩子**。写进去等于给以后每次 git 操作装一个"
+                                 "自动入口,权限档位、项目白名单、「本轮总是允许」都不替"
+                                 "它背书。不是你要的请点拒绝。")
+        return None
+
     def check(self, tool: Tool, args: dict) -> str:
         # 子代理的工具名带类型前缀(如 "explore·bash"),取末段判断
         name = tool.name.rsplit("·", 1)[-1]
@@ -662,7 +738,7 @@ class PermissionGate:
         # 项目规则里的 **deny** 排在读只放行之前:否则 `read_file` 这类工具上写的
         # 一条拒绝永远是装饰。它只能比红线更严,不会更松 —— allow/ask 在下面各自
         # 的位置,同一个 Spec 分两处问是因为"拒绝要趁早、加严要在档位之前"。
-        denied = self.project.hit(name, args, "deny")
+        denied = self._project_hit(name, args, "deny")
         if denied:
             self.reject_reason = denied
             return REJECT
@@ -690,7 +766,7 @@ class PermissionGate:
         # 项目规则里的 ask 排在**档位之前、红线与升级门之后**:.git 与"接触过外部
         # 内容"那两句警告比"这条规则要我确认"更该让用户看到,所以不抢在它们前面;
         # 但必须赶在 full/accept_all 提前 ALLOW 之前,否则 ask 就是装饰品。
-        asked = self.project.hit(name, args, "ask")
+        asked = self._project_hit(name, args, "ask")
         if asked:
             return self._ask("project_rule",
                              f"这份项目的规则要求这一步当面确认({asked})—— "
@@ -702,6 +778,17 @@ class PermissionGate:
             if denial:
                 self.plan_lock_reason = denial
                 return REJECT
+        # 补丁那一路的逐份判定排在**规划锁之后、档位之前**。两个位置都是有理由的:
+        # - 在规划锁**之后**:锁着的时候 `_patch_gate` 若先开口,一份 `.env` 会变成
+        #   "问一句"而不是"拒掉",人就有可能在这张框上点头 —— 那等于用一枚凭据警示
+        #   把"未批不许写"这把锁顶开了。锁比任何一问都硬。
+        # - 在档位**之前**:`accept_edits`/`full` 会自动放行写类工具,而补丁里藏凭据、
+        #   藏 `.git/hooks/`、藏工作区外路径这三件事不该被档位放过(与 write_file
+        #   同一口径 —— 那三层的 ASK 本来也排在档位之前)。
+        if name == PATCH_TOOL_NAME and self.sandbox is not None:
+            gate = self._patch_gate(args)
+            if gate is not None:
+                return gate
         mode = self.config.permission_mode
         if mode == "full":
 
@@ -714,10 +801,13 @@ class PermissionGate:
             # 自动编辑:工作区内的写文件/改文件自动放行;删除、跨区、
             # 敏感命令(上面 SB_ASK 已 return)仍走确认。浏览器打开网页这类
             # 会产生页面跳转的操作不算"编辑",维持逐次确认。
-            if name in WRITE_TOOLS:
-                # 这枚钉真正咬人的地方:这一档以前"工作区内写文件一律不问",于是
-                # 一份没读过的文件可以在用户完全没看见的情况下被按印象改掉的字节落盘。
-                if not self._unread_existing(name, args):
+            # `apply_patch` 与这两只同权重(它就是"一次写好几份文件"的那种编辑),
+            # 所以在这档也自动放行 —— 前面那层 `_patch_gate` 已经把凭据 / `.git` /
+            # 工作区外逐份问过了,自动放行的只是"工作区里的普通文件"这一部分。
+            # 它**不进** `_unread_existing` 的名单:补丁自带上下文,对不上整包就落不了盘,
+            # "没读过"那枚钉在这里没有对应的失败模式。
+            if name in WRITE_TOOLS or name == PATCH_TOOL_NAME:
+                if name not in WRITE_TOOLS or not self._unread_existing(name, args):
                     return ALLOW
                 return self._whitelist_or_unread_ask(name, args)
             if name == "bash" and self._is_workspace_build_command(args):
@@ -734,7 +824,7 @@ class PermissionGate:
         更有话事权;它命中时照旧留两处痕(`project_allow_reason` → 安全日志 + 界面
         info),与 `_project_or_ask` 那条放行完全同一套账。
         """
-        hit = self.project.decide(name, args)
+        hit = self._project_allow(name, args)
         if hit:
             self.project_allow_reason = hit
             return ALLOW
@@ -746,7 +836,7 @@ class PermissionGate:
         命中就放行并留下一句理由:Agent 那边要往安全日志记一行、界面上推一条
         info —— 这是"用户当场没点过头"的放行,静默等于没有审计。
         """
-        hit = self.project.decide(name, args)
+        hit = self._project_allow(name, args)
         if hit:
             self.project_allow_reason = hit
             return ALLOW

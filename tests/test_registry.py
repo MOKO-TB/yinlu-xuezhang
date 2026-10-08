@@ -4,7 +4,9 @@ from minicode.tools.registry import build_default_registry
 def test_registry_contents():
     tools = build_default_registry()
     names = [t.name for t in tools]
-    assert names == ["read_file", "write_file", "edit_file", "bash",
+    assert names == ["read_file", "write_file", "edit_file",
+                     "apply_patch",          # v0.9.134:整包统一 diff,紧跟 edit_file
+                     "bash",
                      "bash_status", "bash_kill", "py_script",
                      "glob", "grep", "repo_outline",
                      "permissions", "permissions_trust",
@@ -34,6 +36,11 @@ def test_read_only_flags():
         "read_file": True,
         "write_file": False,
         "edit_file": False,
+        # v0.9.134 补丁工具:它就是"一次写好几份文件"的编辑,写类毫无疑问。
+        # 顺带说清一件事:它不在 `tools/concurrency.py` 的 CONCURRENT_SAFE 名单里,
+        # 而那份名单要求 `read_only and name in CONCURRENT_SAFE` 两个条件 ——
+        # 也就是"只读"是并发的入场券,写类工具连候选都不是(门要问人不能发生在工作线程)。
+        "apply_patch": False,
         "bash": False,
         "bash_status": True,           # 只读:查后台任务的进度与输出尾部,不该弹确认框
         "bash_kill": False,            # 终止进程是动手面,必须用户点头

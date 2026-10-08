@@ -506,6 +506,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           # 又变回"整份转 UTF-8/LF"那个被抱怨的老毛病。
                           "_dominant_eol", "_write_exact", "_decode_full",
                           "_unreadable", "_existing_form"),
+    # v0.9.134 P0-3 整包补丁。漏 `parse` = 工具注册了却读不出补丁(handler 只会回那句
+    # "这份补丁读不出来",看着像模型的错);漏 `apply` = 算得出来但没人落盘;漏
+    # `patch_paths` 最坏 —— 权限门逐份判定与改动前像都靠它,收了 `apply_patch` 却没
+    # 收它,包里的补丁就能绕过凭据/`.git`/越界那三层(那正是设计里点名要防的洞)。
+    "minicode.patch": ("parse", "apply", "apply_patch", "patch_paths", "build",
+                       "FilePatch", "Hunk", "MAX_FILES", "PATCH_FUZZ",
+                       "ADD", "DELETE", "UPDATE"),
     "minicode.worktree": ("worktree_facts", "suggest", "parse_worktree_list",
                           "build_add_command", "suggest_copy_path",
                           "worktree_tool",
@@ -643,7 +650,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # 没重载,同一轮下一步照样再问 —— 那句按钮的话就成了一句假话;
                             # 漏 NEVER_REMEMBER_ASKS = 凭据/`.git`/外部内容那几类也能被
                             # 一次点头永久放行,这是这一路最不该开的那个口子)
-                            "can_remember", "remember", "NEVER_REMEMBER_ASKS"),
+                            "can_remember", "remember", "NEVER_REMEMBER_ASKS",
+                            # v0.9.134 补丁逐份过同一套门。漏 `_patch_gate` = 一包补丁
+                            # 里藏 `.env` 或 `.git/hooks/` 直接绕过凭据与仓库那一层(最坏
+                            # 那种洞);漏 `_views` = 用户写的 deny/allow 对整包补丁是装饰
+                            # 品(只认 args['path'],而补丁没有那个键)
+                            "_patch_gate", "_views", "_target_paths",
+                            "PATCH_TOOL_NAME"),
     "minicode.kb": ("crawl_credibility", "host_is_trusted",
                     # v0.9.126 相似度判据拆两道 + 一份配置读法(漏 `_spec_float` =
                     # 两个数各认一种配置写法,一处调了另一处不生效)
@@ -780,6 +793,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # 却没有任何地方往里记 → 读过的文件照样被问,而这枚钉看起来是装的;
                        # 漏 READ_NOTED_TOOLS = 名单漂了没人知道,写成功不再算读过)
                        "_note_read_path", "READ_NOTED_TOOLS",
+                       # v0.9.134 一包补丁的前像与读账都按多份展开(漏 `_snapshot_one`
+                       # = 整包只存了第一份原文,退回去就把别的文件留在改过的样子;
+                       # 漏 PATCH_TOOL = 补丁干脆不进回滚账)
+                       "_snapshot_one", "PATCH_TOOL",
                        # v0.9.126 同回合并发 + 超长输出转存(漏 `_lane_ok` =
                        # 池子内没人在判断资格,确认框可能从工作线程弹出来;
                        # 漏 `_spill_tail` = 超长那半截又凭空消失而不落文件)

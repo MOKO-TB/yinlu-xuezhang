@@ -26,7 +26,11 @@ TOOLS_DIR = ROOT / "minicode" / "tools"
 # 之后新增的工具:`search_history`(跨会话记忆)插在 `search_knowledge` 后,
 # `campus_notices`(v0.9.46 时效性)挨着同类插在 `get_weather` 后,其余顺序一字未动。
 ORDER = [
-    "read_file", "write_file", "edit_file", "bash",
+    "read_file", "write_file", "edit_file",
+    # v0.9.134 统一 diff 落盘:插在 edit_file 之后 —— 它与文件组同一家族,而模型选工具
+    # 时"改一处"与"改一包"是挨着的两个决定,离远了会两边都试一遍浪费回合。
+    "apply_patch",
+    "bash",
     # v0.9.84:后台命令的两只眼睛与一只手 —— 挨着 bash,模型先派活、再看进度、才终止
     "bash_status", "bash_kill",
     "py_script", "glob", "grep",
@@ -104,7 +108,7 @@ def test_order_pin_is_not_stale():
     v0.9.96 加 `ask_user` 时它的位置就钉在 `plan` 后面 —— 模型每轮拿到的 tools 数组
     是这个顺序,挪位置等于改行为面,所以新工具插在谁后面都要在这里写明。
     """
-    assert len(ORDER) == len(set(ORDER)) == 58      # v0.9.116:56 + hooks/hooks_apply
+    assert len(ORDER) == len(set(ORDER)) == 59      # v0.9.134:58 + apply_patch
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

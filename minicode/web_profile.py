@@ -56,6 +56,8 @@ EXCLUDED_TOOLS: dict[str, str] = {
     "grep": "同 read_file,可在工作区全文搜索",
     "write_file": "写文件",
     "edit_file": "改文件",
+    # v0.9.134 补丁工具:一次改好几个文件,与 write_file 同权重,访客一律不能碰
+    "apply_patch": "整包写盘(多文件)",
     "bash": "执行命令",
     "bash_status": "列出的是**主人机器上跑过什么命令、输出了什么** —— 后台任务的"
                    "名字与输出尾部对访客毫无用处,却把工作区路径与运行痕迹摊出去",

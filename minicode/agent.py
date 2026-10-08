@@ -21,7 +21,7 @@ from pathlib import Path
 from minicode.compaction import compact, estimate_tokens, microcompact, schema_tokens
 from minicode.llm import LLMClient, ToolCall
 from minicode.model_catalog import window_for
-from minicode.permission import ASK, REJECT, PermissionGate
+from minicode.permission import ASK, REJECT, PATCH_TOOL_NAME, PermissionGate
 from minicode import toolsum
 from minicode.session import Session, outbound as session_outbound, repair_tool_pairs
 from minicode.tools.base import (
@@ -30,6 +30,9 @@ from minicode.tools.base import (
 from minicode.ui import TerminalUI
 
 SNAPSHOT_TOOLS = ("write_file", "edit_file")  # bash 的改动无法安全跟踪,不在回滚范围
+# `apply_patch` 也在"动手前先存原文"的名单里(v0.9.134),但它一次动好几个文件,
+# 所以那本账按**一包多条**记 —— 整包能一起退,才配叫整包原子。
+PATCH_TOOL = PATCH_TOOL_NAME
 # 「这一份我看过了」那本账要记哪几只工具(v0.9.133 P0-1):读成功的,加上写成功的两类
 # —— 自己刚写出去的内容当然算"知道",不然「学长写完再改」这条最常见的链会被误伤。
 READ_NOTED_TOOLS = ("read_file",) + SNAPSHOT_TOOLS
@@ -157,7 +160,7 @@ class Agent:
         # 老记录上那个号就不再对得上任何东西 —— 纪元不同的记录一律不许按号回退。
         self._turn_ordinal = 0
         self._epoch = 0
-        self._undo_open = None     # 等这次真落盘之后补"改后指纹"的那条 seq
+        self._undo_open: list[int] = []   # 等这次真落盘之后补"改后指纹"的那几条 seq
         self._narration = ""       # 本轮模型写的说明文字:权限确认框里当"为什么要做"的兜底
         self._pending_prior = ""   # B1:下一步 search_knowledge 命中历史差评时的那句系统侧先验
         # 失败连击的两个格子**在建对象时就要有**:`run_turn` 每回合开头会重置,但
@@ -1611,17 +1614,37 @@ class Agent:
     def _snapshot_before_mutation(self, tool: Tool, args: dict) -> None:
         # 子代理的工具名带类型前缀(implement·write_file),取末段比对 ——
         # 不剥前缀的话,子代理的写永远不进快照,「/undo 撤不掉子代理的改动」。
-        if tool.name.rsplit("·", 1)[-1] not in SNAPSHOT_TOOLS:
+        name = tool.name.rsplit("·", 1)[-1]
+        if name in SNAPSHOT_TOOLS:
+            raws = [str(args.get("path", ""))]
+        elif name == PATCH_TOOL:
+            # 一包补丁动的是好几个文件,而"整包原子"要落进回滚账才算真原子:
+            # 每一份都存前像,`/undo` 才能一次把这一包退回去(路径清单由解析器给,
+            # 与门那边 `_target_paths` 用的是同一份事实,不在两处各猜一次)。
+            from minicode import patch as patch_mod
+            raws = patch_mod.patch_paths(str(args.get("patch") or ""))
+        else:
             return
-        raw = str(args.get("path", ""))
+        self._undo_open = []
+        for raw in raws:
+            seq = self._snapshot_one(raw)
+            if seq is not None:
+                self._undo_open.append(seq)
+        # 工具还没跑就先落盘:写到一半进程没了,前像也已经在盘上 —— 这一条是这份
+        # 持久化有没有意义的关键,放在“改完之后”就晚了。
+        if self._undo_open:
+            self._save_checkpoints()
+
+    def _snapshot_one(self, raw: str) -> "int | None":
+        """存一份改动前像,返回那条 seq;存不了就返回 None(这一步少一条能退的)。"""
         try:
             p = resolve_path(self.ctx, raw, for_write=True)
         except (PathOutsideWorkspace, PathBlocked):
-            return
+            return None
         try:
             data = p.read_bytes() if p.exists() else None
         except OSError:
-            return
+            return None
         self._undo_seq += 1
         self._undo_stack.append({"seq": self._undo_seq, "path": p, "data": data,
                                  "display": raw, "at": time.time(), "post": None,
@@ -1629,38 +1652,38 @@ class Agent:
         # 这一条还没兑现:工具可能因为参数错/权限失败而根本没落盘。落盘成功后由
         # `_mark_after_mutation` 补上"改后指纹"(见那里的理由),没成功就把这条摘掉 ——
         # 清单里留一条退不动的改动,比少列一条更容易骗人。
-        self._undo_open = self._undo_seq
-        # 工具还没跑就先落盘:写到一半进程没了,前像也已经在盘上 —— 这一条是这份
-        # 持久化有没有意义的关键,放在“改完之后”就晚了。
-        self._save_checkpoints()
+        return self._undo_seq
 
     def _mark_after_mutation(self, tool: Tool, args: dict, result: str) -> None:
-        """给刚才那条快照补上"我改完之后它长什么样"的指纹。
+        """给刚才那几条快照补上"我改完之后它长什么样"的指纹。
 
         审查视图要回答的不是"我改了什么"而是"现在磁盘上这份还是不是我留下的那份":
         bash / py_script 改的东西不在快照范围(`SNAPSHOT_TOOLS` 那句注释),所以一个
         文件可能在我写完之后被命令又改过。用 size + mtime 认这个漂移,不重读整份内容。
-        写失败的那一次顺手从栈里摘掉:没有落盘就没有可退的东西。
+        写失败的那一次顺手从栈里摘掉:没有落盘就没有可退的东西 —— 一包补丁整包失败时
+        这个循环会把这一包刚存的前像全部摘干净,清单不会留半包的假账。
         """
-        seq, self._undo_open = self._undo_open, None
-        if seq is None or tool.name.rsplit("·", 1)[-1] not in SNAPSHOT_TOOLS:
-            return
-        idx = next((i for i, r in enumerate(self._undo_stack)
-                    if r["seq"] == seq), None)
-        if idx is None:
+        seqs, self._undo_open = self._undo_open, []
+        name = tool.name.rsplit("·", 1)[-1]
+        if not seqs or (name not in SNAPSHOT_TOOLS and name != PATCH_TOOL):
             return
         from minicode.toolsum import is_failure
-        if is_failure(result):
-            self._undo_stack.pop(idx)
-            return
-        try:
-            st = self._undo_stack[idx]["path"].stat()
-            self._undo_stack[idx]["post"] = {"size": st.st_size,
-                                             "mtime": st.st_mtime}
-        except OSError:
-            # 拿不到指纹就当"没漂移":宁可少提醒一句,也不给每个文件都扣上
-            # "可能被别的工具改过"—— 那会把真提醒淹掉。
-            self._undo_stack[idx]["post"] = None
+        for seq in reversed(seqs):
+            idx = next((i for i, r in enumerate(self._undo_stack)
+                        if r["seq"] == seq), None)
+            if idx is None:
+                continue
+            if is_failure(result):
+                self._undo_stack.pop(idx)
+                continue
+            try:
+                st = self._undo_stack[idx]["path"].stat()
+                self._undo_stack[idx]["post"] = {"size": st.st_size,
+                                                 "mtime": st.st_mtime}
+            except OSError:
+                # 拿不到指纹就当"没漂移":宁可少提醒一句,也不给每个文件都扣上
+                # "可能被别的工具改过"—— 那会把真提醒淹掉。
+                self._undo_stack[idx]["post"] = None
 
     def _note_read_path(self, tool: Tool, args: dict, result: str) -> None:
         """把「这一步真的读到/写出了内容」记进门那本「读过没有」的账(P0-1)。
@@ -1672,10 +1695,18 @@ class Agent:
         note = getattr(self.gate, "note_read", None)
         if not callable(note):
             return
-        if tool.name.rsplit("·", 1)[-1] not in READ_NOTED_TOOLS:
+        name = tool.name.rsplit("·", 1)[-1]
+        if name not in READ_NOTED_TOOLS and name != PATCH_TOOL:
             return
         from minicode.toolsum import is_failure
         if is_failure(result):
+            return
+        if name == PATCH_TOOL:
+            # 打完一包补丁,这几份文件的**新内容**就是它刚写进去的 —— 当然算读过。
+            # 不点亮的话下一步改同一个文件会再多问一句,而那句问的是它自己刚改的东西。
+            from minicode import patch as patch_mod
+            for raw in patch_mod.patch_paths(str(args.get("patch") or "")):
+                note(raw)
             return
         note(args.get("path"))
 
