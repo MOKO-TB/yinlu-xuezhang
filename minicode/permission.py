@@ -806,10 +806,10 @@ class PermissionGate:
             # 工作区外逐份问过了,自动放行的只是"工作区里的普通文件"这一部分。
             # 它**不进** `_unread_existing` 的名单:补丁自带上下文,对不上整包就落不了盘,
             # "没读过"那枚钉在这里没有对应的失败模式。
-            if name in WRITE_TOOLS or name == PATCH_TOOL_NAME:
-                if name not in WRITE_TOOLS or not self._unread_existing(name, args):
-                    return ALLOW
+            if name in WRITE_TOOLS and self._unread_existing(name, args):
                 return self._whitelist_or_unread_ask(name, args)
+            if name in WRITE_TOOLS or name == PATCH_TOOL_NAME:
+                return ALLOW
             if name == "bash" and self._is_workspace_build_command(args):
                 return ALLOW
             return self._project_or_ask(name, args)

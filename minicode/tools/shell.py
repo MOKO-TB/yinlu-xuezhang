@@ -811,26 +811,20 @@ def py_script(ctx: ToolContext, path: str, timeout: int = 120) -> str:
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as e:
-            if run_job is not None:
-                run_job.close()               # 连整棵树一起收(见 win_sandbox)
-                with contextlib.suppress(Exception):
-                    proc.wait(timeout=BG_KILL_WAIT)
-                partial = _run_partial(e)
-                return (f"错误: 脚本运行超过 {timeout} 秒被中止,"
-                        f"整棵进程树已随这次终止一起回收(启动那一瞬在 job 之外起来的"
-                        f"进程不在此列)。已产生的输出:\n{partial[:TIMEOUT_OUTPUT_LIMIT]}"
-                        f"{env_note}")
-            if run_job is None:
-                with contextlib.suppress(Exception):
-                    proc.kill()
-                with contextlib.suppress(Exception):
-                    proc.wait(timeout=BG_KILL_WAIT)
+            # 先关 job:那一步就是"整棵树一起收"这个动作(见 `win_sandbox`)。
+            # 两条分支只有一处不同 —— **未启用时说未启用**,不写成"已回收"。
             partial = _run_partial(e)
-            return (f"错误: 脚本运行超过 {timeout} 秒被中止(进程约束未启用:"
-                    f"只能杀这一个进程,它下面的可能还活着)。已产生的输出:\n"
+            how = ("整棵进程树已随这次终止一起回收(启动那一瞬在 job 之外起来的"
+                   "进程不在此列)" if run_job is not None else
+                   "进程约束未启用:只能杀这一个进程,它下面的可能还活着")
+            with contextlib.suppress(Exception):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=BG_KILL_WAIT)
+            return (f"错误: 脚本运行超过 {timeout} 秒被中止,{how}。已产生的输出:\n"
                     f"{partial[:TIMEOUT_OUTPUT_LIMIT]}{env_note}")
         if run_job is not None:
-            run_job.close()
+            run_job.close()                    # 正常跑完也要关(见 _BgJob._pump 那句理由)
         proc.stdout, proc.stderr = None, None    # 与 run() 一样:取完就别再碰管道
         rc = proc.returncode
     except OSError as e:
