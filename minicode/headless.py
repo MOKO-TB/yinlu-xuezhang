@@ -174,7 +174,10 @@ class HeadlessUI:
     # ----------------------------------------------- 要人点头的入口:都不点头
 
     def confirm_tool(self, tool, args: dict, reason: str = "",
-                     note: str = "", label: str = "") -> str:
+                     note: str = "", label: str = "",
+                     can_remember: bool = False) -> str:
+        # `can_remember`(v0.9.133「以后都允许」)接了不用:无头模式**没有人点头**,
+        # 就更没有一条该被永久记住的点头 —— 这是"换入口不换权限"的直接推论。
         self.asks_refused.append({"name": tool.name, "reason": reason or note,
                                   "label": label, "args": _brief(args)})
         return "no"

@@ -193,7 +193,7 @@ def _agent(tmp_path, config, turns, registry=None):
 
 
 class _QuietUI:
-    def confirm_tool(self, tool, args, reason="", note=""):
+    def confirm_tool(self, tool, args, reason="", note="", can_remember=False):
         return "yes"                    # 代用户点"允许",否则非只读工具走不到执行
 
     def __getattr__(self, name):

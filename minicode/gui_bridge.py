@@ -2952,7 +2952,7 @@ class Bridge:
         return {"ok": True}
 
     def confirm_reply(self, choice: str) -> dict:
-        if choice in ("yes", "no", "always"):
+        if choice in ("yes", "no", "always", "remember"):
             self._confirm_choice = choice
             self._confirm_event.set()
         return {"ok": True}
@@ -3534,7 +3534,8 @@ class Bridge:
 
     # 确认握手:Agent 线程阻塞在此,前端点按钮后返回
     def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
-                     note: str = "", label: str = "") -> str:
+                     note: str = "", label: str = "",
+                     can_remember: bool = False) -> str:
         from minicode.explain import permission_why
         why = permission_why(tool.name, args, reason)
         risks = list(why.get("risks") or [])
@@ -3544,6 +3545,7 @@ class Bridge:
             self._confirm_event.clear()
             self._confirm_choice = "no"
             self.ui.push("confirm_request", tool=tool.name,
+                         can_remember=bool(can_remember),
                          detail=self._permission_detail_text(tool, args),
                          why=why.get("why", ""), digest=why.get("digest", ""),
                          risks=risks, alert=bool(note),

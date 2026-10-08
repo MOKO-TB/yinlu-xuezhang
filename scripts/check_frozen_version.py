@@ -42,7 +42,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "max_steps",
                         # v0.9.130 模型配置编辑器:漏收这两根 = 界面上填的 cfg 存不下来,
                         # 而保存照样回「已保存」—— 数值静默漂回探测与内置目录。
-                        "model_cfg_from_raw", "MODEL_CFG_KEYS"),
+                        "model_cfg_from_raw", "MODEL_CFG_KEYS",
+                        # v0.9.133 P0-1:漏收 = config.json 里那枚开关没人读,
+                        # 界面说明写「关掉就回到以前的行为」而实际关不掉 —— 一句假话
+                        "read_before_edit"),
     "minicode.gui_bridge": ("test_model", "fetch_models",
                             # v0.9.106 Q1:MCP 热重载换过注册表要重新对齐工具表
                             # (漏收 = 装好的包里那条「现有会话下一轮即可用」又是假的)
@@ -626,7 +629,21 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # v0.9.122 并发批次的只读预演(漏收 = 批前没法判
                             # "这一步会不会问人",于是要么继续串行、要么两个确认框
                             # 串味 —— 而后者不报错,只是问错了次序)
-                            "peeking", "would_ask"),
+                            "peeking", "would_ask",
+                            # v0.9.133 P0-1 没读过的文件不许直接改。漏 `note_read` =
+                            # 那本账没人记也无人写(读过的照样被问、没读过的照样改,
+                            # 两头都错);漏 `_unread_existing` = 判定还在但门不叫它,
+                            # 表现是"这枚钉装了个空的";漏 `_whitelist_or_unread_ask` =
+                            # 用户自己写的白名单被这枚启发式顶掉,那是本末倒置
+                            "note_read", "_unread_existing",
+                            "_whitelist_or_unread_ask",
+                            # v0.9.133 P0-2 那两只手(漏 `can_remember` = 按钮出现的
+                            # 条件不在门上,前端自己猜,猜错就给出一颗点不成的按钮;
+                            # 漏 `remember` = 用户点了「以后都允许」而门里那份装载结果
+                            # 没重载,同一轮下一步照样再问 —— 那句按钮的话就成了一句假话;
+                            # 漏 NEVER_REMEMBER_ASKS = 凭据/`.git`/外部内容那几类也能被
+                            # 一次点头永久放行,这是这一路最不该开的那个口子)
+                            "can_remember", "remember", "NEVER_REMEMBER_ASKS"),
     "minicode.kb": ("crawl_credibility", "host_is_trusted",
                     # v0.9.126 相似度判据拆两道 + 一份配置读法(漏 `_spec_float` =
                     # 两个数各认一种配置写法,一处调了另一处不生效)
@@ -759,6 +776,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # = 包内又退回"从文案里猜密钥二字",git / project_rule 全被记成
                        # escalation —— 事后线索把答案扔了,而没有任何一处会红)
                        "SECURITY_LOG_GATES", "_log_security_ask",
+                       # v0.9.133 P0-1 那支笔(漏 `_note_read_path` = 判定与账都在门里,
+                       # 却没有任何地方往里记 → 读过的文件照样被问,而这枚钉看起来是装的;
+                       # 漏 READ_NOTED_TOOLS = 名单漂了没人知道,写成功不再算读过)
+                       "_note_read_path", "READ_NOTED_TOOLS",
                        # v0.9.126 同回合并发 + 超长输出转存(漏 `_lane_ok` =
                        # 池子内没人在判断资格,确认框可能从工作线程弹出来;
                        # 漏 `_spill_tail` = 超长那半截又凭空消失而不落文件)
@@ -988,7 +1009,16 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           # v0.9.127 §四.2:同一行上的第二件事(指令文件的采纳)。
                           # 漏 `adopt_agents` = 点头没处落;漏 `agents_adopted_sha` =
                           # 落下了也没人读得回来 —— 两条都是"每问重弹一张卡"那种坏法。
-                          "adopt_agents", "agents_adopted_sha", "_row", "_put_row"),
+                          "adopt_agents", "agents_adopted_sha", "_row", "_put_row",
+                          # v0.9.133 P0-2「以后都允许」。漏 `remember` = 那颗按钮点下去
+                          # 什么都不写(界面上说"已记住"而盘上一条都没有);漏
+                          # `granted_rule` = 按钮出现的条件与真写下去的判断分成两套,
+                          # 迟早出现"按钮给了却点不成";漏 `granted_rules` = 本机那本账
+                          # 写了没人读,免确认动作存了个寂寞;漏 GRANTED_KEY = 装载时
+                          # 找错键名,整本账静默变空。
+                          "remember", "granted_rule", "granted_rules",
+                          "granted_candidate", "GRANTED_KEY", "MAX_GRANTED",
+                          "ORIGIN_GRANTED", "to_raw"),
     # v0.9.116 L3:内置钩子配方(整只模块新加;漏 apply = 挂不上,漏 list_line =
     # 连"有没有挂着"都答不出)
     "minicode.hook_packs": ("preview", "apply", "list_line", "TEMPLATES",
@@ -1148,6 +1178,12 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     "function buildUnledger", "function sameFile",
     "function maybeChangeReviewHint", "function openChangesSection",
     ".act-grp", ".chg-hint",
+    # v0.9.133 确认框那颗「以后都允许」(漏 `btnRemember` = 按钮整个不见了,后端那
+    # 一路记规则的代码成了没人按的开关;漏 `can_remember` = 按钮无条件常亮,四类
+    # "永远不给记住"的动作也亮着,点了才说记不成;漏 `.b-remember{` = 它与「本轮
+    # 总是允许」长得一模一样,误点一次就把一次性的点头变成长期授权)
+    "btnRemember", 'confirm_reply("remember")', "can_remember",
+    ".b-remember{",
 )
 
 

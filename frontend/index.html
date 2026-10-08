@@ -1098,6 +1098,11 @@ try {
   .b-no:hover{ border-color:var(--danger); color:var(--danger); }
   .b-always{ background:var(--primary-light); border:1px solid var(--primary);
              color:var(--primary-text); }
+  /* 「以后都允许」(v0.9.133)与「本轮总是允许」差在**活多久**:一个只到这一问,
+     一个从此不再问。虚线边框是刻意的手感差别 —— 两颗长得一模一样的按钮,误点一次
+     就把一次性的点头变成长期授权,那是要命的区别,不该只靠四个字分辨。 */
+  .b-remember{ background:transparent; border:1px dashed var(--primary);
+               color:var(--primary-text); }
   .b-yes{ background:var(--primary); border:none; color:#fff; }
   .b-yes:hover{ transform:translateY(-1px); }
 
@@ -2547,6 +2552,8 @@ try {
     <div class="btns">
       <button class="b-no" id="btnNo">拒绝</button>
       <button class="b-always" id="btnAlways">本轮总是允许</button>
+      <button class="b-remember" id="btnRemember" style="display:none"
+              title="只记在这台机器上、只对这一个项目 —— 不往项目里写任何文件,撤销用 permissions_trust">以后都允许</button>
       <button class="b-yes" id="btnYes">允许</button>
     </div>
   </div>
@@ -4117,6 +4124,10 @@ window.__gcodeEvent = function (e) {
         $("confirmWhy").style.display = "none";
       }
       $("confirmOverlay").classList.add("show");
+      // 「以后都允许」这颗按钮该不该出现,由后端那一道门判(v0.9.133):这一步收窄
+      // 得成一条本机规则才给。前端不自己猜 —— 猜错了就给出一颗点了记不成的按钮。
+      // 默认不显示:`can_remember` 缺失(旧推送)时按"不给"处理,宁少一颗按钮。
+      $("btnRemember").style.display = e.can_remember ? "" : "none";
       break;
     }
     case "ask_request": {
@@ -6459,6 +6470,7 @@ $("btnStop").addEventListener("click", () => pywebview.api.stop_task());
 $("btnNo").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("no"); });
 $("btnYes").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("yes"); });
 $("btnAlways").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("always"); });
+$("btnRemember").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("remember"); });
 
 /* ---------------- 动手前问一句:提问卡(v0.9.96) ----------------
    状态只有一份:askData.qs 是后端给的原文,选项 label 原样回传(不翻译、不改写、

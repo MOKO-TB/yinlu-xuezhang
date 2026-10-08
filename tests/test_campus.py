@@ -30,7 +30,7 @@ class FakeUI:
 
     def finish_stream(self): pass
 
-    def confirm_tool(self, tool, args, reason=""): return "yes"
+    def confirm_tool(self, tool, args, reason="", note="", can_remember=False): return "yes"
 
     def tool_start(self, tool, args): pass
 

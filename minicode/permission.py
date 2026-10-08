@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import re
 from pathlib import Path
 
@@ -147,6 +148,12 @@ class PermissionGate:
         self.config = config
         self.sandbox = sandbox          # minicode.sandbox.SandboxState
         self._turn_allowed: set[str] = set()
+        # 「以后都允许」要落的对象:工作区路径 + 工具名清单。存下来是因为
+        # `remember()` 要在**用户点完头之后**才写这条规则(那时候已经没有入参了),
+        # 而装载那份清单必须用同一份 known_tools —— 换个集合去核,同一条规则
+        # 可能一边算"存在的工具"一边算"不存在的"。
+        self.workspace = workspace
+        self._tool_names = set(tool_names or ())
         # 回合内的"外部接触"标志(注入防御 M3.2);Agent._execute 调 note_external 置位
         self._touched_external = False
         self._external_source = ""
@@ -166,6 +173,11 @@ class PermissionGate:
         # 为什么不住 gate:子代理共用 sandbox、各自新建 gate)。这里只留"这一次拒
         # 的理由"这一份报告字段,与 `reject_reason` 同一层。
         self.plan_lock_reason = ""
+        # 「这一份我看过了」那本账(P0-1,v0.9.133)。住在 gate 上是**刻意的隔离选择**:
+        # 子代理各自新建 gate、共用父会话的 sandbox(规划锁正因为要跨子代理才住 sandbox),
+        # 而"读过没有"要跟着"谁在改这份文件"走 —— 侦察那一档读过的东西不该让写代码的
+        # 这一档以为自己也读过(它看到的是摘要,不是原文)。
+        self._read_paths: set[str] = set()
 
     # ------------------------------------------------------------ 规划锁
     # 三条形状是刻意的,改任何一条都要连带改 `_plan_locked_denial` 的回话:
@@ -215,8 +227,67 @@ class PermissionGate:
         self._touched_external = False
         self._external_source = ""
         self._ask_note = ""
+        # ⚠ `_read_paths` **不在这里清**:"这个文件读过没有"是会话尺度的事,不是回合
+        # 尺度的。每回合忘掉一次读过什么,表现是第一回合之后每一步都要多问一句,
+        # 而那句问的话一模一样 —— 一条会自己刷屏的钉最后只会被用户整个关掉。
         if self.sandbox is not None:
             self.sandbox.new_turn()
+
+    # -------------------------------------------- 没读过的文件不许直接改(P0-1)
+    # 这枚钉管的是**正确性**不是安全:Claude Code 把它当防幻觉第一道,理由在这里同样
+    # 成立 —— 模型没读过一份既有文件就调 edit_file,那份 `old_string` 是按印象写的,
+    # 而 `fs.py` 的逐字匹配只会让它在"没找到"与"改错地方"之间撞运气。
+    # 三条形状先写清,改代码前先读:
+    # ① **不硬拒**。拒了等于把一桩"该读一下"的建议变成一条新红线;这里的形状是"门
+    #    本来要问的地方把原因说清 + 自动编辑档为这一条多问一次",人点「允许」照改。
+    # ② **只碰还会问人的两个档位**。confirm 档那一问本来就有(`_project_or_ask` 里补
+    #    一句原因);accept_edits 档原本"工作区内写文件一律自动放行",这里改成"没读
+    #    过的既有文件先问一次"。accept_all / full 一个字不动:那两档对用户的承诺就是
+    #    不再问,拿一枚启发式去拆承诺是另一种坏法(红线照旧压过它们,与这条无关)。
+    # ③ **写成功也算读过**。不然「学长自己写出去的文件 → 再改它」这条最常见的链会
+    #    突然被问 —— 那份内容就是它写的,没道理说它没读过。
+    # 名单里 `edit_file`/`write_file` 之外不加别的:命令与脚本改的文件没有"先读一遍"
+    # 这个概念,而 `apply_patch`(v0.9.134)自带上下文,它要的是另一条判据。
+
+    def note_read(self, raw) -> None:
+        """登记「这一份我看过了」。路径解析与门自己用同一把尺子,不然「读过」点不亮。"""
+        key = self._path_key(raw)
+        if key:
+            self._read_paths.add(key)
+
+    def _path_key(self, raw) -> str:
+        if self.sandbox is None or not isinstance(raw, str) or not raw.strip():
+            return ""
+        try:
+            _, p = classify_for_write(self.sandbox.workspace, raw.strip())
+            return os.path.normcase(str(p))
+        except (OSError, ValueError):
+            # 解析不开就当一个没读过:宁可多问一句,也不把"我没算清楚"记成"看过了"。
+            return ""
+
+    def _unread_existing(self, name: str, args: dict) -> str:
+        """这一步要动的既有文件本会话读过吗 —— 返回要点亮的那条路径,空串 = 不用管。
+
+        空串的四五种情形都有意义:开关关了、不是写类工具(`WRITE_TOOLS` 那份名单,
+        `apply_patch` 加进去就自动受这条管)、这份路径读过、**文件还不存在**(新建没什么
+        可先读的,那是这条钉最不该出声的一例)、以及解析不出来。
+        """
+        if not getattr(self.config, "read_before_edit", True):
+            return ""
+        if name not in WRITE_TOOLS:
+            return ""
+        key = self._path_key((args or {}).get("path"))
+        if not key or key in self._read_paths:
+            return ""
+        try:
+            return str(args.get("path")) if Path(key).exists() else ""
+        except OSError:
+            return ""
+
+    def _unread_note(self, path) -> str:
+        return (f"⚠ 这一步要改的 {path} 本会话还没读过 —— 学长手上没有它现在的内容,"
+                "要替换的那段文字是按印象写的概率不低(改错了会直接落进你的文件)。"
+                "拿不准就点「拒绝」,让我先 read_file 一遍再来;确认这么改就点「允许」。")
 
     # -------------------------------------------------- 外部内容接触标志
 
@@ -233,6 +304,47 @@ class PermissionGate:
     def ask_note(self) -> str:
         """上一次 check() 为什么强制确认(给确认框多打一行用)。"""
         return self._ask_note
+
+    # ---------------------------------------------------- 「以后都允许」(P0-2)
+    # 这几类问句**永远不给记住**。共同点是它们要问的不是"这一类动作可不可以",而是
+    # "这一步当场看一眼":
+    # - `credential` / `git` / `external` / `project_rule`:与 `NON_DELEGABLE_ASKS`
+    #   同一批(连钩子都不许代答,更不会由一次点头变成永久免确认);
+    # - `outside_path` / `sandbox_command`:沙箱边界与危险命令,代码里早就写着
+    #   "不因权限档位而放开" —— 一个按钮不该比一整档权限更强;
+    # - `unread`:那一句讲的是"你没读过这份文件",记成免确认规则等于把防幻觉的钉
+    #   换成一张长期通行证,而这两件事毫无关系。
+    NEVER_REMEMBER_ASKS = ("credential", "git", "external", "project_rule",
+                           "outside_path", "sandbox_command", "unread")
+
+    def can_remember(self, name: str, args: dict, kind: str = "") -> bool:
+        """这一问能不能变成一条本机免确认规则(决定那颗按钮出不出现)。
+
+        判据与真往下写那一路**共用 `permspec.granted_rule`**:按钮出现了却点不成,
+        属于"界面上说行、实际不行"那一类坏法,这个项目把它列在禁忌里。
+        """
+        if self.workspace is None or kind in self.NEVER_REMEMBER_ASKS:
+            return False
+        rule, _why = permspec.granted_rule(name, args, self._tool_names)
+        return rule is not None
+
+    def remember(self, tool: Tool, args: dict, kind: str = "") -> str:
+        """把这一次点头落成一条本机规则,并让**这道门当场就看见它**。
+
+        当场重载不是贴心,是正确性要求:不重载的话"以后都允许"要等下次开工作区才
+        生效,而用户在同一轮里再遇到同类动作照样被问 —— 那正是这句按钮许诺过不会
+        发生的事。
+        """
+        if self.workspace is None:
+            return "没有工作区,这一步没地方可记。"
+        if kind in self.NEVER_REMEMBER_ASKS:
+            return (f"这一步没记住:「{kind}」这一类要问的是**这一步**,不是这一类动作"
+                    "(凭据、仓库 `.git`、外部内容升格、沙箱边界与危险命令都不给永久免确认)")
+        ok, msg = permspec.remember(self.workspace, tool.name, args,
+                                    self._tool_names)
+        if ok:
+            self.project = permspec.load(self.workspace, self._tool_names)
+        return msg
 
     @property
     def ask_kind(self) -> str:
@@ -603,13 +715,30 @@ class PermissionGate:
             # 敏感命令(上面 SB_ASK 已 return)仍走确认。浏览器打开网页这类
             # 会产生页面跳转的操作不算"编辑",维持逐次确认。
             if name in WRITE_TOOLS:
-                return ALLOW
+                # 这枚钉真正咬人的地方:这一档以前"工作区内写文件一律不问",于是
+                # 一份没读过的文件可以在用户完全没看见的情况下被按印象改掉的字节落盘。
+                if not self._unread_existing(name, args):
+                    return ALLOW
+                return self._whitelist_or_unread_ask(name, args)
             if name == "bash" and self._is_workspace_build_command(args):
                 return ALLOW
             return self._project_or_ask(name, args)
         if name in self._turn_allowed:
             return ALLOW
         return self._project_or_ask(name, args)
+
+    def _whitelist_or_unread_ask(self, name: str, args: dict) -> str:
+        """本该自动放行、被「没读过」拦下来问一次的那一步。
+
+        白名单仍然优先 —— 那是用户自己写进 `permissions.json` 的规则,比一枚启发式
+        更有话事权;它命中时照旧留两处痕(`project_allow_reason` → 安全日志 + 界面
+        info),与 `_project_or_ask` 那条放行完全同一套账。
+        """
+        hit = self.project.decide(name, args)
+        if hit:
+            self.project_allow_reason = hit
+            return ALLOW
+        return self._ask("unread", self._unread_note(args.get("path")))
 
     def _project_or_ask(self, name: str, args: dict) -> str:
         """本该问一次的地方,先看项目白名单是否**已核对且命中**。
@@ -621,6 +750,12 @@ class PermissionGate:
         if hit:
             self.project_allow_reason = hit
             return ALLOW
+        unread = self._unread_existing(name, args)
+        if unread:
+            # confirm 档这一问本来就有,所以**不改它是哪条门开的口**(仍是 `mode`),
+            # 只把"为什么要多看一眼"补进那一行。`ask_kind` 说的是门,不是文案 ——
+            # H3 那批把这句话写成规矩,不能在这一轮自己破。
+            return self._ask("mode", self._unread_note(unread))
         return self._ask("mode")
 
     @staticmethod

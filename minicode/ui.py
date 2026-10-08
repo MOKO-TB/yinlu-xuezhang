@@ -143,11 +143,14 @@ class TerminalUI:
     # ------------------------------------------------------------ 权限确认
 
     def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
-                     note: str = "", label: str = "") -> str:
-        """返回 'yes' | 'no' | 'always'。reason=模型说明的"这一步为什么做"。
+                     note: str = "", label: str = "",
+                     can_remember: bool = False) -> str:
+        """返回 'yes' | 'no' | 'always' | 'remember'。reason=模型说明的"这一步为什么做"。
 
         `label` 是并发子代理路的标签(v0.9.60,如「第2路[implement] 修复登录」):
         CLI 里拼进面板标题,让用户分得清是哪一路在等确认。
+        `can_remember` 为真才多出 (r) 那一项(v0.9.133):这一步收窄得成一条本机
+        免确认规则才给这颗按钮 —— 给了又点不成的按钮就是样子货。
         非交互场景(stdin 关闭、管道输入、Ctrl+C)一律按"拒绝"处理并说明原因,
         不能让确认框把整个进程带崩。
         """
@@ -164,12 +167,17 @@ class TerminalUI:
         ))
         if note:
             self.console.print(f"  [bold red]{escape(note)}[/bold red]")
+        if can_remember:
+            self.console.print(
+                "[dim]  (r) 以后都允许:只记在这台机器上、只对这一个项目,"
+                "不动项目里的任何文件;撤销用 permissions_trust action=revoke。[/dim]")
         while True:
+            choices = "[yellow]允许执行?[/yellow] [bold](y)是[/bold] / [bold](n)否[/bold] " \
+                      "/ [bold](a)本轮总是允许[/bold]"
+            if can_remember:
+                choices += " / [bold](r)以后都允许[/bold]"
             try:
-                ans = self.console.input(
-                    "[yellow]允许执行?[/yellow] [bold](y)是[/bold] / [bold](n)否[/bold] "
-                    "/ [bold](a)本轮总是允许[/bold]: "
-                ).strip().lower()
+                ans = self.console.input(choices + ": ").strip().lower()
             except (EOFError, KeyboardInterrupt):
                 self.console.print("[dim]没有可用的交互输入,已按拒绝处理。[/dim]")
                 return "no"
@@ -177,9 +185,13 @@ class TerminalUI:
                 return "yes"
             if ans in ("a", "always"):
                 return "always"
+            if can_remember and ans in ("r", "remember"):
+                return "remember"
             if ans in ("n", "no", ""):
                 return "no"
-            self.console.print("[dim]请输入 y、n 或 a[/dim]")
+            self.console.print("[dim]请输入 "
+                               + ("y、n、a 或 r" if can_remember else "y、n 或 a")
+                               + "[/dim]")
 
     # ------------------------------------------------------------ 动手面的点头
 

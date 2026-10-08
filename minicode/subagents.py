@@ -310,10 +310,11 @@ class _TaggedUI:
         self._tag = tag
 
     def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
-                     note: str = "", label: str = "") -> str:
+                     note: str = "", label: str = "",
+                     can_remember: bool = False) -> str:
         merged = self._tag + (f" · {label}" if label else "")
         return self._inner.confirm_tool(tool, args, reason=reason, note=note,
-                                        label=merged)
+                                        label=merged, can_remember=can_remember)
 
     def __getattr__(self, name: str):
         return getattr(self._inner, name)

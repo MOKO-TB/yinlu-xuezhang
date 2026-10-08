@@ -157,7 +157,7 @@ class QuietUI:
     def llm_error(self, e): pass
     def max_steps_reached(self, n): pass
 
-    def confirm_tool(self, tool, args, reason="", note=""):
+    def confirm_tool(self, tool, args, reason="", note="", can_remember=False):
         self.confirmed.append((tool.name, dict(args), note))
         return self.choice
 

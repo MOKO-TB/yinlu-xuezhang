@@ -753,7 +753,7 @@ def test_tagged_ui_merges_labels_and_passes_through():
     seen = {}
 
     class Inner:
-        def confirm_tool(self, tool, args, reason="", note="", label=""):
+        def confirm_tool(self, tool, args, reason="", note="", label="", can_remember=False):
             seen["label"] = label
             return "yes"
 

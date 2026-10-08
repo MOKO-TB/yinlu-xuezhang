@@ -29,7 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +44,18 @@ MAX_RULES = 50                      # 一份项目文件里最多收多少条(�
 # config.example/《使用说明》四处口径一起漂,而漂掉的权限文档比难听的字段名危险。
 DECISION_ALLOW, DECISION_ASK, DECISION_DENY = "allow", "ask", "deny"
 DECISIONS = (DECISION_ALLOW, DECISION_ASK, DECISION_DENY)
+
+# 规则的**出处**。这两个值不是装饰:`hit()` 报给用户的每一句"按哪条办的"都必须说清
+# 它来自项目文件还是本机那本账 —— 前者是"这个仓库的作者批的"(所以要有 sha256
+# 核对才生效),后者是"你自己在确认框上点过头"。混成一个来源就等于把两种授权
+# 说成同一种,而那正是「clone 来的仓库替这台机器决定什么不用问」的入口。
+ORIGIN_PROJECT, ORIGIN_GRANTED = "project", "granted"
+
+# 「以后都允许」落的那一格(v0.9.133,P0-2)。它住在**本机信任表的同一行**里,
+# 与白名单的 sha256 并排 —— 因为它们是同一件事的两面:"这一类动作不用再问我"。
+# 上限比项目文件小:`granted` 是点出来的,不是写出来的,攒到几十条没人还记得它拦过什么。
+GRANTED_KEY = "granted"
+MAX_GRANTED = 20
 
 # 能被预先批下来的命令首词:**与 accept_edits 档同一份名单**(permission.py 引用这里,
 # 不在两处各抄一遍)。为什么只能在这一份上收口:白名单若允许 `command_prefix: "rm"`,
@@ -110,6 +122,7 @@ class Rule:
     pattern: str              # 已归一(路径类为小写相对 posix;命令类为首词)
     index: int                # 第几条(给人指认用)
     decision: str = DECISION_ALLOW     # allow=免确认;ask=必须问;deny=直接拒
+    origin: str = ORIGIN_PROJECT       # 项目文件里的,还是本机点过头记住的(见上面那两个常量)
 
     def matches(self, name: str, args: dict) -> bool:
         if self.tool != name:
@@ -122,6 +135,22 @@ class Rule:
         if self.kind == "path":
             return target == self.pattern
         return target.startswith(self.pattern)
+
+    def source(self) -> str:
+        """这一条是从哪本账上读来的 —— 说给用户听的每一句都必须带它。"""
+        if self.origin == ORIGIN_GRANTED:
+            return f"本机记住的第 {self.index} 条"
+        return f"{PERMISSIONS_FILE} 第 {self.index} 条"
+
+    def to_raw(self) -> dict:
+        """存回本机那本账的形状 —— **与 permissions.json 里一条规则同一种线格式**。
+
+        这样存是有道理的,不是省事:装载那一路要拿 `parse_rules` 再核一遍(红线路径、
+        可预授权首词、工具名存不存在),而它只认这一种形状。换成 `{"kind":...,
+        "pattern":...}` 就得再写一个校验器,两把尺子总有一天量出两个数。
+        """
+        return {"tool": self.tool, self.kind: self.pattern,
+                "decision": self.decision}
 
     def describe(self) -> str:
         subject = (f"以 `{self.pattern}` 开头的命令" if self.kind == "command_prefix"
@@ -142,6 +171,10 @@ class Spec:
     problems: list[str] = field(default_factory=list)
     trusted: bool = False
     reason: str = ""          # 为什么没生效(给人看的一句人话)
+    # 本机点过头记住的那几条(v0.9.133)。与 `rules` 分开放,是因为它们的**生效条件
+    # 不同**:项目文件那一份要 sha256 核对过才算数,这一份本来就是这台机器自己的决定,
+    # 项目文件在不在、改没改都跟它无关。
+    granted: list[Rule] = field(default_factory=list)
 
     @property
     def effective(self) -> bool:
@@ -153,12 +186,16 @@ class Spec:
         三种决定**分头扫**,不是"第一条匹配的用它的决定":同一条路径上若既写了
         allow 又写了 deny,后者才是用户该得到的结果 —— 拒绝优先,与 Claude/Codex
         的 `deny > ask > allow` 同一条尺,也和红线排在一切放行之前同构。
+
+        两本账的扫描顺序是"项目文件(核对过才扫)→ 本机记住的",两边报的都是自己的
+        出处,不混着数。
         """
-        if not self.effective:
-            return ""
-        for rule in self.rules:
-            if rule.decision == decision and rule.matches(name, args):
-                return f"permissions.json 第 {rule.index} 条:{rule.describe()}"
+        pools = [self.rules] if self.trusted else []
+        pools.append(self.granted)
+        for pool in pools:
+            for rule in pool:
+                if rule.decision == decision and rule.matches(name, args):
+                    return f"{rule.source()}:{rule.describe()}"
         return ""
 
     def decide(self, name: str, args: dict) -> str:
@@ -252,6 +289,96 @@ def adopt_agents(workspace, sha: str, lines: int = 0) -> None:
     _put_row(workspace, row)
 
 
+def granted_raw(workspace) -> list:
+    """本机记住的那几条的原始形状(不是 `Rule`,装载时才校验)。"""
+    raw = _row(workspace).get(GRANTED_KEY)
+    return list(raw) if isinstance(raw, list) else []
+
+
+def granted_rules(workspace, known_tools: set[str] | None = None
+                  ) -> "tuple[list, list]":
+    """把本机那本账读成规则清单。**每条都要再过一遍 `parse_rules`**。
+
+    为什么不信任自己写进去的数据:这份文件是本机可读可写的 JSON,用户(或另一个
+    会话)改过一字之后,红线路径、`rm` 这种首词、已经不存在的工具名都可能出现在里面。
+    一次装载就是一次重新核对 —— 认不了的丢掉并说明,与项目文件那一路同一口径。
+    """
+    rules, problems = parse_rules(granted_raw(workspace), set(known_tools or ()))
+    return [replace(r, origin=ORIGIN_GRANTED) for r in rules], problems
+
+
+def granted_candidate(name: str, args: dict) -> "tuple[dict, str]":
+    """这一次调用能不能收窄成一条本机规则。返回 (候选规则, 为什么不能)。
+
+    **只收窄不放宽**从这里长出来:路径记的是**整份文件**(`path` 而不是 `path_prefix`,
+    所以「允许改 notes.txt」永远不会变成「允许改这个目录下的任何东西」);命令记**首词**,
+    而首词能不能预授权由 `SAFE_COMMAND_HEADS` 那份名单说了算(在 `parse_rules` 里核)。
+    想批一整个目录,得自己去写 `permissions.json` 并按内容指纹核对 —— 那是"别人写的
+    授权"该有的门槛,不是点一次头就能挣到的。
+    """
+    args = args or {}
+    bare = str(name or "").rsplit("·", 1)[-1]
+    if bare in ("write_file", "edit_file"):
+        raw = str(args.get("path") or "").strip()
+        if not raw:
+            return {}, "这一步没有路径可记"
+        return ({"tool": bare, "path": raw, "decision": DECISION_ALLOW}, "")
+    if bare == "bash":
+        head = command_head(args.get("command", ""))
+        if not head:
+            return {}, "这条命令取不出首词,没什么可记的"
+        return ({"tool": "bash", "command_prefix": head,
+                 "decision": DECISION_ALLOW}, "")
+    return {}, (f"「{bare}」这一步动的不是路径也不是一条命令,收窄不成一条可复用的规则"
+                "(能记住的只有:改哪一个文件、跑哪一类命令)")
+
+
+def granted_rule(name: str, args: dict, known_tools: set[str] | None = None
+                 ) -> "tuple[Rule | None, str]":
+    """这一次调用能不能收窄成一条规则 —— **判定只在这里一份**。
+
+    确认框那颗按钮出不出现(`PermissionGate.can_remember`)与真往下写
+    (`remember`)必须问同一个函数,否则总有一天出现"按钮给了,点了却说记不成"。
+    """
+    cand, why = granted_candidate(name, args)
+    if not cand:
+        return None, why
+    rules, problems = parse_rules([cand], set(known_tools or ()))
+    if not rules:
+        return None, (problems[0] if problems else "这条规则不成立")
+    return rules[0], ""
+
+
+def remember(workspace, name: str, args: dict,
+             known_tools: set[str] | None = None) -> "tuple[bool, str]":
+    """把这一次点头落成一条本机免确认规则。返回 (成没成, 说给用户的那句话)。
+
+    这句话要**原样推给界面**:记成了什么、为什么记不成,都不能只躺在日志里。
+    """
+    ws = Path(workspace)
+    new, why = granted_rule(name, args, known_tools)
+    if new is None:
+        return False, why
+    existing, _ = granted_rules(ws, known_tools)
+    for got in existing:
+        if (got.tool, got.kind, got.pattern, got.decision) == \
+                (new.tool, new.kind, new.pattern, new.decision):
+            return True, f"本来就记住了:{got.source()},{got.describe()}"
+    if len(existing) >= MAX_GRANTED:
+        return False, (f"本机记住的免确认动作已经 {len(existing)} 条(上限 "
+                       f"{MAX_GRANTED}),这一次没往里加。要腾地方请先撤销 —— "
+                       "不该由学长替你挑哪一条该删。")
+    row = _row(ws)
+    stored = row.get(GRANTED_KEY)
+    items = list(stored) if isinstance(stored, list) else []
+    items.append(new.to_raw())
+    row[GRANTED_KEY] = items
+    _put_row(ws, row)
+    return True, (f"已记住(只在这台机器、只对这个项目):{new.describe()}"
+                  f" —— 现在共 {len(items)} 条。不想要了就撤销(permissions_trust "
+                  "action=revoke 会把它们一起撤掉)")
+
+
 def revoke(workspace: Path) -> bool:
     """撤掉这个项目**白名单那半截**的信任。
 
@@ -267,7 +394,7 @@ def revoke(workspace: Path) -> bool:
         table.pop(key)
         _write_trust(table)
         return True
-    fields = ("sha256", "rules", "approved_at")
+    fields = ("sha256", "rules", "approved_at", GRANTED_KEY)
     if not any(f in row for f in fields):
         return False                     # 这一行只有采纳记录:撤销没做成任何事
     for f in fields:
@@ -351,6 +478,24 @@ def parse_rules(raw: Any, known_tools: set[str]) -> tuple[list[Rule], list[str]]
 
 
 def load(workspace: Path | None, known_tools: set[str] | None = None) -> Spec:
+    """读这台机器关于这个项目的两本账:项目文件的白名单 + 点过头记住的免确认。
+
+    分成两本是刻意的(v0.9.133):前者要 sha256 核对过才说话(它是**仓库作者**写的),
+    后者本来就是**这台机器自己**在确认框上点的头,项目文件在不在都跟它无关。
+    """
+    spec = _load_project_file(workspace, known_tools)
+    if workspace:
+        rules, problems = granted_rules(Path(workspace), known_tools)
+        spec.granted = rules
+        if problems:
+            # 加在前面:`permissions` 那一屏最先读到的就该是"有东西被拒了",
+            # 而不是项目文件那份(它可能一条问题都没有)。
+            spec.problems = [f"本机记住的:{p}" for p in problems] + list(spec.problems)
+    return spec
+
+
+def _load_project_file(workspace: Path | None,
+                       known_tools: set[str] | None = None) -> Spec:
     """读工作区的 permissions.json + 本机信任记录,得出"这份白名单现在生效吗"。"""
     if not workspace:
         return Spec(workspace=Path("."), reason="没有工作区,白名单不参与判断")
@@ -405,12 +550,19 @@ def _spec_of(ctx: Any) -> Spec:
 
 
 def _digest_lines(spec: Spec) -> str:
-    lines = [f"· 规则:{len(spec.rules)} 条({spec.summary()})"
+    lines = [f"· 项目白名单:{len(spec.rules)} 条({spec.summary()})"
              + ("(已生效 —— 命中 allow 就免确认)" if spec.effective else
                 f"(未生效:{spec.reason or '原因未报'})")]
     if spec.sha:
         lines.append(f"· 文件指纹 sha256 {spec.sha[:16]}…"
                      " —— 批准时记的就是这个,改一个字整份规则失效")
+    # 两本账分开报,是因为"谁批的"不一样:项目文件那一半要核对内容指纹(它是仓库作者
+    # 写的),本机记住的那一半是用户自己在确认框上点的头。混成一个数会让人以为
+    # 「clone 一份仓库就能带上免确认动作」—— 那正是这一路要堵的死。
+    if spec.granted:
+        lines.append(f"· 本机记住的:{len(spec.granted)} 条(点过「以后都允许」,"
+                     "换台机器就没了,与这个项目文件无关)")
+        lines += [f"    {r.index}. {r.tool} —— {r.describe()}" for r in spec.granted]
     for p in spec.problems:
         lines.append(f"· 装载时拒掉:{p}")
     if spec.rules:
@@ -431,9 +583,13 @@ def permissions(ctx, action: str = "show") -> str:
         return "错误: action 只支持 show / verify。"
     spec = _spec_of(ctx)
     if not spec.sha:
+        # 「这个项目没有 permissions.json」只是半句实话:本机那本账跟这份文件在不在
+        # 无关。有记住的条目却不列出来,回话就成了"这里没有任何免确认动作" —— 而
+        # 用户马上要问的正是"那你为什么这一步没问我"。
         return (f"这个项目没有 {PERMISSIONS_FILE}(或读不到:{spec.reason})。\n"
                 "要预先批一些动作,在项目根放一份 {\"allow\": [...]} 的 JSON,"
-                "再让我用 permissions_trust 批准它 —— **写完不等于生效**,要核对过才行。")
+                "再让我用 permissions_trust 批准它 —— **写完不等于生效**,要核对过才行。"
+                + (("\n\n" + _digest_lines(spec)) if spec.granted else ""))
     head = f"{PERMISSIONS_FILE}(工作区 {spec.workspace}):\n"
     return head + _digest_lines(spec)
 
@@ -453,9 +609,16 @@ def permissions_trust(ctx, action: str = "trust") -> str:
     if action == "revoke":
         # 撤销只动白名单这半截:同一行还记着"这个项目的 AGENTS.md 采纳过没有",
         # 那是用户另一次点头,不该被这一次顺手带走(v0.9.127)。
+        # 但**本机记住的免确认动作算这一半**(v0.9.133):它们与文件里的规则说的是
+        # 同一件事 —— "这类动作不用再问" —— 所以一句"撤销"必须把它们一起带走,
+        # 否则用户以为撤干净了,而某个文件从此不再问他。
+        n = len(granted_rules(Path(ws))[0])
+        ok = revoke(Path(ws))
+        if not ok and not n:
+            return "这个项目本来也没批准过,不用撤。"
         return ("已撤销对这个项目白名单的批准,回到逐次确认。"
-                "(这个项目指令文件的采纳没动 —— 那要单独说不采纳。)"
-                if revoke(Path(ws)) else "这个项目本来也没批准过,不用撤。")
+                + (f"同时忘掉本机记住的 {n} 条免确认动作。" if n else "")
+                + "(这个项目指令文件的采纳没动 —— 那要单独说不采纳。)")
     spec = _spec_of(ctx)
     if not spec.sha:
         return f"错误: 没有可批准的 {PERMISSIONS_FILE}(或读不到:{spec.reason})。"

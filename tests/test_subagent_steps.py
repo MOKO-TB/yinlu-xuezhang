@@ -146,7 +146,7 @@ def test_quiet_ui_without_a_recorder_is_still_quiet_and_does_not_crash():
 
 def test_tagged_ui_still_labels_confirms_and_passes_accounting_through():
     class Inner:
-        def confirm_tool(self, tool, args, reason="", note="", label=""):
+        def confirm_tool(self, tool, args, reason="", note="", label="", can_remember=False):
             Inner.label = label
             return "yes"
 

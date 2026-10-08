@@ -237,7 +237,7 @@ class CollectorUI:
     def max_steps_reached(self, n): pass
     def turn_time_limited(self, seconds, steps): pass
 
-    def confirm_tool(self, tool, args, reason="", note=""):
+    def confirm_tool(self, tool, args, reason="", note="", can_remember=False):
         self.denied.append(tool.name)
         return "no"
 

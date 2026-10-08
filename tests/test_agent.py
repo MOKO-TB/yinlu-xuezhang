@@ -43,7 +43,7 @@ class FakeUI:
 
     def finish_stream(self): pass
 
-    def confirm_tool(self, tool, args, reason=""):
+    def confirm_tool(self, tool, args, reason="", note="", can_remember=False):
         self.confirmed.append((tool.name, dict(args)))
         self.reasons.append(reason)
         return self.confirm_choice
@@ -1557,7 +1557,7 @@ class _NoteUI(FakeUI):
     """真门在有 note 时会用四参数调确认框(第三参数是"为什么做",第四是警示行);
     上面那份 FakeUI 只收三参数,那是 v0.9.115 之前的形状。"""
 
-    def confirm_tool(self, tool, args, reason="", note=""):
+    def confirm_tool(self, tool, args, reason="", note="", can_remember=False):
         self.confirmed.append((tool.name, dict(args)))
         self.reasons.append(reason)
         self.notes = getattr(self, "notes", [])

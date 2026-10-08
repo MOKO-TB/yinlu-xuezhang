@@ -138,7 +138,7 @@ class RecordingGuiUI(gui_ui.GuiUI):
         payload["type"] = type_
         self.events.append(payload)
 
-    def confirm_tool(self, tool, args, reason="", note=""):   # 代用户点按钮
+    def confirm_tool(self, tool, args, reason="", note="", can_remember=False):   # 代用户点按钮
         return getattr(self, "choice", "yes")
 
     def done_events(self) -> list[dict]:

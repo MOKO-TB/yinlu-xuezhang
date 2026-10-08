@@ -30,6 +30,9 @@ from minicode.tools.base import (
 from minicode.ui import TerminalUI
 
 SNAPSHOT_TOOLS = ("write_file", "edit_file")  # bash 的改动无法安全跟踪,不在回滚范围
+# 「这一份我看过了」那本账要记哪几只工具(v0.9.133 P0-1):读成功的,加上写成功的两类
+# —— 自己刚写出去的内容当然算"知道",不然「学长写完再改」这条最常见的链会被误伤。
+READ_NOTED_TOOLS = ("read_file",) + SNAPSHOT_TOOLS
 SYNTAX_CHECK_TOOLS = ("write_file", "edit_file")   # 落盘 .py 的两种来源(借鉴 aider 的 lint-after-edit)
 SYNTAX_SCAN_LIMIT = 512 * 1024                     # 只自检 512 KB 以内:再大不是"手写代码"的场景
 
@@ -1303,18 +1306,34 @@ class Agent:
             if not answer:
                 # 无升级警示时按原调用路径走(不传 note):既有三参数实现/测试代理
                 # 不受影响,而且这是"未接触外部内容时行为与基线一致"的前提。
-                if note:
-                    choice = self.ui.confirm_tool(tool, args, reason or self._narration, note)
+                # 「以后都允许」那颗按钮同一道理:**只在真能给的时候传**,不传就是
+                # 界面本来那三颗(同一份"不扩协议"的取舍,见上面那句理由)。
+                can = False
+                probe = getattr(self.gate, "can_remember", None)
+                if callable(probe):
+                    can = bool(probe(tool.name, args, kind))
+                if note or can:
+                    choice = self.ui.confirm_tool(
+                        tool, args, reason or self._narration, note,
+                        **({"can_remember": True} if can else {}))
                     self._log_security_ask(tool, args, note, choice, kind)
                 else:
                     choice = self.ui.confirm_tool(tool, args, reason or self._narration)
                 if choice == "always":
                     self.gate.approve_for_turn(tool.name)
-                elif choice != "yes":
+                elif choice not in ("yes", "remember"):
+                    # `remember` 也算"这一次允许"(v0.9.133):它是在"允许"之上再加
+                    # "以后别再问这一类",不是另一种答复。漏掉这一条的表现是用户点了
+                    # 「以后都允许」却得到"用户拒绝了本次工具调用" —— 而框确实是他点的。
                     return Prepared(early="用户拒绝了本次工具调用。请停止重试,询问用户希望如何处理。")
                 # 用户放行后记住工作区外路径:「允许」管本回合;「总是允许」升为
                 # 会话级(不落盘,换工作区/重启即失效)
                 self.gate.approve_outside(tool, args, session=(choice == "always"))
+                if choice == "remember":
+                    # 放在"这一次已经放行"之后:记住失败(比如那是一条记不成的动作)
+                    # 不该把这一次的执行一起吞掉 —— 用户点的是「允许,并记住」,
+                    # 允许那半句已经成立了。
+                    self._note_remembered(tool, args, kind)
             else:
                 # 「允许」只这一条、只这一回合:不落盘、不升 always —— 钩子替用户
                 # 点一次头不等于替他签一份长期授权。工作区外路径仍要记本回合。
@@ -1363,6 +1382,7 @@ class Agent:
         tool, args, t = p.tool, p.args, p.timing
         self.ui.tool_done(tool, result)
         self._mark_after_mutation(tool, args, result)
+        self._note_read_path(tool, args, result)
         # post 钩子:失败不拦截,在结果尾部如实附一行(一行,不刷屏)
         post = self._run_config_hook("post_tool", tool, args, result=result)
         post_ctx = ""
@@ -1470,6 +1490,30 @@ class Agent:
             return result + "\n\n" + feedback_recall.repeat_note(times)
         except Exception:
             return result
+
+    def _note_remembered(self, tool: Tool, args: dict, kind: str) -> None:
+        """用户点了「以后都允许」:落一条本机规则,并把结果当说出来(成与不成都要说)。
+
+        三处痕迹各有用处,缺一个都会出事:
+        - **重载门里那份装载结果**(`gate.remember` 自己做的)—— 少了它,这一轮下一步
+          同类动作还要再问一次,而这句按钮的字面承诺就是"不会再问";
+        - **安全日志一行** —— 事后要能查到"这个免确认动作是谁、什么时候给的";
+        - **界面一句 info** —— 用户当场看见记成了什么、记的哪一本账(本机、仅这个项目)。
+          静默记住等于权限在没人看见的地方增殖,与 §6 49「hooks 只从安装目录读」同一条根。
+        """
+        remember = getattr(self.gate, "remember", None)
+        msg = str(remember(tool, args, kind) or "") if callable(remember) else ""
+        try:
+            from minicode import provenance
+            provenance.log_escalation("remember_grant", tool.name, args, msg, "yes")
+        except Exception:
+            pass
+        try:
+            info = getattr(self.ui, "info", None)
+            if callable(info) and msg:
+                info(msg)
+        except Exception:
+            pass
 
     def _note_project_allow(self, tool: Tool, args: dict, why: str) -> None:
         """按项目白名单放行时留痕:安全日志一行 + 界面一句人话。
@@ -1617,6 +1661,23 @@ class Agent:
             # 拿不到指纹就当"没漂移":宁可少提醒一句,也不给每个文件都扣上
             # "可能被别的工具改过"—— 那会把真提醒淹掉。
             self._undo_stack[idx]["post"] = None
+
+    def _note_read_path(self, tool: Tool, args: dict, result: str) -> None:
+        """把「这一步真的读到/写出了内容」记进门那本「读过没有」的账(P0-1)。
+
+        记在 `_finish` 而不是 handler 里,是因为**成败只有在这里判得准**:`is_failure`
+        那份口径与快照摘除用的是同一个。门要的不是"模型调过一次 read_file",是
+        "这份文件的内容真进过它的手" —— 读失败(二进制/编码/越界)不该点亮它。
+        """
+        note = getattr(self.gate, "note_read", None)
+        if not callable(note):
+            return
+        if tool.name.rsplit("·", 1)[-1] not in READ_NOTED_TOOLS:
+            return
+        from minicode.toolsum import is_failure
+        if is_failure(result):
+            return
+        note(args.get("path"))
 
     def _drifted(self, rec: dict) -> bool:
         """这一处改动落盘之后,磁盘上这份还被别的东西动过吗。"""

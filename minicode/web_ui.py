@@ -50,12 +50,14 @@ class WebUI(GuiUI):
     # ------------------------------------------------------------ 确认
 
     def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
-                     note: str = "") -> str:
+                     note: str = "", can_remember: bool = False) -> str:
         """对外模式一律拒绝。
 
         确认通道是「单例 Event + 前端点击唤醒」,在无登录的多访客场景里既没法
         安全配对、一旦没人点就会永久挂住一个线程 —— 所以直接拒绝,绝不放行。
         只读白名单下权限门本来就不会走到这里,这是第二道保险。
+        `can_remember`(v0.9.133 的「以后都允许」)接了不用:访客没有持久身份,
+        替**这台机器的主人**记一条免确认动作正是这一路最该拒的东西。
         """
         self.push("error", text=f"网页版不提供确认通道,已拒绝 {tool.name}")
         return "no"

@@ -17,6 +17,8 @@
   ],
   "active_provider": "zhipu",
   "permission_mode": "confirm",
+  "read_before_edit": true,
+  "_说明_read_before_edit": "「没读过的文件不许直接改」(v0.9.133)。改成要动的文件如果这个会话还没 read_file 过,先问一句再落盘 —— 学长手上没有它现在的内容,old_string 是按猜写的概率不低。自己刚写出去的文件不算(那内容就是它写的)。只在还会问人的两个档位生效:变更前确认 档是给本来就有的确认框补一句原因,自动编辑 档是把「工作区内写文件自动放行」改成「没读过的先问一句」;自动放行 与 完全访问 两档不动(它们对用户的承诺就是不再问)。改成 false 就回到以前的行为。",
   "shell": "auto",
   "max_output_chars": 20000,
   "max_steps": 40,

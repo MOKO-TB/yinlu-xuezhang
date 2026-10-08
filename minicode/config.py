@@ -261,6 +261,12 @@ class Config:
     # confirm:变更前确认(查询放行、变更询问) / accept_edits:自动编辑(普通变更放行、敏感变更询问)
     # accept_all:自动放行(兼容旧配置) / full:完全访问(沙箱内非灾难性操作全放)
     permission_mode: str = "confirm"
+    # 「没读过的文件不许直接改」那枚钉(P0-1,v0.9.133)。默认开,关掉后行为与今天逐字一致。
+    # 只在**还会问人**的两个档位生效:confirm 档给本来就有的那张确认框补一句原因,
+    # accept_edits 档把「工作区内写文件自动放行」这一条改成「没读过的先问一句」。
+    # accept_all / full 不动 —— 那两个档位对用户的承诺就是「不再问」,拿一枚启发式
+    # 去拆承诺是另一种坏法(红线照旧压过它们,与这条无关)。
+    read_before_edit: bool = True
     shell: str = "auto"                 # auto | bash | cmd | powershell
     max_output_chars: int = 20000       # 工具输出回填给模型前的截断长度
     # 单个回合里"请求模型 → 执行工具 → 回填"最多转几圈。撞上限后仍会让模型收一段尾
@@ -558,6 +564,7 @@ def _config_from_raw(raw: dict) -> Config:
         providers=providers,
         active_provider_id=active,
         permission_mode=normalize_mode(raw.get("permission_mode", "confirm")),
+        read_before_edit=bool(raw.get("read_before_edit", True)),
         shell=raw.get("shell", "auto"),
         max_output_chars=int(raw.get("max_output_chars", 20000)),
         max_steps=max(1, int(raw.get("max_steps", 40) or 40)),
@@ -679,6 +686,7 @@ def save_config(path: Path, cfg: Config) -> None:
         "providers": [_safe(p) for p in cfg.providers],
         "active_provider": cfg.provider.id if cfg.provider else "",
         "permission_mode": cfg.permission_mode,
+        "read_before_edit": cfg.read_before_edit,
         "shell": cfg.shell,
         "max_output_chars": cfg.max_output_chars,
         "max_steps": cfg.max_steps,

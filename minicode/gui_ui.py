@@ -207,11 +207,15 @@ class GuiUI:
         self.push("error", text=text)
 
     def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
-                     note: str = "", label: str = "") -> str:
+                     note: str = "", label: str = "",
+                     can_remember: bool = False) -> str:
         """弹确认框并等待用户选择;由 Bridge 注入实现。reason=为什么要做这一步。
 
         `label` 是并发子代理路的标签(v0.9.60):原样传给 handler,确认框标题
         带上「第几路[类型]」,用户才分得清是谁在等。
+        `can_remember` 为真时确认框多一颗「以后都允许」(v0.9.133)。这颗按钮该不该
+        出现由权限门判(`PermissionGate.can_remember`),界面不自己猜 —— 两处各判
+        迟早对不上,而"按钮出现了却点不成"是界面上说行、实际不行。
         """
         if self.confirm_handler is None:
             self.push("error", text="确认通道未就绪,已自动拒绝")
@@ -223,6 +227,10 @@ class GuiUI:
             arity = len(inspect.signature(self.confirm_handler).parameters)
         except (TypeError, ValueError):
             arity = 3
+        if arity >= 6:
+            # 6 参 = (tool, args, reason, note, label, can_remember)
+            return self.confirm_handler(tool, args, reason, note, label,
+                                        can_remember=can_remember)
         if arity >= 5:
             # 绑定方法的 signature 不含 self:5 参 = (tool, args, reason, note, label)
             return self.confirm_handler(tool, args, reason, note, label)
