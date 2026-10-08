@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -308,11 +309,12 @@ def write_user_files(dist: Path) -> None:
         "   这两个目录(charts/、images/)里的东西要手动删,「撤销」不跟踪它们。\n"
         "26. 问校园问题时它按**字面**找:知识库检索升成了 BM25 + 元数据过滤(标题/标签/正文\n"
         "   各自加权),每条命中都写「为什么命中」(命中标题还是正文)和来源网址。想再加一层\n"
-        "   **按意思**找,得你亲自查上向量后端:在 config.json 的 capabilities.embeddings 里指向\n"
-        "   一个有 embedding 接口的供应商(api 档);或在源码目录里跑\n"
-        "   `python scripts/fetch_embed_model.py --repo <组织>/<仓库>` 把权重下到数据目录 ——\n"
-        "   **装好的包里没有 scripts/ 也没有 onnxruntime,所以本地权重这条路只给源码运行的同学**,\n"
-        "   权重本来就不进安装包。两样都没有时检索退回纯关键词,并且**会在结果里如实写「向量档\n"
+        "   **按意思**找,得你亲自查上向量后端,两条路:①api 档 —— 在 config.json 的\n"
+        "   capabilities.embeddings 里指向一个有 embedding 接口的供应商;②本地档 —— 这一版\n"
+        "   **装好的包里也带上了 onnxruntime 和 numpy**,把 model.onnx 与 vocab.txt 放进\n"
+        "   「数据」面板显示的那个目录下的 models/<模型名>/ 就认(权重不进安装包,那份实测\n"
+        "   94,835,369 字节;包里没有 scripts/fetch_embed_model.py,所以这一步是手工放文件,\n"
+        "   文件名必须一模一样)。两样都没有时检索退回纯关键词,并且**会在结果里如实写「向量档\n"
         "   未跑:为什么没跑」** —— 把字面匹配说成语义检索,是这程序不允许的装饰。\n"
         "27. 现在跑脚本之前会先看一眼脚本**内容**:确认框里会列出它读到的可疑行(第几行、原文)、\n"
         "   是「碰密钥目录」「跑出用户目录」「要联网 / 再起子进程」哪一类,并提醒那可能只是提到\n"
@@ -801,7 +803,79 @@ def write_user_files(dist: Path) -> None:
         "100. 长对话里学长会省着发:较早的**只读查询结果**(搜文件、读文件那一类)在\n"
         "   后续每一步只留一句占位,不再整屏重发,屏幕上会有一句「省略了 N 条\n"
         "   (约 X 字)。**留档里仍是全文** —— 导出、审计、重启恢复看到的都是原文,\n"
-        "   真需要那份结果时它会自己重新查一次。写过的文件、失败的那一步永远不省。\n",
+        "   真需要那份结果时它会自己重新查一次。写过的文件、失败的那一步永远不省。\n"
+        "101. 记的长期记忆太多时,学长现在按条让位、不再切半句(v0.9.121):注入系统\n"
+        "   提示词有约 4000 字的预算,超了就让最旧的几条先退出(用户级和项目级各自\n"
+        "   从最旧开始,所以「刚刚记下的那一条」一定在里面),并说一句「另有 M 条没\n"
+        "   列出」—— 想翻旧账问一句「把记忆都列出来」,或按关键词找。以前那种按字数\n"
+        "   硬切,会把一条记忆切成半句话当成完整的话用,而且被切掉的一定是本项目那批。\n"
+        "102. 第三方 MCP 服务器可以给一份工具名单(v0.9.122):在 config.json 那台\n"
+        "   服务器下写 `\"deny_tools\": [\"write_file\"]` 或 `\"allow_tools\": [\"fetch_*\"]`,\n"
+        "   学长就只挂你点的那几只 —— **只能少不能多**(它变不出服务器没声明的工具)。\n"
+        "   侧栏与一键体检报的是「真挂上来的」只数,被挡掉的会另说一句;名单打错字\n"
+        "   也会点名「这些写法没匹配到任何工具」,不会让你以为配上了。\n"
+        "103. 语义检索这一层现在把话说在明处(v0.9.123):检索口径那一行会写清这次用的\n"
+        "   后端、**池化方式**(cls / mean)和**查询带没带检索指令** —— 这三样都会改变算出来的\n"
+        "   向量,不写出来两次检索就没法比。默认**不给查询加指令**:实测那句官方的\n"
+        "   「为这个句子生成表示以用于检索相关文章：」在这套校园语料上反而把自召回 Top-1\n"
+        "   从 100% 打到 65%,要加就在 config 里显式写 query_prefix。换了池化或截断宽度就是\n"
+        "   一套新缓存(旧向量不会被当成新空间的真值用);第一次建索引仍要**明确点一次头**,\n"
+        "   那几百次向量计算不顺手替你决定。\n"
+        "104. 要不要算语义,判据现在说两道话(v0.9.126):实测**单一绝对阈值在这套模型上"
+        "分不开两端**(0.35 放过 98.6% 的不相关配对,而真命中的分数会随问句变短一路掉)。\n"
+        "   所以改成两道:整档都低于病态下限 0.45 就退回关键词;真正在筛的是「与第一名相差\n"
+        "   不超过 0.15」这一道。两个数都能在 config.json 的 capabilities.embeddings 里调,\n"
+        "   回话里也会把两个数一起报出来 —— 只报一个的话,没人知道是哪道把它挡了。\n"
+        "105. 模型一次要好几步时,能一起跑的会一起跑(v0.9.126):三个搜文件/读文件不再\n"
+        "   一个等一个。只有安全的几步并排走(只读、没配钩子、也不需要你点头),要你点头\n"
+        "   的那一步永远单独问你 —— 所以「同时弹两个确认框」这种怪事不会发生。另外某一步\n"
+        "   输出太长时后半截不再凭空消失:它存进工作区的 tool-outputs/,回话点名那个路径,\n"
+        "   学长想看接着读哪个文件就行,不必重跑那一步(网页版没这条,理由写在 HANDOFF)。\n"
+        "106. 三个 exe 各管各的(v0.9.126 说清):图形版与单文件版是**双击看界面**的,一次\n"
+        "   命令跑完就退出、输出给机器读(`--json`)那条路只在 **引路学长-CLI.exe** 上。以前\n"
+        "   给图形版加 --json 会静默开一个永不退出的窗口,看着像「卡住了」;现在它会当场\n"
+        "   告诉你该用哪一只,并按参数错退出。\n"
+        "107. 会话现在有名可改、可归档、可分叉:`/rename <新标题>` 只改留档顶上那行名字,\n"
+        "   一条消息都不碰;`/archive` 把这条沉到列表末尾(**不删也不隐藏**,内容照旧能 /resume);\n"
+        "   `/fork <序号>` 从列表里那条会话整段复制一份开新任务,原来那份一个字节都不动。\n"
+        "108. 学长正在跑的时候,你可以接着打字补一句(v0.9.127):按 Enter 不是发第二条任务,\n"
+        "   而是把这句话递给它 —— 句子先排着,**等手头那一步跑完**就并进这一轮,于是它读到的是\n"
+        "   「它答到哪儿 → 你补的那句 → 接着答」。为什么不在句子打出来那一刻就掐断:正在执行的\n"
+        "   那一步必须给它一个交代,从中间插话会把工具调用与结果拆成孤儿,表现是**从这一轮起每次都\n"
+        "   报错**。按「停止」不会吃掉你打出去的字:没读完的话排着,下一问开头一定读到。带图片的\n"
+        "   那句请等这一轮跑完再发(插话只递文字);一次最多排 8 句,排满了会当场告诉你,那句话\n"
+        "   原样退回输入框。命令行没做这件事 —— 它正老实等一句话打字打完,没有后台那只耳朵。\n"
+        "109. 项目里那份 AGENTS.md 现在要先点一次头才起作用(v0.9.127):仓库里放一份给 agent\n"
+        "   的规矩,可能是你自己写的,也可能是**别人 clone 带来的** —— 所以第一次在这个项目读到\n"
+        "   它时,学长会弹一张卡问「要我照它干活吗」,你点到「采纳」那一项才算数。没答、点\n"
+        "   「按推荐」、点「不采纳」都算**没采纳**:那一段一个字都不进它的提示词,侧栏与 /instructions\n"
+        "   上会写「未采纳」。认的是**内容指纹**(记在本机,与白名单批准同一处),所以采纳过就不再\n"
+        "   打扰,而文件**改一个字会重新问一次**;你自己数据目录里那份用户级 AGENTS.md 是你写的,照旧\n"
+        "   不问。红线不归它管:沙箱边界、敏感路径、动手前的确认框,任何一份指令文件都改不动。\n"
+        "110. 「这一轮改了哪些文件」这一屏现在说得准了(v0.9.128):① 那份清单本来是**整场\n"
+        "   会话**攒着的,以前却写着「本轮」—— 现在按「第几问」分组,当前那一问单独标出来,\n"
+        "   「全部回退」那行也改成「退回这一场会话的开始」;② 账外那片列出来了 —— 命令\n"
+        "   (bash / py_script)或你在别处改的文件,git 看得见、学长退不掉,每一行右侧明标\n"
+        "   「退不掉」,不让人以为一键就干净了(这一列跟着环境栏刷新,学长不会为它多问一次 git);\n"
+        "   ③ 这一轮真改过文件而右侧监控栏是关着的,聊天区会留一条「这一轮改了 N 个文件 ·\n"
+        "   看改了什么」,点一下就开栏并展开那一段。\n"
+        "111. 可以自己加一档子代理(v0.9.129):工作区的 agents/ 目录放一份 markdown\n"
+        "   (frontmatter 写 name 和 base:,正文就是这一档多出来的规矩),task 就能派它。\n"
+        "   这一层**只能往窄里改**,四条都是程序闸:`tools:` 只能选 base 那一档本来就拿得\n"
+        "   到的工具(写了拿不到的会在派发回话里点名,不会静默少给);read_only 只能改成更\n"
+        "   严,不能把只读档放开;步数只能比内置上限小(超了夹回来);名字不许跟内置档或领\n"
+        "   域档撞 —— 撞了整份不算,因为同一个名字两套权限,谁生效就变成看装载顺序。\n"
+        "   `permission_mode`、`model` 这类**提权字段一律撕掉**并说给你听:权限由 config.json\n"
+        "   与确认框管,换档模型写 config 的 subagent_models,仓库里一份 markdown 说了不算。\n"
+        "   被丢掉和被剥掉的每一条都写在派发回话开头的「[档位定义注记]」里,不会让你配了\n"
+        "   却不知道没生效。这类档不参与 auto 路由(角色档一律要显式点名,与 audit/testaudit\n"
+        "   同一条口径)。\n"
+        "112. 模型管理里每个模型多了一颗「配置」(v0.9.130):可以填这个模型的上下文窗口、\n"
+        "   最大输出 Token、图片输入(支持/不支持)、推理等级和它们的参数映射。\n"
+        "   **填了的数真的生效** —— 什么时候该压缩、一次最多让模型回多少字、\n"
+        "   🧠 那几档怎么发给模型,都按你写的走;留空的一律照旧(自动探测、内置目录)。\n"
+        "   自己家的模型明明能看图而程序探测说没有,就在这里点名「支持」。\n"
+        "   只填了档位没写映射会保存不了 —— 那几档会显示出来却一个参数都发不出去。\n",
         encoding="utf-8",
     )
 
@@ -886,6 +960,102 @@ def _verify_bundle_secrets(dist: Path, had_key: bool) -> None:
     print("警告:产物里没有内置 Key(构建机两处都没有)—— 同学装完要自己配模型。")
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _internal_dir(dist: Path) -> Path:
+    """PyInstaller 6 的 onedir 把依赖放在 `_internal/`,老布局直接放在产物根上。"""
+    internal = dist / "_internal"
+    return internal if internal.is_dir() else dist
+
+
+def _force_vc_runtime(internal: Path) -> None:
+    """把 System32 那套 VC 运行库**盖到产物里**,不让 PyInstaller 自己收到的那份顶掉。
+
+    为什么要在构建完成后再盖一次:spec 里已经按文件名加了,但同名 DLL 谁赢由
+    PyInstaller 的去重决定 —— 它也会把 Anaconda 基底里那份 14.29 当 python312.dll
+    的依赖收进来。2026-10-06 实测:同一个最小冻结包,没盖的那份 `import onnxruntime`
+    直接段错误,盖上 System32 的 14.51 后同一条命令推理成功 —— 差别只有这一手。
+    """
+    sys32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+    moved = []
+    for name in ("msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
+                 "vcruntime140.dll", "vcruntime140_1.dll", "vcruntime140_threads.dll"):
+        src = sys32 / name
+        if not src.is_file():
+            continue
+        dst = internal / name
+        try:
+            if dst.exists() and _sha256(dst) == _sha256(src):
+                continue
+            shutil.copy2(src, dst)
+            moved.append(name)
+        except OSError as e:
+            print("警告:%s 盖不进包(%s)—— 没装 VC++ 运行库的机器上本地语义档会起不来" % (name, e))
+    if moved:
+        print("已把 System32 的 VC 运行库钉进包:%s" % "、".join(moved))
+
+
+def _verify_bundle_onnx(dist: Path) -> None:
+    """本地向量档要的那几件到底收进了包没有 —— 收完回头看一眼。
+
+    这条链原本没有任何一步会红:spec 里 `collect_all` 外面包着 `except: pass`,
+    numpy 从 excludes 里摘掉是两行字面量,而 `embed.detect()` 只按 find_spec 判
+    "这台机器有没有这个包"。少收一件时它照样报 ready,用户是在第一次语义检索上
+    撞见的 —— 与 v0.9.107 那个"包里没有 Key 却一路绿"完全同一种坏法。
+
+    VC 运行库那一条更要核到字节:构建机 Anaconda 基底里那份 msvcp140 是 14.29,
+    拿它去加载 onnxruntime 的 pyd 会直接在 PyInit 里 access violation(2026-10-06
+    实测;Python 抓不住,是整个进程没)。所以包里钉的是 System32 那一份新的,
+    这里比的是 sha256 —— 谁被收进来了就说实话。
+    """
+    internal = _internal_dir(dist)
+    _force_vc_runtime(internal)
+    capi = next((c for c in (internal / "onnxruntime" / "capi",
+                             dist / "onnxruntime" / "capi") if c.is_dir()), None)
+    checks = [("onnxruntime 的 pyd", (capi / "onnxruntime_pybind11_state.pyd") if capi else None),
+              ("onnxruntime.dll", (capi / "onnxruntime.dll") if capi else None),
+              ("numpy(_embed_local 第一步就要)", internal / "numpy")]
+    missing = [label for label, path in checks if path is None or not path.exists()]
+    if missing:
+        try:
+            import importlib.util
+            have = importlib.util.find_spec("onnxruntime") is not None
+        except (ImportError, ValueError):
+            have = False
+        if not have:
+            print("警告:构建机没装 onnxruntime —— 这个包不带本地向量档,"
+                  "发出去之前要说清 capabilities.embeddings.backend=local 用不了。")
+            return
+        raise SystemExit(
+            "构建机有 onnxruntime,但产物里没收到:%s —— 这个包发出去「本地语义档」就是"
+            "一句假话,别发。常见原因是 spec 里的 collect_all 抛了却被 except 吞掉。"
+            % "、".join(missing))
+    print("包内已核对:%s 带 onnxruntime 与 numpy(本地语义档这条路在包里是通的)"
+          % capi)
+
+    src = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "msvcp140.dll"
+    dst = internal / "msvcp140.dll"
+    if not src.is_file():
+        print("警告:构建机 System32 里没有 msvcp140.dll,没法核对钉进去的那份。")
+        return
+    if not dst.is_file():
+        print("警告:包里没钉 msvcp140.dll —— 没装 VC++ 运行库的机器上 onnxruntime 起不来"
+              "(那种机器上本地语义档会报加载失败,不是算错)。")
+        return
+    if _sha256(src) != _sha256(dst):
+        raise SystemExit(
+            "包里的 msvcp140.dll 不是 System32 那一份(%s)。构建机 Anaconda 的旧版会让 "
+            "onnxruntime 段错误,这条必须钉死:核一下 spec 里 binaries 的 VC 那一段有没有"
+            "被 PyInstaller 自己收集的那份顶掉。" % dst)
+    print("包内已核对:msvcp140.dll 与 System32 一致(不依赖使用者装没装 VC++ 运行库)")
+
+
 def main() -> None:
     skip_build = "--skip-build" in sys.argv
     dist = ROOT / "dist" / "引路学长"
@@ -901,6 +1071,7 @@ def main() -> None:
             )
             # 包一落盘就核对,别等发出去才发现(见 _inject_build_secrets 的缘由)
             _verify_bundle_secrets(dist, had_key=tmp_secrets is not None)
+            _verify_bundle_onnx(dist)
         finally:
             if tmp_secrets:
                 shutil.rmtree(tmp_secrets, ignore_errors=True)
@@ -910,6 +1081,9 @@ def main() -> None:
         print("跳过 PyInstaller(--skip-build),只用现有 dist 产物重新出包")
         # 复用的产物也要核一眼 Key,否则 --skip-build 会绕过上面那道核对
         _verify_bundle_secrets(dist, had_key=False)
+        # 向量档同理:复用的是上一轮的 PYZ 与 _internal,那一轮没收 onnxruntime 的话,
+        # 这一版发出去还是"没有本地语义档",而源码态全绿。
+        _verify_bundle_onnx(dist)
     _ensure_collected(dist)
     assert (dist / "引路学长.exe").exists(), "构建产物缺失(GUI 版)"
     assert (dist / "引路学长-CLI.exe").exists(), "构建产物缺失(CLI 版)"

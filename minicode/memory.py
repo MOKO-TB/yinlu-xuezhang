@@ -36,7 +36,7 @@ CATEGORIES = {"user": "用户偏好", "feedback": "反馈纠正",
 CATEGORY_ALIASES = {**CATEGORIES, **{v: k for k, v in CATEGORIES.items()},
                     "偏好": "user", "反馈": "feedback", "约定": "project",
                     "参考": "reference"}
-MEMORY_CHAR_LIMIT = 4000   # 注入系统提示词的截断长度(两级合计)
+MEMORY_CHAR_LIMIT = 4000   # 注入系统提示词的字数预算(两级合计,按条让位见 _fit_levels)
 ENTRY_LIMIT = 200          # 单级记忆条数上限,超出淘汰最旧
 CONTENT_LIMIT = 500        # 单条内容长度上限
 DREAM_CONTENT_LIMIT = 120  # Dream 整理后单条的目标长度上限
@@ -431,32 +431,72 @@ def dream_all(workspace: Path | None, llm=None) -> str:
 
 # --------------------------------------------------------------------- 提示词
 
+INJECT_HEADER = "# 长期记忆(跨会话,自动加载)"
+_SAVE_HINT = ("当用户提到个人偏好、项目约定,或纠正了你的做法时,用 action=save 记住它"
+              "(跟人有关的偏好用 scope=user,只跟本项目有关的用 scope=project);"
+              "记忆条目多且重复时,用 action=dream 整理去重。")
+# 让位预算先扣掉固定开销:大标题 + 那句 action=save + 两个小标题和"另有 M 条"那行。
+# 这是"每轮少付一点"的自律,不是协议硬线 —— 估多一点只少注入一条。
+_INJECT_OVERHEAD = len(INJECT_HEADER) + len(_SAVE_HINT) + 160
+
+
+def inject_line(entry: MemoryEntry) -> str:
+    """一条记忆在系统提示词里的那一行(类别显示成中文,与落盘格式 `line()` 不同)。"""
+    return (f"- [{entry.date}]"
+            f"[{CATEGORIES.get(entry.category, entry.category)}] {entry.content}")
+
+
 def _section(title: str, entries: list[MemoryEntry]) -> list[str]:
     if not entries:
         return []
-    out = [f"## {title}"]
-    out += [f"- [{e.date}][{CATEGORIES.get(e.category, e.category)}] {e.content}"
-            for e in entries]
-    return out
+    return [f"## {title}"] + [inject_line(e) for e in entries]
+
+
+def _fit_levels(user: list[MemoryEntry], project: list[MemoryEntry]
+                ) -> tuple[list[MemoryEntry], list[MemoryEntry], int]:
+    """两级共享一份预算,装不下时各自从**最旧**一条开始让位(轮流丢)。
+
+    为什么不是切字符串:以前是 `text[:MEMORY_CHAR_LIMIT]` 裸切,坏在两面 ——
+    ① 半条记忆以完整句子的口气进系统提示词,模型会把说了一半的话当成说全了;
+    ② 用户级在前、项目级在后,于是一超就整块丢项目级 —— 那通常是记得最不久的那批。
+    让位方向与写侧 `ENTRY_LIMIT` 淘汰最旧是同一条口径。两级各留到最后一条就不再动:
+    宁可略微超预算,也不让一本记忆整本消失。
+    """
+    budget = MEMORY_CHAR_LIMIT - _INJECT_OVERHEAD
+    u, p = list(user), list(project)
+
+    def cost() -> int:
+        return sum(len(inject_line(e)) + 1 for e in u + p)
+
+    dropped = 0
+    while cost() > budget and (len(u) > 1 or len(p) > 1):
+        if len(u) > 1:
+            u.pop(0)
+            dropped += 1
+        if cost() <= budget:
+            break
+        if len(p) > 1:
+            p.pop(0)
+            dropped += 1
+    return u, p, dropped
 
 
 def prompt_section(workspace: Path | None, global_path: Path | None = None) -> str:
-    """注入系统提示词:用户级记忆在前(跨项目),项目级在后。"""
+    """注入系统提示词:用户级记忆在前(跨项目),项目级在后;装不下按条让位。"""
     project = load_entries(workspace) if workspace is not None else []
     gpath = Path(global_path) if global_path is not None else global_memory_path()
     user = load_from(gpath)
     if not project and not user:
         return ""
-    lines = ["", "# 长期记忆(跨会话,自动加载)"]
-    lines += _section("用户级(跨项目通用)", user)
-    lines += _section("本项目", project)
-    text = "\n".join(lines)
-    if len(text) > MEMORY_CHAR_LIMIT:
-        text = text[:MEMORY_CHAR_LIMIT]
-        lines = text.splitlines() + ["(记忆过多已截断,建议用 memory action=dream 整理)"]
-    lines.append("当用户提到个人偏好、项目约定,或纠正了你的做法时,用 action=save 记住它"
-                 "(跟人有关的偏好用 scope=user,只跟本项目有关的用 scope=project);"
-                 "记忆条目多且重复时,用 action=dream 整理去重。")
+    kept_u, kept_p, dropped = _fit_levels(user, project)
+    lines = ["", INJECT_HEADER]
+    lines += _section("用户级(跨项目通用)", kept_u)
+    lines += _section("本项目", kept_p)
+    if dropped:
+        lines.append(f"(本次注入最近 {len(kept_u) + len(kept_p)} 条,"
+                     f"另有 {dropped} 条没列出 —— 翻旧账用 action=list,"
+                     "按词找用 action=search;条目多且重复时 action=dream 去重)")
+    lines.append(_SAVE_HINT)
     return "\n".join(lines) + "\n"
 
 

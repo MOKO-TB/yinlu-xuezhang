@@ -6,6 +6,10 @@
 - 相似度没过闸门的条目不能被当成命中。
 """
 
+import sys
+
+import pytest
+
 from minicode import embed, kb as kbmod, retrieval
 from minicode.kb import KbEntry, format_results, search_hybrid
 
@@ -135,10 +139,15 @@ def test_semantic_string_false_is_not_treated_as_true():
 
 # ------------------------------------------------------ 向量档(注入假后端)
 
-def _install_fake_vector(monkeypatch, tmp_path, table):
-    """把向量后端换成查表假实现:只用于验证融合逻辑,不代表任何真模型效果。"""
+def _install_fake_vector(monkeypatch, tmp_path, table, **spec_extra):
+    """把向量后端换成查表假实现:只用于验证融合逻辑,不代表任何真模型效果。
+
+    detect 的返回形状要跟着真实现走 —— 少一个键,上层拿的时候就是 KeyError,
+    那种红是夹具的问题,不是产品的。
+    """
     info = {"backend": "fixture", "model": "fx", "dim": 2, "ready": True,
-            "why": "", "source": "fixture"}
+            "why": "", "source": "fixture", "pooling": "cls", "max_seq_len": 512,
+            "query_prefix": str(spec_extra.get("query_prefix") or "")}
 
     def fake_detect(cfg=None):
         return dict(info)
@@ -157,7 +166,7 @@ def _install_fake_vector(monkeypatch, tmp_path, table):
     monkeypatch.setattr(embed, "detect", fake_detect)
     monkeypatch.setattr(embed, "embed_texts", fake_embed_texts)
     monkeypatch.setattr(embed, "cache_path",
-                        lambda backend, model: tmp_path / "vec-cache.json")
+                        lambda backend, model, *a, **k: tmp_path / "vec-cache.json")
     return info
 
 
@@ -176,14 +185,22 @@ def test_vector_tier_can_recall_a_row_keywords_missed(monkeypatch, tmp_path):
 
 
 def test_vector_below_gate_adds_nothing(monkeypatch, tmp_path):
-    """全部向量都低过闸门时,结果必须退回纯关键词,并把原因写进 meta。"""
+    """全部向量都够不到取用标准时,结果必须退回纯关键词,并把**两道判据的数**写进 meta。
+
+    2026-10-06 判据拆成两道(实测单一绝对阈值没有判别力:0.35 放过 98.6% 的
+    doc-doc 不相关配对,而真命中分数随问句变短一路掉)。所以这句回话里要点名
+    "与第一名相差多少"和"病态下限"两个数 —— 只报一个数的话,调参的人无从知道
+    到底是哪一道把它挡了。
+    """
     # 查询里带一个"任何条目都不含"的记号词 → 向量方向与全部条目正交
     _install_fake_vector(monkeypatch, tmp_path,
                          {"查无此词": [1.0, 0.0], "奖学金": [0.0, 1.0]})
     hits, meta = search_hybrid(ENTRIES, "奖学金查无此词", semantic=True,
                                cfg=_Cfg({"embeddings": {"min_sim": 0.6}}))
     assert meta["vector"]["ran"] is False
-    assert "闸门" in meta["vector"]["why"]
+    why = meta["vector"]["why"]
+    assert "取用标准" in why and "0.15" in why and "0.60" in why, why
+    assert "闸门" not in why        # 绝对阈值已降格成病态下限,不再冒充命中判据
     assert hits and all("向量" not in h.via for h in hits)
 
 
@@ -207,6 +224,190 @@ def test_detect_local_backend_reports_missing_files(monkeypatch, tmp_path):
     info = embed.detect(_Cfg({"embeddings": {"backend": "local", "model": "nope"}}))
     assert info["ready"] is False
     assert "model.onnx" in info["why"] and str(tmp_path) in info["why"]
+
+
+def test_missing_weight_hint_in_a_packaged_build_never_points_at_scripts(monkeypatch, tmp_path):
+    """装好的包里没有 scripts/ —— 那句提示在包里指这条路,等于让用户走进死胡同。"""
+    monkeypatch.setattr(embed, "models_dir", lambda: tmp_path)
+    monkeypatch.setattr(embed.sys, "frozen", True, raising=False)
+    why = embed.detect(_Cfg({"embeddings": {"backend": "local", "model": "nope"}}))["why"]
+    assert "scripts/fetch_embed_model.py" not in why
+    assert "放进" in why and "model.onnx" in why
+
+
+def test_detect_rejects_an_unknown_pooling_instead_of_guessing(monkeypatch, tmp_path):
+    """池化取错不报错、只是全体向量搬家,所以拼错必须当场拦下,不许默默用默认值。"""
+    monkeypatch.setattr(embed, "models_dir", lambda: tmp_path)
+    info = embed.detect(_Cfg({"embeddings": {"backend": "local", "model": "m",
+                                             "pooling": "average"}}))
+    assert info["ready"] is False
+    assert "average" in info["why"] and "cls" in info["why"] and "mean" in info["why"]
+
+
+def test_detect_local_does_not_import_onnxruntime(monkeypatch, tmp_path):
+    """探测阶段绝不真 import onnxruntime:实测它在这台机器上能把进程直接打死。
+
+    access violation 不是异常,try/except 没有位置接 —— 所以这条是保命的针,
+    不是风格问题。真要加载失败由 _session_for 那层说。
+    """
+    d = tmp_path / "m"
+    d.mkdir()
+    (d / "model.onnx").write_bytes(b"x")
+    (d / "vocab.txt").write_text("[PAD]\n[UNK]\n[CLS]\n[SEP]\n", encoding="utf-8")
+    monkeypatch.setattr(embed, "models_dir", lambda: tmp_path)
+    sys.modules.pop("onnxruntime", None)
+    info = embed.detect(_Cfg({"embeddings": {"backend": "local", "model": "m"}}))
+    assert info["ready"] is True and info["pooling"] == "cls"
+    assert "onnxruntime" not in sys.modules, "detect() 偷偷 import 了 onnxruntime"
+
+
+# ------------------------------------------------------- 缓存名跟着口径走
+
+def test_cache_name_follows_everything_that_changes_the_vectors():
+    p = lambda **kw: embed.cache_path(**kw).name                      # noqa: E731
+    cls512 = p(backend="local", model="m", pooling="cls", max_seq_len=512)
+    mean512 = p(backend="local", model="m", pooling="mean", max_seq_len=512)
+    cls256 = p(backend="local", model="m", pooling="cls", max_seq_len=256)
+    assert len({cls512, mean512, cls256}) == 3, "换池化/换截断宽度必须是一套新缓存"
+    assert "cls" in cls512 and "512" in cls512
+    # api 档:那两个本地旋钮动不了端点算出来的向量,写进名字里等于让用户重刷额度
+    assert p(backend="api", model="m", pooling="cls", max_seq_len=512) == \
+           p(backend="api", model="m", pooling="mean", max_seq_len=256)
+
+
+def test_saving_and_loading_a_local_cache_round_trips_the_profile(tmp_path, monkeypatch):
+    """缓存文件里要留着自己的口径:否则三年后没人知道这批向量是怎么算的。"""
+    monkeypatch.setattr(embed, "models_dir", lambda: tmp_path)
+    cache = embed.load_cache("local", "m", "cls", 512)
+    assert cache["pooling"] == "cls" and cache["max_seq_len"] == 512
+    cache["items"] = {"a#1": {"sha": "s", "vec": [1.0, 0.0]}}
+    embed.save_cache(cache)
+    back = embed.load_cache("local", "m", "cls", 512)
+    assert back["items"] == {"a#1": {"sha": "s", "vec": [1.0, 0.0]}}
+    assert embed.load_cache("local", "m", "mean", 512)["items"] == {}, \
+        "换了池化还读到旧向量,就是拿没验证过的空间当真值"
+
+
+# --------------------------------------------------------------- 本地档真形状
+
+class _FakeInput:
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakeOnnx:
+    """第 j 个 token 出 [1+2j, 1, 1, 1] 这样一个 4 维"张量"。
+
+    CLS 那行恒等于 [1,1,1,1](四个分量相等),mask 平均那行第一个分量是后面的
+    若干倍 —— 两种池化的结果因此能一眼分开,断言不依赖浮点细节。
+    """
+
+    def __init__(self):
+        self.runs = 0
+
+    def get_inputs(self):
+        return [_FakeInput(n) for n in ("input_ids", "attention_mask", "token_type_ids")]
+
+    def run(self, _outs, feeds):
+        import numpy as np
+        self.runs += 1
+        ids = feeds["input_ids"]
+        seq = np.arange(ids.shape[1], dtype=np.float32)
+        first = (1.0 + 2.0 * seq)[None, :, None]
+        rest = np.ones((ids.shape[0], ids.shape[1], 3), dtype=np.float32)
+        return [np.concatenate([first, rest], axis=2)]
+
+
+def _local_cfg(tmp_path, monkeypatch, **extra):
+    """models_dir 是"上一级",local_model_dir 再把模型名拼上去 —— 夹具要按这个形状放文件。"""
+    d = tmp_path / "bge-fake"
+    d.mkdir(exist_ok=True)
+    (d / "model.onnx").write_bytes(b"x")
+    (d / "vocab.txt").write_text(
+        "\n".join(["[PAD]", "[UNK]", "[CLS]", "[SEP]", "奖", "学", "金"]) + "\n",
+        encoding="utf-8")
+    monkeypatch.setattr(embed, "models_dir", lambda: tmp_path)
+    spec = {"backend": "local", "model": "bge-fake"}
+    spec.update(extra)
+    return _Cfg({"embeddings": spec}), spec
+
+
+def test_local_backend_pools_from_cls_by_default(monkeypatch, tmp_path):
+    cfg, spec = _local_cfg(tmp_path, monkeypatch)
+    vecs = embed._embed_local(["奖学金"], {"pooling": "cls", "dim": 0,
+                                          "max_seq_len": 512}, spec,
+                              session=_FakeOnnx())
+    assert len(vecs[0]) == 4
+    assert max(vecs[0]) - min(vecs[0]) < 1e-9, "CLS 池化取的是同一行,四个分量该相等"
+
+
+def test_mean_pooling_is_the_mask_weighted_average_not_a_full_row_mean(monkeypatch, tmp_path):
+    cfg, spec = _local_cfg(tmp_path, monkeypatch)
+    vecs = embed._embed_local(["奖学金"], {"pooling": "mean", "dim": 0,
+                                          "max_seq_len": 512}, spec,
+                              session=_FakeOnnx())
+    head, rest = vecs[0][0], vecs[0][1:]
+    assert max(rest) - min(rest) < 1e-9
+    # [CLS]奖学[SEP]… 里第一个分量按位置 1,3,5,7,9 走,平均下来严格大于 1
+    assert head / rest[0] > 1.5, "mean 这条路要真的在做加权平均"
+
+
+def test_local_backend_refuses_when_dim_disagrees_with_the_model(monkeypatch, tmp_path):
+    cfg, spec = _local_cfg(tmp_path, monkeypatch, dim=8)
+    sess = _FakeOnnx()
+    try:
+        embed._embed_local(["奖学金"], {"pooling": "cls", "dim": 8,
+                                       "max_seq_len": 512}, spec, session=sess)
+        assert False, "模型出来 4 维而配置写 8 维,必须当场拒,不能拿这串向量去检索"
+    except embed.EmbedUnavailable as e:
+        assert "4" in str(e) and "8" in str(e)
+
+
+def test_onnx_session_is_built_once_and_dropped_when_weights_change(monkeypatch, tmp_path):
+    """每次检索都新建会话比推理本身慢一个量级;但换了权重文件绝不能继续用旧的。"""
+    cfg, spec = _local_cfg(tmp_path, monkeypatch)
+    embed._SESSIONS.clear()
+    embed._TOKENS.clear()
+    made = []
+
+    def fake_new(path):
+        made.append(path)
+        return _FakeOnnx()
+
+    monkeypatch.setattr(embed, "_new_session", fake_new)
+    info = embed._detect(spec, cfg)
+    embed._embed_local(["奖学金"], info, spec)
+    embed._embed_local(["奖学金"], info, spec)
+    assert len(made) == 1, "同一份权重建了两次会话"
+    (tmp_path / "bge-fake" / "model.onnx").write_bytes(b"xy")   # 换权重
+    embed._embed_local(["奖学金"], info, spec)
+    assert len(made) == 2, "换了权重文件还在用旧会话,那比不缓存更糟"
+
+
+def test_query_prefix_reaches_only_the_query(monkeypatch, tmp_path):
+    """非对称检索:指令加在查询上;文档侧带上它,整条缓存就全变了。"""
+    sent = []
+
+    def spy(texts, cfg=None, spec=None, session=None):
+        sent.extend(texts)
+        return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(embed, "embed_texts", spy)
+    cfg, spec = _local_cfg(tmp_path, monkeypatch,
+                           query_prefix="为这个句子生成表示以用于检索相关文章：")
+    embed.query_vector("奖学金", cfg)
+    assert sent == ["为这个句子生成表示以用于检索相关文章：奖学金"]
+
+    sent.clear()
+    embed.query_vector("奖学金", _Cfg({"embeddings": {"backend": "local",
+                                                      "model": "bge-fake"}}))
+    assert sent == ["奖学金"], "没写 query_prefix 就不许替用户加指令"
+
+
+def test_query_vector_does_not_mark_itself_ready_without_a_backend(monkeypatch):
+    """spec 一路的 ready 由 _detect 判,不能因为"传了 spec"就当自己可用。"""
+    with pytest.raises(embed.EmbedUnavailable):
+        embed.query_vector("奖学金", _Cfg({}))
 
 
 def test_detect_api_backend_needs_a_key_and_never_invents_one(monkeypatch):

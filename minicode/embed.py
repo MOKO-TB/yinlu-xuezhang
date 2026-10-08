@@ -5,14 +5,21 @@
 1. ``api``  —— 走 OpenAI 兼容的 ``/v1/embeddings`` 端点。密钥**不新开路径**:
    ``capabilities.embeddings.provider_id`` 指向 config.json 里已有的供应商,
    运行时借它那把 Key(密钥由 credentials 机制单独管,绝不进分享包)。
-2. ``local`` —— 本地 ONNX 小模型(mean-pooling 那句是 BGE 系中文模型的官方口径)。
-   权重**不进包**(包体已经 600MB 量级),用 ``scripts/fetch_embed_model.py
-   --repo <组织>/<仓库>`` 下到数据目录;没下 → 这一档不存在。
+2. ``local`` —— 本地 ONNX 小模型。**池化方式必须跟模型自己的口径一致**:
+   BGE v1.5 系(BAAI 官方与 ``启用说明`` 都是 CLS),mean 是给 mean-pooled
+   系模型留的旁路,``capabilities.embeddings.pooling`` 自己点。取错池化不会
+   报错,只会让所有向量落在一个谁也没验证过的空间里 —— 所以这一项**写进
+   检索口径给用户看**,不藏在代码里。
+   权重**不进包**(实测 bge-small-zh-v1.5 的 ONNX 94,835,369 B),源码运行用
+   ``scripts/fetch_embed_model.py --repo <组织>/<仓库>`` 下到数据目录;装好的
+   包里没有 scripts/,那一路是把两个文件直接放进 ``<数据目录>/models/<模型名>/``。
 3. ``none``  —— 上面两档都不可用。此时**上层必须写"本次只有关键词检索"**,
    把 BM25 说成语义检索就是装饰,本项目不允许。
 
 向量索引落在数据目录,跟着使用者走、不进仓库;缓存以条目正文的 sha1 为键,
 所以库里改了哪几条就只重算哪几条 —— 868 条这种量级,增量比全量重要。
+缓存文件名还带着**会改变向量本身的那几个口径**(local 档:池化与截断宽度),
+换了口径就是一套新缓存,绝不拿旧向量当真值。
 """
 from __future__ import annotations
 
@@ -20,6 +27,7 @@ import hashlib
 import json
 import math
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -27,6 +35,13 @@ CACHE_VERSION = 1
 BATCH_LIMIT = 32            # 一次请求送多少条:端点普遍有 input 数量上限,取保守值
 TEXT_LIMIT = 1500           # 每条参与 embedding 的正文字数上限
 API_TIMEOUT = 60.0          # embedding 请求单独给短超时:它不该拖住一次检索
+
+# 池化:模型自己的口径,取错了不报错、只是全体向量搬家。BGE v1.5 = CLS。
+POOLINGS = ("cls", "mean")
+DEFAULT_POOLING = "cls"
+# 512 = bge-small-zh-v1.5 config.json 里的 max_position_embeddings(2026-10-06 实读)。
+# 原先默认 256 是把长条目后半截悄悄丢了 —— 建索引时没人告诉你丢了。
+DEFAULT_MAX_SEQ_LEN = 512
 
 
 class EmbedUnavailable(RuntimeError):
@@ -56,34 +71,69 @@ def entry_key(entry) -> str:
 
 # --------------------------------------------------------------- 后端探测
 
+def embeddings_spec(cfg) -> dict:
+    """config.json 里 capabilities.embeddings 那一段(没有就空 dict)。
+
+    只有一份取法:探测、取向量、kb 的 min_sim 都从这里读,免得两处各认一种写法。
+    """
+    caps = getattr(cfg, "capabilities", None) or {}
+    spec = caps.get("embeddings") if isinstance(caps, dict) else None
+    return spec if isinstance(spec, dict) else {}
+
+
+def _download_hint() -> str:
+    """缺权重时那句「怎么办」。装好的包里没有 scripts/,指那条路在包里是死路。"""
+    if getattr(sys, "frozen", False):
+        return ("把 model.onnx 与 vocab.txt 放进上面那个目录(文件名要一模一样,"
+                "权重不进安装包,装好的包里也得自己放这两个)")
+    return ("跑 scripts/fetch_embed_model.py --repo <组织>/<仓库> 下载,"
+            "或手工把 model.onnx 与 vocab.txt 放进上面那个目录")
+
+
 def detect(cfg=None) -> dict:
-    """返回本次可用后端:{backend, model, dim, ready, why, source}。
+    """按 config.json 探测本次可用的后端;真正的判定在 _detect(那里才认 spec)。"""
+    return _detect(embeddings_spec(cfg), cfg)
+
+
+def _detect(spec: dict, cfg=None) -> dict:
+    """返回本次可用后端:{backend, model, dim, ready, why, source, pooling, ...}。
 
     这个 dict 会被上层原样写进检索结果里,所以 why 必须是**人能照做的下一步**
     (缺什么、去哪儿配),而不是"初始化失败"。
     """
-    out = {"backend": "none", "model": "", "dim": 0, "ready": False, "why": "", "source": ""}
-    caps = getattr(cfg, "capabilities", None) or {}
-    spec = caps.get("embeddings") if isinstance(caps, dict) else None
-    if not isinstance(spec, dict) or not spec:
+    out = {"backend": "none", "model": "", "dim": 0, "ready": False, "why": "",
+           "source": "", "pooling": "", "max_seq_len": 0, "query_prefix": ""}
+    if not spec:
         out["why"] = ("未配置向量后端:在 config.json 的 capabilities.embeddings 里写 "
                       '{"backend":"api","provider_id":"<已有供应商>","model":"<embedding 模型名"},'
-                      '或 "backend":"local" 并用 scripts/fetch_embed_model.py --repo <组织>/<仓库> '
-                      "下载权重(仓库名要自己给,脚本不替你猜)")
+                      '或 "backend":"local" 并把 model.onnx + vocab.txt 放进 '
+                      "<数据目录>/models/<模型名>/(源码运行也可以跑 fetch_embed_model.py "
+                      "下载权重,仓库名要自己给,脚本不替你猜)")
         return out
     want = str(spec.get("backend") or "api").strip().lower()
     out["dim"] = _as_int(spec.get("dim"), 0)
     out["model"] = str(spec.get("model") or "").strip()
+    out["query_prefix"] = str(spec.get("query_prefix") or "")
+    pooling = str(spec.get("pooling") or DEFAULT_POOLING).strip().lower()
+    if pooling not in POOLINGS:
+        out["why"] = (f'capabilities.embeddings.pooling 写的是 "{pooling}",程序不认:'
+                      f"只能 {' 或 '.join(POOLINGS)}(BGE v1.5 这类中文模型用 cls,"
+                      "mean-pooled 那一系才用 mean)")
+        return out
+    out["pooling"] = pooling
+    out["max_seq_len"] = _as_int(spec.get("max_seq_len"), DEFAULT_MAX_SEQ_LEN)
     if want == "local":
         model_dir = local_model_dir(spec)
         missing = [n for n in ("model.onnx", "vocab.txt") if not (model_dir / n).is_file()]
         if missing:
-            out["why"] = (f"本地模型缺文件 {', '.join(missing)}(期望目录:{model_dir})"
-                          "——跑 scripts/fetch_embed_model.py 下载,或改用 api 后端")
+            out["why"] = (f"本地模型缺文件 {', '.join(missing)}(期望目录:{model_dir})——"
+                          + _download_hint())
             return out
         if not _onnx_available():
-            out["why"] = (f"权重在 {model_dir},但本机 import 不到 onnxruntime,"
-                          "装它或改用 api 后端")
+            out["why"] = (f"权重在 {model_dir},但本机没有 onnxruntime 这个包:"
+                          "源码运行 `pip install onnxruntime`,装好的包里则要说一声"
+                          "——这一版构建已把它打进包(_internal 里带 onnxruntime),"
+                          "老包里没有,得换新包")
             return out
         out.update(backend="local", ready=True, source=str(model_dir))
         return out
@@ -142,33 +192,66 @@ def models_dir() -> Path:
 
 
 def _onnx_available() -> bool:
+    """只回答"这台机器上有没有 onnxruntime 这个包",**不去真 import**。
+
+    为什么不真 import:2026-10-06 在构建机(Anaconda 基底的 venv)实测,
+    `import onnxruntime` 在 pyd 的 PyInit 里直接 access violation —— 整个进程没,
+    而 access violation 是 Python 抓不住的(不是异常,没有 try/except 的位置)。
+    探针要是敢 import,用户配错一次环境就把学长整个带走。
+    真正的加载失败由 `_session_for()` 兜:能抓到的 ImportError/DLL 问题在那里
+    变成一句 EmbedUnavailable;抓不到的那类属于机器环境问题,只能修环境。
+    """
     import importlib.util
-    return importlib.util.find_spec("onnxruntime") is not None
+    try:
+        return importlib.util.find_spec("onnxruntime") is not None
+    except (ImportError, ValueError):        # 父包本身坏了
+        return False
 
 
 # --------------------------------------------------------------- 索引缓存
 
-def cache_path(backend: str, model: str) -> Path:
+def _profile_tag(backend: str, pooling: str, max_seq_len: int) -> str:
+    """只有真的会改变向量数值的口径才进缓存文件名。
+
+    api 档的向量由端点算,pooling / max_seq_len 那两个本地旋钮动它不着 —— 把它们
+    写进 api 的缓存名,等于用户改一个不起作用的数字就要重刷几百条 embedding,
+    那是他的额度与等待。local 档正相反:那两个数**就是**向量的定义,换口径必须
+    换文件,否则旧的 mean 向量会被当成 CLS 空间里的真值用(不报错,只是全错)。
+    """
+    if backend != "local":
+        return ""
+    return f"-{pooling or DEFAULT_POOLING}-{max_seq_len or DEFAULT_MAX_SEQ_LEN}"
+
+
+def cache_path(backend: str, model: str, pooling: str = "",
+               max_seq_len: int = 0) -> Path:
     from minicode.paths import app_path
-    tag = re.sub(r"[^A-Za-z0-9_.-]+", "-", f"{backend}-{model or 'default'}")
+    tag = re.sub(r"[^A-Za-z0-9_.-]+", "-",
+                 f"{backend}-{model or 'default'}{_profile_tag(backend, pooling, max_seq_len)}")
     return app_path("kb-vectors") / f"{tag}.json"
 
 
-def load_cache(backend: str, model: str) -> dict:
-    p = cache_path(backend, model)
+def load_cache(backend: str, model: str, pooling: str = "",
+               max_seq_len: int = 0) -> dict:
+    p = cache_path(backend, model, pooling, max_seq_len)
+    blank = {"version": CACHE_VERSION, "backend": backend, "model": model,
+             "pooling": pooling, "max_seq_len": max_seq_len, "items": {}}
     try:
         raw = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"version": CACHE_VERSION, "backend": backend, "model": model, "items": {}}
+        return blank
     if not isinstance(raw, dict) or raw.get("version") != CACHE_VERSION:
-        return {"version": CACHE_VERSION, "backend": backend, "model": model, "items": {}}
+        return blank
     if not isinstance(raw.get("items"), dict):
         raw["items"] = {}
+    raw.setdefault("pooling", pooling)
+    raw.setdefault("max_seq_len", max_seq_len)
     return raw
 
 
 def save_cache(cache: dict) -> None:
-    p = cache_path(str(cache.get("backend") or ""), str(cache.get("model") or ""))
+    p = cache_path(str(cache.get("backend") or ""), str(cache.get("model") or ""),
+                   str(cache.get("pooling") or ""), _as_int(cache.get("max_seq_len"), 0))
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
@@ -182,22 +265,37 @@ def embed_texts(texts, cfg=None, spec: dict | None = None, session=None) -> list
     payload = [_norm(t)[:TEXT_LIMIT] for t in texts]
     if not payload:
         return []
-    info = detect(cfg) if spec is None else _from_spec(spec, cfg)
+    # spec 只解析一次:detect 用哪份、_api_endpoint 借哪家的 Key,必须是同一份,
+    # 否则会出现"探测时核的是 A 供应商,真发请求时借的却是 B"。
+    spec = spec if spec else embeddings_spec(cfg)
+    info = _detect(spec, cfg)
     if not info["ready"]:
         raise EmbedUnavailable(info["why"])
     if info["backend"] == "api":
-        vecs = _embed_api(payload, info, cfg, spec or {})
+        vecs = _embed_api(payload, info, cfg, spec)
+    elif info["backend"] == "local":
+        vecs = _embed_local(payload, info, spec, session=session)
     else:
-        vecs = _embed_local(payload, info, spec or {}, session=session)
+        raise EmbedUnavailable(info["why"] or "没有可用的向量后端")
     if len(vecs) != len(payload):
         raise EmbedUnavailable(f"后端返回 {len(vecs)} 条向量,和送出去的 {len(payload)} 条不符")
     return vecs
 
 
-def _from_spec(spec: dict, cfg) -> dict:
-    out = detect(cfg)
-    out.update(model=str(spec.get("model") or out["model"]), ready=True)
-    return out
+def query_vector(query: str, cfg=None) -> list[float]:
+    """查询侧向量。检索指令**只**加在查询上,文档侧永远不带(非对称检索的用法)。
+
+    默认不带,要带就在 config 里明确写 `query_prefix`。理由不是风格:
+    2026-10-06 拿组长那份 model.onnx 在 200 条真馆藏上实测(查询=条目标题),
+    加上「为这个句子生成表示以用于检索相关文章：」把自召回 Top-1 从
+    200/200 打到 130/200,第一二名相似度差从 0.1186 缩到 0.0233 —— 这句官方
+    建议在这个模型、这套语料上是**负收益**的,所以程序不替他加,数字摆在这里。
+    """
+    spec = embeddings_spec(cfg)
+    prefix = str(spec.get("query_prefix") or "")
+    text = f"{prefix}{query}" if prefix else (query or "")
+    vecs = embed_texts([text], cfg, spec=spec)
+    return vecs[0] if vecs else []
 
 
 def _embed_api(payload, info, cfg, spec) -> list[list[float]]:
@@ -229,8 +327,9 @@ def _embed_local(payload, info, spec, session=None) -> list[list[float]]:
         import numpy as np                        # 只在真的走本地档时才要
     except Exception as e:
         raise EmbedUnavailable(f"本地档需要 numpy:{e}") from e
-    sess = session or _new_session(model_dir / "model.onnx")
-    tok = WordPiece(model_dir / "vocab.txt", max_len=_as_int(spec.get("max_seq_len"), 256))
+    sess = session or _session_for(model_dir / "model.onnx")
+    max_len = _as_int(info.get("max_seq_len"), DEFAULT_MAX_SEQ_LEN)
+    tok = _tokenizer_for(model_dir / "vocab.txt", max_len)
     names = [inp.name for inp in sess.get_inputs()]
     batch = tok.batch(payload)
     feeds = {}
@@ -241,9 +340,64 @@ def _embed_local(payload, info, spec, session=None) -> list[list[float]]:
     if "token_type_ids" in names:
         feeds["token_type_ids"] = np.asarray(batch["token_type_ids"], dtype=np.int64)
     out = sess.run(None, feeds)[0]               # (batch, seq, dim)
-    mask = np.asarray(batch["attention_mask"], dtype=out.dtype)
-    vecs = (out * mask[..., None]).sum(1) / np.clip(mask.sum(1)[..., None], 1e-9, None)
-    return _normalize(vecs.tolist())
+    if info.get("pooling") == "mean":
+        mask = np.asarray(batch["attention_mask"], dtype=out.dtype)
+        vecs = (out * mask[..., None]).sum(1) / np.clip(mask.sum(1)[..., None], 1e-9, None)
+    else:                                        # cls:BGE v1.5 官方取法
+        vecs = out[:, 0, :]
+    vecs = _normalize(vecs.tolist())
+    if info.get("dim") and vecs and len(vecs[0]) != info["dim"]:
+        raise EmbedUnavailable(
+            f"这个模型出来的是 {len(vecs[0])} 维,config 里 capabilities.embeddings.dim "
+            f"写的却是 {info['dim']} —— 两个数必有一个不对,先核对权重与配置再说")
+    return vecs
+
+
+# 会话与分词器都按"它依赖的那个数"缓存:权重换个文件(mtime 变)绝不能继续用旧的。
+_SESSIONS: dict[tuple[str, int], object] = {}
+_TOKENS: dict[tuple[str, int, int], "WordPiece"] = {}
+_RUNTIME_KEEP = 2     # 同时留着两份运行时,说明使用者在换模型 —— 旧的那份没用了
+
+
+def _runtime_key(path: Path) -> tuple[str, int]:
+    try:
+        return (str(path.resolve()), path.stat().st_mtime_ns)
+    except OSError:
+        return (str(path), 0)
+
+
+def _session_for(path: Path):
+    """建一次 InferenceSession 远贵于推理一次,所以留着复用。
+
+    实测(2026-10-06,同一份权重、本机 CPU):冷建会话 **224ms**,热会话单次查询
+    **2.4ms** —— 差两个数量级。原先每次语义检索都新建会话,用户感觉到的"慢"
+    全都花在这里,不是模型。
+    """
+    key = _runtime_key(path)
+    sess = _SESSIONS.get(key)
+    if sess is None:
+        try:
+            sess = _new_session(path)
+        except Exception as e:
+            raise EmbedUnavailable(
+                f"打不开 {path.name}:{type(e).__name__}: {str(e)[:180]}"
+                "(权重文件是不是半截的、或者缺同名的外部数据文件?)") from e
+        if len(_SESSIONS) >= _RUNTIME_KEEP:
+            _SESSIONS.clear()
+            _TOKENS.clear()
+        _SESSIONS[key] = sess
+    return sess
+
+
+def _tokenizer_for(path: Path, max_len: int) -> "WordPiece":
+    key = _runtime_key(path) + (max_len,)
+    tok = _TOKENS.get(key)
+    if tok is None:
+        tok = WordPiece(path, max_len=max_len)
+        if len(_TOKENS) >= _RUNTIME_KEEP:
+            _TOKENS.clear()
+        _TOKENS[key] = tok
+    return tok
 
 
 def _new_session(path):
@@ -274,7 +428,9 @@ def ensure_vectors(entries, cfg=None, build: bool = False, progress=None) -> dic
     info = detect(cfg)
     report = {"ready": info["ready"], "backend": info["backend"], "model": info["model"],
               "why": info["why"], "vectors": [], "embedded": 0, "cached": 0,
-              "missing": 0, "total": len(entries), "elapsed_ms": 0}
+              "missing": 0, "total": len(entries), "elapsed_ms": 0,
+              "pooling": info["pooling"], "max_seq_len": info["max_seq_len"],
+              "query_prefixed": bool(info["query_prefix"])}
     if not entries:
         report["elapsed_ms"] = int((time.time() - t0) * 1000)
         return report
@@ -283,7 +439,7 @@ def ensure_vectors(entries, cfg=None, build: bool = False, progress=None) -> dic
         report["missing"] = len(entries)
         report["elapsed_ms"] = int((time.time() - t0) * 1000)
         return report
-    cache = load_cache(info["backend"], info["model"])
+    cache = load_cache(info["backend"], info["model"], info["pooling"], info["max_seq_len"])
     items = cache["items"]
     todo: list[tuple[int, str, str]] = []
     vectors: list[list[float] | None] = [None] * len(entries)

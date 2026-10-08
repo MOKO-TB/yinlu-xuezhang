@@ -361,3 +361,47 @@ def test_trust_says_what_will_still_be_asked(tmp_path, trust_file):
     out = permspec.permissions_trust(_Ctx(), "trust")
     assert "把问题要回来" in out
     assert "不再问你" not in out, "这份清单里一条 allow 都没有"
+
+
+# ----------------------------------------------- 一行两件事:白名单批准 + 指令采纳
+# v0.9.127 §四.2 的「首次采纳点头」把记录记进了同一本 `perms-trust.json`
+# (同一个工作区一行)。这两半各自独立点头,所以也各自独立生效、独立撤销。
+
+def test_trusting_the_whitelist_leaves_the_agents_adoption_alone(tmp_path, trust_file):
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    permspec.adopt_agents(ws, "sha-agents", lines=7)
+
+    permspec.trust(ws, "sha-perms", rules_n=2)
+    assert permspec.approved_sha(ws) == "sha-perms"
+    assert permspec.agents_adopted_sha(ws) == "sha-agents", \
+        "`trust()` 整行盖掉过 —— 批完白名单就把那句点头抹了"
+
+
+def test_revoking_the_whitelist_leaves_the_agents_adoption_alone(tmp_path, trust_file):
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    (ws / "AGENTS.md").write_text("规矩\n", encoding="utf-8")
+    permspec.trust(ws, "sha-perms", rules_n=2)
+    permspec.adopt_agents(ws, "sha-agents", lines=7)
+
+    assert permspec.revoke(ws) is True
+    assert permspec.approved_sha(ws) == ""
+    assert permspec.agents_adopted_sha(ws) == "sha-agents"
+    # 撤到一行都不剩时才把这条踢掉(空行留在账里没人读,也只是噪音)
+    assert permspec.revoke(ws) is False
+    permspec.adopt_agents(ws, "sha-agents", lines=7)
+    row = json.loads(trust_file.read_text(encoding="utf-8"))
+    assert list(row) == [str(ws.resolve())]
+    assert set(row[str(ws.resolve())]) == {"agents_sha256", "agents_lines", "agents_at"}
+
+
+def test_a_hand_written_row_that_is_not_a_dict_still_counts_as_no_trust(tmp_path,
+                                                                        trust_file):
+    """兼容手写坏格式:那一条既算没批白名单,也算没采纳指令。"""
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    trust_file.write_text(json.dumps({str(ws.resolve()): "sha-perms"}),
+                          encoding="utf-8")
+    assert permspec.approved_sha(ws) == "sha-perms"     # 旧读法不动
+    assert permspec.agents_adopted_sha(ws) == ""

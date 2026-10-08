@@ -1413,6 +1413,26 @@ try {
   .mm-row button:hover{ border-color:var(--primary); color:var(--primary-text); }
   .mm-row button.mmdel:hover{ border-color:var(--danger); color:var(--danger); }
   .mm-row.off .mmname{ opacity:.5; }
+  /* 模型配置编辑器(v0.9.121):一行一个字段,标签在左、控件在右。
+     刻意复用 .dialog/.b-* 那套皮肤 —— 另起一套就会跟着深色模式漂。 */
+  .mcf-row{ display:flex; align-items:center; gap:10px; margin-top:10px; }
+  .mcf-row label{ flex:none; width:112px; font-size:12px; color:var(--text-2); }
+  .mcf-row input[type=number], .mcf-row select{ flex:1; min-width:0;
+    background:var(--glass-lite); border:1px solid var(--line-soft);
+    border-radius:var(--r-s); color:var(--text-1); padding:6px 9px; font-size:12.5px; }
+  .mcf-hint{ font-size:11px; color:var(--text-3); margin:8px 0 0 122px; }
+  .mcf-tpl{ width:100%; min-height:56px; resize:vertical;
+    font-family:Consolas,monospace; font-size:12px; background:var(--glass-lite);
+    border:1px solid var(--line-soft); border-radius:var(--r-s); color:var(--text-1);
+    padding:6px 9px; }
+  .mcf-levels{ display:flex; flex-wrap:wrap; gap:6px; flex:1; min-width:0; }
+  .mcf-levels input{ width:88px; background:var(--glass-lite);
+    border:1px solid var(--line-soft); border-radius:var(--r-s);
+    color:var(--text-1); padding:5px 7px; font-size:12px; }
+  .mcf-add{ flex:none; border:1px solid var(--line-soft); background:transparent;
+    border-radius:var(--r-full); color:var(--text-2); cursor:pointer;
+    padding:4px 10px; font-size:12px; }
+  .mcf-model{ font-family:Consolas,monospace; font-size:12px; color:var(--text-3); }
   .mm-note{ font-size:11px; color:var(--text-2); line-height:1.6; min-height:16px; }
   .mm-note.bad{ color:var(--danger); }
   .mm-note.good{ color:var(--ok,#2f9e6e); }
@@ -1618,6 +1638,13 @@ try {
             font-size:10.5px; color:var(--text-3); line-height:1.6; }
   .tk.full .tk-foot{ color:#127a3d; }
   .tk.broken .tk-foot{ color:#a33; }
+  /* 规划锁开着的那张卡片:描边先说出"现在是只读",按钮再给出唯一出口 */
+  .tk.locked{ border-color:var(--warning); }
+  .tk-approve{ display:inline-block; margin-top:5px; padding:3px 10px; font-size:11px;
+               border-radius:999px; border:1px solid var(--warning);
+               background:var(--glass-strong); color:var(--text-1); cursor:pointer; }
+  .tk-approve:hover{ filter:brightness(1.06); }
+  .tk-approve.pending{ opacity:.55; pointer-events:none; }
   /* 深色底上 #a33/#8a5b00/#127a3d 这几档"浅色主题用的深色"会糊成一片,
      换成语义色变量(暮色主题里它们本来就是提亮过的) */
   html.dark .tk-row.failed{ color:#FF9A9E; }
@@ -1766,6 +1793,17 @@ try {
                border:1px solid var(--line-soft); border-radius:9px;
                font-variant-ligatures:none; }
   .act-more{ padding:3px 6px; font-size:10.5px; color:var(--text-3); }
+  /* 「第 N 问」分组头(v0.9.128):这本栈按会话攒,不分组时"本轮改动"四个字会骗人 */
+  .act-grp{ padding:6px 6px 2px; font-size:10.5px; font-weight:700; letter-spacing:.3px;
+            color:var(--text-3); border-top:1px dashed var(--line-soft); margin-top:4px; }
+  /* 回合结束那条审查入口(v0.9.128):坐在聊天流里,不另弹一条 toast ——
+     toast 三秒就没了,而"这一轮改了哪几个文件"是要点进去看的东西 */
+  .chg-hint{ display:flex; align-items:center; gap:8px; margin:2px 0 10px;
+             font-size:12px; color:var(--text-2); }
+  .chg-hint button{ padding:4px 10px; font-size:11.5px; border-radius:999px;
+                    border:1px solid var(--primary); background:var(--glass-strong);
+                    color:var(--primary-text); cursor:pointer; }
+  .chg-hint button:hover{ filter:brightness(1.08); }
   .act-empty{ padding:16px 8px; font-size:12px; color:var(--text-3); line-height:1.7; }
   .act-foot{ padding:8px 12px 10px; border-top:1px dashed var(--line-soft);
              font-size:10px; color:var(--text-3); line-height:1.6; }
@@ -2856,6 +2894,40 @@ try {
 </div>
 
 
+<div class="overlay" id="mmCfgOverlay">
+  <div class="dialog" style="max-width:520px">
+    <h3>编辑模型配置 <span class="mcf-model" id="mcfModel"></span></h3>
+    <div class="mcf-hint" style="margin-left:0">
+      填了的数**真的生效**:窗口决定什么时候压缩、最大输出决定请求里的
+      <code>max_tokens</code>、推理档位决定 🧠 按钮上那几个选项怎么发。
+      留空的项走原行为(探测 / 内置目录 / 服务端默认)。
+    </div>
+    <div class="mcf-row"><label>上下文窗口</label>
+      <input type="number" id="mcfWindow" min="1024" step="1024" placeholder="如 1000000"></div>
+    <div class="mcf-row"><label>最大输出 Token</label>
+      <input type="number" id="mcfMaxOut" min="1" step="1" placeholder="留空 = 不限制"></div>
+    <div class="mcf-row"><label>图片输入</label>
+      <select id="mcfVision">
+        <option value="">跟随探测/内置目录</option>
+        <option value="1">支持(声明)</option>
+        <option value="0">不支持(声明)</option>
+      </select></div>
+    <div class="mcf-row"><label>推理等级</label>
+      <div class="mcf-levels" id="mcfLevels"></div>
+      <button class="mcf-add" id="mcfLevelAdd" title="加一档">＋</button></div>
+    <div class="mcf-row" style="align-items:flex-start"><label style="padding-top:8px">推理参数映射</label>
+      <textarea class="mcf-tpl" id="mcfParam" spellcheck="false"
+        placeholder='{ "reasoning_effort": reasoningLevel }'></textarea></div>
+    <div class="mcf-hint">映射里的 <code>reasoningLevel</code> 会被换成实际档位;
+      写错(解不出 JSON)时**一个参数都不发**,不会送去半截猜测。</div>
+    <div class="btns">
+      <button class="b-no" id="mcfReset" title="清空这个模型的声明">重置</button>
+      <button class="b-no" id="mcfCancel">取消</button>
+      <button class="b-yes" id="mcfSave">保存</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="usageOverlay">
   <div class="dialog">
     <div class="usage-head">
@@ -2993,6 +3065,9 @@ window.onunhandledrejection = function(e){ const el = document.querySelector(".l
 const $ = (id) => document.getElementById(id);
 const chat = $("chat");
 let busy = false;
+// 输入框平日的提示语从 HTML 那枚属性读一次:写死第二遍就成了两个真相,改属性的人
+// 不会想到这儿还有一份。
+const INPUT_HINT = $("input").placeholder;
 let currentSessionKey = null;   // 当前视图对应的会话(后台任务的事件不带这个键就不渲染)
 let cur = null;          // 当前助手消息块 {wrap, body, reasoning, text, reasoningText, timer}
 let lastSent = null;     // 刚发出去、模型那边一句都没答的那句 {text, atts}:失败时放回输入框
@@ -4229,12 +4304,68 @@ function setBusy(v) {
   busy = v;
   $("btnSend").style.display = v ? "none" : "block";
   $("btnStop").style.display = v ? "block" : "none";
+  // 跑着的时候输入框本来就能打字(那条路是插话),但没人知道要按 Enter —— 提示语替它说话
+  $("input").placeholder = v
+    ? "这一轮正在跑，补一句会排在下一步之后（Enter 发送）" : INPUT_HINT;
   if (!v && cur) { renderAssistant(true); cur = null; }
   if (!v) markPlanCardIdle();   // 这一轮结束了:还挂着「进行中」的步骤不能再转圈
+  if (!v) maybeChangeReviewHint();
+}
+
+/* 回合结束时留一条审查入口(v0.9.128)。「跑完了」与「它改了什么」之间原来隔着
+   一栏的距离:改动清单住在 🛰 监控里,而 `activitySchedule` 在关着的时候直接 return
+   (没人看就不敲桥,这条是对的)—— 于是**关着栏的人永远不知道该去开**。
+   三个约束:
+   - 只在**关着**的时候说:开着的话每一步都在刷,再补一条是噪音;
+   - 只说**这一问**改的(`r.turn` 那几条):这本撤销栈按会话攒,拿总数说"这一轮"是假话;
+   - 每一问最多一条(`hintTurn` 记住说过的那一问)—— 停止/重答都会再发一次 busy=false。
+   不弹 toast:toast 三秒就没了,而这是要点进去看的东西。 */
+let hintTurn = 0;
+function maybeChangeReviewHint() {
+  const api = window.pywebview && pywebview.api;
+  if (actOpen || !api || !api.undo_records) return;
+  Promise.resolve(api.undo_records()).then(r => {
+    if (!r || !r.ok || !r.turn) return;
+    const mine = (r.items || []).filter(it => it.turn === r.turn);
+    if (!mine.length || hintTurn === r.turn) return;
+    hintTurn = r.turn;
+    const bar = document.createElement("div");
+    bar.className = "chg-hint";
+    const txt = document.createElement("span");
+    const names = mine.slice(0, 2).map(it => it.path).join("、");
+    txt.textContent = `这一轮改了 ${mine.length} 个文件`
+      + (mine.length ? `：${names}${mine.length > 2 ? " 等" : ""}` : "");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "看改了什么";
+    btn.title = "打开右侧「任务监控 → 本轮改动」：逐处看 diff、逐处回退";
+    btn.addEventListener("click", openChangesSection);
+    bar.appendChild(txt);
+    bar.appendChild(btn);
+    chat.appendChild(bar);
+    toBottom();
+  }).catch(() => {});      // 桥没就绪:这一轮不提示,下一轮再说 —— 不该拖垮收尾
+}
+
+/* 点那条入口 = 开栏 + 把「本轮改动」这一段展开 + 滚过去。
+   展开走的是点段标题同一条路(`actFoldWrite`),不另写一份折叠状态;
+   滚要等刷新画完 —— 所以按帧找那一段,最多等两秒,找不到就算了(不报错也不骗人)。 */
+function openChangesSection() {
+  actFoldWrite("changes", false);
+  setActivityOpen(true);
+  let tries = 0;
+  const seek = () => {
+    const cap = document.querySelector('#actBody .act-cap[data-sect="changes"]');
+    if (cap) { cap.scrollIntoView({ block: "start", behavior: "smooth" }); return; }
+    if (++tries > 120) return;                 // 约 2s:桥慢或这一段确实没东西
+    requestAnimationFrame(seek);
+  };
+  requestAnimationFrame(seek);
 }
 
 function renderHistory(messages) {
   chat.innerHTML = "";
+  hintTurn = 0;          // 换会话 = 那一问说过没有的账要重记(回合号是**会话内**的坐标)
   livePlanCard = null;   // 整段对话被换掉:旧卡片节点已经不在 DOM 里了
   livePlanKey = "";
   cur = null;
@@ -4626,6 +4757,13 @@ function renderProvMain() {
 }
 
 function capText(m) {
+  const cfg = m.cfg || {};
+  const declared = [];
+  if (cfg.context_window) declared.push("声明 " + fmtCtx(cfg.context_window));
+  if (typeof cfg.vision === "boolean") declared.push(cfg.vision ? "声明可图" : "声明纯文本");
+  if (cfg.reasoning_levels && cfg.reasoning_levels.length)
+    declared.push("档位 " + cfg.reasoning_levels.join("/"));
+  if (declared.length) return declared.join(" · ");
   if (!m.known) return "未探测";
   const parts = [];
   if (m.context_window) parts.push(fmtCtx(m.context_window));
@@ -4655,6 +4793,7 @@ function renderModelRows(p) {
     row.innerHTML = `<input class="mmname" spellcheck="false" placeholder="模型名,如 deepseek-chat">
       <span class="mm-cap"></span>
       <label class="sw" title="启用/停用这个模型"><input type="checkbox" class="mmon"><span></span></label>
+      <button class="mmcfg" title="这个模型自己的配置:窗口/最大输出/视觉/推理档位">配置</button>
       <button class="mmtest" title="发一条最小请求:验证连通,并问出上下文窗口">测试</button>
       <button class="mmdel" title="删除这个模型">✕</button>`;
     const nameEl = row.querySelector(".mmname");
@@ -4669,6 +4808,7 @@ function renderModelRows(p) {
       refreshCount(p);
       renderProvList();
     });
+    row.querySelector(".mmcfg").addEventListener("click", () => mcfOpen(p, m));
     row.querySelector(".mmdel").addEventListener("click", () => {
       p.models.splice(i, 1);
       renderModelRows(p);
@@ -4678,6 +4818,86 @@ function renderModelRows(p) {
     box.appendChild(row);
   });
 }
+
+/* ---------------- 模型配置编辑器(v0.9.121) ----------------
+   一个模型一份声明:窗口 / 最大输出 / 视觉 / 推理档位 + 参数映射。
+   留空的项一个字都不覆盖(探测与内置目录照旧),所以"打开看过但没改"
+   不会把任何模型的行为改掉。 */
+let mcfTarget = null;
+
+function mcfRenderLevels(levels) {
+  const box = $("mcfLevels");
+  box.innerHTML = "";
+  (levels || []).forEach(v => {
+    const el = document.createElement("input");
+    el.value = v; el.spellcheck = false; el.placeholder = "档位名";
+    box.appendChild(el);
+  });
+}
+
+function mcfOpen(p, m) {
+  mcfTarget = { p, m };
+  const cfg = m.cfg || {};
+  $("mcfModel").textContent = m.name || "(还没填模型名)";
+  $("mcfWindow").value = cfg.context_window || "";
+  $("mcfMaxOut").value = cfg.max_output_tokens || "";
+  $("mcfVision").value = cfg.vision === true ? "1" : (cfg.vision === false ? "0" : "");
+  mcfRenderLevels(cfg.reasoning_levels || []);
+  $("mcfParam").value = cfg.reasoning_param || "";
+  $("mmCfgOverlay").classList.add("show");
+}
+
+function mcfClose() { $("mmCfgOverlay").classList.remove("show"); mcfTarget = null; }
+
+function mcfCollect() {
+  const cfg = {};
+  const w = parseInt($("mcfWindow").value, 10);
+  if (w > 0) cfg.context_window = w;
+  const o = parseInt($("mcfMaxOut").value, 10);
+  if (o > 0) cfg.max_output_tokens = o;
+  const v = $("mcfVision").value;
+  if (v !== "") cfg.vision = v === "1";
+  const levels = Array.from($("mcfLevels").children)
+    .map(i => String(i.value || "").trim()).filter(Boolean);
+  if (levels.length) cfg.reasoning_levels = levels;
+  const tpl = String($("mcfParam").value || "").trim();
+  if (tpl) cfg.reasoning_param = tpl;
+  return cfg;
+}
+
+function mcfSave() {
+  if (!mcfTarget) { mcfClose(); return; }
+  const cfg = mcfCollect();
+  // 只填一半就保存 = 界面上有那几档、请求里一个参数都不发。那是样子货,拒。
+  if (cfg.reasoning_levels && !cfg.reasoning_param) {
+    toast("填了推理档位就得写参数映射,否则那几档发不出去", true); return;
+  }
+  if (!cfg.reasoning_levels && cfg.reasoning_param) {
+    toast("写了映射但一个档位都没有 —— 先加档位,或把映射一起清空", true); return;
+  }
+  const target = mcfTarget;
+  target.m.cfg = cfg;
+  saveProvItems(true).then(ok => {
+    if (!ok) { toast("没保存成功:配置被后端拒了", true); return; }
+    toast("这个模型的配置已保存,下一步请求就按它走");
+    renderModelRows(target.p);
+    pywebview.api.get_reasoning().then(renderReasoning).catch(() => {});
+    mcfClose();
+  });
+}
+
+$("mcfLevelAdd").addEventListener("click", () => {
+  const box = $("mcfLevels");
+  const el = document.createElement("input");
+  el.spellcheck = false; el.placeholder = "档位名";
+  box.appendChild(el); el.focus();
+});
+$("mcfReset").addEventListener("click", () => {
+  $("mcfWindow").value = ""; $("mcfMaxOut").value = "";
+  $("mcfVision").value = ""; $("mcfParam").value = ""; mcfRenderLevels([]);
+});
+$("mcfCancel").addEventListener("click", mcfClose);
+$("mcfSave").addEventListener("click", mcfSave);
 
 function testOneModel(p, m, row) {
   const name = (m.name || "").trim();
@@ -4768,7 +4988,13 @@ function saveProvItems(silent) {
     base_url: p.base_url || "",
     api_key: p.api_key || "",
     models: (p.models || [])
-      .map(m => ({ name: String(m.name || "").trim(), enabled: m.enabled !== false }))
+      .map(m => {
+        const e = { name: String(m.name || "").trim(), enabled: m.enabled !== false };
+        // 模型自己那份配置必须跟着提交上去 —— 以前这里只留 name/enabled,
+        // 于是编辑器改完点保存,后端收到的还是光秃秃两个字段(§6 47 那第四跳)。
+        if (m.cfg && Object.keys(m.cfg).length) e.cfg = m.cfg;
+        return e;
+      })
       .filter(m => m.name),
     enabled: p.enabled !== false,
   }));
@@ -6139,10 +6365,53 @@ $("btnSkillSave").addEventListener("click", () => {
 });
 
 /* ---------------- 输入与按钮 ---------------- */
+/* 回合中途插话(v0.9.127,§6 6(c)):这一轮正在跑时按 Enter 不是"发第二条任务",
+   而是给学长补一句。后端 send_task 在 runner.busy 时把它收进信箱,做完手头那一步
+   并入本轮 —— "什么时候算插话"只由后端那一个 busy 判,前端不另判一次。
+   三件事是刻意的:
+   - **先问后端再画气泡**:排到顶、带附件这两种"这句没进去"若先画了气泡,前端
+     userSeq 就比后端的 user 消息多一条,而「编辑重发」是按这个序号回退文件的。
+   - **画之前把正在流的那段封住**(sealStreamingText):不封就出现"回答长在插话头上"。
+   - **不走编辑重发、不带附件**:前者要退文件,后者要先把图拼进多模态消息体,
+     而那一步发生在回合线程之外。 */
+function interject(text, atts) {
+  if (atts.length) { toast("插话只带文字,附件等这一轮跑完再发", true); return; }
+  if (!text) return;
+  $("input").value = "";
+  $("input").style.height = "auto";
+  pywebview.api.send_task(text, "[]").then(r => {
+    // 没进去才把话放回输入框:这一刻可能已经又打了几句,所以只在框是空的时候还
+    if (!r || r.ok === false) {
+      if (!$("input").value) $("input").value = text;
+      toast((r && r.msg) || "插话没进去", true);
+      return;
+    }
+    sealStreamingText();
+    addUserMsg(text);
+    toast("已排队:学长做完手头这一步就把它并进这一轮");
+  }).catch(() => {
+    if (!$("input").value) $("input").value = text;
+    toast("插话没发出去(桥没接上)", true);
+  });
+}
+
+/* 把正在流的那段正文就地封住:插话气泡落在它下面,而后面的 text_delta 是往 `cur`
+   里追加的 —— 不封住,新句子就长在插话头上。与 `case "tool_start"` 那行同一手法
+   (cur = null,下一条自己开一段),多出来的一次 renderAssistant(true) 是因为节流
+   窗口里还没画完的那几个字,这一段之后不会再有 finish_stream 替它刷尾巴。
+   `lastTool` 不动:那张卡片还在 DOM 里等 tool_done 回来收尾。 */
+function sealStreamingText() {
+  if (!cur) return;
+  if (cur.timer) { clearTimeout(cur.timer); cur.timer = null; }
+  renderAssistant(true);
+  cur = null;
+}
+
 function send() {
   const text = $("input").value.trim();
   const atts = attachments.slice();
-  if ((!text && !atts.length) || busy) return;
+  if (!text && !atts.length) return;
+  if (busy) { interject(text, atts); return; }   // 跑着的那句是插话,不是新任务
   if (editing) {
     const { ord, text: expect } = editing;
     const go = (revert) => {
@@ -7336,6 +7605,33 @@ function renderPlanCard(r) {
       + (tag ? `<span class="tk-tag">${tag}</span>` : "") + `</div>`;
   }).join("");
   card.querySelector(".tk-foot").textContent = tkFoot(r);
+  /* 规划锁开着 → 卡片上给一只「批准这版计划」(v0.9.129)。
+     这只按钮不是锦上添花:锁**只有人能解**,而 GUI 没有斜杠命令 —— 少了它,
+     核对单一旦被关掉或被取消,这一场会话就再也写不了东西(死锁状态)。
+     点它 = 解 sandbox 上那一份锁(与核对单「批准」同一条路,不另记状态)。 */
+  const foot = card.querySelector(".tk-foot");
+  if (r.locked) {
+    card.classList.add("locked");
+    const btn = document.createElement("button");
+    btn.className = "tk-approve";
+    btn.type = "button";
+    btn.textContent = "批准这版计划";
+    btn.title = "解锁后学长才能写文件与跑命令;不批就还是只读规划中";
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      btn.classList.add("pending");
+      pywebview.api.plan_approve().then(() => {
+        btn.classList.remove("pending");
+        activityRefresh();          // 卡片重画:锁没了,按钮就该消失(不自己改 DOM 状态)
+      }).catch(() => {
+        btn.classList.remove("pending");
+        toast("批准没送达(桥没接上)", true);
+      });
+    });
+    foot.appendChild(btn);
+  } else {
+    card.classList.remove("locked");
+  }
   toBottom();
 }
 
@@ -7875,6 +8171,12 @@ function buildSubagents(parent, sa) {
 // ---------------- 「本轮改动」段:把那本撤销栈摊开给人看 —— 一行退一处(v0.9.101)
 // 读的是后端 `Agent.undo_records()`(就是撤销栈本身),与产出行同源、前端不另记一份。
 // 所以栈被 /clear、换会话、压缩历史清空时这一段跟着变空,不会留下一份"看起来还能退"的旧账。
+//
+// v0.9.128 两处补正:
+// ⑴ 这本栈是**按会话**攒的,不是按问 —— 以前段标题说「本轮」而列的是整场,长会话里
+//    就是句骗人的话。现在按「第 N 问」分组,并在抬头说清跨了几问。
+// ⑵ 账外那片(命令与外部程序改的)以前只有环境栏两个总数,看不出是哪些文件。
+//    现在拿同一份 `actEnv.files` 列在下面,并**逐条标出它退不掉**。
 function buildChanges(parent, data) {
   const ch = data.changes;
   if (!ch) return 0;                        // 后端没给这一份(网页版/老桥):整段不出现
@@ -7885,7 +8187,16 @@ function buildChanges(parent, data) {
   const items = ch.items || [];
   if (!items.length) return 0;              // 这一轮没写文件就别摆一段"暂无"
   parent.appendChild(actEl("act-s", ch.note));
+  let lastTurn = null, shown = 0;
   for (const item of items) {
+    // 后端给的是"最新在前",所以分组天然按问从大到小排;同问内保持原顺序。
+    if (item.turn !== lastTurn) {
+      lastTurn = item.turn;
+      const head = actEl("act-grp", item.turn === ch.turn
+        ? `第 ${item.turn} 问 · 这一轮` : `第 ${item.turn} 问`);
+      head.title = "同一问里改的排在一起;「这一轮」标的是此刻最新那一问";
+      parent.appendChild(head);
+    }
     const box = actEl({ cls: "act-chg" });
     const row = actEl({ cls: "act-row" });
     row.dataset.k = "change:" + item.seq;
@@ -7913,13 +8224,63 @@ function buildChanges(parent, data) {
     box.appendChild(row);
     box.appendChild(holder);
     parent.appendChild(box);
+    shown++;
   }
   if (ch.more) parent.appendChild(actEl("act-more", `另有 ${ch.more} 处没列出(共 ${ch.total} 处)`));
-  const all = actEl({ cls: "act-row" }, `全部回退 ${ch.total} 处(一路退回本轮开始前)`);
+  const all = actEl({ cls: "act-row" },
+    `全部回退 ${ch.total} 处(一路退回这一场会话的开始`
+    + ((ch.turns || 1) > 1 ? `,跨 ${ch.turns} 问` : "") + ")");
   all.title = "按最新到最旧逐处退;命令(bash / py_script)与外部程序改的不在这份账里";
   all.addEventListener("click", undoAllChanges);
   parent.appendChild(all);
-  return items.length;
+  return shown + buildUnledger(parent, ch);
+}
+
+/* 账外那片:git 说"与 HEAD 不一样",而撤销栈里没这一条 —— 就是命令(bash / py_script)、
+   用户自己的编辑器、或别的程序改的。列出来的价值不是"能退",是**别让人以为退干净了**:
+   以前只有环境栏那两个总数(+A −B),看不出是哪 30 个文件。
+   数据用现成的 `actEnv`:它按"开栏 / 点 ↻ / 切工作区"的节奏问一次 git,而这一段是
+   每个工具事件都在刷 —— 在这里再敲一次 git 就等于把环境栏当初避开的那个卡顿
+   从另一头请回来。所以这一列的刷新节奏跟着环境那份走,标题里也这么写。 */
+function buildUnledger(parent, ch) {
+  const e = actEnv;
+  if (!e || !e.is_repo || !(e.files || []).length) return 0;
+  const outside = e.files.filter(f => f && f.path && !sameFile(f.path, ch.items));
+  if (!outside.length) return 0;
+  parent.appendChild(actEl("act-s", "下面这些 git 看见、但不在我的撤销账里 —— "
+    + "多半是命令改的或你在别处改的,**退不掉**（与 HEAD 比,随环境栏刷新）"));
+  const rows = outside.slice(0, 8);
+  for (const f of rows) {
+    const row = actEl({ cls: "act-row plain" });
+    const mid = actEl({ cls: "act-m" });
+    mid.appendChild(actEl("act-t", "· " + f.path));
+    const bits = [f.state || "改"];
+    bits.push(f.binary ? "二进制(行数算不出)"
+      : (f.added == null ? "行数没算出来" : `+${f.added} −${f.removed || 0}`));
+    mid.appendChild(actEl("act-s", bits.join(" · ")));
+    row.appendChild(actEl({ cls: "act-dot" }));
+    row.appendChild(mid);
+    row.title = "这一处我退不掉:它不在撤销账里。要退得你自己动手(git restore 或改回去)";
+    row.appendChild(actEl("act-badge", "退不掉"));
+    parent.appendChild(row);
+  }
+  const extra = outside.length - rows.length;
+  if (extra > 0 || e.more) {
+    parent.appendChild(actEl("act-more", `账外另有 ${extra + (e.more || 0)} 个文件没列出`
+      + (e.partial ? "(git 给不出全部行数,合计只算了列出的那些)" : "")));
+  }
+  return rows.length;
+}
+
+/* 同一个文件吗?撤销账里的路径是**相对工作区**,git 那份是**相对仓库根** ——
+   工作区就是仓库根时两者一样,工作区在仓库的子目录时差一段前缀。所以按后缀比,
+   而不是直接 ==:比不上的后果是把"我改过的"重复列进"退不掉"那片,那是句假话。 */
+function sameFile(gitPath, items) {
+  const g = String(gitPath || "").replace(/\\/g, "/");
+  return (items || []).some(it => {
+    const p = String(it.path || "").replace(/\\/g, "/");
+    return p && (g === p || g.endsWith("/" + p) || p.endsWith("/" + g));
+  });
 }
 
 // diff 的行、颜色、"算不出"那句原因,**全部来自后端**:前端只负责把 +/- 分个行,
@@ -8142,7 +8503,9 @@ function renderActivity(data) {
       b => buildSubagents(b, sa)) : null),
     actSect("groups", "📦 产出与来源", "", b => buildGroups(b, data)),
     actSect("changes", "🛠 本轮改动", (data.changes && data.changes.total)
-      ? data.changes.total + " 处可退" : "", b => buildChanges(b, data)),
+      ? data.changes.total + " 处可退"
+        + ((data.changes.turns || 1) > 1 ? " · 跨 " + data.changes.turns + " 问" : "")
+        : "", b => buildChanges(b, data)),
     // 环境信息:数据不在 activity 里(那要每次推送都跑三条 git 命令),单独问一次、
     // 2 秒缓存,只在开栏 / 点 ↻ / 切工作区时刷新 —— 用户刚报过切换卡顿,不能再加一刀。
     (actEnv ? actSect("env", "🖥 环境信息", actEnvSummary(actEnv),

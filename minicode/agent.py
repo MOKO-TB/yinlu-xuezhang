@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import ast
 import difflib
+import hashlib
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
 from minicode.compaction import compact, estimate_tokens, microcompact, schema_tokens
 from minicode.llm import LLMClient, ToolCall
-from minicode.model_catalog import context_window_for
+from minicode.model_catalog import window_for
 from minicode.permission import ASK, REJECT, PermissionGate
 from minicode import toolsum
 from minicode.session import Session, outbound as session_outbound, repair_tool_pairs
@@ -60,6 +64,27 @@ HARD_REJECT_NOTE = (
 # 拆掉另一只手刚装的门。
 NON_DELEGABLE_ASKS = ("credential", "git", "external", "project_rule")
 
+# 安全日志(M6)里「是哪条门过的问」这一列。**由 ask_kind 派生,不从文案猜**:
+# `_ask` 的 docstring 早就写着为什么 —— 靠匹配文案,改一个字判定就悄悄失效,
+# 而且没有任何一条测试会红(H3 之前正因为如此,三类红线门只能靠"密钥"二字猜)。
+# 旧的两个词留着不动(已经有人按它们读这份事后线索):`credential` 与 `escalation`;
+# 其余门不再挤进一个笼统的 escalation —— 它们各自叫什么,`permission.py` 里已经说了。
+SECURITY_LOG_GATES = {"credential": "credential", "external": "escalation"}
+
+# 超长工具输出的转存(对标 Claude 的 MCP 落盘 / ZCode 的 artifactPath)。
+# 目录开在**工作区里**是刻意的:模型要用 `read_file` 把尾巴读回来,而越界的那条路
+# 会弹确认框、无头模式直接拒 —— 存了却读不到,比不存更坏。
+OUTPUT_SPILL_DIR = "tool-outputs"
+SPILL_FILE_MAX_CHARS = 1_000_000    # 单个转存文件的封顶,超了就在文件里再说一声
+# 同一条消息里最多几只工具一起跑。与子代理那一路同一量级(上限 4→6 见 §2 v0.9.60),
+# 再宽也不会更快:磁盘与本地 sqlite 才是瓶颈,不是线程数。
+TOOL_PARALLEL_MAX = 4
+
+# 回合中途插话(§6 6(c)):跑着的时候用户补的那一句先进信箱,在**安全边界**读。
+# 信箱上限是兜底不是判据:正常情况一两步就清空,攒到顶说明这一轮里有一步跑了很久,
+# 那时再多收只会把用户的话压进他看不见的地方 —— 界面据此回一句"排队满了"。
+INBOX_MAX = 8
+
 FAIL_STREAK_NOTE = ("同一个工具调用已经连续失败 3 次,结果都一样,继续原样重试没有意义。"
                     "这一次不许再调用工具。请向用户如实说明:卡在哪一步、每次失败的具体原因"
                     "(以上面的工具回话为准,不要凭印象编)、以及可选的下一步"
@@ -68,6 +93,31 @@ FAIL_STREAK_NOTE = ("同一个工具调用已经连续失败 3 次,结果都一�
 TOKEN_LIMIT_NOTE = ("本会话累计 token 消耗已到 session_token_limit 上限,这一次不许再调用工具。"
                     "请向用户如实说明:这一轮做到哪了、还剩什么没做;想继续可以提高 "
                     "config.json 里的 session_token_limit,或新开一个会话再接着做。")
+
+
+@dataclass
+class Prepared:
+    """`_prepare` 交给 `_run_handler` / `_finish` 的那一份状态。
+
+    `early` 非空 = 这一步根本不该执行(工具不存在 / 参数不是 JSON / 硬拒 / 钩子拦 /
+    用户拒 / 没人可点头),回话就是 `early` 那一句。三段拆开最容易坏的就是"早退也必须
+    有一条结果" —— 少一条,上下文里就留下"有 call 没结果"的悬空对儿,从这一轮起每个
+    请求都 400,而用户看不出跟刚才那次报错有什么关系。
+    """
+
+    tool: Tool | None = None
+    args: dict = field(default_factory=dict)
+    timing: dict = field(default_factory=dict)
+    early: str = ""
+    # 这三句要活着到最终回话的**围栏之外**(本地附注不该被标成外部内容),所以跟着
+    # 这一步走,而不是散在调用栈的局部变量里。
+    hook_ctx: str = ""
+    rewrite_note: str = ""
+    ask_extra: str = ""
+
+    @property
+    def runnable(self) -> bool:
+        return not self.early and self.tool is not None
 
 
 class Agent:
@@ -107,13 +157,20 @@ class Agent:
         self._undo_open = None     # 等这次真落盘之后补"改后指纹"的那条 seq
         self._narration = ""       # 本轮模型写的说明文字:权限确认框里当"为什么要做"的兜底
         self._pending_prior = ""   # B1:下一步 search_knowledge 命中历史差评时的那句系统侧先验
+        # 失败连击的两个格子**在建对象时就要有**:`run_turn` 每回合开头会重置,但
+        # 落账那条路(`_account` → `_fail_streak_hit`)不该依赖"回合已经开过"——
+        # 直接调调度器(测试、子代理复用同一段)时,表现是 AttributeError 而不是判错。
+        self._fail_streak_key = None
+        self._fail_streak_count = 0
         # W1:这次请求成功之前撞了几次重试。挂在 agent 上而不是 UI 上,因为
         # 它要跟 `_record_usage` 一起落库(UI 的那份是给监控栏的会话级计数)。
         self._llm_retries = 0
-        # W10:本步实测毫秒(handler 全程)。_execute 每步开头清零;替身/子类
-        # 覆盖 _execute 时这里保底 None —— add_tool_result 拿到 None 不带键。
-        self._step_ms = None
-        self._hook_ms = None      # 同一条保底:H2 的钩子实测毫秒,没跑钩子就不带键
+        # W10:本步实测毫秒(handler 全程)。⚠ 这两个数**存在"这一步自己的那份"
+        # 里(`_execute` 的 `timing` 参数),不散在 self 上** —— self 上的 `_step_ms`
+        # /`_hook_ms` 只是"最近一次默认那一路"的读取位(替身/子类与界面都读它)。
+        # 并发批次每路传自己的 dict,谁也不会把别人的毫秒盖掉。
+        # 保底仍是 None:没跑钩子/没跑 handler 就不带那个键(add_tool_result 据此省略)。
+        self._last_timing: dict = {"step_ms": None, "hook_ms": None}
         # microcompact 那句"省略了多少"每回合最多说一次(它每一步都成立,
         # 每一步都说就成了刷屏)。
         self._micro_noted = False
@@ -125,7 +182,38 @@ class Agent:
         # 第一回合只记账不重建(见 _refresh_clock 那句理由)。漏了这行不是"少刷一次",
         # 是每一路新会话的第一条消息直接 AttributeError —— 整个回合崩掉。
         self._prompt_sig = None
+        # 项目指令文件的采纳点头:`_ask_project_agents` 用它保证"同一份内容这一会话
+        # 只问一次"(被拒过也不追着问),以及"说过一次没采纳就别每回合刷屏"。
+        self._agents_asked = ""
+        self._agents_refused_noted = False
         self.mcp = None            # app_setup 注入:McpManager,退出时关停
+        # 超长输出转存:图形版/CLI 默认开;**对外模式由 web_profile 关掉**
+        # (每个访客一个 Bridge,但工作区目录是共用的,落文件等于跨访客可见)。
+        self.output_spill = True
+        # 插话信箱(§6 6(c)):界面线程写、回合线程读,所以两边过同一把锁。
+        # 空清单在构造时就要有(与上面 `_fail_streak_key` 同一个理由):收句子
+        # 不要求"回合已经开过",直接调它就该成功,否则表现是 AttributeError。
+        self._inbox: list[str] = []
+        self._inbox_lock = threading.Lock()
+
+    # 「最近一次默认那一路」的读取位:界面替身、测试与 add_tool_result 都从这里取
+    # (读的是 `_last_timing` 这一份,不是散着的两个字段)。写也走这里 —— 那等于
+    # 明说"我没传自己的 timing,吃的就是默认那一份",不会让老调用点与子类悄悄断。
+    @property
+    def _step_ms(self) -> int | None:
+        return self._last_timing.get("step_ms")
+
+    @_step_ms.setter
+    def _step_ms(self, value: int | None) -> None:
+        self._last_timing["step_ms"] = value
+
+    @property
+    def _hook_ms(self) -> int | None:
+        return self._last_timing.get("hook_ms")
+
+    @_hook_ms.setter
+    def _hook_ms(self, value: int | None) -> None:
+        self._last_timing["hook_ms"] = value
 
     def close(self) -> None:
         """释放外部资源(当前是 MCP 子进程);重复调用安全。"""
@@ -137,13 +225,43 @@ class Agent:
                 pass
             self.mcp = None
 
+    def queue_interjection(self, text: str) -> bool:
+        """收一句"跑着的时候补的话",回它有没有进信箱(§6 6(c))。
+
+        空句子不收 —— 那是按错了回车,不是"我要说一句"。超过 `INBOX_MAX` 不收,
+        不收这件事由调用方说给用户,而不是默默丢掉:用户已经看见自己那句话发出去了。
+        """
+        clean = str(text or "").strip()
+        if not clean:
+            return False
+        with self._inbox_lock:
+            if len(self._inbox) >= INBOX_MAX:
+                return False
+            self._inbox.append(clean)
+        return True
+
+    def _take_inbox(self) -> int:
+        """把信箱里的话按先后并进会话,回并进去几条(0 = 本来就空)。
+
+        只在两处调用:每一步**发请求之前**(上一步的 tool 结果已经落进留档,这一句
+        排在它后面 —— "答到哪儿 → 用户补一句 → 接着答"),以及本轮正要收口的时候。
+        两个位置都在主线程、都不在 handler 中间,所以 call/result 的配对从结构上破不了。
+        """
+        with self._inbox_lock:
+            pending, self._inbox = self._inbox, []
+        for text in pending:
+            self.session.add_user(text)
+        return len(pending)
+
     def run_turn(self, user_input: str, content=None, *, add_user: bool = True) -> None:
         """跑一个回合。content 可选:带附件时的多模态消息体(list[dict])。
 
         `add_user=False` 给用户点「重新生成」用:那句提问已经在上下文里了(而且带着
         当时的附件消息体),再追加一遍会让模型把同一句话看到两遍,答出来的是"下一题"。
         """
-        self._refresh_clock()      # 跨天了先重建日期与课表段,再收这条新消息
+        # 先问项目指令采不采纳(它可能改提示词内容),再按指纹决定要不要重建 ——
+        # 顺序反了就会"跨天/换规矩"这一句抢在一次点头之前说,而说的还是旧的那份。
+        self._refresh_clock(self._ask_project_agents())
         self._note_daily_budget()  # C1:日预算接近/超支,当天各提醒一次
         self.gate.new_turn()
         self._micro_noted = False   # 新的一问,那句"省略了多少"还可以再说一次
@@ -187,6 +305,7 @@ class Agent:
                 return
             steps += 1
             self._maybe_compact()
+            self._take_inbox()      # 插话在发这一次请求之前并入(见 _take_inbox)
             try:
                 turn = self.llm.stream_chat(
                     self._messages_for_request(),
@@ -213,28 +332,17 @@ class Agent:
             self._narration = str(turn.text or "")   # 供本步工具确认框解释"为什么要做"
 
             if not turn.tool_calls:
+                # 正要收口时信箱里有话 —— 那不是"下一轮的事":它是用户在这一轮跑着的时候
+                # 补的,按 §6 6(c) 拍的口径算这一轮的后续步骤,所以继续转而不 return。
+                # 继续照样吃 `max_steps` 一格,插话因此变不出无限回合。
+                if self._take_inbox():
+                    continue
                 return
 
-            for call in turn.tool_calls:
-                try:
-                    result = self._execute(call)
-                except Exception as e:  # noqa: BLE001 —— 见下面为什么必须兜住
-                    # handler 自己抛错(不止 _execute 里那几种可预期的)也必须落一条
-                    # 结果:少这一条,上下文里就留下"有 call 没结果"的悬空对儿,从这一
-                    # 轮起每次请求都会 400,而用户看不出跟刚才那次报错有什么关系。
-                    result = (f"错误: 工具 {call.name} 执行时抛了 "
-                              f"{type(e).__name__}: {str(e)[:200]}")
-                self.session.add_tool_result(call.id, call.name, result,
-                                             elapsed_ms=self._step_ms,
-                                             hook_ms=self._hook_ms)
-                if self._fail_streak_hit(call):
-                    # 连续 N 次一模一样的失败:再原样重试只是烧 token(撞上
-                    # max_steps/时间限才停)。收一次尾,把"接下来怎么办"交给
-                    # 用户 —— 文案不许说"我已停止了它",停的是这一轮的循环,
-                    # 与两条时限同一口径。
-                    self.ui.fail_streak_limit(call.name, FAIL_STREAK_LIMIT)
-                    self._wrap_up(FAIL_STREAK_NOTE)
-                    return
+            # 一步走完再走下一步是**默认**;只有连续、名单内、没钩子认领、门也不会问
+            # 的那几支才一起跑(§6 50(b))。返回 True 表示这一轮该收尾。
+            if self._dispatch_tool_calls(list(turn.tool_calls)):
+                return
         else:
             self.ui.max_steps_reached(self.max_steps)
             self._wrap_up()
@@ -272,7 +380,7 @@ class Agent:
         self._bump_turn_tokens(turn)
         self._push_turn_stats(turn)
 
-    def _refresh_clock(self) -> None:
+    def _refresh_clock(self, rebuild_note: str = "") -> None:
         """跨过一天就把 system prompt 重算一遍(每个会话每天至多一次)。
 
         为什么按日重建而不是每轮注入一行当前时间:后者**每一步请求都在破坏
@@ -282,12 +390,16 @@ class Agent:
 
         只在回合边界检查:`run_turn` 一开头,第一条 LLM 请求之前。跑到一半的回合
         绝不会被换掉提示词(后台会话运行器各建各的 Agent,各查各自的)。
+
+        `rebuild_note` 非空 = **强制重建**并改说这一句。它只有一个来源:用户刚刚
+        对项目指令文件点了头(`_ask_project_agents`)。那种情况下第一回合的
+        "只记账不重建"捷径会把点头吞掉 —— 提示词是建 Agent 时拼的,那时还没采纳。
         """
         today = date.today()
         from minicode.app_setup import (build_system_prompt,
                                         instruction_signature)
         fp = instruction_signature(self.ctx.workspace)
-        if self._prompt_sig is None:
+        if self._prompt_sig is None and not rebuild_note:
             # 建 Agent 时这份提示词刚由 build_system_prompt 拼好,第一遍把指纹记下来就收工:
             # 往下走会重写一遍内容一模一样的 system,还会冒出一句「指令文件或技能清单有变化,
             # 已重新载入」—— 那是没发生过的事。**但日期本身已经过期时不能跳过**,
@@ -298,7 +410,7 @@ class Agent:
         # 两个事实分开比,别写成"元组 == 字符串":那样永远不相等,于是每一步都重建
         # system、每一步都说一句已重新载入 —— 既把 KV Cache 前缀破光(这套按日重建
         # 的全部理由就是为了别破),又每句都在骗人。
-        elif today == self._prompt_date and fp == self._prompt_sig:
+        elif not rebuild_note and today == self._prompt_date and fp == self._prompt_sig:
             return
         crossed_day = today != self._prompt_date
         self._prompt_date = today
@@ -309,10 +421,93 @@ class Agent:
                                     "reply_style", "normal"))):
             # D1(v0.9.102):重建条件从"跨天"推广为"跨天或指令/技能清单变了"
             # —— 内容变了才破 KV Cache,没变照旧稳定命中。
-            if crossed_day:
+            if rebuild_note:
+                self.ui.info(rebuild_note)
+            elif crossed_day:
                 self.ui.info("已跨天,日期与课表已刷新")
             else:
                 self.ui.info("指令文件或技能清单有变化,已重新载入")
+
+    def _ask_project_agents(self) -> str:
+        """项目自带的那份 AGENTS.md 是别人写的规矩:第一次照它干活之前要人点一次头。
+
+        `docs/roadmap-分层指令文件.md` §四.2⑧ + §七.2 那三条口径,现在住在这里:
+        - **没答不算同意**:这个形态没有提问通道(无头、网页版)、点了「不采纳」、
+          甚至点了「按推荐」都不算 —— 只认明确点到「采纳」那一项;
+        - **同一份内容只问一次**:点头记的是内容指纹(见 `app_setup.agents_adoption`),
+          文件改一个字就回到没采纳;这一会话里被拒过的那份也不再追着问第二遍;
+        - **子代理不问**:它拿到的是任务文本,而提示词那一段本来就以"本机采纳过"
+          为条件 —— 在这里弹框等于把主会话的一次决定重问 N 遍。
+
+        返回要强制重建提示词时该说的话(空串 = 什么都不动)。
+        """
+        if self._is_sub:
+            return ""
+        from minicode import asking
+        from minicode.app_setup import adopt_agents, agents_adoption
+
+        info = agents_adoption(self.ctx.workspace)
+        if not info["present"] or info["adopted"]:
+            return ""
+        if info["sha"] == self._agents_asked:
+            return ""                    # 这一会话已经为这份内容问过一回
+        self._agents_asked = info["sha"]
+        ask = getattr(self.ui, "ask_user", None)
+        if not callable(ask):
+            return self._agents_refused(
+                info, "这个界面点不了头")     # 无头/网页版:说一次,别每回合刷屏
+        qs, err = asking.normalize([{
+            "q": f"这个项目自带一份指令文件({info['name']},{info['lines']} 行),"
+                 "要我照它干活吗?",
+            "why": "它可能是别人放进这个目录的。采纳后它会进这一路对话的系统提示词;"
+                   "沙箱边界、敏感路径硬禁与确认门它一样都改不动。"
+                   "只有点到「采纳」那一项才算 —— 没答、按推荐都不算替你点头。",
+            "header": "项目指令",
+            "options": [
+                {"label": "采纳,以后这一份不再问",
+                 "note": "记的是内容指纹:文件改一个字会再问一次"},
+                {"label": "不采纳",
+                 "note": "这一段不进提示词,这一会话里也不再问"},
+            ]}])
+        if err:
+            return self._agents_refused(info, f"这张卡没弹成:{err}")
+        mode, picks = self._ask_pick(ask(qs, note=info["name"]))
+        if mode != asking.MODE_ANSWER or not picks:
+            # 三种"没点头"分开说:说错了等于替用户讲了他没做的事
+            why = ({asking.MODE_UNANSWERED: "没等到回答",
+                    asking.MODE_RECOMMEND: "你点的是「按推荐」"}.get(
+                        mode, "你没点到任何一项"))
+            return self._agents_refused(info, f"{why},这不算点头")
+        if picks[0] != qs[0]["options"][0]["label"]:
+            return self._agents_refused(info, f"你选了「{picks[0]}」")
+        adopt_agents(self.ctx.workspace)
+        return (f"已采纳这个项目的 {info['name']}({info['lines']} 行)—— "
+                "它现在在这一路的系统提示词里")
+
+    def _agents_refused(self, info: dict, why: str) -> str:
+        """没采纳时说得出口的一句,并保证同一会话里不重复说(返回值仍为空串)。"""
+        if not getattr(self, "_agents_refused_noted", False):
+            self._agents_refused_noted = True
+            self.ui.info(f"{info['name']}({info['lines']} 行)没采纳:{why}。"
+                         "这一段不进提示词;想让它起作用就点一次头,或把规矩并进"
+                         "用户级那份(那一份是你自己写的,不问)。")
+        return ""
+
+    @staticmethod
+    def _ask_pick(reply) -> tuple[str, list]:
+        """从提问卡的回传里取 (mode, 这一题选中的 label 列表)。
+
+        界面可能回字符串也可能回数组(`asking.format_answers` 两种都收),这里按
+        它自己的读法收一遍 —— 不在这里替用户把"没选"总结成"选了第一项"。
+        """
+        mode = str((reply or {}).get("mode") or "unanswered")
+        out: list = []
+        for item in (reply or {}).get("answers") or []:
+            if not isinstance(item, dict):
+                continue
+            choice = item.get("choice")
+            out += [choice] if isinstance(choice, str) else list(choice or [])
+        return mode, [str(x) for x in out]
 
     def _messages_for_request(self) -> list[dict]:
         """这一次请求要发的消息 = 留档那份(先过一遍工具调用配对)+(必要时)一条
@@ -505,6 +700,11 @@ class Agent:
         没退,`drift` 是这一处落盘之后又被别的工具动过。栈被 `/clear`、换会话、
         压缩历史清空时这里就是空的,界面必须照实说"没有可退的改动",
         不许留一份看起来还能退的缓存。
+
+        载荷里那两个数是给"这一栏到底管多远"用的:这本栈是**按会话**攒的,不是按问,
+        所以 `turn`(现在第几问)让界面能标出"这一轮"那几条,`turns`(栈里出现过几问)
+        让它能说"这份账跨了 4 问" —— 以前段标题写着「本轮改动」而列的是整场会话,
+        长会话里就是一句看着没错、用起来骗人的话。
         """
         items = []
         for rec in reversed(self._undo_stack):
@@ -524,6 +724,8 @@ class Agent:
         more = max(0, len(items) - self.CHANGE_VIEW_LIMIT)
         return {"ok": True, "items": items[:self.CHANGE_VIEW_LIMIT],
                 "total": len(items), "more": more,
+                "turn": int(self._turn_ordinal or 0),
+                "turns": len({it["turn"] for it in items}),
                 # 抬头那句不是免责声明,是这一屏最容易骗人的一处:bash/py_script
                 # 改出来的东西压根不在快照里,点了"全部回退"也退不掉它们。
                 "note": ("只列我用 write_file / edit_file 改的文件;"
@@ -659,7 +861,10 @@ class Agent:
         return out["msg"] + self._undo_extra_tail(rec)
 
     def undo_all(self) -> str:
-        """一路退回本轮开始前:按最新→最旧逐条退,同一文件退到最早那份前像。"""
+        """一路退回**这一场会话开始**:按最新→最旧逐条退,同一文件退到最早那份前像。
+
+        名字里的"全部"是栈的全部,不是本轮的全部 —— 这本栈按会话攒,不按问清。
+        """
         if not self._undo_stack:
             return "没有可撤销的文件改动(bash 产生的改动不在跟踪范围)。"
         done, failed = [], []
@@ -837,9 +1042,8 @@ class Agent:
 
     def _maybe_compact(self, force: bool = False) -> bool:
         cfg = self.ctx.config
-        # 与任务面板同一把尺子:优先用运行时探测到的真实窗口(见 model_probe),
-        # 探测不到才退回 config.json 里的默认值。
-        window = context_window_for(cfg.model, cfg.context_window)
+        # 与任务面板同一把尺子:用户在这个模型上声明的窗口 > 运行时探测 > config.json 默认。
+        window = window_for(cfg, cfg.model)
         threshold = int(window * cfg.compact_at_ratio)
         if not force and self.context_tokens() <= threshold:
             return False
@@ -865,22 +1069,180 @@ class Agent:
 
     # ------------------------------------------------------------------
 
-    def _execute(self, call: ToolCall) -> str:
-        # W10:每步先清零 —— 早退路径(工具不存在/参数坏/被拒/钩子拦)不残留
-        # 上一步的实测,add_tool_result 拿到 None 就不带 elapsed_ms 键。
-        self._step_ms = None
-        self._hook_ms = None      # 同上:这一步没跑钩子就不带 hook_ms
+    def _lane_ok(self, call: ToolCall) -> bool:
+        """这一步能不能和邻着的那几步一起跑(四个条件全过才算)。
+
+        判据一条都不新写:门走 `gate.would_ask`(与真判同一条链,预演完还原字段),
+        钩子走 `_matched_config_hook`,参数解析与 `_prepare` 同一句 `json.loads`。
+        pre 钩子会改写参数、post 钩子会往结果里灌正文,两者都要求"按模型给的顺序"
+        发生,所以认领了钩子的那一步一律串行(没配钩子时与今天零差别)。
+        """
+        tool = self._tool_map.get(call.name)
+        if tool is None or not getattr(tool, "concurrent_safe", False):
+            return False
+        try:
+            args = json.loads(call.arguments) if call.arguments.strip() else {}
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(args, dict):
+            return False
+        props = (tool.parameters or {}).get("properties") or {}
+        if "reason" in props:
+            args = {k: v for k, v in args.items() if k != "reason"}
+        if self._matched_config_hook("pre_tool", tool, args):
+            return False
+        if self._matched_config_hook("post_tool", tool, args):
+            return False
+        return not self.gate.would_ask(tool, args)
+
+    def _dispatch_tool_calls(self, calls: list[ToolCall]) -> bool:
+        """按模型给的顺序走完这一批调用。返回 True = 这一轮该收尾(失败连击触顶)。
+
+        并发的只有 `_run_handler` 那一段:攒批、准备(可能弹确认框)、收尾与落账全在
+        主线程,留档里 tool 结果仍按 `tool_calls` 的原顺序追加,不会留下悬空对儿;
+        失败连击、快照、白名单留痕这些跨步状态一个都不进线程。
+
+        **够两只才起池**:单只仍走 `_execute` 本体 —— 那是测试与子类的替换接缝,
+        绕开它就等于把别人赖以拦截的那个点悄悄搬走。
+        """
+        i, n = 0, len(calls)
+        while i < n:
+            run = [calls[i]]
+            i += 1
+            if self._lane_ok(calls[i - 1]):
+                while (i < n and len(run) < TOOL_PARALLEL_MAX
+                       and self._lane_ok(calls[i])):
+                    run.append(calls[i])
+                    i += 1
+            if len(run) == 1:
+                if self._run_one_serial(run[0]):
+                    return True
+                continue
+            batch = []
+            for call in run:
+                lane = {"step_ms": None, "hook_ms": None}
+                # prepare 在主线程、按顺序跑:它可能要弹框,而一次只能有一个框
+                batch.append((call, self._prepare(call, lane), lane))
+            if self._run_batch(batch):
+                return True
+        return False
+
+    def _run_batch(self, batch) -> bool:
+        """一批(≥2 只)同时跑 handler,再按模型给的顺序收尾与落账。"""
+        texts, runnable = [], []
+        for _call, prep, _lane in batch:
+            if prep.runnable:
+                texts.append("")
+                runnable.append(len(texts) - 1)
+            else:
+                texts.append(prep.early)     # 早退的(用户拒/硬拒/参数坏)没有 handler 可跑
+        got = {}
+        if runnable:
+            with ThreadPoolExecutor(max_workers=min(TOOL_PARALLEL_MAX, len(runnable)),
+                                    thread_name_prefix="tool") as ex:
+                futs = {k: ex.submit(self._run_handler, batch[k][1].tool,
+                                      batch[k][1].args) for k in runnable}
+                for k, fut in futs.items():
+                    try:
+                        got[k] = fut.result()
+                    except BaseException as e:  # noqa: BLE001 —— 少一条结果就是悬空对儿
+                        got[k] = (f"错误: 工具 {batch[k][0].name} 执行时抛了 "
+                                  f"{type(e).__name__}: {str(e)[:200]}", 0)
+        for k in runnable:
+            text, ms = got[k]
+            batch[k][2]["step_ms"] = ms
+            texts[k] = self._finish(batch[k][1], text)
+        for (call, _prep, lane), text in zip(batch, texts):
+            if self._account(call, text, lane):
+                return True
+        return False
+    def _run_parallel(self, batch):
+        """一批里同时跑 handler,按**模型给的顺序**把结果与收尾交回主线程。"""
+        runnable = [k for k, (_c, prep, _l) in enumerate(batch) if prep.runnable]
+        texts: list[str] = [prep.early if not prep.runnable else ""
+                            for _c, prep, _l in batch]
+        if runnable:
+            with ThreadPoolExecutor(max_workers=min(TOOL_PARALLEL_MAX, len(runnable)),
+                                    thread_name_prefix="tool") as ex:
+                futs = {k: ex.submit(self._run_handler, batch[k][1].tool,
+                                     batch[k][1].args) for k in runnable}
+                # 逐个取:少取一个就留下"有 call 没结果",从这一轮起每次请求都会 400,
+                # 而用户看不出跟刚才那次报错有什么关系 —— 所以抛错也必须变成一条结果。
+                got = {}
+                for k, fut in futs.items():
+                    try:
+                        got[k] = fut.result()
+                    except BaseException as e:  # noqa: BLE001
+                        got[k] = (f"错误: 工具 {batch[k][0].name} 执行时抛了 "
+                                  f"{type(e).__name__}: {str(e)[:200]}", 0)
+            for k in runnable:
+                text, ms = got[k]
+                batch[k][2]["step_ms"] = ms
+                texts[k] = self._finish(batch[k][1], text)
+        return [(texts[k], batch[k][0], batch[k][2]) for k in range(len(batch))]
+
+    def _run_one_serial(self, call: ToolCall) -> bool:
+        """今天那条路:一步整体跑完、落账、判断失败连击。
+
+        调 `_execute(call)` 而不是把 lane 传进去 —— 那是既有签名,也是测试与子类的
+        替换点(传第二个参数会让所有一参数替换者当场 TypeError)。这一步的实测数就
+        落在默认那份 lane 上,读回来即可,与拆分之前逐字节一致。
+        """
+        try:
+            text = self._execute(call)
+        except Exception as e:  # noqa: BLE001 —— 见 `_account`:少一条结果就是悬空对儿
+            text = (f"错误: 工具 {call.name} 执行时抛了 "
+                    f"{type(e).__name__}: {str(e)[:200]}")
+        return self._account(call, text, self._last_timing)
+
+    def _account(self, call: ToolCall, text: str, lane: dict) -> bool:
+        """落一条结果并判断失败连击。True = 这一轮该收尾。
+
+        文案不许说"我已停止了它":停的是这一轮的循环,与两条时限同一口径。
+        """
+        self.session.add_tool_result(call.id, call.name, text,
+                                     elapsed_ms=lane.get("step_ms"),
+                                     hook_ms=lane.get("hook_ms"))
+        if self._fail_streak_hit(call):
+            self.ui.fail_streak_limit(call.name, FAIL_STREAK_LIMIT)
+            self._wrap_up(FAIL_STREAK_NOTE)
+            return True
+        return False
+    def _execute(self, call: ToolCall, timing: dict | None = None) -> str:
+        """跑一步:prepare(钩子 + 门 + 确认框 + 快照)→ handler → finalize(回灌 + 围栏)。
+
+        今天这三段是一次调用串起来的,行为与拆分前一字不差;拆开的理由是 §6 50(b)
+        那批并发:**只有 `_run_handler` 会进线程池** —— 门、确认框、回合状态与跨步
+        计数都留在主线程按序跑。
+        """
+        p = self._prepare(call, timing)
+        if not p.runnable:
+            return p.early
+        result, step_ms = self._run_handler(p.tool, p.args)
+        p.timing["step_ms"] = step_ms
+        return self._finish(p, result)
+
+    def _prepare(self, call: ToolCall, timing: dict | None = None) -> Prepared:
+        # `timing` 是"这一步自己的那份毫秒"。不传 = 吃 self 上那份默认位(今天所有
+        # 调用点的形状与数字都不变);并发批次每路传一个独立 dict,谁的耗时都不会
+        # 被别人盖掉。
+        t = self._last_timing if timing is None else timing
+        # W10:每步先清零 —— 早退路径(工具不存在/参数坏/被拒/钩子拦)不残留上一步
+        # 的实测,add_tool_result 拿到 None 就不带 elapsed_ms 键。
+        t["step_ms"] = None
+        t["hook_ms"] = None      # 同上:这一步没跑钩子就不带 hook_ms
 
         tool = self._tool_map.get(call.name)
         if tool is None:
-            return (f"错误: 未找到工具 '{call.name}'。"
-                    f"可用工具: {', '.join(self._tool_map)}")
+            return Prepared(early=(f"错误: 未找到工具 '{call.name}'。"
+                                   f"可用工具: {', '.join(self._tool_map)}"))
         try:
             args = json.loads(call.arguments) if call.arguments.strip() else {}
         except json.JSONDecodeError as e:
-            return f"错误: 工具参数不是有效 JSON({e})。原始参数: {call.arguments[:200]}"
+            return Prepared(early=f"错误: 工具参数不是有效 JSON({e})。"
+                                  f"原始参数: {call.arguments[:200]}")
         if not isinstance(args, dict):
-            return "错误: 工具参数必须是 JSON 对象。"
+            return Prepared(early="错误: 工具参数必须是 JSON 对象。")
 
         # reason 是给用户看的"这一步为什么做",不是工具参数:声明了才摘掉,避免
         # 误吃 MCP 工具自己同名的参数。
@@ -901,13 +1263,13 @@ class Agent:
             # 硬拒根本不叫钩子(方案 H1 红线②):先只读跑一次门只为拿这个判断。
             # check() 自己会清 ask_note/project_allow_reason,重复调没有副作用。
             if self.gate.check(tool, args) == REJECT:
-                return self._reject_note(tool, args)
+                return Prepared(early=self._reject_note(tool, args))
             pre = self._run_config_hook("pre_tool", tool, args)
             if pre is not None:
-                self._hook_ms = int(pre.get("elapsed_ms") or 0)
+                t["hook_ms"] = int(pre.get("elapsed_ms") or 0)
                 self._note_hook_health("pre_tool", tool.name, pre)
                 if pre.get("blocked"):
-                    return self._hook_blocked_text(pre)
+                    return Prepared(early=self._hook_blocked_text(pre))
                 hook_ctx = str(pre.get("context") or "")
                 original = dict(args)
                 args, rewrite_note = self._apply_hook_input(tool, args, pre)
@@ -916,7 +1278,7 @@ class Agent:
 
         decision = self.gate.check(tool, args)
         if decision == REJECT:
-            return self._reject_note(tool, args)
+            return Prepared(early=self._reject_note(tool, args))
 
         if decision == ASK:
             note = getattr(self.gate, "ask_note", "") or ""
@@ -924,24 +1286,25 @@ class Agent:
             # ---- H3(v0.9.115):弹框之前,给 permission_request 钩子一次表态的机会。
             # 三类红线级的门不进来(见 NON_DELEGABLE_ASKS);钩子没跑成也不进来
             # —— 失败的归宿是"照旧问人",既不替人拒也不替人放。
-            answer = self._ask_via_permission_hook(tool, args, kind)
+            answer = self._ask_via_permission_hook(tool, args, kind, t)
             if answer and answer[0] == "deny":
-                return ("错误: 这一步被你配的 permission_request 钩子拒了 —— "
-                        f"**不是用户拒的**,用户根本没看到这一问。钩子给的理由:"
-                        f"{answer[1] or '(没写)'}。请如实告诉用户是钩子拦的(别把它说成"
-                        "用户的决定),并问他要不要改那条钩子或换个做法。")
+                return Prepared(early=(
+                    "错误: 这一步被你配的 permission_request 钩子拒了 —— "
+                    f"**不是用户拒的**,用户根本没看到这一问。钩子给的理由:"
+                    f"{answer[1] or '(没写)'}。请如实告诉用户是钩子拦的(别把它说成"
+                    "用户的决定),并问他要不要改那条钩子或换个做法。"))
             if not answer:
                 # 无升级警示时按原调用路径走(不传 note):既有三参数实现/测试代理
                 # 不受影响,而且这是"未接触外部内容时行为与基线一致"的前提。
                 if note:
                     choice = self.ui.confirm_tool(tool, args, reason or self._narration, note)
-                    self._log_security_ask(tool, args, note, choice)
+                    self._log_security_ask(tool, args, note, choice, kind)
                 else:
                     choice = self.ui.confirm_tool(tool, args, reason or self._narration)
                 if choice == "always":
                     self.gate.approve_for_turn(tool.name)
                 elif choice != "yes":
-                    return "用户拒绝了本次工具调用。请停止重试,询问用户希望如何处理。"
+                    return Prepared(early="用户拒绝了本次工具调用。请停止重试,询问用户希望如何处理。")
                 # 用户放行后记住工作区外路径:「允许」管本回合;「总是允许」升为
                 # 会话级(不落盘,换工作区/重启即失效)
                 self.gate.approve_outside(tool, args, session=(choice == "always"))
@@ -966,6 +1329,16 @@ class Agent:
         # 而"原本要做什么"落在安全日志里(_log_hook_rewrite),不是丢了。
         self._snapshot_before_mutation(tool, args)
         self.ui.tool_start(tool, args)
+        return Prepared(tool=tool, args=args, timing=t, hook_ctx=hook_ctx,
+                        rewrite_note=rewrite_note, ask_extra=ask_extra)
+
+    def _run_handler(self, tool: Tool, args: dict) -> "tuple[str, int]":
+        """**唯一可以放进线程池的一段** —— 除了 handler 本身,不碰任何共享状态。
+
+        抛错也必须变成一条结果(包括 TypeError 那种参数与 schema 不匹配的):少这一条,
+        上下文里就留下"有 call 没结果"的悬空对儿,从这一轮起每次请求都会 400,而用户
+        看不出跟刚才那次报错有什么关系。实测毫秒由调用方写进**这一步自己的** timing。
+        """
         t0 = time.monotonic()
         try:
             result = tool.handler(self.ctx, **args)
@@ -976,14 +1349,18 @@ class Agent:
         # W10:这一步的实测耗时(handler 全程,含异常路径 —— 抛错也是真实
         # 耗时)。口径与实时表一致(tool_start→tool_done);确认框等待不算
         # (handler 还没跑),与实时表同一条规矩。
-        self._step_ms = max(0, int((time.monotonic() - t0) * 1000))
+        return result, max(0, int((time.monotonic() - t0) * 1000))
+
+    def _finish(self, p: Prepared, result: str) -> str:
+        """主线程按序跑的收尾:界面结束、post 钩子、截断、空手计数、外部围栏。"""
+        tool, args, t = p.tool, p.args, p.timing
         self.ui.tool_done(tool, result)
         self._mark_after_mutation(tool, args, result)
         # post 钩子:失败不拦截,在结果尾部如实附一行(一行,不刷屏)
         post = self._run_config_hook("post_tool", tool, args, result=result)
         post_ctx = ""
         if post is not None:
-            self._hook_ms = (self._hook_ms or 0) + int(post.get("elapsed_ms") or 0)
+            t["hook_ms"] = (t["hook_ms"] or 0) + int(post.get("elapsed_ms") or 0)
             self._note_hook_health("post_tool", tool.name, post)
             if not post.get("ok"):
                 result = result + f"\n(工具钩子 post_tool 失败:{post.get('output') or '原因不明'})"
@@ -1010,7 +1387,7 @@ class Agent:
                 note(tool.name, args)
         # 两句钩子附注留在围栏**之外**:它们是我方本地附注,不该被标成外部内容;
         # 而改写那一句必须活着到模型面前 —— 它被截掉等于用户点过头的事没人告知。
-        for extra in (post_ctx, hook_ctx, rewrite_note, ask_extra):
+        for extra in (post_ctx, p.hook_ctx, p.rewrite_note, p.ask_extra):
             if extra:
                 result = result + ("\n" + extra if extra.startswith("(") else
                                    f"\n(工具钩子附注:{extra})")
@@ -1106,11 +1483,16 @@ class Agent:
         except Exception:
             pass
 
-    def _log_security_ask(self, tool: Tool, args: dict, note: str, choice: str) -> None:
-        """安全门(凭据/升级)开口就留一行痕(方案 M6)。失败静默。"""
+    def _log_security_ask(self, tool: Tool, args: dict, note: str, choice: str,
+                          kind: str = "") -> None:
+        """安全门(凭据/升级)开口就留一行痕(方案 M6)。失败静默。
+
+        `kind` 是门自己报的结构字段(`PermissionGate.ask_kind`);类别由它派生,
+        不再从 `note` 里找"密钥"两个字 —— 那样改一句文案就会把凭据门记成升级门。
+        """
         try:
             from minicode import provenance
-            gate = "credential" if ("密钥" in note or "凭据" in note) else "escalation"
+            gate = SECURITY_LOG_GATES.get(kind) or kind or "escalation"
             provenance.log_escalation(gate, tool.name, args, note, choice)
         except Exception:
             pass
@@ -1304,6 +1686,13 @@ class Agent:
         或撤销批准",因为后者确实有正当的解法,而前者不该有。
         """
         self.ui.tool_rejected_hard(tool, args)
+        # 三种拒要说三种话:红线拒 / 项目规则拒(用户自己写的 deny) / 规划锁拒
+        # (这张单子还没人批准)。说反了的代价很实在:规划锁那句要是走了"改规则"
+        # 的模板,模型会劝用户去翻 permissions.json,而解开只要他点一下「批准」。
+        lock_reason = getattr(self.gate, "plan_lock_reason", "") or ""
+        if lock_reason:
+            self.gate.plan_lock_reason = ""       # 一次拒只说一次,别带到下一步
+            return lock_reason
         why = getattr(self.gate, "reject_reason", "") or ""
         if not why:
             return HARD_REJECT_NOTE
@@ -1392,8 +1781,12 @@ class Agent:
         except Exception:
             pass
 
-    def _ask_via_permission_hook(self, tool, args: dict, kind: str) -> "tuple[str, str] | None":
+    def _ask_via_permission_hook(self, tool, args: dict, kind: str,
+                                 timing: dict | None = None) -> "tuple[str, str] | None":
         """问人之前先问一句钩子(H3,v0.9.115)。回 ("allow"|"deny", 理由) 或 None=照常弹框。
+
+        `timing` 由 `_execute` 把它那一份传进来 —— 代答这一步的实测毫秒要记在
+        **同一路**上,不能写回 self 那份默认的(并发批次里谁也不是"最后跑的那个")。
 
         三道闸门,少一道就做出一个"机器替人点头"的产品:
 
@@ -1417,7 +1810,8 @@ class Agent:
         got = self._run_config_hook("permission_request", tool, args)
         if got is None:
             return None
-        self._hook_ms = (self._hook_ms or 0) + int(got.get("elapsed_ms") or 0)
+        t = self._last_timing if timing is None else timing
+        t["hook_ms"] = (t["hook_ms"] or 0) + int(got.get("elapsed_ms") or 0)
         self._note_hook_health("permission_request", tool.name, got)
         decision = str(got.get("decision") or "")
         if not got.get("declared") or decision not in ("allow", "deny"):
@@ -1475,7 +1869,33 @@ class Agent:
         limit = self.ctx.config.max_output_chars
         if len(text) <= limit:
             return text
-        return text[:limit] + f"\n…(输出超过 {limit} 字符,已截断)"
+        return self._spill_tail(text, limit)
+
+    def _spill_tail(self, text: str, limit: int) -> str:
+        """超出 `max_output_chars` 的那一截存进工作区,对话里留一句"怎么读回来"。
+
+        为什么正好压在截断那一条上:今天超长部分的命运是**直接消失**(只留头部),
+        而模型接下来的常见动作是"再调一次同一个工具"—— 白付一遍时间与额度。
+        头部一个字节都不改(与今天逐字节一致),尾巴从"没了"变成"在这儿"。
+        写不成(目录不存在/磁盘问题)就退回今天那句原文 —— 转存是增益,
+        不能变成第二个故障源,更不能"假装存了"。
+        """
+        cut = text[:limit] + f"\n…(输出超过 {limit} 字符,已截断)"
+        if not getattr(self, "output_spill", True):
+            return cut          # 对外模式不往共用工作区里落文件(见 web_profile)
+        workspace = Path(getattr(self.ctx, "workspace", ".") or ".")
+        digest = hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()[:12]
+        keep = text[:SPILL_FILE_MAX_CHARS]
+        clipped = ("" if len(text) <= SPILL_FILE_MAX_CHARS else
+                   f";文件本身也在第 {SPILL_FILE_MAX_CHARS} 字处截过(原始 {len(text)} 字)")
+        rel = f"{OUTPUT_SPILL_DIR}/{time.strftime('%Y%m%d')}-{digest}.txt"
+        try:
+            (workspace / OUTPUT_SPILL_DIR).mkdir(parents=True, exist_ok=True)
+            (workspace / rel).write_text(keep, encoding="utf-8", newline="\n")
+        except OSError:
+            return cut          # 存不下来就照旧:宁可按原样截断,也不指一条读不到的路
+        return (cut[:-1] + f" —— 其余 {len(text) - limit} 字已存进 {rel},"
+                f"接着看就 read_file 这个路径,不必重跑这一步{clipped})")
 
     def _py_syntax_feedback(self, tool: Tool, args: dict, result: str) -> str:
         """Python 写后自检(借鉴 aider 的 lint-after-edit):write_file/edit_file

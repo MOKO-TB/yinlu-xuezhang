@@ -39,7 +39,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # v0.9.39 B0/B1:回灌开关(漏收 = config.json 里写了没人读)
                         "feedback_recall",
                         # v0.9.40 D2:回合步数上限(漏收 = 配置文件里的数字没人读)
-                        "max_steps"),
+                        "max_steps",
+                        # v0.9.130 模型配置编辑器:漏收这两根 = 界面上填的 cfg 存不下来,
+                        # 而保存照样回「已保存」—— 数值静默漂回探测与内置目录。
+                        "model_cfg_from_raw", "MODEL_CFG_KEYS"),
     "minicode.gui_bridge": ("test_model", "fetch_models",
                             # v0.9.106 Q1:MCP 热重载换过注册表要重新对齐工具表
                             # (漏收 = 装好的包里那条「现有会话下一轮即可用」又是假的)
@@ -263,7 +266,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 没人替你把确认挡住**:同一份 CLI 在源码里会拒,在包里悄悄放行 —— 换入口
     # 不该换权限,这条判断只能有一处。漏 _brief 则是反过来的坏法:工具参数正文
     # (可能是同学的课件原文或凭据)整包进那份常被贴进 CI 日志的输出。
+    # v0.9.126:`headless_flags_in` 是图形入口那道闸唯一的判定来源(漏收 =
+    # GUI 又回到"给了 --json 也静默开一个永不退出的窗口")
     "minicode.headless": ("HeadlessUI", "pop_output_flags", "exit_code_for",
+                          "headless_flags_in",
                           "build_result", "render", "status_for", "_brief",
                           "OUTPUT_FORMATS", "EXIT_ASK_REFUSED", "UsageError"),
 
@@ -275,6 +281,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "build_system_prompt", "agents_prompt_section", "user_agents_prompt_section",
         "instructions_prompt_section", "instruction_layers", "instructions_line",
         "project_agents_path", "_read_instruction", "_instruction_body",
+        # v0.9.127 §四.2「首次采纳点头」:漏 `agents_adoption` = 装好的包里没人知道
+        # 这份项目文件采没采纳(那一段就静默不注入,而侧栏照旧报"项目级 37 行");
+        # 漏 `adopt_agents` = 点了头也没处记,每一问都重弹一张卡。
+        "agents_adoption", "adopt_agents",
         "INSTRUCTION_GUARD", "USER_AGENTS_NAME", "AGENTS_CHAR_LIMIT", "AGENTS_FILES",
         "apply_retention"),
     "minicode.paths": ("_is_writable", "_local_state_dir", "diagnostics",
@@ -329,8 +339,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "register_protocol", "handoff", "start_listener",
                           "pending_uri_arg", "take_pending_panel"),
     "minicode.reasoning": ("reasoning_snapshot", "get_capability",
-                           "apply_reasoning_choice"),
+                           "apply_reasoning_choice",
+                           # v0.9.130:声明优先于内置表那两层(漏收 = 🧠 按钮又开始只认模型名)
+                           "declared_capability", "_render_template"),
     "minicode.session": ("to_markdown", "search_logs", "export_filename",
+                         # v0.9.126 改名/归档/标题一处真相(漏 `display_title` =
+                         # 手改的名字在某个入口不生效,同一条会话顶两个名字;漏 `patch_start_meta` =
+                         # 改个名字能把留档改坏)
+                         "display_title", "current_title", "set_title",
+                         "set_archived", "patch_start_meta", "normalize_title",
                          # v0.9.40 D0:跨天重建提示词要真换得掉 messages[0]
                          "refresh_system_prompt",
                          # 跨会话记忆:模型侧工具与 CLI /find 共用这一份取数,
@@ -363,7 +380,16 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # 以及那三个数漂了没人对账。
                             "microcompact", "micro_placeholder",
                             "tool_names_by_call", "MICRO_KEEP_RECENT",
-                            "MICRO_MIN_CHARS", "MICRO_FLOOR_TOKENS"),
+                            "MICRO_MIN_CHARS", "MICRO_FLOOR_TOKENS",
+                            # v0.9.121「记忆候选」那根线:漏收的表现是摘要里又只
+                            # 留下那行字没人接 —— 候选产出了,主对话却不知道拿它办
+                            "_summary_message", "MEMORY_CANDIDATE_MARK"),
+    # v0.9.121 记忆注入改按条让位(漏收 = 装好的包里又回到"按字符硬切":
+    # 半条记忆当完整句子用,而且整块丢掉项目级那批新的)
+    # v0.9.126 并发资格表(漏收 = 包内没人知道哪几只工具能同跑,或更糟:默认全放)
+    "minicode.tools.concurrency": ("CONCURRENT_SAFE", "mark_concurrent"),
+    "minicode.memory": ("prompt_section", "_fit_levels", "inject_line",
+                        "MEMORY_CHAR_LIMIT"),
     "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill",
                         # v0.9.63:技能使用账(漏收 = 装好的包里用了技能不记账,
                         # 「哪些技能真有人用」永远没有答案)
@@ -506,7 +532,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                                # v0.9.111 p8:顶部药丸要说「这个任务真正在用的模型」,
                                # 而「会话单独切过」这件事载荷里原本没有 —— 前端只能拿
                                # 两个名字比着猜(漏收 = 界面又开始猜,全局默认名顶上来了)
-                               "session_override"),
+                               "session_override",
+                               # v0.9.130:「声明 > 探测 > 目录」那把尺子的三个出口
+                               "model_info", "window_for", "vision_capable"),
     # v0.9.111 p9:监控栏那一节「环境信息」的全部取材(漏 collect = 整节不出现;
     # 漏 _added_removed = 有未跟踪文件时它会报一个看着完整的 +0 −0,那比没有更坏)
     "minicode.envinfo": ("collect", "_added_removed"),
@@ -558,6 +586,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "contains_external", "log_escalation"),
     "minicode.sandbox": ("SECRET", "is_credential_filename",
                          "command_hits_credential", "command_hits_network",
+                         # v0.9.129 命令层「两层都扫不到」那一类(漏 `command_hits_stealth`
+                         # = `Start-Process -WindowStyle Hidden` 与 `-enc <base64>` 又从
+                         # 命令层与脚本内容层之间漏过去 —— 而这条坏法不报错,只是没人问);
+                         # 漏 `lock_plan`/`unlock_plan` = 规划锁没有状态可存,门永远不锁
+                         "command_hits_stealth", "STEALTH_PATTERNS",
+                         "lock_plan", "unlock_plan",
                          # v0.9.39:沙箱第四层(脚本内容级检测)+ 子进程密钥剥离。
                          # 漏收 = 确认框又只看命令字面,`python 一个偷偷读密钥的脚本`
                          # 一路放行(表现是"没弹框就跑了",而不是报错,所以必须有这根针)
@@ -573,14 +607,26 @@ TARGETS: dict[str, tuple[str, ...]] = {
                          "GIT_PATH_TOKEN", "GIT_DIR_NAME", "SCRIPT_GIT_PATTERNS"),
     "minicode.permission": ("note_external", "_is_sensitive_action",
                             "_credential_hit", "_same_site",
+                            # v0.9.129 规划锁排在档位之前(漏 `plan_locked` = 包里的门
+                            # 根本不问这把锁 → 核对单白批;漏 `_plan_locked_denial` =
+                            # 拒了却不给出口,模型只能原地打转或劝用户去改错的地方)
+                            "plan_locked", "_plan_locked_denial",
                             # v0.9.104:上面那一层接到门里的那只手(漏收 = 判定还在
                             # sandbox 里,但 PermissionGate 不叫它 → 四档一律照旧放行)
                             "_git_hit",
                             # v0.9.115 H3:"是哪条门开的口"这个结构字段(漏收 = agent 取
                             # 不到 ask_kind → 三类红线级的 ASK 被当成普通一问交给了钩子,
                             # 于是凭据文件与 `.git` 由一条命令替用户点头 —— 正是最坏那种)
-                            "_ask", "ask_kind"),
+                            "_ask", "ask_kind",
+                            # v0.9.122 并发批次的只读预演(漏收 = 批前没法判
+                            # "这一步会不会问人",于是要么继续串行、要么两个确认框
+                            # 串味 —— 而后者不报错,只是问错了次序)
+                            "peeking", "would_ask"),
     "minicode.kb": ("crawl_credibility", "host_is_trusted",
+                    # v0.9.126 相似度判据拆两道 + 一份配置读法(漏 `_spec_float` =
+                    # 两个数各认一种配置写法,一处调了另一处不生效)
+                    "DEFAULT_MIN_SIM", "DEFAULT_REL_MARGIN",
+                    "_min_sim", "_rel_margin", "_spec_float",
                     "CRAWLED_UNVERIFIED",
                     # v0.9.39 B0:"没查到"这句话与判它的那一处必须同时在包里 ——
                     # 只收一个,回灌就静默失灵(界面照旧,只是再也不提示)
@@ -588,7 +634,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                     # v0.9.90 未命中即给联网入库路径(第三梯队 ⑦):这句话是**写死在
                     # 工具回话里**的,不靠模型自觉 —— 漏收 = 包内未命中又变回一句
                     # 「没查到」,模型爱查不查,而源码测试全绿看不出差别
-                    "FALLBACK_HINT"),
+                    "FALLBACK_HINT",
+                    # v0.9.123:查询侧向量走 embed.query_vector 那一条(检索指令加不加
+                    # 只在那一处判)。漏收 = 包里还是旧接线 embed_texts([query]),
+                    # 文档向量与查询向量两头不一致 —— 不报错,只是语义命中悄悄变差。
+                    "query_vector"),
     # ---- v0.9.18:课表持久化 + 天气 chip ----
     "minicode.schedule": ("parse_weeks", "classes_on", "next_class_note",
                           "schedule_prompt_section",
@@ -650,7 +700,16 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "FIELD_WEIGHTS"),
     "minicode.embed": ("detect", "embed_texts", "ensure_vectors", "cache_path",
                        "load_cache", "save_cache", "entry_key", "entry_text",
-                       "EmbedUnavailable", "CACHE_VERSION"),
+                       "EmbedUnavailable", "CACHE_VERSION",
+                       # v0.9.123:本地向量档进包 + 池化口径摆到明面上。
+                       # 漏 embeddings_spec = kb 的 min_sim 与探测各认一种配置写法;
+                       # 漏 query_vector = 查询侧那半套规矩(默认不加指令)没人实现,
+                       #   检索还是拿"带不带指令"两头的向量在比;
+                       # 漏 _profile_tag = 换池化/换截断宽度仍在复用旧向量 —— 不报错,
+                       #   只是每条命中都是另一个空间里的数;
+                       # 漏 _session_for = 每次语义检索都重建一次 ONNX 会话(慢一个量级)。
+                       "embeddings_spec", "query_vector", "_profile_tag", "_session_for",
+                       "POOLINGS", "DEFAULT_POOLING", "DEFAULT_MAX_SEQ_LEN"),
     "minicode.ocr": ("recognize", "ocr_image", "ocr_probe", "recognize_system",
                      "recognize_vision", "system_ready", "vision_ready",
                      "normalize_system_text", "SYSTEM_WARN", "VISION_PROMPT",
@@ -691,6 +750,29 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        "_matched_config_hook", "_apply_hook_input", "_hook_blocked_text",
                        "_log_hook_rewrite", "_note_hook_health",
                        "_ask_via_permission_hook", "NON_DELEGABLE_ASKS",
+                       # v0.9.123 安全日志里"是哪道门问的"那一列(漏 SECURITY_LOG_GATES
+                       # = 包内又退回"从文案里猜密钥二字",git / project_rule 全被记成
+                       # escalation —— 事后线索把答案扔了,而没有任何一处会红)
+                       "SECURITY_LOG_GATES", "_log_security_ask",
+                       # v0.9.126 同回合并发 + 超长输出转存(漏 `_lane_ok` =
+                       # 池子内没人在判断资格,确认框可能从工作线程弹出来;
+                       # 漏 `_spill_tail` = 超长那半截又凭空消失而不落文件)
+                       "_dispatch_tool_calls", "_lane_ok", "_run_batch",
+                       "_account", "_spill_tail", "OUTPUT_SPILL_DIR",
+                       "TOOL_PARALLEL_MAX",
+                       # v0.9.127 回合中途插话(漏 `queue_interjection` = 界面那句
+                       # "补一句"当场消失;漏 `_take_inbox` = 收进去了却没人读,
+                       # 信箱成为第二份历史 —— 用户看见的话永远不会进模型上下文)
+                       "queue_interjection", "_take_inbox", "INBOX_MAX",
+                       # v0.9.127 §四.2 项目指令的首次采纳点头(漏 `_ask_project_agents`
+                       # = 那份别人写的文件在包里照样静默注入,而源码态是"不点就不注入"
+                       # —— 两态行为不一样,正是冻结针要抓的那种);
+                       # 漏 `_ask_pick` = 答案读不回来,点了头也算没点。
+                       "_ask_project_agents", "_ask_pick", "_agents_refused",
+                       # v0.9.125 三段拆分的接缝(漏 `_run_handler` = 包里没有那段
+                       # "唯一可进线程池"的边界,并发批次只能整步丢进线程 → 确认框
+                       # 从工作线程弹出来,而这条坏法不报错)
+                       "Prepared", "_prepare", "_run_handler", "_finish",
                        "HARD_REJECT_NOTE", "HOOK_BAD_STREAK",
                        # v0.9.115 H4:两个事件钩子(漏 `_collect_event_hook` = 事件照叫、
                        # 附的那句话永远进不了请求;漏 `_fire_start_hooks` = 整类事件不跑)
@@ -739,7 +821,20 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "_web_note",
                            # v0.9.95:按档位分模型的判定(漏收 = 配置读了、报告却仍说主模型,
                            # 或反过来在报告里编一句「本档模型 X」而代码里根本没这回事)
-                           "model_choice"),
+                           "model_choice",
+                           # v0.9.129 本地档位定义(agents/*.md)接进派发那一段。
+                           # 漏 type_keys = task 那份清单里没有用户自己起的档名,模型叫得出
+                           #   也看不见,等于这层只能靠猜名字用;
+                           # 漏 unknown_tools/dispatch_notes/notes_prefix = 红线 4 断了,
+                           #   "tools: 里写了一只这档拿不到的工具"会静默少给而不吭声。
+                           "type_keys", "profiles_view", "_profile_bases",
+                           "_apply_profile", "unknown_tools", "dispatch_notes",
+                           "notes_prefix"),
+    # v0.9.129 本地档位定义整只模块(agents/*.md → 只能收窄的一档)。
+    # 漏收的表现不是报错:用户在工作区写了一份 agents/scout.md,应用**完全当它不存在**,
+    # 而任务面板里那一档永远派不出去,一句解释都没有 —— 与"配置读了没人接"同一种坏法。
+    "minicode.agent_profiles": ("load", "Profile", "profile_dirs", "PROFILE_DIR",
+                               "PRIVILEGED_KEYS", "NEVER_CHILD_TOOLS"),
     # v0.9.95:换模型重建客户端的那条构造(漏收 = 档位分模型整块没了)
     "minicode.llm": ("scoped",                 # v0.9.110:400 摘字段重发的那张梯子
                              "LEAN_LADDER", "BODY_PARSE_MARKS", "lean"),
@@ -861,7 +956,17 @@ TARGETS: dict[str, tuple[str, ...]] = {
                      # v0.9.82:能力协商照实说(漏收 = 包里添加服务器那句话与
                      # 侧栏悬停都不再讲「对端声明了什么、学长只接了 tools」,
                      # 用户又会以为接上就等于全能用)
-                     "CLIENT_PRIMITIVES", "caps_line", "server_caps"),
+                     "CLIENT_PRIMITIVES", "caps_line", "server_caps",
+                     # v0.9.121 工具结果那一份文本的出口(漏收 = 装好的包里
+                     # image/audio 又整坨 base64 灌进上下文、structuredContent
+                     # 明明有数据却回「工具返回空结果」—— 两处都不报错,
+                     # 一个是每轮多付一笔读不懂的字,一个是把有说成没有)
+                     "format_call_result", "_inline_note", "_data_size_note",
+                     "STRUCTURED_MAX", "BASE64_INLINE_MAX",
+                     # v0.9.122 工具级名单(漏收 = 配了 deny_tools 却一只没少,
+                     # 而侧栏报的还是服务器声明的那只数 —— 两处数字各说各话)
+                     "mount_names", "client_mount", "mount_line",
+                     "allow_tools", "deny_tools"),
     # ---- v0.9.24:计划面板(漏收 = 顶栏「🗂 计划」点开永远说没计划) ----
     # v0.9.33:对话流里的计划卡片靠 in_progress/running 画出"正在做哪一步"
     # (漏收 = 卡片只剩一堆待办和勾,转圈的那一行永远不出现)
@@ -874,7 +979,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           # v0.9.116 L2:ask/deny 的三条命脉。漏 `hit` = 门只查得到
                           # allow,用户写的"必须问我/不许做"在包里静默失效 —— 比没有
                           # 这条功能更糟,因为文件确实躺在项目根上。
-                          "hit", "summary", "DECISIONS"),
+                          "hit", "summary", "DECISIONS",
+                          # v0.9.127 §四.2:同一行上的第二件事(指令文件的采纳)。
+                          # 漏 `adopt_agents` = 点头没处落;漏 `agents_adopted_sha` =
+                          # 落下了也没人读得回来 —— 两条都是"每问重弹一张卡"那种坏法。
+                          "adopt_agents", "agents_adopted_sha", "_row", "_put_row"),
     # v0.9.116 L3:内置钩子配方(整只模块新加;漏 apply = 挂不上,漏 list_line =
     # 连"有没有挂着"都答不出)
     "minicode.hook_packs": ("preview", "apply", "list_line", "TEMPLATES",
@@ -1022,6 +1131,18 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # `.dialog button{padding:8px 20px}`(单类名特异性更低)。漏回来 = 那颗又撑成
     # 42×26 的横胶囊、图标落在右半边 —— 界面细节没人会去重查,所以钉在包里。
     ".usage-head .usage-refresh{",
+    # v0.9.127 回合中途插话的前端半边(漏 `interject` = 跑着的时候按 Enter 又什么都不
+    # 做,后端那个信箱成了没人喂的空格子;漏 `sealStreamingText` = 插话气泡画出来了,
+    # 可后面每一条 text_delta 仍往上面那段里追加 —— 回答长在插话头上;漏 `INPUT_HINT`
+    # = 提示语从 HTML 属性里读一次这件事没了,改成写死两份)
+    "function interject", "function sealStreamingText", "INPUT_HINT",
+    # v0.9.128 改动审查那一屏的三处补正(漏 `buildUnledger`/`sameFile` = 账外那片又
+    # 只剩环境栏两个总数,或把"我改过的"重复说成"退不掉";漏 `maybeChangeReviewHint`
+    # = 关着监控栏的人依然永远等不到那条入口,这一件就白做;漏 `.act-grp`/`.chg-hint`
+    # = 有函数没样式,分组头与那条入口挤成一坨看不见)
+    "function buildUnledger", "function sameFile",
+    "function maybeChangeReviewHint", "function openChangesSection",
+    ".act-grp", ".chg-hint",
 )
 
 

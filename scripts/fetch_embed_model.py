@@ -125,6 +125,13 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 
 def main(argv=None) -> int:
+    # 重定向到文件/管道时 Windows 按 cp936 建流,中文会变成一串乱码(2026-10-06 这个
+    # 脚本自己的下载日志就是这么坏的)。与 check_frozen_version.py 同一手法。
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     args = parse_args(argv)
     base = MIRROR_BASE if args.mirror else args.base
     if args.dest:
@@ -171,8 +178,10 @@ def main(argv=None) -> int:
         print(f"  ✓ {name} {size:,} B · sha256 {digest[:16]}… · {pinned}")
     print("\n下一步:在 config.json 里写 "
           '"capabilities": {"embeddings": {"backend": "local", "model": "%s"}},'
-          "并确认本机装得到 onnxruntime。" % model)
-    print("向量索引会在第一次按语义检索时自动建,落在数据目录 kb-vectors/(不进包)。")
+          "并确认本机 import 得到 onnxruntime。" % model)
+    print("向量索引**不会**自己建:第一次按语义检索时缺多少条就如实报多少条并停下,"
+          "要建就明确说一声(那是几百次向量计算,花的是使用者的时间与额度)。"
+          "建好落在数据目录 kb-vectors/(不进包);换池化或换截断宽度会自动另起一套缓存。")
     return 0
 
 

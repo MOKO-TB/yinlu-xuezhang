@@ -100,9 +100,47 @@ def lookup(model: str) -> dict:
 
 
 def context_window_for(model: str, default: int) -> int:
-    """模型的上下文窗口;目录里没有就用配置默认(压缩触发器同款)。"""
+    """模型的上下文窗口;目录里没有就用配置默认(压缩触发器同款)。
+
+    ⚠ 这是**没有用户声明时**的那一层。要看"用户在这个模型上自己填的窗口"请走
+    `window_for(config, model)` —— 它把三层叠在一起,是运行时唯一该用的入口。
+    """
     info = lookup(model)
     return info["context_window"] or default
+
+
+def model_info(config, model: str = "") -> dict:
+    """`lookup()` 之上再叠一层**用户自己声明的**配置:声明 > 探测 > 静态目录。
+
+    为什么声明要在最上面:探测是"这台网关这次答了什么",会随服务端改版变;
+    而用户在界面上填的是"我要它按这个数走"(ZCode 那条"内置模型的窗口由服务端
+    下发、本地改动下次同步即被还原"是反例 —— 用户明明知道自己家的模型多大)。
+    没声明过的键一律不覆盖,行为与今天逐字节一致。
+    """
+    name = str(model or getattr(config, "model", "") or "").strip()
+    info = dict(lookup(name))
+    cfg = config.model_cfg(name) if config is not None else {}
+    window = cfg.get("context_window")
+    if isinstance(window, int) and not isinstance(window, bool) and window > 0:
+        info["context_window"] = window
+        info["declared_window"] = True
+    if isinstance(cfg.get("vision"), bool):
+        info["supports_vision"] = cfg["vision"]
+        info["declared_vision"] = True
+    return info
+
+
+def window_for(config, model: str = "") -> int:
+    """运行时那把尺子:声明的窗口 > 探测/目录 > 配置默认。只有一个入口,别各处自己拼。"""
+    name = str(model or getattr(config, "model", "") or "").strip()
+    return model_info(config, name)["context_window"] or getattr(
+        config, "context_window", 0) or 0
+
+
+def vision_capable(config, model: str = "") -> bool:
+    """这个模型收不收图。**用户声明过就按声明**(探测会因服务端改版漂移,
+    而"我这家支持视觉"是人人都知道的常识);没声明走 lookup 那条链。"""
+    return bool(model_info(config, model)["supports_vision"])
 
 
 def capabilities(model: str) -> list[str]:
@@ -172,10 +210,10 @@ def session_metrics(agent, session, config, llm_override: dict | None) -> dict:
     下的两个模型都显示成"选中"。
     """
     model = llm_override["model"] if llm_override else config.model
-    window = context_window_for(model, config.context_window)
+    info = model_info(config, model)          # 声明 > 探测 > 目录,与压缩触发器同一份
+    window = info["context_window"] or config.context_window
     used, source = context_reading(agent, session)
     consumed = getattr(agent, "turn_tokens", 0) or 0
-    info = lookup(model)
     selectable = []
     for p in config.providers:
         if p.id != "gzasc" and not getattr(p, "enabled", True):

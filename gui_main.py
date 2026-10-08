@@ -6,11 +6,13 @@
 MCP 子进程,不留后台进程。托盘接管失败的老环境仍退回"点 X 直接退出"。
 """
 import os
+import sys
 import time
 
 import webview
 
 from minicode import APP_NAME
+from minicode import headless
 from minicode import tray
 from minicode import workspace as ws
 from minicode.app_setup import apply_retention
@@ -188,7 +190,29 @@ def _start_activate_listener(ui) -> None:
         tray.log(r["msg"])
 
 
+def guard_headless_flags(argv: list[str]) -> int | None:
+    """图形版/单文件版收到无头旗标就**当场说清该用哪只 exe**,返回退出码。
+
+    以前 `引路学长.exe --json "…"` 是**静默开窗**:同一句话在 CLI 上回一份 JSON 加
+    六个语义化退出码,在这里却是一个永不退出的窗口 —— 脚本作者只会判断成"卡住了",
+    而这恰好和"任务没做成"长得一模一样(与 v0.9.120 那条 stdout 契约同一个坏法)。
+    参数层面就拒,绝不假装"开了窗口也算跑了"。判定只写在 `headless.headless_flags_in`
+    一处,免得两个入口各认一套旗标写法。
+    """
+    flags = headless.headless_flags_in(argv)
+    if not flags:
+        return None
+    print(f"{APP_NAME} 的图形版与单文件版不跑无头模式(收到 {' '.join(flags)})。\n"
+          "   一次命令跑完就退出、输出给机器读的那条路只在 **引路学长-CLI.exe** 上:\n"
+          '     引路学长-CLI.exe "你的任务" --json\n'
+          "   想打开图形界面,请不带这些旗标直接运行本程序。", file=sys.stderr)
+    return headless.EXIT_ARGS
+
+
 def main() -> None:
+    rc = guard_headless_flags(sys.argv[1:])
+    if rc is not None:
+        sys.exit(rc)
     # 通知点击直达(v0.9.72):--activate 由协议命令拉起 —— 先试着交给在跑的
     # 实例(送达即退,绝不双开);没人在跑才自己启动,并把落点带进首屏
     # (get_info 一次性取走,前端 boot 完成后落面板)。

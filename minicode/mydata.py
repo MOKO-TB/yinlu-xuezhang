@@ -138,8 +138,9 @@ TABLE: tuple[Entry, ...] = (
           note="本机成长日志,含对话摘要"),
     Entry("kb-hits.jsonl", "知识库检索命中账", PERSONAL, False,
           note="问句 + 命中的条目 id,供评价绑条目;含本机提问记录"),
-    Entry("perms-trust.json", "项目权限白名单的批准记录", PERSONAL, False,
-          note="工作区绝对路径 + 文件指纹;换机器带走等于替那台机器上的项目批了权限"),
+    Entry("perms-trust.json", "项目白名单与指令文件的本机批准记录", PERSONAL, False,
+          note="工作区绝对路径 + 内容指纹;换机器带走等于替那台机器上的项目批了权限、"
+               "也替它采纳过别人写的 AGENTS.md"),
     # ---- 设置与偏好
     Entry("config.json", "模型与权限配置", PREF, True, restart=True,
           note="导出前会洗掉里面的 API Key,新机器要重填一次"),
@@ -167,6 +168,10 @@ TABLE: tuple[Entry, ...] = (
     Entry("AGENTS.md", "我的工程规矩(用户级指令)", PREF, True, scope="global",
           note="存在就每轮自动进系统提示词:注释密度、回复格式这类按你的习惯来。"
                "沙箱边界、敏感路径硬禁、确认门不吃这一份,任何指令文件都改不动它们"),
+    Entry("agents", "我的档位定义(agents/*.md)", PREF, True, kind="family", pattern="*.md",
+          note="自己加的子代理档:`base:` 指要收窄的那一档,正文是这一档多出来的规矩。"
+               "只能往窄里改(工具子集、只读只增不减、步数只减不增),提权字段装载时"
+               "一律撕掉并说给你听 —— 换电脑带走的是口径,不带也只是一档都没有"),
     # ---- 统计
     Entry("token-usage.db", "token 用量库", STATS, False,
           note="SQLite 常驻连接在 Windows 上会锁文件,统计也跟着机器走,不进包"),

@@ -42,7 +42,7 @@ from minicode.paths import (APP_DIR, SESSIONS_DIR, diagnostics as paths_diagnost
                             resource_path)
 from minicode.permission import MODE_LABELS, PERMISSION_MODES
 from minicode.sandbox import SandboxState, classify_path, policy_from_raw, policy_to_raw
-from minicode.session import (derive_title,
+from minicode.session import (display_title,
                               export_filename as session_export_name,
                               list_sessions,
                               search_logs as search_session_logs,
@@ -259,6 +259,10 @@ class PublicApi:
     def plan_review_reply(self, payload) -> dict:
         """计划核对单的三种回答(批准 / 改一条 / 重排)。判定与写回都在桥与 planning 里。"""
         return self._b.plan_review_reply(payload)
+
+    def plan_approve(self) -> dict:
+        """计划卡片上那颗「批准这版计划」(解规划锁)。只转发,状态在 sandbox 那一份。"""
+        return self._b.plan_approve()
 
     def undo(self) -> dict:
         return self._b.undo()
@@ -979,9 +983,14 @@ class Bridge:
             # 探测时顺便把「对端声明了什么、学长只接了 tools」讲清楚:加服务器这一刻
             # 正是用户最容易以为"接上就等于全能用"的时候。
             caps = str(probe.get("caps") or "")
+            hidden_note = str(probe.get("hidden_line") or "")
+            got = int(probe.get("n_server_tools") or 0) or int(probe["n_tools"])
             return _persist_and_reload(
                 f"已添加「{sid}」({probe['server'] or '服务器'}),"
-                f"探到 {probe['n_tools']} 个工具。" + (f"{caps}。" if caps else ""))
+                f"探到 {got} 个工具"
+                + (f",按你配的名单挂上 {probe['n_tools']} 个 —— {hidden_note}"
+                   if hidden_note else "")
+                + "。" + (f"{caps}。" if caps else ""))
         if action in ("remove", "enable", "disable"):
             if not name:
                 return f"错误: action={action} 需要 name。"
@@ -1234,7 +1243,24 @@ class Bridge:
                     "running": [],
                     "dispatch_text": "",
                     "msg": f"读取计划失败:{type(exc).__name__}: {exc}"}
-        return {"ok": True, "dispatch_text": dispatch_text(state), **state}
+        return {"ok": True, "dispatch_text": dispatch_text(state),
+                # 规划锁开着的时候面板要能给出那颗「批准这版计划」(v0.9.129):
+                # 锁只有人能解,而 GUI 没有斜杠命令 —— 解铃的那只手必须在界面上。
+                "locked": bool(getattr(
+                    getattr(self.agent.ctx, "sandbox", None), "plan_lock", False)),
+                **state}
+
+    def plan_approve(self) -> dict:
+        """计划卡片上那颗「批准这版计划」:解掉规划锁,让这一步之后可以开工。
+
+        与核对单的「批准」是同一条语义的两个入口(核对单可能已经被关掉或根本没弹),
+        所以两边都走 `sandbox.unlock_plan()` 这同一个动作,不在界面上另记一份状态。
+        """
+        sb = getattr(self.agent.ctx, "sandbox", None)
+        ok = bool(sb is not None and sb.unlock_plan())
+        self.ui.push("info", text="已批准这张计划,可以开工了" if ok
+                     else "现在没有规划锁(没锁就不用批)")
+        return {"ok": ok, "locked": bool(getattr(sb, "plan_lock", False))}
 
     # ------------------------------------------------------------ 任务监控栏
 
@@ -1422,7 +1448,7 @@ class Bridge:
             if str(s.path) not in running:
                 continue          # 拿不到确证就不列 —— 宁可少列,也不谎报"在跑"
             r = board.row(
-                "running", derive_title(s.first_user_text) or s.path.name,
+                "running", display_title(s) or s.path.name,
                 f"{s.n_messages} 条 · {s.time} · 侧栏第 {i} 个",
                 action={"type": "session", "index": i}, source="会话")
             r["ws"] = self._ws_label(s.workspace)
@@ -1925,18 +1951,22 @@ class Bridge:
         if r is None:
             return
         llm = self._session_llm(r)
+        model = self._active_model_name(r)
         snap = reasoning_snapshot(
-            self._active_model_name(r),
-            getattr(llm, "reasoning_choice", "default") if llm else "default")
+            model,
+            getattr(llm, "reasoning_choice", "default") if llm else "default",
+            cfg=self.config.model_cfg(model))     # 用户自己登记的档位优先
         self.ui.push("reasoning", session=r.key, **snap)
 
     def get_reasoning(self) -> dict:
         """思考档位面板一屏数据:能力 + 当前选择(初始化/切模型后拉取)。"""
         from minicode.reasoning import reasoning_snapshot
         llm = self._session_llm()
+        model = self._active_model_name()
         snap = reasoning_snapshot(
-            self._active_model_name(),
-            getattr(llm, "reasoning_choice", "default") if llm else "default")
+            model,
+            getattr(llm, "reasoning_choice", "default") if llm else "default",
+            cfg=self.config.model_cfg(model))
         snap["ok"] = True
         return snap
 
@@ -1953,12 +1983,12 @@ class Bridge:
         if runner.busy:
             return {"ok": False, "msg": "任务进行中,等这轮跑完再切思考档位"}
         model = self._active_model_name(runner)
-        cap = get_capability(model)
+        cap = get_capability(model, cfg=self.config.model_cfg(model))
         if cap.kind == "hidden":
             return {"ok": False, "msg": f"模型 {model} 暂不支持思考档位设置"}
         if cap.kind == "fixed":
             return {"ok": False, "msg": f"模型 {model} 固定开启思考,不可调节"}
-        choice = normalize_choice(model, choice)
+        choice = normalize_choice(model, choice, cfg=self.config.model_cfg(model))
         keep = getattr(runner.agent.llm, "reasoning_choice", "default")
         # 换回哪个供应商的凭据由 `LLMClient.scoped` 一处管(会话切模型同一套路)
         pid = (runner.llm_override["provider_id"] if runner.llm_override
@@ -2006,13 +2036,13 @@ class Bridge:
 
         v0.9.21 之前只看 `config.vision` 那个总开关 —— 而它**没有任何设置入口**,
         只有手改 config.json 才打得开,所以"选了视觉模型仍说不能看图"。现在按
-        会话实际在用的模型查能力表(探测结果优先,静态目录兜底),配置里的开关
-        退化成"人工强制打开"。
+        会话实际在用的模型查能力表(**用户在这个模型上声明过的视觉优先**,再探测、
+        再静态目录),配置里的开关退化成"人工强制打开"。
         """
         model = self._active_model_name(runner) or fallback_model
         try:
-            from minicode.model_catalog import lookup
-            capable = bool(lookup(model)["supports_vision"])
+            from minicode.model_catalog import vision_capable
+            capable = vision_capable(self.config, model)
         except Exception:
             capable = False
         return capable or bool(self.config.vision)
@@ -2069,7 +2099,19 @@ class Bridge:
             return {"ok": False, "msg": "GUI 里不需要斜杠命令,直接描述任务"}
         runner = self._current
         if runner.busy:
-            return {"ok": False, "msg": "当前会话有任务正在进行中"}
+            # 这一轮正在跑:这句是**插话**,不是新任务(§6 6(c))。走同一条 send_task
+            # 而不是另开一个方法,是因为"什么时候算插话"只有一个判据 —— runner.busy,
+            # 两处各判一次迟早对不上(而前端只知道按了回车)。
+            # 附件不走这条路:信箱里存的是一句**文字**,而带图的那条消息要先把图片
+            # 拼成多模态消息体(`build_content`)—— 那一步只在"开一个新回合"时做。
+            # 让插话带着图静默降级成"只有文字",比当场说清楚更坏。
+            if atts:
+                return {"ok": False, "msg": "插话只带文字,附件等这一轮跑完再发"}
+            if not runner.agent.queue_interjection(text):
+                # 上限那个数只住在 `agent.INBOX_MAX` 一处,这里不复述它 ——
+                # 复述一遍就有了第二个真相,改一边就骗人。
+                return {"ok": False, "msg": "插话排到顶了,等这一步跑完再发"}
+            return {"ok": True, "queued": True, "session": runner.key}
         content = (build_content(text, atts, self._vision_on(runner))
                    if atts else None)
         runner.thread = threading.Thread(target=self._run_task,
@@ -3444,7 +3486,7 @@ class Bridge:
                 "last_user_text": s.last_user_text,
                 # v0.9.98:自动标题(第一条提问派生,不调模型);前端优先显示它,
                 # 老留档没有 first_user_text 时是空串,前端退回原样
-                "title": derive_title(s.first_user_text),
+                "title": display_title(s),
                 "current": s.path == cur_path,
                 "workspace": ws_name,
                 "ws_current": in_current,
@@ -3454,7 +3496,7 @@ class Bridge:
     def recent_for_tray(self, limit: int = 5) -> list:
         """托盘菜单里那一叠「最近会话」:回 [(留档名, 标题)]。
 
-        与侧栏同一份 `list_sessions`、同一个 `derive_title` —— 两处两个标题口径
+        与侧栏同一份 `list_sessions`、同一个 `display_title` —— 两处两个标题口径
         是迟早要被打脸的那种事。当前正在看的那条也列(托盘的价值就是"跳回去")。
         """
         from minicode import tray as _tray
@@ -3462,7 +3504,7 @@ class Bridge:
         try:
             for s in list_sessions(self.sessions_dir,
                                    limit=max(1, int(limit)))[:_tray.MENU_RECENT]:
-                out.append((s.path.name, derive_title(s.first_user_text)
+                out.append((s.path.name, display_title(s)
                             or s.last_user_text or "(空会话)"))
         except Exception:
             return []

@@ -28,6 +28,17 @@ def _app_dir(tmp_path, monkeypatch):
 TODAY = date(2026, 9, 22)
 
 
+def _recent(back: int) -> str:
+    """按**真今天**往前推 N 天的日期串。
+
+    用在哪几支测试上是有原因的:`list_recent` 与 `mood(action=list)` 默认拿真今天算
+    时间窗,而窗口一过,写死的绝对日期就掉出去 —— 表现是"什么都没改,过一天自己红了"
+    (2026-10-08 就是这样红的:夹具写 2026-10-01,七天窗的边界那天正好是 10-02)。
+    要摆"窗口外"的旧记录仍然用绝对日期或显式传 today=,那两类是故意的。
+    """
+    return (date.today() - timedelta(days=back)).isoformat()
+
+
 def _put(day, score=None, note="", tags=None):
     """直接落一条记录(绕开 log 的规范化,专门用来摆窗口/阈值)。"""
     rows = mood.load_entries()
@@ -357,28 +368,28 @@ def test_norm_tags_cleans_and_caps():
 
 
 def test_log_stores_tags_and_overwrite_replaces(tmp_path):
-    _put("2026-10-01", 3, "忙", tags=["实习", "累"])
+    _put(_recent(1), 3, "忙", tags=["实习", "累"])
     rows = mood.list_recent(days=7)
     assert rows[0]["tags"] == ["实习", "累"]
     # 同天覆盖:tags 整体替换(覆盖语义就是"这天换新的"),不悄悄叠加
-    mood.log(score=2, note="更忙", day="2026-10-01", tags=["实习"])
+    mood.log(score=2, note="更忙", day=_recent(1), tags=["实习"])
     rows = mood.list_recent(days=7)
     assert rows[0]["tags"] == ["实习"]
 
 
 def test_list_and_review_filter_by_tag(tmp_path):
-    _put("2026-10-01", 2, "实习第一天", tags=["实习"])
-    _put("2026-10-02", 4, "没事", tags=[])
-    _put("2026-10-03", 3, "考试周", tags=["考试"])
+    _put(_recent(2), 2, "实习第一天", tags=["实习"])
+    _put(_recent(1), 4, "没事", tags=[])
+    _put(_recent(0), 3, "考试周", tags=["考试"])
     got = mood.list_recent(days=7, tag="实习")
-    assert [r["date"] for r in got] == ["2026-10-01"]
+    assert [r["date"] for r in got] == [_recent(2)]
     assert mood.list_recent(days=7, tag="#实习")     # 带 # 也能筛到
     text = mood.weekly_review(days=7, tag="实习")["text"]
     assert "实习第一天" in text and "考试周" not in text
 
 
 def test_mood_tool_tag_passthrough(tmp_path):
-    _put("2026-10-01", 2, "实习第一天", tags=["实习"])
+    _put(_recent(1), 2, "实习第一天", tags=["实习"])
     out = mood.mood(None, action="list", days=7, tag="实习")
     assert "实习第一天" in out
     out2 = mood.mood(None, action="list", days=7, tag="不存在")

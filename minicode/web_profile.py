@@ -198,6 +198,10 @@ def apply_public_profile(agent: Agent, session: Session, workspace: Path) -> lis
     kept = [t for t in agent.registry if t.name in PUBLIC_TOOLS]
     agent.registry = kept
     agent.refresh_registry()
+    # 对外不转存超长输出:转存是把全文落进**工作区**文件让 `read_file` 读回来,
+    # 而网页版每个访客一个 Bridge、工作区目录却只有一份 —— 那等于把一个人的
+    # 抓取原文摆到别人能读的地方。对外沿用"截断"那句老行为,一个字都不多写。
+    agent.output_spill = False
 
     prompt = build_public_system_prompt(workspace)
     for i, msg in enumerate(session.messages):

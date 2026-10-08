@@ -80,7 +80,12 @@ INJECTION_LOG_CAP_LINES = 500   # v0.9.66:留排查现场,但别无限长
 
 def log_escalation(gate_name: str, tool_name: str, args: dict, note: str,
                    choice: str) -> None:
-    """把"升级门/凭据门过问过的敏感动作"记一行本地日志(注入防御 M6)。
+    """把"安全门过问过的敏感动作"记一行本地日志(注入防御 M6)。
+
+    `gate_name` 用的是门**自己的名字**(`PermissionGate.ask_kind`:credential / git /
+    external / project_rule / outside_path / …),不是从给人看的那句话里猜关键词 ——
+    猜文案的代价写在 `_ask` 的 docstring 里:改一个字判定就悄悄失效,没人会红。
+    兼容旧的事后线索:`credential` 与 `escalation`(外部内容升格门)两个词照旧。
 
     分发出去的程序没有遥测,这份日志是唯一的事后线索:真被注入过,至少能查到
     "先接触了哪个外部来源、后来想干什么、用户点了什么"。

@@ -484,6 +484,21 @@ def _apply_review_edit(ctx: ToolContext, verdict: dict) -> str:
             f"{PLAN_REL.as_posix()}。请按**改后的这一版**执行,不要照你原来那份走。")
 
 
+def _set_plan_lock(ctx: ToolContext, on: bool, goal: str = "") -> bool:
+    """上/解规划锁(v0.9.129)。状态住在 `ctx.sandbox` 那一份共享对象上 ——
+    子代理各自新建权限门、但共用父会话的 sandbox,所以锁放在这里才传得下去
+    (放 gate 上等于给写型子代理留一条后门:主代理锁着,派出去那一路照样能写)。
+
+    返回"这一次调用是不是真的改变了状态",调用方据此决定要不要说一声。
+    没有 sandbox 的形态(测试桩 / 某些内部工具路径)一律算"锁不上",也不报错 ——
+    这把锁不该让没有权限门的场景崩掉。
+    """
+    sb = getattr(ctx, "sandbox", None)
+    if sb is None or not hasattr(sb, "lock_plan"):
+        return False
+    return sb.lock_plan(goal) if on else sb.unlock_plan()
+
+
 def review_plan(ctx: ToolContext, goal: str, steps: list) -> str:
     """计划刚写完:把**整张单子**摊给人核对(批准 / 改一条 / 重排)。
 
@@ -500,6 +515,10 @@ def review_plan(ctx: ToolContext, goal: str, steps: list) -> str:
         return f"\n(核对单没弹成:{type(exc).__name__};先把计划讲给用户,别直接开工。)"
     mode = str(verdict.get("mode") or "unanswered")
     if mode == "approve":
+        # 批准这一步**真的解那道锁**(v0.9.129)。以前这里只回一句话给模型看,
+        # 而"没批准也不许写"这件事在 permission 里没有任何一处执行 —— 那等于
+        # 一张装饰性的核对单。解铃还须系铃人:锁是 `plan(action=write)` 上的。
+        _set_plan_lock(ctx, False, goal)
         return "\n用户已在界面上**批准这张计划**,可以按顺序开工(每完成一步照旧 update 标记)。"
     if mode == "edit":
         return _apply_review_edit(ctx, verdict)
@@ -554,12 +573,17 @@ def _plan_write(ctx: ToolContext, goal: str, steps: list) -> str:
             if with_verify else
             "\n能给判据的步骤请在这一步的 detail 里补一条 `verify: <命令>`"
             "(跑测试/跑构建/`--check` 这类);填不出就留空,别编一条空跑的命令。")
+    # 单子写出来了 → 上规划锁:在这张纸被人批准之前,动手面一律拒(v0.9.129)。
+    # 顺序很重要 —— 先锁再弹核对单,核对单没弹成/没人答都留在"锁着"那一侧。
+    _set_plan_lock(ctx, True, goal)
     return (f"计划已写入 {PLAN_REL.as_posix()}(共 {len(clean)} 步):\n"
             + "\n".join(listed)
             + gate
             + scheduling_view({"steps": clean})
             + "\n请把计划展示给用户并等待确认;确认后逐步执行,"
               "每完成一步用 action=update 标记 done。"
+            + "\n⚠ 规划锁已开:这张单子被用户批准之前,写文件/改文件/跑命令那一路"
+              "都会被拒(读与查仍然随便)。不要试着绕过它,请用户点头是唯一的路。"
             # 整单核对单:桌面版当场弹一张卡(批准/改一条/重排),别处照旧走对话
             + review_plan(ctx, goal, clean))
 

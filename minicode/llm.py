@@ -246,10 +246,18 @@ class LLMClient:
         }
         if schemas:
             kwargs["tools"] = schemas
+        # 模型配置里声明的"最大输出 Token"→ 真发进请求。没声明就不带这个键
+        # (与旧请求逐字节一致)—— 这条是"编辑器不是样子货"的一部分。
+        # 这里不再判类型:`model_cfg_from_raw` 只让正整数进来,重复校验就是第二把尺子。
+        declared_out = self.config.model_cfg().get("max_output_tokens")
+        if declared_out:
+            kwargs["max_tokens"] = declared_out
         # 思考档位 → 真实请求参数(见 minicode/reasoning.py)。
         # default 时一个参数都不加:请求字节与旧版完全一致。
+        # 用户在模型配置里自己登记的档位与映射优先于内置那张按模型名的表。
         from minicode.reasoning import apply_reasoning_choice
-        apply_reasoning_choice(kwargs, self.config.model, self.reasoning_choice)
+        apply_reasoning_choice(kwargs, self.config.model, self.reasoning_choice,
+                               cfg=self.config.model_cfg())
 
         turn = AssistantTurn()
         fragments: dict[int, dict] = {}

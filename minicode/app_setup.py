@@ -1,6 +1,7 @@
 """CLI 与 GUI 共享的应用装配:system prompt 组装 + Agent 构建。"""
 from __future__ import annotations
 
+import hashlib
 import platform
 import sys
 import time
@@ -21,6 +22,7 @@ from minicode.memory import memory_prompt_section
 from minicode.llm import LLMClient
 from minicode.paths import SESSIONS_DIR, SYSTEM_PROMPT_PATH, app_path
 from minicode.permission import PermissionGate
+from minicode import permspec
 from minicode.sandbox import SandboxState, policy_from_raw
 from minicode.session import Session
 from minicode.skills import load_skills, skill_dirs, skills_prompt_section
@@ -41,22 +43,27 @@ INSTRUCTION_GUARD = ("这些是风格与流程上的规矩;沙箱边界、敏感
 
 
 def _read_instruction(path: Path) -> dict:
-    """读一份指令文件,返回 {exists, lines, chars, truncated}。
+    """读一份指令文件,返回 {exists, lines, chars, truncated, sha}。
 
     读不动(不存在/二进制/半截)一律回 exists=False:这一屏宁可少报一层,
     也不报一层"读到了"其实没读到的。
+
+    `sha` 是**去掉首尾空白之后**正文的 sha256:项目级的采纳点头记的就是它
+    (§四.2,v0.9.127)—— 换行符与结尾空行不该让人多点一次头,而改一个字
+    必须再问一次。
     """
     try:
         text = path.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):
         return {"exists": False, "path": path, "lines": 0, "chars": 0,
-                "truncated": False, "text": ""}
+                "truncated": False, "text": "", "sha": ""}
     if not text:
         return {"exists": False, "path": path, "lines": 0, "chars": 0,
-                "truncated": False, "text": ""}
+                "truncated": False, "text": "", "sha": ""}
     return {"exists": True, "path": path, "text": text,
             "lines": len(text.splitlines()), "chars": len(text),
-            "truncated": len(text) > AGENTS_CHAR_LIMIT}
+            "truncated": len(text) > AGENTS_CHAR_LIMIT,
+            "sha": hashlib.sha256(text.encode("utf-8")).hexdigest()}
 
 
 def _instruction_body(found: dict) -> str:
@@ -84,6 +91,9 @@ def instruction_layers(workspace) -> list[dict]:
     为什么要有这一屏:「我明明写了规矩它不听」不该变成扯皮。这里能确认的是
     "读到没读到、几行、有没有被截",**不能**报"我之所以这么做是因为你第 N 条"
     —— 那是把模型的自述当因果证据。
+
+    项目级那一条另带一个 `adopted`(v0.9.127):在场但没采纳的这份文件**没有**
+    进提示词,这一屏要说得出这个差别,否则用户只看见"读到了 37 行"。
     """
     out = []
     user = _read_instruction(app_path(USER_AGENTS_NAME))
@@ -97,17 +107,27 @@ def instruction_layers(workspace) -> list[dict]:
         if proj["exists"]:
             out.append({"scope": "项目级", "name": p.name,
                         "lines": proj["lines"], "chars": proj["chars"],
-                        "truncated": proj["truncated"]})
+                        "truncated": proj["truncated"],
+                        "adopted": (permspec.agents_adopted_sha(workspace)
+                                    == proj["sha"])})
     return out
 
 
 def instructions_line(workspace) -> str:
-    """一屏话:「内置 + 用户级(12 行)+ 项目级(5 行)」;一份都没有就空串。"""
+    """一屏话:「内置 + 用户级(12 行)+ 项目级(5 行)」;一份都没有就空串。
+
+    项目级还没点过头采纳时,后面缀一句「(未采纳)」—— 侧栏那一行不能让人以为
+    它已经在起作用。
+    """
     layers = instruction_layers(workspace)
     if not layers:
         return ""
-    bits = [f"{it['scope']}({it['lines']} 行"
-            + ("、已截断" if it["truncated"] else "") + ")" for it in layers]
+    bits = []
+    for it in layers:
+        tail = "、已截断" if it["truncated"] else ""
+        if it["scope"] == "项目级" and not it.get("adopted", True):
+            tail += "、未采纳"
+        bits.append(f"{it['scope']}({it['lines']} 行{tail})")
     return "内置 + " + " + ".join(bits)
 
 
@@ -125,6 +145,37 @@ def user_agents_prompt_section() -> str:
     return f"\n{head}{_instruction_body(found)}\n"
 
 
+def agents_adoption(workspace) -> dict:
+    """这份项目指令文件当下的采纳状态:`{present, adopted, sha, name, lines, chars}`。
+
+    §四.2「首次采纳点头」把这件事拆成两半,而且两半各只有一处真相:
+    **读没读到**在这里(照旧由 `_read_instruction` 报),**这台机器点没点头**在
+    `permspec` 那本信任账里(按内容指纹记)。所以这一屏能说清"它在场但你还没采纳",
+    而 `agents_prompt_section` 只认后者。
+    """
+    empty = {"present": False, "adopted": False, "sha": "", "name": "",
+             "lines": 0, "chars": 0, "found": None}
+    p = project_agents_path(workspace)
+    if p is None:
+        return empty
+    found = _read_instruction(p)
+    if not found["exists"]:
+        return empty
+    return {"present": True,
+            "adopted": permspec.agents_adopted_sha(workspace) == found["sha"],
+            "sha": found["sha"], "name": p.name,
+            "lines": found["lines"], "chars": found["chars"], "found": found}
+
+
+def adopt_agents(workspace) -> str:
+    """记下「这份项目指令我核对过、采纳了」,回它的指纹(没这份文件就回空串)。"""
+    info = agents_adoption(workspace)
+    if not info["present"]:
+        return ""
+    permspec.adopt_agents(workspace, info["sha"], info["lines"])
+    return info["sha"]
+
+
 def agents_prompt_section(workspace) -> str:
     """工作区根的 AGENTS.md 指令文件,自动进系统提示词(F1,v0.9.100)。
 
@@ -133,16 +184,17 @@ def agents_prompt_section(workspace) -> str:
     本地落法 —— **工作区根**的两个名字按序找,存在才注入;文件是用户
     手写的,原样注入、截断到 4000 字并写明,绝不替用户改写。子代理也带
     (它就是"这个项目的规矩",对派出去干活的那一路同样有效)。
+
+    v0.9.127 起**还要求本机采纳过这一份内容**(§四.2 的点头):这份文件可能是
+    别人 clone 带来的,而"文件里写了规矩"与"你同意它对你说话"是两件事。
+    没采纳时这里返回空串 —— 不报错也不解释,那是 `/instructions` 与提问卡的活。
     """
-    p = project_agents_path(workspace)
-    if p is None:
+    info = agents_adoption(workspace)
+    if not info["adopted"]:
         return ""
-    found = _read_instruction(p)
-    if not found["exists"]:
-        return ""
-    head = (f"# 项目指令(工作区 {p.name},用户手写,优先级高于你的默认习惯)\n"
+    head = (f"# 项目指令(工作区 {info['name']},用户手写,优先级高于你的默认习惯)\n"
             + INSTRUCTION_GUARD + "\n\n")
-    return f"\n{head}{_instruction_body(found)}\n"
+    return f"\n{head}{_instruction_body(info['found'])}\n"
 
 
 def instruction_signature(workspace) -> str:
@@ -151,6 +203,10 @@ def instruction_signature(workspace) -> str:
     `_refresh_clock` 拿它判断"要不要重建提示词":跨天**或**指纹变了才重建
     —— 内容变了才破 KV Cache,没变照旧稳定命中(与"一天至多破一次"同一条
     口径的推广)。指纹只碰几个小文件的字节与技能名清单,每回合一次,便宜。
+
+    v0.9.127 起这个指纹里**折进项目级的采纳状态**:点了头之后提示词的内容确实
+    变了(那一段从没有变成有),所以指纹也该变 —— 否则采纳发生在会话中途时,
+    `_refresh_clock` 会判"什么都没变"而不重建,那句点头就当没发生过。
     """
     import hashlib
     h = hashlib.sha1()
@@ -163,6 +219,7 @@ def instruction_signature(workspace) -> str:
             h.update(f.read_bytes())
         except OSError:
             h.update(b"<missing>")
+    h.update(b"|adopted" if agents_adoption(workspace)["adopted"] else b"|pending")
     try:
         names = "|".join(sorted(x.name for x in load_skills(skill_dirs(workspace))))
         h.update(names.encode("utf-8"))

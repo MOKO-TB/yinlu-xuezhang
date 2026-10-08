@@ -34,6 +34,11 @@ def skills_plan_search() -> list[Tool]:
             description=(
                 "复杂任务的计划管理(保存在工作区 plans/plan.md)。"
                 "action=write:列 2-8 步计划,然后展示给用户等待确认再执行;"
+                "**写完会自动上「规划锁」**:这张计划被用户批准之前,write_file / "
+                "edit_file / bash / py_script 那一路会被权限门直接拒(读、查、改计划"
+                "本身不受影响),而**这把锁只有人能解** —— 桌面版点核对单或计划卡片上的"
+                "「批准这版计划」,命令行 `/plan approve`。所以别写完计划就接着动手,"
+                "把计划讲清楚等用户点头;也不要试图绕过或自行解除它。"
                 "步骤可用 depends_on 声明依赖(如第 3 步 depends_on=[1,2]),"
                 "只有依赖全部完成的步骤才是「可执行」,互不依赖的可并行派子代理;"
                 "action=update:每完成一步标记 status=done(可附 note);"

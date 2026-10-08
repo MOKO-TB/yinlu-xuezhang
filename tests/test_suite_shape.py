@@ -33,3 +33,37 @@ def test_no_duplicate_test_names_in_one_file():
             bad[path.name] = sorted(dup)
     assert not bad, (f"这些文件里有同名测试,前面那份根本没在跑:{bad}"
                      " —— 改名字或删掉一份,别留两份互相顶掉")
+
+
+# 起浏览器那一份退路,不许再长出新副本(§6 #50(e)② 那笔账的"止血"部分)
+OWN_FALLBACK_CEILING = 29
+
+
+def test_no_new_hand_rolled_browser_fallback():
+    """`scripts/` 里自带一份 chromium 退路的脚本**只准减少,不准增加**。
+
+    2026-10-08 把这条账实测核过,三个数都和 HANDOFF 写的不一样:
+
+    - HANDOFF 说「仍散在 12 支脚本里」→ 实测 **29 支**各抄了一份(自己 `def _launch(`、
+      或自己找 `ms-playwright` / 传 `executable_path`);12 是 v0.9.39 抽 `e2e_launch.py`
+      那一刻已收进去的数量,此后每轮又各自长。
+    - 「v0.9.09~0.9.13 那五场没抄,所以每次都红、连页面都没打开」这个前提**已经不成立**:
+      今天这台机器上裸 `p.chromium.launch()` 起得来(chromium 151.0.7922.34,页面真渲染),
+      所以那 11 支没退路的脚本没病 —— 别按旧文档去"修"它们。
+    - 把 29 份换成 `from e2e_launch import launch` 本身是安全的(那只函数先试裸 launch、
+      失败才去找 chrome.exe、两条都不行就抛得明明白白,是严格超集),但**29 支没跑过的
+      浏览器场不该在一次风格改动里一起动**,而 `scripts/` 正是这几天并行会话在改的地方。
+      所以这条闸只干一件事:**不再长**。真要收,一次一支、跑通再挪。
+    """
+    hits = []
+    for path in sorted((TESTS.parent / "scripts").glob("*.py")):
+        if path.name == "e2e_launch.py":
+            continue
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        if "sync_playwright" not in text or "from e2e_launch import" in text:
+            continue
+        if "def _launch(" in text or "ms-playwright" in text or "executable_path" in text:
+            hits.append(path.name)
+    assert len(hits) <= OWN_FALLBACK_CEILING, (
+        f"自带浏览器退路的脚本从 {OWN_FALLBACK_CEILING} 支涨到 {len(hits)} 支:"
+        f"新写的请改用 `from e2e_launch import launch`({'、'.join(hits)})")

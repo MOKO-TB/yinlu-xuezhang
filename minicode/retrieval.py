@@ -166,17 +166,29 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 def rank_by_vector(query_vec: Sequence[float], vecs: Sequence[Sequence[float]],
-                   min_sim: float = 0.0) -> list[tuple[int, float]]:
-    """暴力余弦,返回 (下标, 相似度) 降序;相似度低于 min_sim 的一律丢掉。
+                   min_sim: float = 0.0, rel_margin: float = 0.0
+                   ) -> list[tuple[int, float]]:
+    """暴力余弦,返回 (下标, 相似度) 降序;两道判据各管一件事。
 
-    min_sim 这一道闸门是**语义上的诚实**:开了向量也不能让"随便什么条目"都算命中,
-    否则未命中的问句会被塞进一堆不相干结果,比不返回更难查。
+    `min_sim` 是**病态下限**:整档连它都够不到,说明这次问的东西根本不在库里,
+    退回关键词比硬塞一堆不相干条目诚实。
+    `rel_margin` 是**与第一名的差距**:真正在做事的是这一道 —— 相似度是相对量,
+    同一个"算不算命中"的绝对数在不同输入长度下完全不是一回事(短问句的分数天然低),
+    只跟第一名比就不受这个影响。
+    两个数都 ≤0 时行为与不筛一致(向后兼容既有调用点)。
     """
     if not query_vec:
         return []
     scored = [(i, cosine(query_vec, v)) for i, v in enumerate(vecs) if v]
-    scored = [(i, s) for i, s in scored if s >= min_sim > 0.0] if min_sim > 0.0 else scored
+    if not scored:
+        return []
     scored.sort(key=lambda pair: (-pair[1], pair[0]))
+    floor = min_sim if min_sim > 0.0 else 0.0
+    if rel_margin > 0.0:
+        rel = scored[0][1] - rel_margin
+        floor = max(floor, rel)
+    if floor > 0.0:
+        scored = [pair for pair in scored if pair[1] >= floor]
     return scored
 
 

@@ -204,7 +204,14 @@ def _check_mcp(mcp_rows: Any) -> Callable[[], dict]:
         on = [r for r in mcp_rows if r.get("connected")]
         off = [r for r in mcp_rows
                if not r.get("connected") and r.get("enabled", True)]
-        parts = [f"{r.get('label')}({r.get('n_tools', 0)} 工具)" for r in on]
+        parts = []
+        for r in on:
+            one = f"{r.get('label')}({r.get('n_tools', 0)} 工具)"
+            # 被名单挡掉的只数要在这行就说出口:体检报"12 工具"而模型只有 5 只能调,
+            # 同学会以为是服务器坏了,而不是自己配的那两条规则。
+            if r.get("n_hidden"):
+                one += f",另 {r['n_hidden']} 只被你的名单挡了"
+            parts.append(one)
         detail = f"共 {len(mcp_rows)} 台,连上 {len(on)} 台:" + ("、".join(parts) or "无")
         if off:
             detail += ";没连上:" + "、".join(str(r.get("label")) for r in off)

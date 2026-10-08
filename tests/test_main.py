@@ -85,6 +85,8 @@ SILENT_COMMANDS = ("/clear",)   # 只改状态,不往 UI 打消息
     "/help", "/clear", "/model", "/history", "/undo", "/compact",    "/sandbox", "/sandbox off", "/memory", "/memory user",
     "/remember 喜欢先给结论", "/dream", "/dream all",
     "/skills", "/kb", "/plan", "/nothing-like-this",
+    # v0.9.129 规划锁:这三条子命令是命令行那一侧唯一的解铃出口,不许有一条打不开
+    "/plan approve", "/plan lock", "/plan status", "/plan 乱写",
     "/find", "/find 三体", "/permission", "/permission full",
     # v0.9.96 之前这三条根本不在清单里:/library 与 /usage 改坏了也没人红
     "/library", "/library 活着", "/usage",
@@ -100,6 +102,35 @@ def test_slash_commands_do_not_crash(env, cmd):
     assert handle_slash(cmd, session, Config(), ui, agent) is False
     if cmd not in SILENT_COMMANDS:
         assert ui.messages, f"{cmd} 没有任何输出"
+
+
+def test_plan_approve_is_the_command_line_way_to_release_the_lock(env):
+    """命令行是规划锁在桌面版之外的唯一出口(v0.9.129):`/plan approve` 必须
+    真的把 sandbox 上那一份解开,而不是只回一句好听的话。"""
+    from minicode.sandbox import SandboxPolicy, SandboxState
+    _workspace, ui, agent = env
+    sb = SandboxState(SandboxPolicy(), _workspace)
+    agent.ctx.sandbox = sb
+    session = Session(system_prompt="测试用系统提示")
+
+    handle_slash("/plan approve", session, Config(), ui, agent)
+    assert sb.plan_lock is False and "没有锁" in ui.messages[-1][1]
+
+    handle_slash("/plan lock", session, Config(), ui, agent)     # 没有计划:锁不上
+    assert sb.plan_lock is False, "没有计划也锁 = 把用户关在一个没来路的锁里"
+    assert "没有可锁的计划" in ui.messages[-1][1]
+
+    (Path(_workspace) / "plans").mkdir(exist_ok=True)
+    (Path(_workspace) / "plans" / "plan.md").write_text(
+        "# 计划:毕设排期\n\n- [ ] 1. 定题\n- [ ] 2. 写开题报告\n", encoding="utf-8")
+    handle_slash("/plan lock", session, Config(), ui, agent)
+    assert sb.plan_lock is True and sb.plan_lock_goal == "毕设排期"
+    handle_slash("/plan status", session, Config(), ui, agent)
+    assert "规划锁开着" in ui.messages[-1][1]
+    handle_slash("/plan", session, Config(), ui, agent)
+    assert "还没被批准" in ui.messages[-1][1]
+    handle_slash("/plan approve", session, Config(), ui, agent)
+    assert sb.plan_lock is False and "可以开工" in ui.messages[-1][1]
 
 
 def test_slash_exit_returns_true(env):
@@ -400,6 +431,8 @@ def test_cli_undo_lists_every_change_and_touches_nothing(written):
     assert doc.read_text(encoding="utf-8") == "v2"
     ui, out = _slash("/undo", agent)
     assert "本轮改动 2 处" in out and "doc.txt" in out
+    # v0.9.128:这本栈按会话攒,不分组不标"现在第几问"的话,「本轮」在长会话里是假话
+    assert "跨 2 问" in out and "现在第 2 问" in out, out
     assert "还有 1 处没退" in out                 # 早那条带着"上面还有几处"的旗
     assert "命令(bash / py_script)" in out         # 这份账的边界必须说出口
     assert ui.asks == [], "只是列清单,不该伸手要点头"

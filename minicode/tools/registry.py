@@ -20,7 +20,10 @@ from minicode.tools import (
     catalog_remind,
     catalog_places,
 )
+from minicode.tools import concurrency
 from minicode.tools.base import Tool
+
+
 
 
 def build_default_registry() -> list[Tool]:
@@ -30,7 +33,7 @@ def build_default_registry() -> list[Tool]:
     而漂掉的那处正是"看着一切正常、装好的包里少一只工具"的来源。当前条数由
     `tests/test_registry_split.py` 拿实测钉住,文档数以 `check_docs.py --collect` 对账。
     """
-    return [
+    tools = [
         *catalog_files.tools(),
         *catalog_files.perms_tools(),
         # v0.9.116 L3:钩子配方两只,挨着权限那组(都是"用户点头才改配置"的一族)
@@ -51,3 +54,5 @@ def build_default_registry() -> list[Tool]:
         *catalog_remind.remind_tools(),
         *catalog_places.map_tools(),
     ]
+    concurrency.mark_concurrent(tools)   # 资格表在 tools/concurrency.py
+    return tools

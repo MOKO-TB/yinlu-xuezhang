@@ -78,6 +78,9 @@ const API = {
     summary: {calls: 0}, changes: {ok: true, total: 0, items: [], note: ""},
     updated_at: "", empty: true, groups: []}),
   get_env_info: () => Promise.resolve({}),
+  // v0.9.129 规划锁:GUI 没有斜杠命令,这颗按钮是图形版除核对单之外唯一的出口。
+  plan_approve: () => { rec("plan_approve", null);
+    return Promise.resolve({ok: true, locked: false}); },
   get_monitor_pref: () => Promise.resolve({open: false, folded: {}}),
   set_monitor_pref: () => Promise.resolve({ok: true}),
   get_reasoning: () => Promise.resolve({visible: false, disabled: true, kind: "hidden",
@@ -361,6 +364,36 @@ def main() -> int:
             later = json.loads(_calls(page, "plan_review_reply")[-1][1])
             check(later["mode"] == "unanswered",
                   "「稍后再说」回的是 unanswered —— 关卡必须同时松掉后端那条等待")
+
+            # ---- 6b. 规划锁:聊天里那张计划卡片上的「批准这版计划」(v0.9.129) ----
+            # 核对单会被关掉、也可能压根没弹(重排之后),所以卡片上这一颗不是装饰:
+            # 少了它,图形版就有一条"锁上了却没人在界面上解得开"的死路。
+            page.evaluate("""() => renderPlanCard({ok: true, has_plan: true,
+                goal: '把成绩导入修好', total: 2, done: 0, locked: true,
+                steps: [{n: 1, title: '复现', status: 'pending', ready: true,
+                         blocked: false, depends_on: [], note: '', verify: ''},
+                        {n: 2, title: '改解析', status: 'pending', ready: false,
+                         blocked: true, depends_on: [1], note: '', verify: ''}],
+                ready: [1], blocked: [2], failed: [], running: []})""")
+            page.wait_for_timeout(200)
+            btn = page.locator(".tk.locked .tk-approve")
+            check(btn.count() == 1, "锁着的计划卡片上有一颗「批准这版计划」")
+            check(btn.first.inner_text() == "批准这版计划", f"按钮文案:{btn.first.inner_text()}")
+            btn.first.click()
+            page.wait_for_timeout(300)
+            check(_calls(page, "plan_approve"),
+                  "点它真的敲了桥(不是只把按钮自己藏起来)")
+            # 解锁之后重画:按钮必须消失 —— 留着就是一只点了没用的死按钮
+            page.evaluate("""() => renderPlanCard({ok: true, has_plan: true,
+                goal: '把成绩导入修好', total: 2, done: 0, locked: false,
+                steps: [{n: 1, title: '复现', status: 'pending', ready: true,
+                         blocked: false, depends_on: [], note: '', verify: ''},
+                        {n: 2, title: '改解析', status: 'pending', ready: false,
+                         blocked: true, depends_on: [1], note: '', verify: ''}],
+                ready: [1], blocked: [2], failed: [], running: []})""")
+            page.wait_for_timeout(200)
+            check(page.locator(".tk-approve").count() == 0,
+                  "没锁的卡片上不该还留着这颗按钮")
 
             # ---- 7. 新功能③:技能分享包两颗 ----
             page.click("#btnSkills")

@@ -290,6 +290,63 @@ def command_hits_network(command: str) -> str | None:
     return None
 
 
+# ---------------------------------------------------------- "两层都扫不到"那一类
+# 命令层只看命令行,脚本内容层只读得到**落成文件**的那份脚本(`_script_targets` 拿
+# 路径去读盘)。于是有两种写法从两层之间漏过去,而它们的共同点不是"危险",是
+# **我们看不见**:
+#   ① 起一个不等它结束、还可以不可见的进程 —— `Start-Process` 默认不 -Wait,
+#      `cmd /c start` 与 `wscript`/`mshta` 同理:本工具的超时、输出上限、进程树终止
+#      全都只管它自己那条子进程,被它拉起来的那个跑什么、跑多久、有没有弹窗都没人知道;
+#   ② 把读不到的正文交给解释器 —— `-EncodedCommand`/`-enc` 后面那段 base64 我们
+#      **根本不解开**,内容层等于不存在(222 行那条已知限界说的就是这件事)。
+# 只升级到确认,**不硬拒**:隐藏窗口起一个进程可能是正当需求(跑一个 GUI 应用、
+# 起一个本地服务),而这一层头上的定位是"这套边界不是防火墙" —— 假装挡住了,
+# 比多问一次坏得多。
+STEALTH_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
+    ("把看不见的正文交给解释器（base64 那段解不开，脚本内容那一层等于没扫）",
+     re.compile(r"-\w*(?:enc|encodedcommand)\s+[A-Za-z0-9+/]{20,}={0,2}",
+                re.IGNORECASE)),
+    # PowerShell 的 `Start-Process` / `Start-Job`:**默认不 -Wait**,所以本工具在
+    # 它返回那一刻就结束了,被拉起来的那个之后跑什么、有没有弹窗、什么时候结束,
+    # 超时与进程树终止都管不到它。`-WindowStyle Hidden` 只是让这件事更看不见。
+    ("起一个不等它结束的进程或后台作业（Start-Process / Start-Job 默认不 -Wait）",
+     re.compile(r"\b(?:start-process|start-job|invoke-command|start-threadjob)\b",
+                re.IGNORECASE)),
+)
+# 段首 token 判的那几个:`start` 与三个脚本宿主。按段首算而不是全文匹配,是因为
+# `npm start` / `yarn start` / `pnpm start` 是日常里最高频的两个词组 —— 拿子串匹配
+# 会把它们每一句都要确认一次,一条喊疼的门最后只会被整体关掉。
+STEALTH_LAUNCH_HEADS = ("start", "wscript", "mshta", "cscript")
+
+
+def command_hits_stealth(command: str) -> str | None:
+    """命令行里有没有"两层都扫不到"的写法。命中回一句人话,没命中回 None。"""
+    cmd = command or ""
+    for label, pattern in STEALTH_PATTERNS:
+        hit = re.search(pattern, cmd)
+        if hit:
+            return f"{label}：{hit.group(0).strip()[:60]}"
+    for seg in _PIPE_SPLIT.split(cmd):
+        tokens = [t.strip("\"'") for t in seg.split()]
+        if not tokens:
+            continue
+        head = tokens[0].lower().rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        head = head[:-4] if head.endswith(".exe") else head
+        # `cmd /c start ...`:段的真正入口在第二个 token 上
+        if head == "cmd" and len(tokens) > 2:
+            nxt = tokens[2].lower()
+            if nxt in STEALTH_LAUNCH_HEADS:
+                return (f"起一个不等它结束的进程（{nxt}）："
+                        "它的输出、超时与是否结束都不在本工具管得到的范围里")
+        elif head in STEALTH_LAUNCH_HEADS:
+            # `start /b "" npm i` 与 `wscript foo.vbs` 都算;`cscript foo.js` 也算 ——
+            # 它跑的是文件,但那份文件由脚本宿主解释,内容层扫的是我们传给它的路径,
+            # 不是它实际读到的东西。
+            return (f"起一个不等它结束的进程（{head}）："
+                    "它的输出、超时与是否结束都不在本工具管得到的范围里")
+    return None
+
+
 def check_command(policy: SandboxPolicy, command: str) -> tuple[str, str]:
     """返回 (决策, 说明)。REJECT 表示沙箱直接拦下;ASK 表示交给确认流程。"""
     cmd = (command or "").strip()
@@ -302,6 +359,13 @@ def check_command(policy: SandboxPolicy, command: str) -> tuple[str, str]:
             hit = pattern.lower() in cmd.lower()
         if hit:
             return REJECT, f"命令命中沙箱禁配规则「{pattern}」"
+
+    if policy.enabled:
+        # "两层都扫不到"那一类:与网络那条同一位置(命令层),但只到 ASK 为止
+        stealth = command_hits_stealth(cmd)
+        if stealth:
+            return ASK, ("⚠ 这一步会" + stealth
+                         + "。确认框之外跑起来的东西，我看不到它的输出，也退不回它做的事。")
 
     if policy.enabled and not policy.allow_network:
         found = command_hits_network(cmd)
@@ -589,9 +653,37 @@ class SandboxState:
         self.workspace = Path(workspace)
         self.approved_paths: set[str] = set()
         self.session_approved: set[str] = set()
+        # 规划锁(v0.9.129):这张计划没被人批准之前,动手面一律拒。
+        # **为什么住这里而不是住 PermissionGate**:子代理各自新建 gate,但
+        # `sandbox=ctx.sandbox` 是**共用父会话那一份**(subagents.py 里就这么写的)。
+        # 锁住 gate 上等于给写型子代理留一条后门 —— 主代理被锁住、派出去的那一路
+        # 照样能写,那把锁就是给模型看的道具。状态放在两边都读得到的那一个对象上。
+        # 与上面两档批准同一层不落盘:进程退出就没了,它是"这一场工作"的状态。
+        self.plan_lock = False
+        self.plan_lock_goal = ""
 
     def new_turn(self) -> None:
         self.approved_paths.clear()      # session_approved 跨回合保留,见类注释
+        # plan_lock 也跨回合保留:批不批准不是"第几回合"的事,解它要人的动作。
+
+    def lock_plan(self, goal: str = "") -> bool:
+        """上规划锁。返回 True = 这一次真的从"没锁"变成"锁着"。"""
+        goal = str(goal or "").strip()
+        if self.plan_lock:
+            if goal:
+                self.plan_lock_goal = goal      # 重排后的新单子:目标跟着换,锁不清
+            return False
+        self.plan_lock = True
+        self.plan_lock_goal = goal
+        return True
+
+    def unlock_plan(self) -> bool:
+        """解规划锁。**只由人的动作调用**(核对单批准 / 计划卡片那颗 / `/plan approve`)。"""
+        if not self.plan_lock:
+            return False
+        self.plan_lock = False
+        self.plan_lock_goal = ""
+        return True
 
     def path_allowed(self, p: Path) -> bool:
         if self.policy.allow_outside_workspace:

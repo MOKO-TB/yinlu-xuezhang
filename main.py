@@ -76,6 +76,11 @@ def _undo_list_text(agent) -> str:
     if not rep["items"]:
         return rep["hint"]
     head = f"本轮改动 {rep['total']} 处(最新在前"
+    if rep.get("turns", 1) > 1:
+        # 这本栈是按会话攒的,不是按问:以前这句「本轮改动」在长会话里是句假话
+        head += f",跨 {rep['turns']} 问"
+    if rep.get("turn"):
+        head += f",现在第 {rep['turn']} 问"
     if rep["more"]:
         head += f",这里只列 {len(rep['items'])} 处,另有 {rep['more']} 处"
     head += "):"
@@ -161,7 +166,7 @@ def _undo_command(agent, ui, rest: list) -> None:
 
 
 def _instructions_text(workspace) -> str:
-    """L3 的终端形态:报「读到没读到、几行、来自哪份、有没有被截」。
+    """L3 的终端形态:报「读到没读到、几行、来自哪份、有没有被截、采没采纳」。
 
     报不了「我之所以这么做是因为你第 N 条」—— 那是把模型的自述当因果证据。
     """
@@ -179,9 +184,16 @@ def _instructions_text(workspace) -> str:
                  else project_agents_path(workspace))
         cut = (f"(超过 {AGENTS_CHAR_LIMIT} 字,只注入了前面那一截,后面没进提示词)"
                if it["truncated"] else "")
+        # 项目级那一行要说得出"在场但没采纳"(v0.9.127 §四.2):这一屏的全部意义
+        # 就是让用户不必猜"它到底读了没有"。
+        pending = (it["scope"] == "项目级" and not it.get("adopted", True))
         lines.append(f"  • {it['scope']} {it['name']}:"
-                     f"{it['lines']} 行 / {it['chars']} 字{cut}")
+                     f"{it['lines']} 行 / {it['chars']} 字{cut}"
+                     + ("  ← 还没点过头,**没进提示词**" if pending else ""))
         lines.append(f"    {where}")
+        if pending:
+            lines.append("    下一问会弹一张卡请你采纳;这个界面点不了头时,把规矩写进"
+                         "用户级那一份(那一份是你自己写的,不问)")
     lines.append("  " + INSTRUCTION_GUARD)
     return "\n".join(lines)
 
@@ -301,12 +313,36 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
         ui.info(dream_all(workspace, llm) if scope in ("all", "both", "全部")
                 else dream(workspace, scope, llm))
     elif name == "/plan":
-        from minicode.planning import PLAN_REL
-        p = workspace / PLAN_REL
-        if p.exists():
-            ui.info(p.read_text(encoding="utf-8"))
+        from minicode.planning import PLAN_REL, plan_state
+        sub = (arg or "").strip().lower()
+        sb = getattr(agent.ctx, "sandbox", None)
+        # 规划锁只有人能解(v0.9.129)—— 所以命令行这一条不是"给模型用的开关",
+        # 而是**用户自己**批准/放弃这张单子的出口(桌面版对应核对单与卡片那颗按钮)。
+        if sub in ("approve", "批准", "unlock"):
+            ok = bool(sb is not None and sb.unlock_plan())
+            ui.info("已批准这张计划,规划锁解除 —— 可以开工了。" if ok else
+                    "现在没有锁(没锁就不用批:写文件与命令照常走档位)。")
+        elif sub in ("lock",):
+            st = plan_state(workspace)
+            # 没有计划就不许锁:锁一张不存在的单子,等于把用户关在一个
+            # 没有出口的地方(他连可批的东西都没看到)。
+            ok = bool(st.get("has_plan") and sb is not None
+                      and sb.lock_plan(st.get("goal") or ""))
+            ui.info("已上规划锁:在你 /plan approve 之前,写文件与跑命令都会被拒。"
+                    if ok else "没有可锁的计划(先让学长 plan 一版)。")
+        elif sub in ("status", "状态"):
+            locked = bool(sb is not None and getattr(sb, "plan_lock", False))
+            ui.info(("🔒 规划锁开着" if locked else "规划锁没开")
+                    + f";计划:{'有' if (workspace / PLAN_REL).exists() else '没有'}。")
         else:
-            ui.info("当前没有计划文件(工作区 plans/plan.md)。")
+            p = workspace / PLAN_REL
+            if p.exists():
+                locked = bool(sb is not None and getattr(sb, "plan_lock", False))
+                ui.info(("🔒 这张计划还没被批准(写文件与跑命令会被拒)。"
+                         "要开工输入 /plan approve。" if locked else "")
+                        + p.read_text(encoding="utf-8"))
+            else:
+                ui.info("当前没有计划文件(工作区 plans/plan.md)。")
     elif name == "/skills":
         from minicode.skills import load_skills, skill_dirs, dependency_report
         skills = load_skills(skill_dirs(workspace))
@@ -458,6 +494,49 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
                              "不是漏算了什么。")
         lines.append("会话留档在 sessions/ 目录。")
         ui.info("\n".join(lines))
+    elif name == "/rename":
+        # v0.9.126:改名只动留档顶上那行元数据,不碰任何一条消息 —— 会话是同学的
+        # 记录,程序没权利因为"你换了个叫法"就把旧那份挪走或删掉。
+        from minicode.session import current_title, set_title
+        path = agent.session.log_path
+        if not arg:
+            head = ("当前标题:" + current_title(path) + "\n") if path \
+                else "当前会话还没有留档。\n"
+            ui.info(head + "用法: /rename <新标题>")
+        else:
+            ui.info(set_title(path, arg) if path else
+                    "当前会话还没有留档 —— 先说一句(第一句话才会落盘成留档)。")
+    elif name in ("/archive", "/unarchive"):
+        from minicode.session import set_archived
+        path = agent.session.log_path
+        if path is None:
+            ui.info("当前会话还没有留档(先说一句话)。")
+        else:
+            ui.info(set_archived(path, name == "/archive"))
+    elif name == "/fork":
+        # v0.9.126:分叉**列表里那条会话**开新任务。与 /resume 的区别:/resume 是
+        # 回到原文件接着写,/fork 是复制一份新的、原留档一个字不动。行级复制保留
+        # 原消息的 ts —— 分叉的意义是"从那一刻换个思路再走一遍",改写时间线=伪造历史。
+        from minicode.session import fork_log_file
+        summaries = list_sessions(SESSIONS_DIR)
+        if not summaries:
+            ui.info("还没有历史会话。")
+        elif not arg.isdigit():
+            ui.list_sessions(summaries)
+            ui.info("用法: /fork <序号>(原会话原样保留,新的一份接管当前上下文)")
+        elif not 1 <= int(arg) <= len(summaries):
+            ui.error(f"序号超出范围(1-{len(summaries)})。")
+        else:
+            chosen = summaries[int(arg) - 1]
+            got = fork_log_file(chosen.path, max(1, chosen.n_messages),
+                                SESSIONS_DIR, workspace)
+            if got is None:
+                ui.error("分叉没成:那条留档读不到,或里面还没有消息。")
+            else:
+                new_path, kept = got
+                n = session.load_from(new_path)
+                ui.info(f"已从 {chosen.path.name} 分叉出新会话:复制 {kept} 条消息,"
+                        f"当前上下文载入 {n} 条。原会话原样留在列表里。")
     elif name == "/resume":
         summaries = list_sessions(SESSIONS_DIR)
         if not summaries:

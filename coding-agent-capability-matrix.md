@@ -324,21 +324,32 @@
 
 ### D. 建议的「自研桌面 Agent 差距自检」最小项（从上面归纳）
 
-| 优先级 | 检查项 | 最低实现要求 |
-|---|---|---|
-| P0 | 审批双维度 | 动作类别 × 自主档位，可分别配置，且有「记住此批准」的持久化规则 |
-| P0 | 命令策略 | 前缀/glob allow + deny，**deny 优先**，危险替换守卫 |
-| P0 | 检查点 | 每次改动前自动快照（建议 shadow git，不动用户仓库），提供「只回滚文件 / 文件+对话」两档 |
-| P0 | 上下文压缩 | 阈值触发自动摘要 + 手动触发 + 压缩前可回滚 |
-| P0 | 项目说明文件 | 原生支持 `AGENTS.md`（含子目录嵌套与优先级） |
-| P0 | MCP | stdio + Streamable HTTP（OAuth），工具级白/黑名单 |
-| P1 | 生命周期 Hook | 至少 `before_tool` / `after_tool` / `session_start` / `stop`，支持阻断与改写入参，`fail_open`/`fail_closed` 可选 |
-| P1 | 子代理 | 独立上下文 + 只回传摘要 + 并发上限 + 只读研究型子代理 |
-| P1 | 规划模式 | 只读探索 → 可编辑计划 → 批准后执行，切换保留上下文 |
-| P1 | 无头模式 | 单次指令执行 + JSON/JSONL 输出 + 结构化输出 schema + 退出码语义 |
-| P2 | 成本统计 | 任务级 token/花费 + 上下文余量显示；有则加硬预算 |
-| P2 | 编辑后自动化 | lint/test 命令配置 + 非零退出即回灌模型修复 |
-| P2 | 生态兼容 | 读 `.cursor/rules`、`.clinerules`、`.claude/` 等既有规则/子代理目录 |
+> 第四列是本项目（引路学长）的现状，**2026-10-06 从 v0.9.121 工作树逐格实测**，不是回忆上一轮结论：凡 `✅/◐/✖` 都带 `文件:行号`，读代码的人应当能顺着行号复核。图例同 §9。
+> **2026-10-07（v0.9.127）改了两格、加了一格**：P0「项目说明文件」的采纳点头做实了、P2「生态兼容」那句"至今没做"的前置随之作废、新增 P1「跑着的时候接得上话」。这三格的行号是当天从工作树读的，其余各格仍是 v0.9.121 那次实测的原样——**别把它们当今天的数**（并行会话这两天又动了 `kb.py`/`embed.py`/`session.py`）。
+> 标〔不做〕的格子是**撞本项目自己写下的边界**（本地优先 / 换入口不换权限 / 工作区定义只收窄），不是漏做——把它读成"差距"会引出错误的补齐动作。
+
+| 优先级 | 检查项 | 最低实现要求 | 引路学长现状 |
+|---|---|---|---|
+| P0 | 审批双维度 | 动作类别 × 自主档位，可分别配置，且有「记住此批准」的持久化规则 | ◐ 四档 × 按工具类别都有；**「记住此批准」只有半格**：白名单文件与信任记录在（`permspec.py:241 parse_rules` 读、`:217 trust` 记本机点头），但**用户点一次头不会生成一条规则** —— `permspec.py` 里没有任何写规则的函数（全文只有 `_write_trust` 写信任记录），要固化必须人自己手写 `permissions.json`。这一格的真缺口登记在本轮台账里 |
+| P0 | 命令策略 | 前缀/glob allow + deny，**deny 优先**，危险替换守卫 | ✅ `deny > ask > allow` 且三者**求值位置各不相同**（deny 在只读放行前 `permission.py:458`、ask 在红线与外部内容升格门之后档位之前 `:500`、allow 兜底 `:527`）；matcher 有 `command_prefix`/`args_match`；`SAFE_COMMAND_HEADS` 只喂 allow。这一格在八家里属于最全的一档 |
+| P0 | 检查点 | 每次改动前自动快照（建议 shadow git，不动用户仓库），提供「只回滚文件 / 文件+对话」两档 | ✅ 写类工具执行前自动快照，单文件回退 + 整体回退 + 审查视图逐文件（`agent.py:501-518,600-738`、`gui_bridge.py:267-282`）；◐ 不用 shadow git（自建 undo 记录，用户仓库不动），「文件+对话」两档合并成 `revert_files` 一个开关 |
+| P0 | 上下文压缩 | 阈值触发自动摘要 + 手动触发 + 压缩前可回滚 | ✅ 阈值 `窗口×0.7` 自动 + `/compact` 手动 + microcompact 只换老只读结果且留档不动（`compaction.py:144-205`、`agent.py:189,836-847`）；✖「压缩前可回滚」不成立——对话级回滚会被压缩吃掉，这一条与 ZCode 同款限制 |
+| P0 | 项目说明文件 | 原生支持 `AGENTS.md`（含子目录嵌套与优先级） | ◐ 只有**两层**：用户级 + **工作区根那一份**项目级 —— `app_setup.project_agents_path` 只按两个名字查工作区根，全模块没有 `glob`/`rglob`，**子目录嵌套没有**（2026-10-07 纠正：这一格此前写着"✅ 子目录嵌套"，是凭印象对标出来的假 ✅，被 `docs/ROADMAP_IMPROVEMENTS.md` 那条差距反过来抓出来）；✅ **半可信处理已经做实（v0.9.127 §四.2）**：项目级那份**要按内容指纹点一次头采纳才注入**，没答 / 点「按推荐」/ 点不采纳一律算没采纳（`agent.py:_ask_project_agents`、`app_setup.agents_adoption`、记录并进 `perms-trust.json` 同一行），侧栏与 `/instructions` 报得出「未采纳」；✖ `@import` 递归（已登记待做，不是没发现）；✖ 子目录嵌套与就近优先级（同一件，动手前要先拍"多一层文件是不是多一次点头"） |
+| P0 | MCP | stdio + Streamable HTTP（OAuth），工具级白/黑名单 | ◐ 三种传输 + resources 有（`mcp.py`、`catalog_web.py:318`）、断线自动重连一次；✅ **per-server 工具级白/黑名单 v0.9.122 补上**：`allow_tools`/`deny_tools`，deny 赢、**只收窄不扩权**、名单里没命中的写法必点名（`mcp.py:mount_names` / `client_mount`，注册表与侧栏/体检/添加回话读同一份数字）；✖ OAuth 动态授权（只有 `${ENV}` 静态 Bearer）、✖ prompts/sampling/elicitation/progress/logging |
+| P1 | 生命周期 Hook | 至少 `before_tool` / `after_tool` / `session_start` / `stop`，支持阻断与改写入参，`fail_open`/`fail_closed` 可选 | ◐ 5 类事件含 `permission_request` 代答与 pre 改写后重跑门（`hooks.py:48,134-136`）；✖ `stop`/`pre_compact`/`subagent_*`〔押后，理由写在 roadmap-工具钩子升级 §八〕；✖ `fail_open/fail_closed` 未做——pre 脚本出错固定按不干预放行（`hooks.py:261`），那是缺省值而不是可选项 |
+| P1 | 子代理 | 独立上下文 + 只回传摘要 + 并发上限 + 只读研究型子代理 | ✅ 5 档独立上下文、只回摘要、多路守护线程并行、只读档过滤（`subagents.py:84-131,334-350,521-530`）、可按档配模型；✖ 外部定义文件（§6 50(d)，动手前红线已定死：工作区里的定义只能收窄不能扩权） |
+| P1 | 规划模式 | 只读探索 → 可编辑计划 → 批准后执行，切换保留上下文 | ◐ 有依赖图 + 可编辑整单核对单 + 步骤 `verify:` 硬闸（`planning.py:17,195-255,487-516`）；**✖ 没有「未批不许写」这个态**——`permission.py` 里 `grep plan_mode/approval` 零命中，计划批准前后写盘都要走同一套档位，本轮实测新发现 |
+| P1 | 无头模式 | 单次指令执行 + JSON/JSONL 输出 + 结构化输出 schema + 退出码语义 | ◐ 单次任务 + `--json`/`--output-format` + 六个语义化退出码（`headless.py:28,33-38,229`）——退出码把「没人点头」和「没做成」分开，是八家里最细的一档；✖ `stream-json`、✖ `--output-schema`；〔不做〕默认自动批准：无人点头一律拒并记 `asks_refused`，Codex 的 `--prompt` 默认 yolo 被明确当反例（`headless.py` 口径 2） |
+| P2 | 成本统计 | 任务级 token/花费 + 上下文余量显示；有则加硬预算 | ✅ 每请求记 `ttft_ms`/思考 token/缓存 token/钩子毫秒，按天与模型聚合折美元（`usage.py:46-62,416-470`），界面有上下文余量（`frontend/index.html:2418`）；✅ 硬预算两个：会话级超限自动收尾（`agent.py:168-180`）+ 日预算（`config.py:268`）——这一格我们比 §10 那批「只有 Cursor 有硬预算」还多一个观测维度 |
+| P2 | 编辑后自动化 | lint/test 命令配置 + 非零退出即回灌模型修复 | ◐ 不做「配置一条 lint 命令」的专用面，而是走钩子：内置配方「改完跑测试会执行工作区代码」（`hook_packs.py`，默认一条不挂，preview→一次性凭据→apply）；✅ 另有不可关的语法反馈底线 `_py_syntax_feedback`（刻意不被 H6 替换，避免两套真相） |
+| P2 | 生态兼容 | 读 `.cursor/rules`、`.clinerules`、`.claude/` 等既有规则/子代理目录 | ✖ 三家都不读。要做的话前置不是「多认一个目录」，而是先过分层指令那套半可信处理——**那道前置已经在了**（v0.9.127 的首次采纳点头，roadmap-分层指令文件 §四.2），多认一个目录等于多几条"别人写的文件对你说话"的入口，每一条都要走同一次点头 |
+| P1 | 跑着的时候接得上话 | 消息队列 / steer：正在跑的 turn 里用户能补一句，在下一次工具调用边界投递 | ✅ **v0.9.127 做了这一格**：`Agent.queue_interjection` + 信箱，两个安全边界读（每一步请求前、本轮正要收口时），补的话算**这一轮**的后续步骤（Cursor 的「steer a running agent」同一形状，ZCode 那句"运行中可打字但不打断=入队等当前 turn"也是）；按停止不清空信箱，下一轮读到；上限 8 句满了当场说。◐ 只在图形版/网页版这条入口成立——命令行正卡在 `input()` 上等一句完整的话，没有后台读线程；✖ 没做进子代理（ZCode 的 `SendMessage steered` 那一半：派出去那一路没有提问通道，往里塞句子等于塞进没人看的信箱） |
+
+**这一列归纳出来的五条真缺口**（其余格子要么已达成、要么撞边界、要么已登记）：① **「记住此批准」不会自动生成规则**，用户点完头还要自己手写 `permissions.json`；② P0-MCP 的 **OAuth 动态授权**（工具级名单已于 v0.9.122 补上：`allow_tools`/`deny_tools`，只收窄不扩权，见上一行）；③ P1-规划模式没有「未批不许写」的只读态（`permission.py` 里 `grep plan_mode/approval` 零命中）；④ P1-Hook 的 `fail_open/fail_closed` 是缺省值不是选项；⑤ 表外两条本轮新量并已修：**记忆注入此前按字符裸切**（v0.9.121 改成按条让位，`memory.py:_fit_levels`）、**MCP 工具结果此前把 image 的 base64 整坨塞进对话且漏读 `structuredContent`**（同一版修掉，`mcp.py:format_call_result`）。
+
+另有两条本轮实测"确实没有"、竞品清单里却有对应物的：`grep read_before/未读` 全仓零命中（**没有「没读过的文件不许改」这枚钉**，Claude Code 把它当防幻觉第一道）；会话不能手动重命名（`session.py` 只有 `derive_title` 自动派生）。
+
+> ⚠ **这一列自己的取证边界**：行号取自 v0.9.121 工作树（HEAD `c86cc29` 之后），本项目被多个会话并行改，引用前先 `git log -1` 复核；两处结论是**纠正**上一轮口头回填时说错的东西 —— ⑴ 我曾把「点头即写 `permissions.json`」说成已落地，实际 `permspec.py` 全文没有写规则的函数；⑵ 我曾说「无头模式没有预算」，实际 `session_token_limit` 在循环顶部查并自动收尾（`agent.py:168-180`），欠的只是 CLI 侧的旗标。
 
 ---
 
@@ -353,3 +364,4 @@
 7. **通用未核实项**：各家的「自动失败回落 / 模型级 failover」普遍缺乏文档化说明，除 Cursor Auto-review 分类器有明确 fallback（Gemini 3.5 Flash Lite → Claude 4.5 Haiku）外，其余多为重试参数而非模型回落。
 8. **ZCode（2026-10-06 新增节）**：① **未执行过该仓库一行代码**，所有"代码里有"的结论都只到"读到了这段实现/这段注释"为止，不等于跑起来就是这个行为；② 版本基线有三个数并存——最新 tag `v3.14.3`、`package.json` 里 `3.14.3`、changelog 顶部 `v3.14.4`（内容仅"关闭模型请求的 CAPTCHA 校验"），**引用具体行为时须注明取自 `main` = `29628c9a` 而非某个已发布版本**；③ **一处文档与代码直接矛盾**：项目级 hooks「不执行」（文档明写）vs 同一 commit 里完整的 workspace-hook 信任子系统（20 个 reasonCode + `zcode hooks trust grant`）——**谁更新需要人工比版本**，本节按"存在逐条摘要授权才准入的实现"写，但这条判读本身要复核；④ `ApplyPatch` 与 `Workflow` 的 handler 被注释掉，是**当前构建**的状态，不保证下一个 commit 还如此；⑤ 通用 workspace trust 对话框是否存在：未找到证据，**不等于没有**；⑥ 语音的"无证据"结论只覆盖官方文档 27 页标题 + CLI 英文文案 grep，**未覆盖桌面端 renderer 代码**。
 9. **Qoder（2026-10-06 新增节）**：① **只逐字读了 7 个页面**（CLI 的 run-tasks / permissions / hooks-reference / subagent / how-memory-works / undo-restore / mcp-servers + 桌面的 approval-and-sandbox），文档站其余上百页**只有导航标题可引**，凡据此填的格子一律是 `?` 或标「正文未读」，**不许当成"该产品没有"**；② `cli/mcp-servers` 那一页正文很薄，其"未见 OAuth / 未见原语"的答复**不足以支撑否定结论**，故 MCP 行只填 `◐`；③ **OS 级沙箱既没确认有也没确认无**——`approval-and-sandbox` 页只讲作用域，机制要看 `terminal-and-sandbox` 与 `security-and-authorization`，两页均未读；④ 标 `〔运行时〕` 的格子是**本机这个 Qoder 构建里能看见的入口**（工具名、目录形状、agent 类型），它只证明"入口在场"，**不证明产品承诺、不证明语义完整、也不证明别的版本/别的部署同样如此**；⑤ Qoder 分六条产品线（桌面 / IDE / JetBrains / CLI / Agent SDK / Cloud Agents），本节以 CLI + 桌面为主，**IDE 与 JetBrains 侧差异未系统比对**；⑥ hooks 的「能否改写工具入参与结果」在参考页里既没说有也没说无（stdout 契约里却有 `hookSpecificOutput` 这个容器键），**判为未核实**，不要抄成"不支持改写"。
+10. **本项目那一列（§10D 第四列）的取证边界**：行号取自 2026-10-06 的 v0.9.121 工作树，**多个会话并行改这份工作树，引用前先 `git log -1`**。这一列同时**纠正了上一轮口头回填的两处错报**，留在这里是因为它们是"凭印象对标"的真实代价：⑴ 曾把「点头即写 `permissions.json`」报成已落地，还给过 `permission.py:373-403 add_project_rule()` 这个**不存在的函数名与行号**——本轮按名字 grep 全仓零命中，`permspec.py` 全文没有任何写规则的函数（只有 `_write_trust` 写本机信任记录），所以那一格现在是 ◐ 而不是 ✅；⑵ 曾说「无头模式没有预算」，实际 `session_token_limit` 早在循环顶部查并自动收尾（`agent.py:168-180`），欠的只是 CLI 侧旗标。方法论一条：**这一列里凡是"有"，必须能顺着行号读到；读不到就降级为「半格 / 无」并登记进 §6 台账**。

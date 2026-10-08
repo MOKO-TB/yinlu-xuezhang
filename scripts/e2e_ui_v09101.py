@@ -56,14 +56,30 @@ window.__ACT__ = {
        action: {type: "file", path: "doc.txt"}}]}],
   changes: {
     ok: true, total: 5, more: 2, note: __NOTE__, hint: "没有可退的改动",
+    // v0.9.128:这一栏要能自己算出"这一轮"是哪几条 —— 栈按会话攒,段标题却说"本轮"。
+    // turn 刻不成 1/2/1 这种"每处一问"的整齐形状:分组错了(比如按数组下标分)当场红。
+    turn: 2, turns: 2,
     items: [
       {seq: 12, path: "src/app.py", kind: "改", verb: "恢复", at: "10:20:31",
-       newer: 0, drift: true},
+       newer: 0, drift: true, turn: 2},
       {seq: 9, path: "src/app.py", kind: "改", verb: "恢复", at: "10:18:02",
-       newer: 1, drift: false},
+       newer: 1, drift: false, turn: 2},
       {seq: 4, path: "notes/new.md", kind: "新建", verb: "删除", at: "10:11:40",
-       newer: 0, drift: false}]}
+       newer: 0, drift: false, turn: 1}]}
 };
+// 环境那一屏(git 那半):`get_env_info` 只在开栏 / 点 ↻ 时问一次,所以账外那一片
+// 跟着它的节奏刷新。故意放三个文件:一个**在撤销账里**(src/app.py,不该被说成
+// "退不掉")、两个不在(scripts/gen.py 与一个二进制)—— 前端若拿路径直接 ==,
+// 工作区在仓库子目录时就会把"我改过的"重复列进"退不掉"那片。
+window.__ENV__ = {
+  ok: true, is_repo: true, repo_root: "D:/demo/campus", branch: "main",
+  workspace: "D:/demo/campus", added: 61, removed: 12, partial: false,
+  total: 3, more: 0, git_note: "",
+  files: [
+    {path: "src/app.py", state: "改", added: 3, removed: 1, binary: false},
+    {path: "scripts/gen.py", state: "改", added: 40, removed: 11, binary: false},
+    {path: "data/raw.csv", state: "未跟踪", added: null, removed: null,
+     binary: true}]};
 window.__BOARD__ = {
   ok: true, at: "10:22:05", scan: 20, scan_note: "只列最近 20 个会话(不是全部)",
   boundary: __BOUNDARY__, failed_sources: ["计划"], empty: false,
@@ -89,6 +105,7 @@ window.__BOARD__ = {
        action: {type: "ask", text: "说一下「周复盘」上次跑出了什么"},
        source: "定时任务"}]}};
 window.__CHANGES__ = { ok: true, total: 3, more: 0, note: __NOTE__, hint: "",
+  turn: 2, turns: 2,
   items: [
     {seq: 12, path: "src/app.py", kind: "改", verb: "恢复", at: "10:20:31",
      newer: 0, drift: false, turn: 2, stale: false},
@@ -122,6 +139,10 @@ const base = {
   },
   get_monitor_pref: () => Promise.resolve({ok: true, open: false, folded: {}}),
   set_monitor_pref: () => Promise.resolve({ok: true}),
+  get_env_info: () => {
+    window.__CALLS__.push(["get_env_info"]);
+    return Promise.resolve(window.__ENV__);
+  },
   refresh_sessions: () => Promise.resolve({ok: true}),
   get_recent_projects: () => Promise.resolve({ok: true, current: {}, default: {},
                                               recent: []}),
@@ -268,7 +289,13 @@ def main() -> int:
               "那一问之后没改过文件就不弹确认(不问一个没有选项的问题)")
         check(calls("edit_resend")[-1][3] is False, "直接重发时 revert 是 false")
         page.evaluate("() => { window.__CHANGES__ = {ok: true, total: 3, more: 0,"
-                      " note: 'x', hint: '', items: []}; }")
+                      " note: 'x', hint: '', turn: 2, turns: 2, items: ["
+                      "  {seq: 12, path: 'src/app.py', kind: '改', verb: '恢复',"
+                      "   at: '10:20:31', newer: 0, drift: false, turn: 2},"
+                      "  {seq: 9, path: 'notes/new.md', kind: '新建', verb: '删除',"
+                      "   at: '10:18:02', newer: 0, drift: false, turn: 2},"
+                      "  {seq: 4, path: 'old/keep.py', kind: '改', verb: '恢复',"
+                      "   at: '10:11:40', newer: 0, drift: false, turn: 1}]}; }")
 
         # ---- 1. 指令层那一行:逐字是桥给的句子,空就整行不出现 ----
         page.wait_for_function(
@@ -283,9 +310,31 @@ def main() -> int:
               "一份指令文件都没有 → 那一行整行隐藏(不写「未配置」占位)")
         page.evaluate("() => renderInstrLine(window.__INSTR__)")
 
-        # ---- 2. 打开监控:「本轮改动」那一段与它的抬头 ----
-        page.click("#btnActivity")
+        # ---- 1b. 回合结束那条审查入口(v0.9.128):监控栏关着时才说一次 ----
+        # 走的是真事件(`__gcodeEvent({type:"busy",value:false})`),不是直接调函数 ——
+        # "跑完了没人提示该去看"这件事,只有事件这条路能证明它真的接上了。
+        check(page.evaluate("() => document.body.classList.contains('act-open')") is False,
+              "起点:监控栏是关着的(开着就不该再弹入口)")
+        page.evaluate("() => window.__gcodeEvent({type:'busy', value:false})")
+        page.wait_for_selector(".chg-hint", timeout=8000)
+        hint = page.locator(".chg-hint").first.inner_text()
+        check("这一轮改了 2 个文件" in hint,
+              f"入口只数**这一问**改的(桥给 3 条,其中一条是上一问的)(实测「{hint}」)")
+        check("old/keep.py" not in hint, "上一问改的那条不该算进「这一轮」")
+        # 再发一次 busy=false(停止/重答都会再发):不该叠第二条
+        page.evaluate("() => window.__gcodeEvent({type:'busy', value:false})")
+        page.wait_for_timeout(250)
+        check(page.locator(".chg-hint").count() == 1,
+              "同一问最多一条(每问一条,不刷屏)")
+        hit_calls = page.evaluate("() => JSON.stringify(window.__CALLS__)")
+        check('"undo_records"' in hit_calls,
+              "入口那句「改了几个文件」是问桥要的,不是前端自己攒的第二份账")
+
+        # 点它 = 开栏 + 展开那一段(这一击就是这一节后面的入口)
+        page.click(".chg-hint button")
         page.wait_for_selector("#actBody .act-sect", timeout=8000)
+
+        # ---- 2. 打开监控:「本轮改动」那一段与它的抬头 ----
         sect = page.locator("#actBody .act-sect").filter(has=page.locator(SECT_SELECTOR))
         check(sect.count() == 1, "监控栏里有「本轮改动」这一段")
         check(NOTE[:14] in sect.first.inner_text(),
@@ -313,8 +362,39 @@ def main() -> int:
         all_texts = sect.locator(".act-row").all_inner_texts()
         allrow = next((t for t in all_texts if "全部回退" in t), "")
         check("全部回退 5 处" in allrow, "最后那行「全部回退 5 处」的数也是桥给的")
+        # v0.9.128:那句"退回本轮开始前"以前是假话(栈按会话攒),现在说准并标跨几问
+        check("这一场会话的开始" in allrow and "跨 2 问" in allrow,
+              f"全部回退那行说准了范围(实测「{allrow}」)")
+        check("跨 2 问" in " ".join(caps),
+              f"段标题带出「跨 N 问」,不让人以为只有这一轮(实测 {caps})")
 
-        # ---- 2b. 「看改了什么」:展开的是后端算好的 diff,且不动手 ----
+        # ---- 2a. 按「第几问」分组:分组错了(按下标、或整段一组)当场红 ----
+        grps = sect.locator(".act-grp").all_inner_texts()
+        check(grps[:2] == ["第 2 问 · 这一轮", "第 1 问"],
+              f"两组抬头,当前那一问标「这一轮」(实测 {grps})")
+        grp_html = page.evaluate(
+            "() => [...document.querySelectorAll('#actBody .act-chg')].map(x => {"
+            "  const p = x.previousElementSibling;"
+            "  return (p && p.classList.contains('act-grp'))"
+            "    ? 'H' : ((x.querySelector('.act-t') || {}).textContent || '?');})")
+        check(grp_html[0] == "H" and grp_html[2] == "H",
+              f"分组头插在两问的交界处而不是随便位置(实测 {grp_html})")
+
+        # ---- 2b. 账外那片(git 有、撤销账里没有)----
+        out_rows = [t for t in sect.locator(".act-row").all_inner_texts()
+                    if "退不掉" in t]
+        joined = " | ".join(out_rows)
+        check("scripts/gen.py" in joined and "+40" in joined,
+              f"命令改的那个文件带着 git 的行数列出来了(实测「{joined[:90]}」)")
+        check("data/raw.csv" in joined and "二进制" in joined,
+              "未跟踪 + 二进制:行数算不出就写算不出,不补 0")
+        check("src/app.py" not in joined,
+              "撤销账里有的那个文件**不该**被说成退不掉 —— 路径口径不同时要按后缀比")
+        heads = " | ".join(sect.locator(".act-s").all_inner_texts())
+        check("不在我的撤销账里" in heads,
+              "那一片抬头说的是「为什么它们退不掉」,不是一行光秃秃的清单")
+
+        # ---- 2c. 「看改了什么」:展开的是后端算好的 diff,且不动手 ----
         chip = sect.locator(".act-row").first.locator(".act-chip")
         check(chip.inner_text() == "看改了什么", "每一行那颗芯片默认写「看改了什么」")
         chip.click()

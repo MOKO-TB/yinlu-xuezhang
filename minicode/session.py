@@ -29,6 +29,8 @@ class SessionSummary:
     last_user_text: str
     workspace: str = ""      # 留档里记的工作区(老留档没这个字段,给空串)
     first_user_text: str = ""  # 第一条用户消息(v0.9.98):自动标题的原料
+    title: str = ""            # 用户手改的标题(v0.9.126):空 = 没改过,照自动派生
+    archived: bool = False     # 归档标记:沉底、不删除、也不改任何人的序号来源
 
 
 def derive_title(text: str, limit: int = 24) -> str:
@@ -50,6 +52,111 @@ def derive_title(text: str, limit: int = 24) -> str:
             continue
         return clean[:limit] + ("…" if len(clean) > limit else "")
     return ""
+
+
+TITLE_MAX_CHARS = 60         # 手改标题的封顶(列表一行放得下,也够说清一件事)
+
+
+def normalize_title(raw: str) -> str:
+    """手改标题的清洗:换行压成空格、掐长度。存进去什么样,列出来就什么样。"""
+    return " ".join(str(raw or "").split())[:TITLE_MAX_CHARS]
+
+
+def display_title(s: SessionSummary, limit: int = 24) -> str:
+    """一条会话顶在列表上的名字 —— **只此一份**。
+
+    以前各处现场 `derive_title(s.first_user_text)`:加"手改标题"这件事若不改这一处,
+    表现就是侧栏显示手改名、CLI 的 `/resume` 列表还是第一句问话 —— 同一条会话两个名字。
+    """
+    return s.title or derive_title(s.first_user_text, limit)
+
+
+def patch_start_meta(path: Path, **fields) -> str:
+    """改这份留档 `session_start` 那一行的元字段(原子替换,绝不留半截文件)。
+
+    老留档可能根本没有 `session_start` 行(v0.9.66 之前没写),那就**补一行**在开头 ——
+    把手改的名字丢进虚无比多写一行元数据糟得多。
+    """
+    p = Path(path)
+    if not p.is_file():
+        return "这条会话还没有留档(先说一句话再改名)"
+    lines = p.read_text(encoding="utf-8").splitlines()
+    hit = -1
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and obj.get("type") == "session_start":
+            obj.update(fields)
+            lines[i] = json.dumps(obj, ensure_ascii=False)
+            hit = i
+            break
+    if hit < 0:
+        meta = {"type": "session_start",
+                "time": time.strftime("%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime))}
+        meta.update(fields)
+        lines.insert(0, json.dumps(meta, ensure_ascii=False))
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    tmp.replace(p)                  # 原子:半截文件会被读成"没有这行"
+    return ""
+
+
+def _start_meta(path: Path) -> dict:
+    """留档开头那行 `session_start` 的元数据;没有就回空 dict(老留档确实没有)。"""
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(obj, dict) and obj.get("type") == "session_start":
+            return obj
+        return {}          # 元数据只可能在最前面:第一句不是它,就是没有
+    return {}
+
+
+def current_title(path: Path, limit: int = 24) -> str:
+    """这份留档现在顶着的名字:手改优先,没改过就按第一句问话派生。"""
+    p = Path(path)
+    if not p.is_file():
+        return ""
+    meta, first = _start_meta(p), ""
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and obj.get("role") == "user" \
+                and isinstance(obj.get("content"), str):
+            first = obj["content"]
+            break
+    return str(meta.get("title") or "") or derive_title(first, limit)
+
+
+def set_title(path: Path, title: str) -> str:
+    clean = normalize_title(title)
+    if not clean:
+        return "标题是空的 —— 什么都没改(要说清想改成什么)"
+    err = patch_start_meta(path, title=clean)
+    return err or f"已改名为「{clean}」"
+
+
+def set_archived(path: Path, flag: bool) -> str:
+    err = patch_start_meta(path, archived=bool(flag))
+    if err:
+        return err
+    return ("已归档(沉到列表末尾,没有删除):/unarchive 可取消"
+            if flag else "已取消归档,回到原来的位置")
 
 
 class Session:
@@ -628,6 +735,8 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
         last_user_text = ""
         first_user_text = ""
         workspace = ""
+        title = ""
+        archived = False
         started = time.strftime("%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime))
         for line in p.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -641,6 +750,8 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
                 if obj.get("time"):
                     started = obj["time"]
                 workspace = str(obj.get("workspace") or "")
+                title = str(obj.get("title") or "")
+                archived = bool(obj.get("archived"))
             if obj.get("role") in ("user", "assistant", "tool"):
                 n_messages += 1
             if obj.get("role") == "user" and isinstance(obj.get("content"), str):
@@ -651,7 +762,11 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
             path=p, time=started, n_messages=n_messages,
             last_user_text=last_user_text.replace("\n", " ")[:60],
             workspace=workspace, first_user_text=first_user_text,
+            title=title, archived=archived,
         ))
+    # 归档的沉到末尾,但**不从这里消失**:侧栏 /resume / 分支 / 搜索用的是同一份序号,
+    # 一隐藏就把别人的坐标弄破(要"删除"得是另一件明说过的动作,这里不代做)。
+    summaries.sort(key=lambda s: s.archived)   # 稳定排序:未归档的相对次序不变
     return summaries
 
 

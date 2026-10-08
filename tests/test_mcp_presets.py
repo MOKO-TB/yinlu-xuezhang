@@ -135,10 +135,14 @@ def _bridge(config, tmp_path, mcp_servers):
 
 class _FakeClient:
     def __init__(self, sid, label, n_tools):
-        self.cfg = type("C", (), {"sid": sid, "label": label})()
+        self.cfg = type("C", (), {"sid": sid, "label": label,
+                                  "allow_tools": [], "deny_tools": []})()
         self.server_info = {"name": f"{sid}-server"}
         self.server_caps = {"tools": {}}
-        self._tools = list(range(n_tools))
+        # 替身得长成**真客户端**的样子:tools/list 回的是 [{name: ...}, ...]。
+        # 以前这里塞的是 list(range(3)) —— 因为旧实现只 `len()` 它,一换成
+        # 按名字过名单(mcp.client_mount)就露出形状不对。
+        self._tools = [{"name": f"t{i}"} for i in range(n_tools)]
 
     def list_tools(self):
         return self._tools

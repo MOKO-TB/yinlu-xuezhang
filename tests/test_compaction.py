@@ -348,3 +348,32 @@ def test_agent_sends_placeholders_but_keeps_the_full_archive(tmp_path):
     sent = agent._messages_for_request()
     assert sum(1 for m in sent if m["role"] == "tool" and "省略" in str(m["content"])) > 0
     assert all(len(m["content"]) == len(LONG) for m in s.messages if m["role"] == "tool")
+
+
+# ------------------------------------------------------------ 记忆候选那根线
+# SUMMARY_PROMPT 第 6 条让模型在摘要末尾列"记忆候选",但主对话此前不知道拿它
+# 怎么办 —— 那行字产出后就躺在摘要里。下面钉的是"接上了"和"没候选时不加戏"。
+
+def _three_turns():
+    return [{"role": "user", "content": "第一问"},
+            {"role": "assistant", "content": "答一"},
+            {"role": "user", "content": "第二问"},
+            {"role": "assistant", "content": "答二"},
+            {"role": "user", "content": "第三问"},
+            {"role": "assistant", "content": "答三"}]
+
+
+def test_memory_candidate_line_gets_a_wire():
+    fake = FakeSummarizer(summary="改了导出。\n记忆候选:同学偏好表格用 xlsx")
+    msgs, _ = compact(_three_turns(), fake)
+    body = msgs[0]["content"]                # 没有 system 消息时摘要就是第一条
+    assert "记忆候选" in body and "action=save" in body
+    assert "不要记" in body                 # 外部来源那条要当面说出口
+    assert msgs[0]["role"] == "user"
+
+
+def test_no_candidate_adds_nothing():
+    """没候选时一个字都不加 —— 摘要消息是压缩后新前缀的第一块。"""
+    fake = FakeSummarizer(summary="这次没有值得跨会话记住的事")
+    msgs, _ = compact(_three_turns(), fake)
+    assert msgs[0]["content"] == "(此前对话的摘要,细节可能省略)\n这次没有值得跨会话记住的事"

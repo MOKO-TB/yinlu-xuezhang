@@ -8,10 +8,13 @@
 - 生命周期:进程级长连接,启动时按配置**惰性宽容**连接——连不上只记日志跳过,
   绝不让一个坏配置把整个应用带崩;
 - 握手:initialize → notifications/initialized → tools/list;
-- 调用:tools/call,结果按 content[].text 拼接,isError 前置「错误:」;
+- 调用:tools/call,content[].text 拼接、二进制载体只报数不内联,isError 前置「错误:」;
 - 超时:启动 10s、调用 60s(可被服务器配置覆盖);
 - 权限:MCP 工具默认**不是只读**——会走确认门;受信任服务器可在配置里标
   read_only: true 免确认。
+- 工具级名单(allow_tools / deny_tools):**只收窄、不扩权** —— deny 永远赢,
+  allow 非空则只挂列出的那几只;写法支持精确名与末尾 `*` 前缀。名单里没命中
+  任何工具的写法会在汇总与添加回话里点名,因为"配了却没少一只"是查不出来的假配置。
 
 密钥的规矩(和模型 API Key 同一条):headers 的值写成 ${ENV} 形式即可,
 学长在读配置时展开 —— 这样密钥只留在环境变量里,不进 config.json。
@@ -30,6 +33,7 @@ headers 与 URL 的查询串都不会出现在侧栏(tools_summary 只给 id/名
 """
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 import os
@@ -58,6 +62,8 @@ DEFAULT_START_TIMEOUT = 10.0
 DEFAULT_CALL_TIMEOUT = 60.0
 STDERR_KEEP_LINES = 20
 TOOL_NAME_MAX = 60
+STRUCTURED_MAX = 4000       # structuredContent 拼进回话的字数上限
+BASE64_INLINE_MAX = 512     # 没认出的类型带长 data 载荷时也不整坨塞出去
 
 
 # --------------------------------------------------------------------- 配置
@@ -84,6 +90,13 @@ class McpServerConfig:
     transport: str = "stdio"
     url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
+    # 工具级名单(对标清单里八家普遍有、我们此前缺的那一格)。**只收窄,不扩权**:
+    # 名单不能把没声明的工具变出来,只能让声明了的挂不上注册表。
+    # `allow_tools` 非空 = 只挂列出的那几只;`deny_tools` 永远赢。写法支持精确名
+    # 与末尾 `*` 前缀通配(`fetch_*`),没有正则、没有 glob 的中间星 —— 一条会
+    # 匹配意外的规则比没有规则更糟。
+    allow_tools: list[str] = field(default_factory=list)
+    deny_tools: list[str] = field(default_factory=list)
 
     @property
     def label(self) -> str:
@@ -164,6 +177,8 @@ def parse_servers(raw) -> list[McpServerConfig]:
             transport=transport,
             url=url,
             headers=headers,
+            allow_tools=_as_str_list(item.get("allow_tools")),
+            deny_tools=_as_str_list(item.get("deny_tools")),
         ))
     return out
 
@@ -193,6 +208,10 @@ def servers_to_raw(servers: list[McpServerConfig]) -> list[dict]:
             item["trusted"] = True
         if s.description:
             item["description"] = s.description
+        if s.allow_tools:
+            item["allow_tools"] = list(s.allow_tools)
+        if s.deny_tools:
+            item["deny_tools"] = list(s.deny_tools)
         out.append(item)
     return out
 
@@ -804,7 +823,6 @@ class McpClient:
             if "text" in c:
                 out.append(str(c.get("text") or ""))
             elif "blob" in c:
-                import base64
                 raw = str(c.get("blob") or "")
                 size = len(base64.b64decode(raw)) if raw else 0
                 out.append(f"(二进制内容 {size} 字节,{c.get('mimeType') or '未知类型'},"
@@ -865,8 +883,35 @@ class McpClient:
                 pass
 
 
+def _data_size_note(payload: str) -> str:
+    """base64 字符串对应多少字节 —— 解不开就估,别把估算写成精确数。"""
+    if not payload:
+        return "0 字节"
+    try:
+        return f"{len(base64.b64decode(payload, validate=False))} 字节"
+    except (ValueError, TypeError):
+        return f"约 {len(payload) * 3 // 4} 字节"
+
+
+def _inline_note(kind: str, payload: str, mime: str, suffix: str = "") -> str:
+    """二进制载体的回话:报数、说清没内联、给一条真能接得住的下一步。
+
+    工具结果只能是字符串(图片 part 只长在用户消息里,见 attachments.py:328),
+    把整坨 base64 塞进 transcript 换来的是"每轮重付一遍,而模型读不出内容"。
+    """
+    tail = f",{suffix}" if suffix else ""
+    return (f"({kind}未内联:{_data_size_note(payload)},"
+            f"{mime or '未知类型'}{tail} —— 需要的话让服务器端导出成文件"
+            "(图片落成文件后可用 ocr_image 读图里的文字)")
+
+
 def format_call_result(result) -> str:
-    """把 tools/call 的 result 拍平成文本(content[].text 拼接)。"""
+    """把 tools/call 的 result 拍平成文本。
+
+    三条口径:①文本与文本类资源原样拼;②image/audio/二进制资源只报字节数与类型,
+    不内联(理由见 _inline_note);③structuredContent 要拼进来 —— 声明了
+    outputSchema 的服务器把结果放在那儿,漏读它等于把有数据说成"空结果"。
+    """
     if result is None:
         return "(MCP 工具无返回内容)"
     if not isinstance(result, dict):
@@ -876,14 +921,39 @@ def format_call_result(result) -> str:
         if not isinstance(item, dict):
             parts.append(str(item))
             continue
-        if item.get("type") == "text":
+        kind = item.get("type")
+        if kind == "text":
             parts.append(str(item.get("text") or ""))
-        elif item.get("type") == "resource":
+        elif kind == "resource":
             res = item.get("resource") or {}
-            parts.append(str(res.get("text") or res.get("uri") or ""))
+            if res.get("text"):
+                parts.append(str(res.get("text")))
+            elif res.get("blob"):
+                parts.append(_inline_note("二进制资源", str(res.get("blob") or ""),
+                                          str(res.get("mimeType") or ""),
+                                          suffix=str(res.get("uri") or "")))
+            else:
+                parts.append(str(res.get("uri") or ""))
+        elif kind in ("image", "audio"):
+            parts.append(_inline_note("图片" if kind == "image" else "语音",
+                                      str(item.get("data") or ""),
+                                      str(item.get("mimeType") or "")))
         else:
-            parts.append(json.dumps(item, ensure_ascii=False))
+            payload = str(item.get("data") or "")
+            if len(payload) > BASE64_INLINE_MAX:
+                # 没见过的类型不假装认识,但带着长 base64 载荷的不能整坨塞出去
+                parts.append(_inline_note(str(kind or "未知内容"), payload,
+                                          str(item.get("mimeType") or "")))
+            else:
+                parts.append(json.dumps(item, ensure_ascii=False))
     text = "\n".join(p for p in parts if p != "")
+    structured = result.get("structuredContent")
+    if structured:
+        blob = json.dumps(structured, ensure_ascii=False)
+        if len(blob) > STRUCTURED_MAX:
+            blob = (blob[:STRUCTURED_MAX]
+                    + f"……(结构化结果原长 {len(blob)} 字,已截到 {STRUCTURED_MAX} 字)")
+        text = (text + "\n" if text else "") + f"(结构化结果) {blob}"
     if not text and result.get("content") is not None:
         text = "(工具返回空结果)"
     if not text:
@@ -904,6 +974,70 @@ def tool_name_for(sid: str, remote: str, taken: set[str]) -> str:
         n += 1
     taken.add(name)
     return name
+
+
+# --------------------------------------------------------------------- 工具级名单
+
+def _name_hits(pattern: str, remote: str) -> bool:
+    """名单里的一条写法认不认这个工具名:精确名,或末尾 `*` 的前缀。
+
+    故意不支持中间 `*` 与正则:一条会「意外匹配」的规则比没有规则更糟,
+    而意外少挂一只工具的表现是「模型说自己没这个能力」,没人会想到是名单干的。
+    """
+    if pattern.endswith("*"):
+        return remote.startswith(pattern[:-1])
+    return pattern == remote
+
+
+def mount_names(remote_names, allow, deny):
+    """按两份名单算出 (挂上的, [(被挡的, 原因)], [没命中任何工具的写法])。
+
+    `allow` 非空 = 只挂列出的;`deny` 永远赢(先判)。第三个返回值是必须的:
+    名单打错一个字母,表现是「配了却一只没少」,而系统里没有任何地方会红 ——
+    这正是本项目反复说的「写了不等于生效」。
+    """
+    allow = [a for a in (str(x).strip() for x in (allow or [])) if a]
+    deny = [d for d in (str(x).strip() for x in (deny or [])) if d]
+    kept: list[str] = []
+    hidden: list[tuple[str, str]] = []
+    for name in remote_names:
+        hit = next((d for d in deny if _name_hits(d, name)), "")
+        if hit:
+            hidden.append((name, f"deny 名单里的「{hit}」"))
+            continue
+        if allow and not any(_name_hits(a, name) for a in allow):
+            hidden.append((name, "不在 allow 名单里"))
+            continue
+        kept.append(name)
+    unused = ([p for p in deny if not any(_name_hits(p, n) for n in remote_names)]
+              + [p for p in allow if not any(_name_hits(p, n) for n in remote_names)])
+    return kept, hidden, unused
+
+
+def client_mount(client):
+    """这台服务器「挂哪几只 / 挡了哪几只 / 名单里没命中的写法」。
+
+    三处消费者(注册表、侧栏与体检的汇总、对话里 `mcp action=list`)都读这一个函数:
+    两处数字不一致的时候,用户信哪一处都不是,而模型会照那份数字承诺能力。
+    """
+    names = [str(t.get("name") or "") for t in client.list_tools()
+             if isinstance(t, dict)]
+    return mount_names(names, client.cfg.allow_tools, client.cfg.deny_tools)
+
+
+def mount_line(hidden, unused) -> str:
+    """把「挡了几只、为什么、有没有写空的规则」收成一句人话(没挡就空串)。"""
+    if not hidden and not unused:
+        return ""
+    bits = []
+    if hidden:
+        bits.append(f"按你的名单没挂 {len(hidden)} 只:"
+                    + "、".join(f"{n}({why})" for n, why in hidden[:4])
+                    + (f"……共 {len(hidden)} 只" if len(hidden) > 4 else ""))
+    if unused:
+        bits.append("名单里这些写法没匹配到任何工具:" + "、".join(unused[:6])
+                    + (f"……共 {len(unused)} 条" if len(unused) > 6 else ""))
+    return ";".join(bits)
 
 
 # --------------------------------------------------------------------- 管理器
@@ -927,6 +1061,10 @@ def summary_rows(config, manager=None) -> "list[dict]":
     for s in cfg_servers:
         sid = str((s.get("id") or s.get("name") or "")).strip()
         c = live.get(sid)
+        # 挂上来的只数,不是服务器自己声明的只数:后者会把"被你名单挡掉的"也算进
+        # 「可用」,而界面这句话是给同学决定「要不要再配一台服务器」看的。
+        mounted, hidden, unused = (client_mount(c) if c
+                                   else ([], [], []))
         out.append({
             "id": sid,
             "label": str((c.cfg.label if c else "")
@@ -935,7 +1073,10 @@ def summary_rows(config, manager=None) -> "list[dict]":
             "transport": str(s.get("transport") or "stdio"),
             "connected": bool(c),
             "server": str((c.server_info or {}).get("name") or "") if c else "",
-            "n_tools": len(c.list_tools()) if c else 0,
+            "n_tools": len(mounted),
+            "n_server_tools": len(hidden) + len(mounted),
+            "n_hidden": len(hidden),
+            "hidden_line": mount_line(hidden, unused),
             # 对端声明的能力与学长实际接了哪几项(没连上就没这句可说)
             "caps": c.caps_line() if c else "",
         })
@@ -962,8 +1103,18 @@ class McpManager:
         taken: set[str] = set()
         out: list[Tool] = []
         for client in self.clients:
+            keep = set(client_mount(client)[0])
             for spec in client.list_tools():
+                # tools/list 是**第三方给的**外部数据:条目不是字典时不能炸掉整张
+                # 注册表(表现是"配了 MCP 之后学长起不来 / 侧栏那一行整个没了")。
+                # keep 里本来就只收过字典条目,所以这一句跳过即等于不挂。
+                if not isinstance(spec, dict):
+                    continue
                 remote = str(spec.get("name"))
+                # 名单只在这里生效一次:注册表里没有的 MCP 工具,模型根本看不见,
+                # 也就不存在"绕过名单直接 call"的第二条路。
+                if remote not in keep:
+                    continue
                 name = tool_name_for(client.cfg.sid, remote, taken)
                 out.append(Tool(
                     name=name,
@@ -976,12 +1127,17 @@ class McpManager:
         return out
 
     def tools_summary(self) -> list[dict]:
-        return [
-            {"id": c.cfg.sid, "label": c.cfg.label, "n_tools": len(c.list_tools()),
-             "server": (c.server_info or {}).get("name", ""),
-             "caps": c.caps_line()}
-            for c in self.clients
-        ]
+        rows = []
+        for c in self.clients:
+            mounted, hidden, unused = client_mount(c)
+            rows.append({"id": c.cfg.sid, "label": c.cfg.label,
+                         "n_tools": len(mounted),
+                         "n_server_tools": len(mounted) + len(hidden),
+                         "n_hidden": len(hidden),
+                         "hidden_line": mount_line(hidden, unused),
+                         "server": (c.server_info or {}).get("name", ""),
+                         "caps": c.caps_line()})
+        return rows
 
     def close_all(self) -> None:
         for c in self.clients:
@@ -1189,8 +1345,12 @@ def probe_server(raw: dict, log=None) -> dict:
                 "n_tools": 0, "server": ""}
     client = McpClient(cfg_list[0], log=log)
     ok = client.start()
+    mounted, hidden, unused = (client_mount(client) if ok else ([], [], []))
     out = {"ok": ok, "error": "" if ok else client.error,
-           "n_tools": len(client.tools) if ok else 0,
+           "n_tools": len(mounted),
+           "n_server_tools": len(mounted) + len(hidden),
+           "n_hidden": len(hidden),
+           "hidden_line": mount_line(hidden, unused),
            "server": str((client.server_info or {}).get("name") or ""),
            "caps": client.caps_line() if ok else ""}
     client.close()

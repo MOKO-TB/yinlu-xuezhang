@@ -91,6 +91,78 @@ def test_format_call_result():
     assert format_call_result({"content": []}) == "(工具返回空结果)"
 
 
+# ---------------------------------------------------------------- 二进制载体
+# 钉的是"整坨 base64 不进 transcript"这一**类**,而不是某一句文案:
+# 工具结果只能是字符串,把 data 字段序列化出去 = 每个后续回合都重付一遍,
+# 而模型读不出内容。v0.9.121 前 image 就落在那条 else 里。
+
+def _b64(n: int) -> str:
+    import base64
+    return base64.b64encode(b"\x89PNG\r\n" + b"x" * n).decode()
+
+
+def test_image_result_never_inlines_the_payload():
+    payload = _b64(3000)
+    out = format_call_result({"content": [{"type": "image", "data": payload,
+                                           "mimeType": "image/png"}]})
+    assert payload not in out                 # 一个字符都不许漏进回话
+    assert "未内联" in out and "image/png" in out
+    assert "字节" in out
+
+
+def test_audio_and_binary_resource_also_not_inlined():
+    payload = _b64(2000)
+    out = format_call_result({"content": [
+        {"type": "audio", "data": payload, "mimeType": "audio/wav"},
+        {"type": "resource", "resource": {"uri": "file:///p.pdf",
+                                          "blob": payload,
+                                          "mimeType": "application/pdf"}}]})
+    assert payload not in out
+    assert "语音未内联" in out and "二进制资源未内联" in out
+    assert "file:///p.pdf" in out             # URI 要说得出,否则没路可接
+
+
+def test_unknown_type_with_long_payload_not_inlined_short_one_still_dumped():
+    """没认出的类型照常序列化(不假装认识),但带着长载荷的不能整坨塞。"""
+    long_payload = _b64(1500)
+    out = format_call_result({"content": [{"type": "drawing", "data": long_payload,
+                                          "mimeType": "image/svg"}]})
+    assert long_payload not in out and "未内联" in out
+    kept = format_call_result({"content": [{"type": "drawing", "data": "abc"}]})
+    assert '"data": "abc"' in kept           # 短载荷仍是原样序列化,别顺手扔掉
+
+
+def test_binary_size_estimate_is_marked_as_estimate():
+    out = format_call_result({"content": [{"type": "image", "data": "!!!not-b64!",
+                                           "mimeType": "image/png"}]})
+    assert "约" in out and "字节" in out      # 估出来的数不许写成精确数
+
+
+# ---------------------------------------------------------------- 结构化结果
+
+def test_structured_content_is_not_reported_as_empty():
+    """声明了 outputSchema 的服务器把结果放在 structuredContent 里 ——
+    漏读它就是"把有数据说成没数据",比没数据更难查。"""
+    out = format_call_result({"content": [],
+                              "structuredContent": {"score": 91, "gpa": "3.7"}})
+    assert "空结果" not in out
+    assert "91" in out and "gpa" in out
+    both = format_call_result({"content": [{"type": "text", "text": "读完了"}],
+                               "structuredContent": {"n": 1}})
+    assert both.startswith("读完了") and "结构化结果" in both
+
+
+def test_structured_content_says_how_much_was_cut():
+    out = format_call_result({"structuredContent": {"rows": ["长" * 80] * 200}})
+    assert "已截到" in out and "原长" in out   # 截了要报原长,不许装作是全部
+
+
+def test_error_flag_survives_structured_only_result():
+    out = format_call_result({"isError": True,
+                              "structuredContent": {"why": "额度用尽"}})
+    assert out.startswith("错误: ") and "额度用尽" in out
+
+
 # ------------------------------------------------------------------ 协议往返
 
 def test_start_lists_tools(client):
@@ -139,6 +211,123 @@ def test_start_timeout_on_silent_server():
     c.close()
 
 
+# ------------------------------------------------------------------ 工具级名单
+# 钉的不是"有没有这两个键",而是三件会**静默**坏掉的事:
+# ① 名单只能收窄,不能扩权;② 报给界面与模型的只数必须是真挂上来的;
+# ③ 写错的规则要说出口 —— 配了却没少一只,是查不出来的假配置。
+
+def _mgr(sid, **kw):
+    from minicode.mcp import connect_servers
+    return connect_servers([_fake(sid, **kw)])
+
+
+def test_deny_list_hides_a_tool_and_the_counts_tell_the_truth():
+    mgr = _mgr("dl", description="名单服务", deny_tools=["fail"])
+    try:
+        assert [t.name for t in mgr.build_tools()] == ["mcp_dl_echo"]
+        row = mgr.tools_summary()[0]
+        assert row["n_tools"] == 1            # 报给前端的必须是能调的那几只
+        assert row["n_server_tools"] == 2     # 服务器自己声明的数另说,不混为一谈
+        assert "fail" in row["hidden_line"] and "deny" in row["hidden_line"]
+    finally:
+        mgr.close_all()
+
+
+def test_allow_list_mounts_only_the_listed_names():
+    mgr = _mgr("al", allow_tools=["echo"])
+    try:
+        assert [t.name for t in mgr.build_tools()] == ["mcp_al_echo"]
+        assert "不在 allow 名单里" in mgr.tools_summary()[0]["hidden_line"]
+    finally:
+        mgr.close_all()
+
+
+def test_deny_wins_over_allow():
+    """两份名单同时命中同一只时,严的那份说话(与 permissions.json 的 deny 优先同口径)。"""
+    mgr = _mgr("dw", allow_tools=["echo", "fail"], deny_tools=["echo"])
+    try:
+        assert [t.name for t in mgr.build_tools()] == ["mcp_dw_fail"]
+    finally:
+        mgr.close_all()
+
+
+def test_only_a_trailing_star_is_a_wildcard():
+    """`e*` 认前缀;`*x` 不当通配 —— 会意外匹配的规则比没有规则更糟,
+    而它必须被点名成"没匹配到任何工具",不能装作生效了。"""
+    mgr = _mgr("pw", deny_tools=["e*"])
+    try:
+        assert [t.name for t in mgr.build_tools()] == ["mcp_pw_fail"]
+    finally:
+        mgr.close_all()
+    mgr2 = _mgr("pw2", deny_tools=["*x"])
+    try:
+        assert len(mgr2.build_tools()) == 2
+        assert "没匹配到任何工具" in mgr2.tools_summary()[0]["hidden_line"]
+    finally:
+        mgr2.close_all()
+
+
+def test_a_list_can_never_invent_a_tool():
+    """只收窄不扩权:allow 里写一个服务器没声明的名字,结果是**一只都不挂**,
+    而不是"照单变出几只来"。"""
+    mgr = _mgr("inv", allow_tools=["no_such_tool"])
+    try:
+        assert mgr.build_tools() == []
+        line = mgr.tools_summary()[0]["hidden_line"]
+        assert "no_such_tool" in line and "没匹配到" in line
+    finally:
+        mgr.close_all()
+
+
+def test_probe_server_reports_mounted_not_declared():
+    """添加服务器那句「探到 N 个工具」以前报的是服务器声明的数;配了名单之后
+    那个数会和"模型真能调的"分家,而同学是照这句话决定要不要再配一台的。"""
+    from minicode import mcp as mcp_mod
+    probe = mcp_mod.probe_server({"id": "pb", "command": sys.executable,
+                                  "args": [str(FAKE_SERVER)],
+                                  "deny_tools": ["fail"]})
+    assert probe["ok"] is True
+    assert probe["n_tools"] == 1 and probe["n_server_tools"] == 2
+    assert "fail" in probe["hidden_line"]
+
+
+def test_lists_round_trip_and_absent_keys_stay_absent():
+    """老配置回写不能凭空多出一个空名单键(与 permissions.json 的 decision 缺省
+    同一口径:没配 = 一个字都不改)。"""
+    servers = parse_servers([{"id": "a", "command": "npx", "deny_tools": ["x"]},
+                             {"id": "b", "command": "npx"}])
+    raw = servers_to_raw(servers)
+    assert raw[0]["deny_tools"] == ["x"]
+    assert "allow_tools" not in raw[0]
+    assert "deny_tools" not in raw[1] and "allow_tools" not in raw[1]
+
+
+def test_a_malformed_tools_list_does_not_take_the_registry_down():
+    """`tools/list` 是第三方服务器发的:里面混进不是字典的条目时,既不能炸掉
+    整张注册表(表现是配了 MCP 之后学长起不来),也不能把那条算进"工具数"。"""
+    from minicode.mcp import McpManager, McpServerConfig
+
+    class _BadClient:
+        cfg = McpServerConfig(sid="bad", description="坏清单服务")
+        server_info = {"name": "bad-server"}
+
+        def list_tools(self):
+            return [{"name": "ok"}, 7, None, "x"]
+
+        def caps_line(self):
+            return ""
+
+        def call_tool(self, name, arguments):
+            return "不该被调用"
+
+    mgr = McpManager([_BadClient.cfg])
+    mgr.clients = [_BadClient()]
+    assert [t.name for t in mgr.build_tools()] == ["mcp_bad_ok"]
+    row = mgr.tools_summary()[0]
+    assert row["n_tools"] == 1 and row["n_server_tools"] == 1
+    assert row["hidden_line"] == ""      # 没配名单就不编一句"挡了什么"
+
+
 # ------------------------------------------------------------------ 管理器集成
 
 def test_manager_builds_tools_and_summary():
@@ -153,6 +342,7 @@ def test_manager_builds_tools_and_summary():
         assert all(t.read_only is False for t in tools)
         summary = mgr.tools_summary()
         assert summary == [{"id": "demo", "label": "演示服务", "n_tools": 2,
+                            "n_server_tools": 2, "n_hidden": 0, "hidden_line": "",
                             "server": "fake-mcp",
                             # 不抄第二份措辞:能力那句由 caps_line 自己说,这里只钉
                             # "summary 的每一行都带着它"(形状仍是精确比对,多一个键就红)

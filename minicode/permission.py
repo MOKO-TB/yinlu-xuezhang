@@ -16,11 +16,13 @@
 """
 from __future__ import annotations
 
+import contextlib
 import re
 from pathlib import Path
 
 from minicode.config import Config
 from minicode import permspec
+from minicode.planning import PLAN_REL
 from minicode.sandbox import (
     ASK as SB_ASK, BLOCKED, KNOWN_LIMITS, OUTSIDE,
     REJECT as SB_REJECT, SECRET, check_command, classify_for_write,
@@ -153,6 +155,60 @@ class PermissionGate:
         self.project = permspec.load(workspace, tool_names or set())
         self.project_allow_reason = ""
         self._ask_note = ""
+        # 这两句不是装饰:`ask_kind` 是 property,而 `peeking()` 要先读后还 ——
+        # 没跑过 check() 的新 gate 上读它们会 AttributeError(第一次碰它的是
+        # 并发批次的预演,表现会是"一上来就炸",而不是判错)。
+        self._ask_kind = ""
+        self.reject_reason = ""
+        # 规划锁(v0.9.129):补的是矩阵 §10D 那一格 —— 以前整单核对单批完只给模型
+        # 看一句"用户已批准",`permission.py` 里没有任何一处执行它,批准与没批准
+        # 写盘走的是同一套档位。**状态本身住在 `SandboxState`**(那里有注释说明
+        # 为什么不住 gate:子代理共用 sandbox、各自新建 gate)。这里只留"这一次拒
+        # 的理由"这一份报告字段,与 `reject_reason` 同一层。
+        self.plan_lock_reason = ""
+
+    # ------------------------------------------------------------ 规划锁
+    # 三条形状是刻意的,改任何一条都要连带改 `_plan_locked_denial` 的回话:
+    # ① **只有人能解**:核对单点「批准」/ 计划卡片上那颗「批准这版计划」/ 命令行
+    #    `/plan approve`。模型自己能解的锁不是锁 —— 所以 `plan(action=unlock)` 这种
+    #    东西**不存在**。
+    # ② 排在**档位之前**:`accept_all` / `full` / 项目白名单都放不过它。否则"先给我
+    #    看计划"这个承诺在最常用的那一档里直接蒸发(与 `.git`、外部内容升级门同一
+    #    心智模型:这几条不是"档位管的事")。
+    # ③ 只读工具在它之前就已经 return ALLOW —— 规划态要的就是"只能读"。
+
+    @property
+    def plan_locked(self) -> bool:
+        """这道会话现在是不是"只读规划中"。没有 sandbox 的 gate(测试桩)一律算没锁。"""
+        return bool(getattr(self.sandbox, "plan_lock", False))
+
+    def lock_plan(self, goal: str = "") -> bool:
+        if self.sandbox is None:
+            return False
+        return self.sandbox.lock_plan(goal)
+
+    def unlock_plan(self) -> bool:
+        if self.sandbox is None:
+            return False
+        return self.sandbox.unlock_plan()
+
+    def _plan_locked_denial(self, name: str, args: dict) -> str | None:
+        """规划锁下这一步该不该拒。None = 放行(读、以及"把计划本身写出来"那两类)。"""
+        if name == "plan":
+            return None             # 不让人写计划,就永远拿不到一张可批的单子
+        if name in WRITE_TOOLS:
+            raw = str((args or {}).get("path") or "").replace("\\", "/")
+            while raw.startswith("./"):
+                raw = raw[2:]
+            if raw.lstrip("/") == PLAN_REL.as_posix():
+                return None         # 计划文件是例外:它就是给人看的那张单子
+        goal = str(getattr(self.sandbox, "plan_lock_goal", "") or "")
+        goal = f"(目标:{goal[:60]})" if goal else ""
+        return (f"这一步没做:这张计划{goal}还没被用户批准,规划锁还开着。"
+                "要开工只有一条路 —— 请用户点头:桌面版点核对单或计划卡片上的"
+                "「批准这版计划」,命令行输入 /plan approve。"
+                "不要换一种写法绕过去,也不要自己去解这道锁;"
+                "如果用户其实想直接开工,把这句话原样转达给他,由他决定。")
 
     def new_turn(self) -> None:
         self._turn_allowed.clear()
@@ -182,6 +238,36 @@ class PermissionGate:
     def ask_kind(self) -> str:
         """上一次 check() 的 ASK 是**哪条门**开的口(见 `_ask`)。"""
         return self._ask_kind
+
+    @contextlib.contextmanager
+    def peeking(self):
+        """只读预演:借**同一条判断链**算「这一步会不会问人」,跑完把报告字段还原。
+
+        为什么不另写一份「会不会问」的判断:`check()` 的结论由十几道门的**位置**
+        决定(deny 排在只读放行之前、`.git` 与外部内容升级门排在档位之前、项目
+        ask 排在档位之前、白名单只在「本该问」那一步才起作用),抄一份必然与真判
+        漂移,而漂移的表现是「本来该问的那一步直接跑了」—— 那不会报错。
+        弹框也不在这里:那是 Agent 看到 ASK 之后做的事,预演只看返回值。
+        """
+        saved = (self._ask_note, self._ask_kind,
+                 self.project_allow_reason, self.reject_reason,
+                 self.plan_lock_reason)
+        try:
+            yield
+        finally:
+            (self._ask_note, self._ask_kind,
+             self.project_allow_reason, self.reject_reason,
+             self.plan_lock_reason) = saved
+
+    def would_ask(self, tool: Tool, args: dict) -> bool:
+        """这一步会不会走到「要人点头」。并发批次派生之前用它筛。
+
+        一次预演不是一次判断的**缓存**:真执行时还得调 `check()`,因为中间可能有
+        别的步骤把「本回合接触过外部内容」这类状态改了。这里只回答「现在这一刻
+        会不会问」,用于决定「这批能不能一起发出去」。
+        """
+        with self.peeking():
+            return self.check(tool, args) == ASK
 
     def _ask(self, kind: str, note: str = "") -> str:
         """每一次"要问人"都说清是哪条门在问,并且当场把话备好。
@@ -442,7 +528,10 @@ class PermissionGate:
                 if level == SB_REJECT:
                     return REJECT
                 if level == SB_ASK and self.config.permission_mode != "full":
-                    return self._ask("sandbox_command")
+                    # 把沙箱那层算出来的**具体原因**带进确认框:以前这里只说"沙箱觉得
+                    # 这条要问",而 `Start-Process` 与"命中禁配规则"是两件不同的事,
+                    # 用户看不到是哪一件就没法判断该不该点允许。
+                    return self._ask("sandbox_command", why)
                 if level == SB_ASK and self.config.permission_mode == "full":
                     pass                # full 档:沙箱内可配命令放行(见下)
                 if not self.sandbox.policy.enabled:
@@ -494,6 +583,13 @@ class PermissionGate:
             return self._ask("project_rule",
                              f"这份项目的规则要求这一步当面确认({asked})—— "
                              "它比权限档位更严,full 与 accept_all 都省不掉这一问。")
+        # 规划锁:排在**档位与白名单之前**(见 `plan_locked` 上面那三条),所以
+        # accept_all / full / 项目白名单 / 「本轮总是允许」都放不过它。
+        if self.plan_locked:
+            denial = self._plan_locked_denial(name, args)
+            if denial:
+                self.plan_lock_reason = denial
+                return REJECT
         mode = self.config.permission_mode
         if mode == "full":
 

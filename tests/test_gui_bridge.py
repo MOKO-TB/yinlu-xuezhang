@@ -939,6 +939,28 @@ def test_get_plan_reflects_the_workspace_file_with_flags(config, tmp_path):
     assert "第 1 步 定题" in r["dispatch_text"]
 
 
+def test_get_plan_reports_the_lock_and_plan_approve_releases_it(config, tmp_path):
+    """计划卡片上那颗「批准这版计划」的两侧:面板要说得出锁着,点它要真解得开。
+
+    这把锁只有人能解,而 GUI 没有斜杠命令 —— 所以这一对是图形版**唯一**的出口。
+    少了它,核对单一旦被关掉,这场会话就再也写不了东西(死锁)。
+    """
+    from minicode.sandbox import SandboxPolicy, SandboxState
+    bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    sb = SandboxState(SandboxPolicy(), tmp_path)
+    bridge.agent.ctx.sandbox = sb
+
+    assert bridge.get_plan()["locked"] is False
+    sb.lock_plan("毕设排期")
+    assert bridge.get_plan()["locked"] is True
+
+    r = bridge.plan_approve()
+    assert r["ok"] is True and r["locked"] is False
+    assert bridge.get_plan()["locked"] is False
+    assert bridge.plan_approve()["ok"] is False, "没锁着的时候不该报「我解开了」"
+    assert window.of_type("info"), "解完要在界面上说一声,不能默默改状态"
+
+
 def test_plan_writes_push_plan_changed_to_the_window(config, tmp_path):
     """学长每写一次计划,界面要收到 plan_changed(带 session 标记),角标才会动。"""
     from minicode import planning
@@ -1106,18 +1128,30 @@ def test_workspace_search_files_returns_relative_paths(config, tmp_path):
     assert all("\\" not in i for i in empty["items"])   # 一律 posix 斜杠
 
 def test_get_info_reports_instruction_layers(config, tmp_path, monkeypatch):
-    """L3:侧栏那一行报"读到哪几层、各几行",报的是真读到的数,不是猜的。"""
-    from minicode import app_setup
+    """L3:侧栏那一行报"读到哪几层、各几行",报的是真读到的数,不是猜的。
+
+    v0.9.127 起项目级那一层还带采纳状态:没点过头的那一份**没进提示词**,
+    这一行不能说得像它已经在起作用。
+    """
+    from minicode import app_setup, permspec
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr(app_setup, "app_path", lambda *p: home.joinpath(*p))
+    monkeypatch.setattr(permspec, "trust_path",
+                        lambda: home / "perms-trust.json")
     (home / "AGENTS.md").write_text("一\n二\n", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("甲\n乙\n丙\n", encoding="utf-8")
     bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
     d = bridge.get_info()["instructions"]
-    assert d["ok"] and d["line"] == "内置 + 用户级(2 行) + 项目级(3 行)"
+    assert d["ok"] and d["line"] == "内置 + 用户级(2 行) + 项目级(3 行、未采纳)"
     assert [it["scope"] for it in d["layers"]] == ["用户级", "项目级"]
+    assert d["layers"][1]["adopted"] is False
     assert "一" not in d["line"]              # 只报数,不把内容再贴一遍
+
+    assert app_setup.adopt_agents(tmp_path)     # 点一次头(采纳记的是内容指纹)
+    d2 = bridge.get_info()["instructions"]
+    assert d2["line"] == "内置 + 用户级(2 行) + 项目级(3 行)"
+    assert d2["layers"][1]["adopted"] is True
 
 
 def test_board_reads_the_four_real_accounts(config, tmp_path):
@@ -1201,3 +1235,68 @@ def test_edit_resend_without_the_flag_keeps_files(config, tmp_path):
     bridge.edit_resend(1, "换个说法")          # 默认不退
     assert (tmp_path / "keep.md").read_text(encoding="utf-8") == "留着"
     assert "reverted" not in bridge.edit_resend(1, "再换一次")
+
+
+# ------------------------------------------------------------------ 回合中途插话
+# §6 6(c):这一轮正在跑时,`send_task` 不再硬回「有任务正在进行中」把那句话吃掉,
+# 而是收进 agent 的信箱,由回合在安全边界读。判据只有一个(runner.busy),所以
+# 桥这层的用例与 agent 那层的用例测的是同一条路的两端:界面进来的句子,和
+# 回合什么时候把它并进会话。
+
+def test_interjection_while_busy_goes_to_the_box_not_a_second_task(config, tmp_path):
+    gate = threading.Event()
+    bridge, window, session = make(config, tmp_path, GatedLLM(gate))
+    assert bridge.send_task("任务一")["ok"]
+    assert wait_until(lambda: bridge._busy)
+    # 确认真的在流式输出中(而不是刚把 busy 立起来、还没走到第一个边界):
+    assert wait_until(lambda: window.of_type("text_delta"))
+    runner = bridge._current
+    thread_before = runner.thread
+
+    r = bridge.send_task("补一句:只看第三章")
+    assert r["ok"] is True and r["queued"] is True
+    assert runner.thread is thread_before, "插话开出了第二个回合"
+    assert runner.agent._inbox == ["补一句:只看第三章"]
+
+    gate.set()
+    assert wait_until(lambda: not bridge._busy)
+    # 并进的是**这一轮**:助手那句在前,插话那句在后,然后才是对它的答复
+    assert [m["role"] for m in session.messages] == \
+        ["system", "user", "assistant", "user", "assistant"]
+    assert session.messages[3]["content"] == "补一句:只看第三章"
+
+
+def test_interjection_with_attachment_is_refused_saying_why(config, tmp_path):
+    """带图的插话当场说清"附件等这一轮跑完",而不是静默降级成一句纯文字。"""
+    from PIL import Image
+    gate = threading.Event()
+    bridge, window, session = make(config, tmp_path, GatedLLM(gate))
+    bridge.workspace = tmp_path
+    src = tmp_path / "错题.png"
+    Image.new("RGB", (30, 20), (200, 10, 10)).save(src)
+    atts, errors = save_attachments(tmp_path, [str(src)])
+    assert not errors
+
+    assert bridge.send_task("任务一")["ok"]
+    assert wait_until(lambda: window.of_type("text_delta"))
+    r = bridge.send_task("这道也看看", json.dumps([a.to_dict() for a in atts]))
+    assert r["ok"] is False and "附件" in r["msg"]
+    assert bridge._current.agent._inbox == []
+    gate.set()
+    assert wait_until(lambda: not bridge._busy)
+
+
+def test_interjection_box_overflow_is_reported_not_dropped(config, tmp_path):
+    """信箱排到顶:回话要说"没进去",因为前端据此把那句话放回输入框。"""
+    from minicode.agent import INBOX_MAX
+    gate = threading.Event()
+    bridge, window, session = make(config, tmp_path, GatedLLM(gate))
+    assert bridge.send_task("任务一")["ok"]
+    assert wait_until(lambda: window.of_type("text_delta"))
+    agent = bridge._current.agent
+    assert all(agent.queue_interjection(f"第{i}句") for i in range(INBOX_MAX))
+
+    r = bridge.send_task("第 N+1 句")
+    assert r["ok"] is False and "排到顶" in r["msg"]
+    gate.set()
+    assert wait_until(lambda: not bridge._busy)

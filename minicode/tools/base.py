@@ -85,6 +85,12 @@ class Tool:
     parameters: dict[str, Any]  # JSON Schema,类型必须是 object
     handler: Handler
     read_only: bool = False
+    # 这只工具的 handler 能不能和**同一条消息里的另一只**同时跑(§6 50(b) 那批并发)。
+    # 与 `read_only` 是两回事:只读说的是"要不要弹框",这里说的是"能不能同跑"。
+    # 默认 False —— 没逐条看过实现就不许进线程池(浏览器走 CDP 同步 API、ask_user
+    # 的弹框发生在 handler 里,这两类进了池子都是**不报错**的坏法)。
+    # 认这个旗标的只有 `agent._lane_ok` 一处,名单在 `registry.CONCURRENT_SAFE`。
+    concurrent_safe: bool = False
     # 信任级:local 本机产生 / external 外部内容(结果要套溯源围栏,见 provenance.py)
     # / principal 用户意志。子代理工具沿用父工具的值。
     trust: str = "local"

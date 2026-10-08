@@ -63,7 +63,8 @@ SHIP_NEVER: tuple[StateFile, ...] = (
     StateFile("kb-hits.jsonl", FILE,
               "知识库检索命中账(问句 + 条目 id):评价绑条目用,含本机提问记录"),
     StateFile("perms-trust.json", FILE,
-              "项目权限白名单的批准记录:工作区绝对路径 + 文件指纹,是本机授权状态"),
+              "本机的项目核对记录:工作区绝对路径 + 内容指纹,记两件事 —— "
+              "permissions.json 白名单批过没有、AGENTS.md 采纳过没有(v0.9.127)"),
     StateFile("schedule.json", FILE, "我的课表:属使用者本人"),
     StateFile("schedule.prev.json", FILE, "换回上一版用的课表备份,同样是本人课表"),
     StateFile("scores.json", FILE, "成绩单存档:带学分与分数的正式成绩,比课表更私密"),
@@ -126,6 +127,10 @@ SHIP_NEVER: tuple[StateFile, ...] = (
               "图片产物:同 charts,落工作区;工作区=程序目录时才会出现在这里"),
     StateFile("browser-profile", DIR,
               "教务导入的浏览器登录态:里面是登录后的 cookie,带走 = 把账号交给别人"),
+    StateFile("agents", DIR,
+              "本地档位定义(agents/*.md,v0.9.129):这一档多出来的角色规矩是这台机器上的人"
+              "自己写的,与用户级 AGENTS.md 同一类 —— 替别人定规矩不该随包发。缺了它只是没有"
+              "自定义档,派发那层会照内置口径跑,不会报错"),
 )
 
 _BY_NAME: dict[str, StateFile] = {e.name: e for e in SHIP_NEVER}

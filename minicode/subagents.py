@@ -51,7 +51,7 @@ from dataclasses import dataclass, replace as dc_replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from minicode import planning, router, toolsum
+from minicode import agent_profiles, planning, router, toolsum
 from minicode.agent import Agent
 from minicode.config import Config
 from minicode.permission import PermissionGate
@@ -87,6 +87,10 @@ class SubAgentSpec:
     description: str
     read_only: bool
     extra_prompt: str
+    # 本地档位定义(agents/*.md)带进来的两个旋钮。都给默认值,是因为既有五档与
+    # 领域档都是五个位置参数拼出来的 —— 加必填字段等于把它们全改一遍。
+    tools: tuple = ()     # 只收窄:空元组 = 照 base 那一档全给
+    steps: int = 0        # 0 = 用内置上限 MAX_SUB_STEPS;只能更小(在装载处已夹过)
 
 
 SUBAGENT_TYPES: dict[str, SubAgentSpec] = {
@@ -132,6 +136,47 @@ DOMAIN_KEYS = tuple(router.DOMAINS)
 TYPE_KEYS = tuple(SUBAGENT_TYPES) + DOMAIN_KEYS + ("auto",)
 
 
+# --------------------------------------------- 本地档位定义(agents/*.md)
+#
+# 每次派发读一次盘,同一份传给这一批的每一路 —— 与 `_skill_gaps()` 同一条规矩:
+# 派发是低频路径,但一轮请求里不该反复敲盘。
+
+def _profile_bases() -> dict:
+    """给 agent_profiles 核对 `base:` 用:内置五档 + 领域档,两者都带 read_only。"""
+    bases = dict(SUBAGENT_TYPES)
+    bases.update({d.key: d for d in router.DOMAINS.values()})
+    return bases
+
+
+def profiles_view(workspace) -> tuple[dict, list]:
+    return agent_profiles.load(workspace, bases=_profile_bases(),
+                               step_cap=MAX_SUB_STEPS)
+
+
+def type_keys(workspace=None) -> tuple:
+    """task 这一只工具此刻认得的档名:内置 + 领域 + auto + 本地定义。"""
+    if not workspace:
+        return TYPE_KEYS
+    profiles, _notes = profiles_view(workspace)
+    return TYPE_KEYS + tuple(sorted(profiles))
+
+
+def _apply_profile(prof, base: SubAgentSpec) -> SubAgentSpec:
+    """把一份定义套到 base 档上。三条都往严里走,所以每个字段都是"取更小的那个"。"""
+    tail = ("\n# 本地档位定义(%s)\n%s\n" % (Path(prof.source).name, prof.extra_prompt)
+            if prof.extra_prompt else "")
+    return dc_replace(
+        base,
+        type=prof.name,
+        label=prof.label or base.label,
+        description=prof.description or base.description,
+        extra_prompt=base.extra_prompt + tail,
+        # `or` 而不是赋值:base 是只读档就永远只读,定义里写什么都不知道不改这条
+        read_only=bool(base.read_only) or bool(prof.read_only),
+        tools=tuple(prof.tools),
+        steps=int(prof.steps or 0))
+
+
 def _available_skill_names(workspace) -> list[str] | None:
     """本机技能库里叫得出名字的技能;读不到时返回 None(=这次不核对)。"""
     try:
@@ -157,16 +202,8 @@ def _skill_gaps() -> dict:
         return {}
 
 
-def type_spec(key: str, workspace=None, gaps: dict | None = None) -> SubAgentSpec | None:
-    """把类型名解析成子代理规格:通用档取静态表,领域档按本机技能库现拼提示词。
-
-    `gaps` 不传就当场读一次账(直接调用方与测试的路径);批量派发由调用方读一次
-    传给每一路,免得六路各敲一次盘。
-    """
-    key = str(key or "").strip()
-    spec = SUBAGENT_TYPES.get(key)
-    if spec is not None:
-        return spec
+def _domain_spec(key: str, workspace, gaps: dict | None) -> SubAgentSpec | None:
+    """领域档按本机技能库现拼提示词(不复制 router 的知识)。"""
     domain = router.DOMAINS.get(key)
     if domain is None:
         return None
@@ -174,6 +211,34 @@ def type_spec(key: str, workspace=None, gaps: dict | None = None) -> SubAgentSpe
         domain.key, domain.label, domain.description, domain.read_only,
         router.extra_prompt(domain, _available_skill_names(workspace),
                             gaps=_skill_gaps() if gaps is None else gaps))
+
+
+def type_spec(key: str, workspace=None, gaps: dict | None = None,
+              profiles: dict | None = None) -> SubAgentSpec | None:
+    """把类型名解析成子代理规格:通用档取静态表,领域档现拼,本地定义套在 base 上。
+
+    顺序就是优先级:**内置档与领域档先查**,所以一份 `agents/explore.md` 永远不可能
+    把内置的 explore 换成另一套权限(agent_profiles.load 会把这种文件整份丢掉并说理由,
+    这里是第二道:就算它漏了,也到不了这条分支)。
+
+    `gaps` 不传就当场读一次账(直接调用方与测试的路径);批量派发由调用方读一次
+    传给每一路,免得六路各敲一次盘。`profiles` 同一条道理。
+    """
+    key = str(key or "").strip()
+    spec = SUBAGENT_TYPES.get(key)
+    if spec is not None:
+        return spec
+    domain = _domain_spec(key, workspace, gaps)
+    if domain is not None:
+        return domain
+    table = profiles if profiles is not None else profiles_view(workspace)[0]
+    prof = table.get(key)
+    if prof is None:
+        return None
+    base = SUBAGENT_TYPES.get(prof.base) or _domain_spec(prof.base, workspace, gaps)
+    if base is None:
+        return None
+    return _apply_profile(prof, base)
 
 
 
@@ -346,7 +411,44 @@ def sub_tool_registry(registry: list[Tool], spec: SubAgentSpec) -> list[Tool]:
     tools = [t for t in registry
              if t.name not in ("task", "ask_user", "export_trace")
              and (not spec.read_only or t.read_only)]
+    # 本地档位定义的 `tools:` 在这里落地 —— 只有这一层知道注册表里真有什么,
+    # 所以"只能收窄"这条红线是在**真工具集**上核的,不是对着配置文件里的名单猜。
+    if spec.tools:
+        keep = set(spec.tools)
+        tools = [t for t in tools if t.name in keep]
     return [dc_replace(t, name=f"{spec.type}·{t.name}") for t in tools]
+
+
+def unknown_tools(spec: SubAgentSpec, registry: list[Tool]) -> list[str]:
+    """定义里点名了、但这一档其实拿不到的工具(拼错了,或那只本来就被摘掉)。
+
+    单独一只函数是因为**报错要说得出名字**:静默少给一只工具,用户会以为
+    `tools:` 没生效,而实际上是那一档本来就没有它。
+    """
+    have = {t.name for t in registry
+            if t.name not in ("task", "ask_user", "export_trace")
+            and (not spec.read_only or t.read_only)}
+    return [n for n in spec.tools if n not in have]
+
+
+def dispatch_notes(notes: list, specs: list, registry: list[Tool]) -> list:
+    """装载那一层的注记(被丢掉/被剥掉的) + 派发这一层才核得出的注记。
+
+    分两段是必须的:`tools: write_file` 在装载时完全合法,只有拿到真注册表才知道
+    这一档本来就没有它 —— 少给一只工具而不吭声,用户读到的是"我配了,它没生效"。
+    """
+    out = list(notes or [])
+    for spec, _text, _note in specs:
+        miss = unknown_tools(spec, registry)
+        if miss:
+            out.append("%s 这一档的 tools: 里 %s 拿不到(拼错了,或那只本来就被摘掉),"
+                       "这一路就没有它" % (spec.type, "、".join(miss)))
+    return out
+
+
+def notes_prefix(notes: list) -> str:
+    """红线 4:被剥掉与被丢掉的一句话都不静默;没有话就一个字都不加。"""
+    return ("[档位定义注记] " + " ".join(notes) + "\n") if notes else ""
 
 
 def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
@@ -398,7 +500,7 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
             # (那一行写的是父会话最深一层在跑的东西)—— 串味的进度等于假进度。
             # 静默那一路(`_QuietUI`)本来就吞掉 tool_start/tool_done,现在进度走同一条闸。
             ctx=dc_replace(ctx, ui=ui),
-            max_steps=MAX_SUB_STEPS,
+            max_steps=spec.steps or MAX_SUB_STEPS,
             # H4:子代理不叫 session_start/user_prompt_submit —— 它拿到的是任务文本,
             # 不是一次用户开的会话;叫了会让"每次开一句话说一句"的钩子每路各冒一次。
             is_sub=True,
@@ -601,6 +703,11 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
     # 按档位分模型(v0.9.95):一个模型名一份客户端,同一个档位反复派活不该每次
     # 都新建一条 httpx 连接。客户端的构造规则在 `LLMClient.scoped` 一处。
     clients: dict[str, object] = {}
+    # 这份清单是**装配时**的快照(内置 + 领域 + auto + 当时盘上的本地档)。中途新加的
+    # `agents/*.md` 不进这一份,但派发那一层每次都重读盘,所以模型只要叫得出名字就照样
+    # 能派 —— 快照过期只影响"模型知不知道有这一档",不影响它能不能用。要刷新就重开
+    # 会话或让注册表热重载(MCP 那一路已有同一个动作)。
+    type_enum = list(type_keys(ctx.workspace))
 
     def route_llm(spec_type: str) -> tuple[object, str, str]:
         """返回(这一档用的客户端, 真用了哪个模型, 要写进报告的那句话)。
@@ -644,14 +751,18 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
         # 缺依赖那一句同一个道理:账读一次,几路共用同一份(派发是低频路径,
         # 每轮请求一个字都不碰这本账)。
         gaps = _skill_gaps()
+        # 本地档位定义:一次派发读一次盘,几路共用同一份;被丢掉/被剥掉的那些话
+        # 攒在这里,最后随报告一起回给主代理(红线 4:不静默)。
+        profiles, pnotes = profiles_view(workspace)
         specs = []
         for t, text in zip(types, tasks):
             key, note = router.resolve_type(str(t).strip(), text, available, gaps)
-            spec = type_spec(key, workspace, gaps)
+            spec = type_spec(key, workspace, gaps, profiles=profiles)
             if spec is None:
                 return (f"错误: 未知子代理类型 '{t}'。"
-                        f"可用: {', '.join(TYPE_KEYS)}")
+                        f"可用: {', '.join(type_keys(workspace))}")
             specs.append((spec, text.strip(), note))
+        pfx = notes_prefix(dispatch_notes(pnotes, specs, registry))
 
         # ---- 挂在计划的哪一步(可选):校验在派活之前,不合法就不白花一路 ----
         use_step = step not in (None, "", 0, "0")
@@ -690,7 +801,7 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             facts = [f"{spec.type} 报告 {len(report)} 字"
                      + ("(超时未回)" if timed_out else "")
                      + (f"(模型 {used_model})" if used_model else "")]
-            return _plan_head(facts) + body + _SUB_REPORT_NOTE
+            return pfx + _plan_head(facts) + body + _SUB_REPORT_NOTE
 
         # ---- 批量:v0.9.60 起写类型也并发。确认通道仍是一条(锁排队),
         # 但每路经 _TaggedUI 贴上「第 N 路[类型]任务」标签,用户分得清在等谁;
@@ -751,7 +862,7 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                   else f"{s.type} 超时未回")
                  + (f"(模型 {routes[i][1]})" if routes[i][1] else "")
                  for i, ((s, _t, _n), r) in enumerate(zip(specs, reports))]
-        return _plan_head(facts) + out + _SUB_REPORT_NOTE
+        return pfx + _plan_head(facts) + out + _SUB_REPORT_NOTE
 
     return Tool(
         name="task",
@@ -798,9 +909,9 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                     "description": "子代理类型;并行探索时传类型数组,如 [\"explore\", \"review\"];"
                                    "\"auto\" 表示按任务特征路由(理由会回显)",
                     "anyOf": [
-                        {"type": "string", "enum": list(TYPE_KEYS)},
+                        {"type": "string", "enum": type_enum},
                         {"type": "array", "items": {"type": "string",
-                                                    "enum": list(TYPE_KEYS)}},
+                                                    "enum": type_enum}},
                     ],
                 },
                 "task": {

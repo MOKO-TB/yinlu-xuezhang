@@ -288,6 +288,9 @@ _OUTLINE_SKIP = {
     # 构建产物与运行时产物
     "dist", "build", "_internal", "crawled", "browser-profile",
     "uploads", "images", "charts", "sessions", "memory", "kb",
+    # 超长工具输出的转存地:那是"这一步跑完的原始料",不是项目文件,别让它在
+    # @ 引用补全与 repo_outline 里冒充代码/文档
+    "tool-outputs",
 }
 
 _OUTLINE_DIR_DEPTH = 6        # 目录最多下钻几层:再深是依赖或数据,不是代码

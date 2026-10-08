@@ -26,6 +26,11 @@ class Ctx:
         self.ui = ui
         self.root = self.workspace / planning.PLAN_REL.parent
         self.root.mkdir(parents=True, exist_ok=True)
+        # 规划锁(v0.9.129)住在 sandbox 上,所以这个假 ctx 必须带一份真的
+        # SandboxState —— 不带的话 `_set_plan_lock` 走的是"没有 sandbox 就锁不上"
+        # 那条降级路,这一整个文件就测不到锁了。
+        from minicode.sandbox import SandboxPolicy, SandboxState
+        self.sandbox = SandboxState(SandboxPolicy(), self.workspace)
 
 
 class CardUI:
@@ -92,7 +97,13 @@ def test_approve_is_the_only_way_the_model_hears_yes(tmp_path):
 def test_no_answer_is_recorded_as_unconfirmed_never_as_approved(tmp_path):
     _ctx, text = _write(tmp_path, CardUI({"mode": "unanswered"}))
     assert "未确认" in text and "先把计划讲给用户" in text
-    assert "批准" not in text, "没等到回答却写「批准」= 替用户点头"
+    # 钉的是"批准那句原话有没有跑出来",不是"批准二字有没有出现":v0.9.129 起
+    # 规划锁的说明里就有"被用户批准之前不许写"这句**否定**用法,按子串拦会把
+    # 一句真话判成假闸。要防的是替用户点头,那就照点头那句原话拦。
+    assert "用户已在界面上**批准这张计划**" not in text, "没等到回答却说了批准那句 = 替用户点头"
+    assert "已批准" not in text and "批准这版" not in text
+    # 而且锁必须**还开着**:没答就不是批了
+    assert _ctx.sandbox.plan_lock is True, "没等到回答却把规划锁解了 = 替用户点头"
 
 
 def test_revise_carries_the_classmates_words_verbatim(tmp_path):

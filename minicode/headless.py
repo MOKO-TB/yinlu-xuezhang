@@ -40,6 +40,17 @@ class UsageError(Exception):
     """参数层面的错:说清哪儿不对,以 EXIT_ARGS 退出,不进 Agent 一步。"""
 
 
+def headless_flags_in(argv: list[str]) -> list[str]:
+    """这串参数里有没有无头模式的旗标(给**图形入口**用的那份判定)。
+
+    判定只在这里写一份:`pop_output_flags` 负责"摘下来并解析",这里负责"有没有" ——
+    两处各写一遍的话,总有一天一处认 `--output-format=json` 另一处不认。
+    """
+    return [a for a in argv
+            if a == "--json" or a == "--output-format"
+            or a.startswith("--output-format=")]
+
+
 def ensure_utf8_stdout() -> None:
     """把 stdout 钉成 UTF-8 —— **管道场景下这是契约的一部分**。
 

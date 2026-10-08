@@ -214,19 +214,68 @@ def approved_sha(workspace: Path) -> str:
     return str(row or "")           # 兼容手写坏格式:不是 dict 就当没记
 
 
-def trust(workspace: Path, sha: str, rules_n: int = 0) -> None:
+def _row(workspace) -> dict:
+    """这个工作区在本机信任表里的那一行;没记过就是空行。"""
+    row = _read_trust().get(str(Path(workspace).resolve()))
+    return dict(row) if isinstance(row, dict) else {}
+
+
+def _put_row(workspace, row: dict) -> None:
     table = _read_trust()
-    table[str(Path(workspace).resolve())] = {
-        "sha256": sha, "rules": rules_n, "approved_at": _now()}
+    table[str(Path(workspace).resolve())] = row
     _write_trust(table)
 
 
+def trust(workspace: Path, sha: str, rules_n: int = 0) -> None:
+    # **合并**而不是整行盖掉:同一行还记着"这个项目那份 AGENTS.md 采纳了没有"
+    # (§四.2 的点头)。一行两件事,是因为它们本来就是同一件事的两面 ——
+    # "别人写进这个目录的文件,你核对过才让它对你说话"。
+    row = _row(workspace)
+    row.update({"sha256": sha, "rules": rules_n, "approved_at": _now()})
+    _put_row(workspace, row)
+
+
+def agents_adopted_sha(workspace) -> str:
+    """本机为这个项目采纳过的那份指令文件的内容指纹(没采纳过 = 空串)。"""
+    return str(_row(workspace).get("agents_sha256") or "")
+
+
+def adopt_agents(workspace, sha: str, lines: int = 0) -> None:
+    """记一次「这份项目指令我核对过、采纳」—— 同样只认内容指纹。
+
+    文件改一个字,指纹就变,于是又回到"没采纳"的状态(与上面 `trust` 那条
+    "改了要重新批"是同一条道理,不是两条规则)。
+    """
+    row = _row(workspace)
+    row.update({"agents_sha256": sha, "agents_lines": int(lines or 0),
+                "agents_at": _now()})
+    _put_row(workspace, row)
+
+
 def revoke(workspace: Path) -> bool:
-    table = _read_trust()
+    """撤掉这个项目**白名单那半截**的信任。
+
+    同一行还记着指令文件的采纳(§四.2,v0.9.127),它不能被"撤销白名单"顺手带走
+    —— 那是两次独立的点头。整行只在这两半都没了之后才删。
+    """
     key = str(Path(workspace).resolve())
+    table = _read_trust()
+    row = table.get(key)
     if key not in table:
         return False
-    table.pop(key, None)
+    if not isinstance(row, dict):        # 手写坏格式的那条:本来就什么都没能生效
+        table.pop(key)
+        _write_trust(table)
+        return True
+    fields = ("sha256", "rules", "approved_at")
+    if not any(f in row for f in fields):
+        return False                     # 这一行只有采纳记录:撤销没做成任何事
+    for f in fields:
+        row.pop(f, None)
+    if row:
+        table[key] = row
+    else:
+        table.pop(key, None)
     _write_trust(table)
     return True
 
@@ -402,7 +451,10 @@ def permissions_trust(ctx, action: str = "trust") -> str:
     if not ws:
         return "错误: 没有工作区,白名单无从谈起。"
     if action == "revoke":
+        # 撤销只动白名单这半截:同一行还记着"这个项目的 AGENTS.md 采纳过没有",
+        # 那是用户另一次点头,不该被这一次顺手带走(v0.9.127)。
         return ("已撤销对这个项目白名单的批准,回到逐次确认。"
+                "(这个项目指令文件的采纳没动 —— 那要单独说不采纳。)"
                 if revoke(Path(ws)) else "这个项目本来也没批准过,不用撤。")
     spec = _spec_of(ctx)
     if not spec.sha:

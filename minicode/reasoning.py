@@ -31,17 +31,52 @@ LABELS = {
 
 
 class ReasoningCapability:
-    """一个模型的思考能力:kind(展示形态)+ options(可选档位)+ 策略。"""
+    """一个模型的思考能力:kind(展示形态)+ options(可选档位)+ 策略。
 
-    __slots__ = ("kind", "options", "strategy")
+    `param` 只在策略是 `template` 时有值:用户在模型配置里写的那份映射,
+    里面 `reasoningLevel` 是要被替换成实际档位的占位符。
+    """
 
-    def __init__(self, kind: str, options: tuple[str, ...], strategy: str):
+    __slots__ = ("kind", "options", "strategy", "param")
+
+    def __init__(self, kind: str, options: tuple[str, ...], strategy: str,
+                 param: str = ""):
         self.kind = kind            # effort(档位选择) / hidden(不显示)
         self.options = options      # ("default", "off", ...) 档位值
         self.strategy = strategy    # 请求参数编码策略(见 apply_reasoning_choice)
+        self.param = param          # 模板串(template 策略下用)
 
 
 _HIDDEN = ReasoningCapability("hidden", (), "")
+
+
+def declared_capability(cfg) -> "ReasoningCapability | None":
+    """用户在模型配置里自己登记的档位清单 → 一份能力。没登记就返回 None。
+
+    这条是 §6 47 那两难里的"便宜那条":配置文件声明,不花额度、不猜端点。
+    内置表仍然兜底 —— 没声明过的模型行为与今天逐字节一致。
+    """
+    levels = (cfg or {}).get("reasoning_levels")
+    if not isinstance(levels, (list, tuple)) or not levels:
+        return None
+    opts = tuple(["default"] + [str(v).strip() for v in levels if str(v).strip()])
+    return ReasoningCapability("effort", opts, "template",
+                               str((cfg or {}).get("reasoning_param") or ""))
+
+
+def get_capability(model_name: str, cfg=None) -> ReasoningCapability:
+    """查能力:**用户在这个模型上声明的档位优先**,再精确登记,再前缀兜底,
+    其余一律 hidden(不猜)。"""
+    declared = declared_capability(cfg)
+    if declared is not None:
+        return declared
+    key = normalize_model(model_name)
+    cap = REASONING_CAPABILITIES.get(key)
+    if cap is not None:
+        return cap
+    if key.startswith("deepseek"):
+        return _DEEPSEEK
+    return _HIDDEN
 
 # model 名(小写精确匹配) -> 能力。来源与 model_catalog.MODEL_CATALOG 同步:
 # 引路学长目前分发的模型以 deepseek-v4 家族为主(校园内置 deepseek-v4-flash,
@@ -74,18 +109,7 @@ def normalize_model(name: str) -> str:
     return _leaf(name)
 
 
-def get_capability(model_name: str) -> ReasoningCapability:
-    """查能力:精确登记优先,deepseek 前缀兜底,其余一律 hidden(不猜)。"""
-    key = normalize_model(model_name)
-    cap = REASONING_CAPABILITIES.get(key)
-    if cap is not None:
-        return cap
-    if key.startswith("deepseek"):
-        return _DEEPSEEK
-    return _HIDDEN
-
-
-def reasoning_snapshot(model_name: str, choice: str = "default") -> dict:
+def reasoning_snapshot(model_name: str, choice: str = "default", cfg=None) -> dict:
     """给界面的能力快照:kind 三态 + options(中文标签)+ hint(为什么不能调)。
 
     三态语义(v0.9.22 改了第一态):
@@ -96,7 +120,7 @@ def reasoning_snapshot(model_name: str, choice: str = "default") -> dict:
     - ``fixed``   模型固定思考,不可关(如 deepseek-reasoner)。
     - ``effort``  有档位可选。
     """
-    cap = get_capability(model_name)
+    cap = get_capability(model_name, cfg)
     fixed = cap.kind == "fixed"
     unknown = cap.kind == "hidden"
     choice = str(choice or "default")
@@ -111,20 +135,38 @@ def reasoning_snapshot(model_name: str, choice: str = "default") -> dict:
                 ("该模型固定开启思考,不可调节" if fixed else ""),
         "choice": choice if choice in cap.options or fixed or choice == "default"
                   else "default",
-        "options": [{"value": v, "label": LABELS[v]} for v in cap.options],
+        "options": [{"value": v, "label": LABELS.get(v, v)} for v in cap.options],
     }
 
 
-def normalize_choice(model_name: str, choice: str) -> str:
+def normalize_choice(model_name: str, choice: str, cfg=None) -> str:
     """非法/过期档位一律归回 default,绝不让界面积累的旧值打进请求。"""
-    cap = get_capability(model_name)
+    cap = get_capability(model_name, cfg)
     choice = str(choice or "").strip() or "default"
     if cap.kind == "fixed":
         return "default"       # 固定思考:不留 choice,由 always_on 策略处理
     return choice if choice in cap.options else "default"
 
 
-def apply_reasoning_choice(kwargs: dict, model_name: str, choice: str) -> dict:
+def _render_template(param: str, choice: str) -> dict:
+    """把用户写的那句映射渲成要发出去的键值。
+
+    写法是 ZCode 那种模板串:`{ "reasoning_effort": reasoningLevel }` ——
+    值位上放裸标识符 `reasoningLevel`,这里换成带引号的档位再按 JSON 解。
+    解不出来就返回空 dict(**不发半截猜测**):写错模板的后果应该是"这一档
+    没生效",而不是给网关送去一个畸形请求体。
+    """
+    import json
+    body = str(param or "").replace("reasoningLevel", '"' + str(choice) + '"')
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def apply_reasoning_choice(kwargs: dict, model_name: str, choice: str,
+                           cfg=None) -> dict:
     """把思考档位编码进 chat.completions 请求参数(原地修改并返回 kwargs)。
 
     - default → 不动任何参数(服务端默认行为,字节层面与旧请求完全一致);
@@ -136,12 +178,22 @@ def apply_reasoning_choice(kwargs: dict, model_name: str, choice: str) -> dict:
     - thinking_object_effort: DeepSeek 官方约定(extra_body 里 thinking 对象);
     - always_on: 固定思考的模型(deepseek-reasoner),无需参数,直接返回。
     """
-    cap = get_capability(model_name)
-    choice = normalize_choice(model_name, choice)
+    cap = get_capability(model_name, cfg)
+    choice = normalize_choice(model_name, choice, cfg)
     if cap.kind == "hidden" or choice == "default":
         return kwargs
     strategy = cap.strategy
     if strategy == "always_on":
+        return kwargs
+    if strategy == "template":
+        # 用户自己声明的档位与映射:渲出来的键一律走 extra_body —— openai SDK
+        # 会把它并进请求体,于是"顶层参数"与"私有参数"两种网关都能接得住,
+        # 而不会因为 SDK 不认某个陌生顶层关键字直接抛。
+        rendered = _render_template(cap.param, choice)
+        if rendered:
+            extra = kwargs.setdefault("extra_body", {}) or kwargs["extra_body"]
+            extra.update(rendered)
+            kwargs["extra_body"] = extra
         return kwargs
     if strategy == "thinking_object_effort":
         extra = kwargs.setdefault("extra_body", {}) or kwargs["extra_body"]

@@ -127,6 +127,9 @@ skill-usage.jsonl
 # 向量检索的本地缓存与「用时下载」的模型权重(都是本机可再生资源,绝不进仓库)
 # kb-vectors/ = 条目指纹+向量档(embed.py);models/ = 本地 embedding 权重目录
 /kb-vectors/
+# agents/ = 本地档位定义 agents/*.md(agent_profiles.py,v0.9.129):那一档多出来的
+# 规矩是这台机器上的人自己写的,与用户级 AGENTS.md 同一类 —— 不随包发,也不进仓库
+/agents/
 /models/
 
 # 工具生成的产物(默认工作区 = 程序目录,所以它们会落在仓库根)

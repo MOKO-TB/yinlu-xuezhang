@@ -37,7 +37,19 @@ def _sha256(path: Path, chunk: int = 1 << 22) -> str:
     return h.hexdigest()
 
 
+def _utf8_console() -> None:
+    """这道闸自己打印 ✓/✗。Windows 默认控制台是 GBK,`print` 会直接
+    UnicodeEncodeError —— 闸在自家机器上跑不起来就等于没有闸。照 `check_docs.py`
+    同一手法执行(被重定向、没有 `reconfigure` 的流原样让它去,不因此炸)。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main(argv: list[str]) -> int:
+    _utf8_console()
     workspace = Path(argv[1]).resolve() if len(argv) > 1 else ROOT
     print(f"工作区: {workspace}")
     for p in library.db_candidates(workspace):

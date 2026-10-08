@@ -1,6 +1,8 @@
 import json
 import threading
 
+import pytest
+
 from minicode.agent import WRAP_UP_NOTE, Agent
 from minicode.llm import AssistantTurn, ToolCall
 from minicode.permission import PermissionGate
@@ -1015,25 +1017,46 @@ def test_compaction_invalidates_the_floor_it_just_used(config, ctx):
 
 # ------------------------------------------- 工作区 AGENTS.md 注入(F1,v0.9.100)
 
-def test_agents_md_injected_when_present(tmp_path):
+def _adopted(workspace, monkeypatch, trust_home=None):
+    """点一次头(v0.9.127 §四.2「首次采纳点头」)。
+
+    项目级那段从"在场就注入"改成"本机采纳过这一份内容才注入",所以这些用例要先
+    采纳。信任账(perms-trust.json)必须指到 tmp:不指的话测试会去读写仓库根那份
+    真的 —— 换一台机器结果就不一样,那类针比没测更糟。
+
+    `trust_home` 单独给,是因为一条用例里采纳**两个**工作区时那本账必须是同一本:
+    各写一本的话,第二次采纳把第一次的记录换掉了,"A 的规矩没混进 B"就测了个假。
+    """
+    from minicode import app_setup, permspec
+    root = workspace if trust_home is None else trust_home
+    monkeypatch.setattr(permspec, "trust_path",
+                        lambda: root / "app" / "perms-trust.json")
+    assert app_setup.adopt_agents(workspace)
+
+
+def test_agents_md_injected_when_present(tmp_path, monkeypatch):
     from minicode.app_setup import agents_prompt_section, build_system_prompt
     (tmp_path / "AGENTS.md").write_text("# 我的规矩\n- 回答先给结论\n", encoding="utf-8")
+    _adopted(tmp_path, monkeypatch)
     out = agents_prompt_section(tmp_path)
     assert "项目指令" in out and "先给结论" in out
     # 子代理也带(项目指令对派出去干活的那一路同样有效)
     assert "项目指令" in build_system_prompt(tmp_path, for_subagent=True)
 
 
-def test_agents_md_absent_means_empty_and_dot_name_fallback(tmp_path):
+def test_agents_md_absent_means_empty_and_dot_name_fallback(tmp_path, monkeypatch):
     from minicode.app_setup import agents_prompt_section
     assert agents_prompt_section(tmp_path) == ""      # 没有文件一个字不加
     (tmp_path / ".agents.md").write_text("备选名字的指令", encoding="utf-8")
+    assert agents_prompt_section(tmp_path) == ""      # 在场但没点过头:照样不注入
+    _adopted(tmp_path, monkeypatch)
     assert "备选名字" in agents_prompt_section(tmp_path)
 
 
-def test_agents_md_truncated_with_marker(tmp_path):
+def test_agents_md_truncated_with_marker(tmp_path, monkeypatch):
     from minicode.app_setup import AGENTS_CHAR_LIMIT, agents_prompt_section
     (tmp_path / "AGENTS.md").write_text("长" * (AGENTS_CHAR_LIMIT + 500), encoding="utf-8")
+    _adopted(tmp_path, monkeypatch)
     out = agents_prompt_section(tmp_path)
     assert "已截断" in out and len(out) < AGENTS_CHAR_LIMIT + 200
 
@@ -1065,6 +1088,25 @@ def test_undo_records_lists_newest_first_with_kinds(config, ctx, tmp_path):
     assert rep["items"][0]["newer"] == 0           # 最新那条之上没有更动的了
     assert rep["items"][1]["newer"] == 1           # 退更早那次会连带跳过更新的改动
     assert rep["items"][0]["seq"] != rep["items"][1]["seq"]
+
+
+def test_undo_records_says_which_turn_each_change_belongs_to(config, ctx, tmp_path):
+    """这本栈是**按会话**攒的,而段标题叫「本轮改动」—— 界面要能自己算出"这一轮"
+    是哪几条,否则长会话里那句「本轮」就是骗人的(v0.9.128 补的两个字段)。
+    """
+    agent = _two_writes(config, ctx, tmp_path)
+    rep = agent.undo_records()
+    assert rep["turn"] == 2                    # 现在停在第几问
+    assert rep["turns"] == 2                   # 这份账跨了几问
+    assert [it["turn"] for it in rep["items"]] == [2, 1]
+    # 同一问里改两处:分组要落在同一格子里,而不是"每处算一问"
+    agent.llm.turns = [
+        _write_turn("a.txt", "1", "c3"), _write_turn("b.txt", "2", "c4"),
+        AssistantTurn(text="done3")]
+    agent.run_turn("第三版")
+    rep = agent.undo_records()
+    assert rep["turn"] == 3 and rep["turns"] == 3
+    assert [it["turn"] for it in rep["items"]] == [3, 3, 2, 1]
 
 
 def test_undo_by_seq_only_touches_that_one(config, ctx, tmp_path):
@@ -1188,6 +1230,7 @@ def test_two_layers_ordered_user_then_project(tmp_path, monkeypatch):
     from minicode import app_setup
     _user_layer(monkeypatch, tmp_path)
     (tmp_path / "AGENTS.md").write_text("项目级 MARKER-PROJ\n", encoding="utf-8")
+    _adopted(tmp_path, monkeypatch)
     out = app_setup.instructions_prompt_section(tmp_path)
     assert out.index("MARKER-USER") < out.index("MARKER-PROJ")
     assert "工程规矩(用户级" in out and "项目指令(工作区" in out
@@ -1217,6 +1260,8 @@ def test_switching_workspace_switches_project_layer(tmp_path, monkeypatch):
     b.mkdir()
     (a / "AGENTS.md").write_text("A 的规矩 MARKER-A", encoding="utf-8")
     (b / ".agents.md").write_text("B 的规矩 MARKER-B", encoding="utf-8")
+    _adopted(a, monkeypatch, tmp_path)     # 同一本信任账,两个工作区各记一行
+    _adopted(b, monkeypatch, tmp_path)
     assert "MARKER-A" in app_setup.instructions_prompt_section(a)
     assert "MARKER-B" in app_setup.instructions_prompt_section(b)
     assert "MARKER-A" not in app_setup.instructions_prompt_section(b)
@@ -1227,6 +1272,7 @@ def test_guard_line_present_in_both_layers(tmp_path, monkeypatch):
     from minicode import app_setup
     _user_layer(monkeypatch, tmp_path)
     (tmp_path / "AGENTS.md").write_text("项目 MARKER", encoding="utf-8")
+    _adopted(tmp_path, monkeypatch)
     out = app_setup.instructions_prompt_section(tmp_path)
     assert out.count(app_setup.INSTRUCTION_GUARD) == 2
     assert "改不动它们" in out
@@ -1237,6 +1283,10 @@ def test_layers_report_counts_not_content(tmp_path, monkeypatch):
     _user_layer(monkeypatch, tmp_path, text="一\n二\n三\n")
     (tmp_path / "AGENTS.md").write_text("甲\n乙\n", encoding="utf-8")
     layers = app_setup.instruction_layers(tmp_path)
+    assert layers[1]["adopted"] is False      # 还没点过头:这一屏要说得出这个差别
+    assert app_setup.instructions_line(tmp_path) == \
+        "内置 + 用户级(3 行) + 项目级(2 行、未采纳)"
+    _adopted(tmp_path, monkeypatch)
     assert [it["scope"] for it in layers] == ["用户级", "项目级"]
     assert layers[0]["lines"] == 3 and layers[1]["lines"] == 2
     assert layers[1]["name"] == "AGENTS.md"
@@ -1260,10 +1310,11 @@ def test_truncation_reports_how_much(tmp_path, monkeypatch):
     assert app_setup.instruction_layers(tmp_path)[0]["truncated"] is True
 
 
-def test_subagent_still_gets_project_layer(tmp_path):
+def test_subagent_still_gets_project_layer(tmp_path, monkeypatch):
     """继承口径(v0.9.100 已定):派出去的那一路也在同一个工作区干活,项目规矩同样有效。"""
     from minicode.app_setup import build_system_prompt
     (tmp_path / "AGENTS.md").write_text("项目 MARKER", encoding="utf-8")
+    _adopted(tmp_path, monkeypatch)
     assert "MARKER" in build_system_prompt(tmp_path, for_subagent=True)
 
 
@@ -1397,6 +1448,7 @@ def test_changing_agents_md_reloads_once_and_says_so(config, ctx, tmp_path, monk
     ag = make_agent(config, ctx, llm, ui)
     ag.run_turn("第一句")                          # 这一遍只记指纹
     (tmp_path / "AGENTS.md").write_text("新加的规矩 MARKER-D1", encoding="utf-8")
+    _adopted(tmp_path, monkeypatch)                # 不点这一句头就没有这一段
     ag.run_turn("第二句")                          # 内容真变了才重建、才说一声
     said = [t for t in _infos(ui) if "重新载入" in t]
     assert len(said) == 1, _infos(ui)
@@ -1495,3 +1547,782 @@ def test_rollback_bad_ordinal_is_an_error_not_a_wipe(config, ctx, tmp_path):
         r = ag.rollback_to_ordinal(bad)
         assert r["ok"] is False, bad
     assert ag.undo_records()["total"] == 2        # 参数错了不许退任何东西
+
+
+# ------------------------------------------------ 安全日志里「是哪道门问的」那一列
+# 钉的是"类别由 ask_kind 派生、不从文案猜"这一整类 —— `_ask` 的 docstring 早就写着
+# 靠匹配文案的代价:改一个字判定就悄悄失效,而没有任何一条测试会红。
+
+class _NoteUI(FakeUI):
+    """真门在有 note 时会用四参数调确认框(第三参数是"为什么做",第四是警示行);
+    上面那份 FakeUI 只收三参数,那是 v0.9.115 之前的形状。"""
+
+    def confirm_tool(self, tool, args, reason="", note=""):
+        self.confirmed.append((tool.name, dict(args)))
+        self.reasons.append(reason)
+        self.notes = getattr(self, "notes", [])
+        self.notes.append(note)
+        return self.confirm_choice
+
+
+def _captured_gates(monkeypatch):
+    from minicode import provenance
+    seen = []
+    monkeypatch.setattr(provenance, "log_escalation",
+                        lambda gate, name, args, note, choice: seen.append(gate))
+    return seen
+
+
+def test_log_gate_uses_the_kind_not_the_words(config, ctx, monkeypatch):
+    seen = _captured_gates(monkeypatch)
+    agent = make_agent(config, ctx, FakeLLM([]), _NoteUI())
+    tool = Tool(name="read_file", description="", parameters={},
+                handler=lambda c, **kw: "", read_only=True)
+    for kind, expect in [("credential", "credential"), ("external", "escalation"),
+                         ("git", "git"), ("project_rule", "project_rule"),
+                         ("outside_path", "outside_path"), ("", "escalation")]:
+        seen.clear()
+        # 文案里**故意不含**「密钥」「凭据」四个字:旧判定会把凭据门记成升级门
+        agent._log_security_ask(tool, {}, "这一步要问人", "yes", kind)
+        assert seen == [expect], (kind, seen)
+
+
+def test_git_gate_is_logged_by_its_own_kind_end_to_end(config, tmp_path, monkeypatch):
+    """走真 `_execute`:往仓库 `.git/hooks/` 写那一问过去只被记成笼统的 escalation,
+    现在按门自己的名字记 —— 事后翻这份日志的人能分清"是哪道门问的、用户答了什么"。"""
+    from minicode.sandbox import SandboxPolicy, SandboxState
+
+    seen = _captured_gates(monkeypatch)
+    ws = tmp_path / "proj"
+    (ws / ".git").mkdir(parents=True)
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="write_file",
+            arguments=json.dumps({"path": ".git/hooks/pre-commit",
+                                  "content": "#!/bin/sh\nexit 0\n"}))]),
+        AssistantTurn(text="不写了"),
+    ])
+    ui = _NoteUI()
+    ui.confirm_choice = "no"
+    agent = Agent(
+        llm=llm, registry=build_default_registry(), session=Session(system_prompt="sys"),
+        gate=PermissionGate(config, sandbox=SandboxState(SandboxPolicy(), ws),
+                            workspace=ws),
+        ui=ui, ctx=ToolContext(workspace=ws, config=config))
+    agent.run_turn("给仓库加个提交前检查")
+    assert seen == ["git"], seen                  # 旧形状:这一条是 "escalation"
+    assert ui.notes and ".git" in ui.notes[0]     # 问人的那句话仍然说得出为什么
+
+
+# -------------------------------------------------- 每步计时住在"自己那一路"里
+# §6 50(b) 并发的前置:`_execute` 以前把毫秒写在 `self` 上,同一条消息里两路一起跑
+# 就是后跑的那一路盖掉前一路的实测 —— 表现不是报错,是留档里那些耗时变成对不上人。
+
+def _lane_agent(config, tmp_path, tag="lane_a", delay=0.05):
+    import time
+
+    from minicode.permission import PermissionGate
+    from minicode.session import Session
+
+    def slow(ctx, **kw):
+        time.sleep(delay)
+        return tag
+
+    tool = Tool(name="slow_read", description="", read_only=True, handler=slow,
+                parameters={"type": "object", "properties": {}})
+    ws = tmp_path / tag
+    ws.mkdir(exist_ok=True)
+    return Agent(llm=FakeLLM([]), registry=[tool], session=Session(system_prompt="s"),
+                 gate=PermissionGate(config), ui=FakeUI(),
+                 ctx=ToolContext(workspace=ws, config=config))
+
+
+def _call(i="c1"):
+    return ToolCall(id=i, name="slow_read", arguments="{}")
+
+
+def test_a_per_call_lane_leaves_the_default_one_untouched(config, tmp_path):
+    agent = _lane_agent(config, tmp_path)
+    lane = {"step_ms": None, "hook_ms": None}
+    assert agent._execute(_call(), timing=lane) == "lane_a"
+    assert isinstance(lane["step_ms"], int) and lane["step_ms"] >= 40, lane
+    assert lane["hook_ms"] is None                 # 没配钩子就不该有这个数
+    # 默认那一路一个字都不接 —— 否则并发时"最近一次"会被任意后到的线程改写
+    assert agent._step_ms is None and agent._hook_ms is None
+
+
+def test_two_lanes_do_not_share_one_slot(config, tmp_path):
+    a = _lane_agent(config, tmp_path, tag="lane_a")
+    lane1, lane2 = {"step_ms": None, "hook_ms": None}, {"step_ms": None, "hook_ms": None}
+    assert a._execute(_call("c1"), timing=lane1) == "lane_a"
+    assert a._execute(_call("c2"), timing=lane2) == "lane_a"
+    assert lane1["step_ms"] >= 40 and lane2["step_ms"] >= 40
+    lane2["step_ms"] = 1
+    assert lane1["step_ms"] >= 40, "两路共用了同一个格子"
+
+
+def test_an_early_exit_clears_its_own_lane_not_the_previous_one(config, tmp_path):
+    """W10 那条"早退不残留上一步实测"现在要按**每一路**成立:同一 lane 里换一步
+    早退(工具不存在),上一步的毫秒必须被清掉,而不是留在里面冒充这一步。"""
+    a = _lane_agent(config, tmp_path)
+    lane = {"step_ms": None, "hook_ms": None}
+    a._execute(_call(), timing=lane)
+    assert lane["step_ms"] is not None
+    out = a._execute(ToolCall(id="c2", name="没有这只工具", arguments="{}"), timing=lane)
+    assert out.startswith("错误: 未找到工具")
+    assert lane == {"step_ms": None, "hook_ms": None}, lane
+
+
+# ------------------------------------------------------------ 可以进线程池那一段
+# §6 50(b):并发只能把 `_run_handler` 放进线程池。这两条针钉的是**那一段的边界**——
+# 以后谁把 `ui.tool_done` / `gate.check` / `session.add_*` 挪进来,这里当场红,
+# 而不是等两路确认框串味、或留档顺序倒了才发现。
+
+def test_the_parallel_seam_touches_nothing_shared(config, tmp_path):
+    import threading
+
+    a = _lane_agent(config, tmp_path)
+    ui = a.ui
+    lane = {"step_ms": None, "hook_ms": None}
+    p = a._prepare(_call(), lane)
+    assert p.runnable and p.tool is not None
+    before_done = len(ui.tool_results)
+    before_msgs = len(a.session.messages)
+    before_gate = (a.gate.ask_kind, a.gate.project_allow_reason)
+
+    main_thread = threading.current_thread()
+    seen = []
+
+    def run():
+        seen.append(threading.current_thread() is not main_thread)
+        seen.append(a._run_handler(p.tool, p.args))
+
+    t = threading.Thread(target=run)
+    t.start()
+    t.join()
+    ran_elsewhere, (result, step_ms) = seen
+    assert ran_elsewhere, "这段没跑在另一条线程上,这条针就没在管并发"
+    assert result == "lane_a" and step_ms >= 40
+    # 收尾(界面结束、会话留档、门的报告字段)仍归主线程的 `_finish`,这一段不许碰
+    assert len(ui.tool_results) == before_done
+    assert len(a.session.messages) == before_msgs
+    assert (a.gate.ask_kind, a.gate.project_allow_reason) == before_gate
+    assert lane["step_ms"] is None      # 毫秒由调用方写进这一路,不在这一段里落
+
+
+def test_the_three_parts_still_add_up_to_one_step(config, tmp_path):
+    """拆开之后必须仍然是「一次调用」:prepare → run → finish 拼起来与 _execute 同值。"""
+    a = _lane_agent(config, tmp_path)
+    lane1 = {"step_ms": None, "hook_ms": None}
+    whole = a._execute(_call("c1"), timing=lane1)
+    lane2 = {"step_ms": None, "hook_ms": None}
+    p = a._prepare(_call("c2"), lane2)
+    result, step_ms = a._run_handler(p.tool, p.args)
+    lane2["step_ms"] = step_ms
+    assert a._finish(p, result) == whole == "lane_a"
+    assert lane1["hook_ms"] is None and lane2["hook_ms"] is None
+    assert isinstance(lane1["step_ms"], int) and isinstance(lane2["step_ms"], int)
+
+
+# ------------------------------------------------------------- 超长输出转存回读
+# 对标 Claude 的 MCP 落盘与 ZCode 的 artifactPath。三条不许坏:头部与今天逐字节一致、
+# 尾巴**真读得回来**(落在工作区内,不触发越界确认)、存不成就照原样截断不装样子。
+
+def _spill_agent(tmp_path, limit=100, body_len=6000):
+    from minicode.config import Config, Provider
+    from minicode.permission import PermissionGate
+    from minicode.session import Session
+
+    body = "".join(f"第{i}行:语义语料\n" for i in range(body_len // 12))
+
+    def big(ctx, **kw):
+        return body
+
+    tool = Tool(name="big_out", description="", read_only=True, handler=big,
+                parameters={"type": "object", "properties": {}})
+    ws = tmp_path / "ws"
+    ws.mkdir(exist_ok=True)
+    cfg = Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",
+                                     api_key="k", model="m")],
+                 active_provider_id="t", max_output_chars=limit)
+    agent = Agent(llm=FakeLLM([]), registry=[tool], session=Session(system_prompt="s"),
+                  gate=PermissionGate(cfg, workspace=ws), ui=FakeUI(),
+                  ctx=ToolContext(workspace=ws, config=cfg))
+    return agent, ws, body, limit
+
+
+def _big_call():
+    return ToolCall(id="c1", name="big_out", arguments="{}")
+
+
+def test_long_output_spills_the_tail_and_keeps_the_head_verbatim(tmp_path):
+    agent, ws, body, limit = _spill_agent(tmp_path)
+    out = agent._execute(_big_call())
+    assert out.startswith(body[:limit])          # 头部一个字节都不许变
+    assert "已存进 tool-outputs/" in out and "不必重跑" in out
+    files = list((ws / "tool-outputs").glob("*.txt"))
+    assert len(files) == 1, files
+    assert files[0].read_text(encoding="utf-8") == body   # 存的是全文,不是又一个截断
+
+
+def test_the_spilled_file_is_readable_without_a_dialog(tmp_path):
+    """落点必须在沙箱内:否则模型读回来要弹框,无头模式下直接判"没人可问"——
+    那是"存了但读不到",比不存更坏。用上一轮那道只读预演问一句,不许它说要问。"""
+    agent, ws, _body, _limit = _spill_agent(tmp_path)
+    out = agent._execute(_big_call())
+    rel = out.split("已存进 ", 1)[1].split(",", 1)[0]
+    read_tool = next(t for t in build_default_registry() if t.name == "read_file")
+    assert agent.gate.would_ask(read_tool, {"path": rel}) is False
+    # 而且真读得到内容(走 handler,不是只看路径字符串)
+    assert "语义语料" in read_tool.handler(agent.ctx, path=rel)
+
+
+def test_short_output_writes_nothing_at_all(tmp_path):
+    agent, ws, _body, _limit = _spill_agent(tmp_path, limit=100000)
+    out = agent._execute(_big_call())
+    assert "tool-outputs" not in out
+    assert not (ws / "tool-outputs").exists()     # 没超就一个文件都不许多写
+
+
+def test_unwritable_target_falls_back_to_the_old_wording(tmp_path):
+    """`tool-outputs` 那个名字被一个同名**文件**占着 → mkdir 真的失败。
+    这时必须退回今天那句原文,而不是在回话里指一条不存在的路。"""
+    agent, ws, _body, limit = _spill_agent(tmp_path)
+    (ws / "tool-outputs").write_text("占了这个名字", encoding="utf-8")
+    out = agent._execute(_big_call())
+    assert out.endswith(f"…(输出超过 {limit} 字符,已截断)")
+    assert "已存进" not in out
+    assert (ws / "tool-outputs").read_text(encoding="utf-8") == "占了这个名字"
+
+
+def test_spill_file_is_capped_and_says_so(tmp_path):
+    agent, ws, _body, _limit = _spill_agent(tmp_path, limit=50, body_len=4000)
+    import minicode.agent as am
+    cap, old = 3000, am.SPILL_FILE_MAX_CHARS
+    am.SPILL_FILE_MAX_CHARS = cap
+    try:
+        out = agent._execute(_big_call())
+    finally:
+        am.SPILL_FILE_MAX_CHARS = old
+    assert "文件本身也在第" in out and "处截过" in out
+    f = list((ws / "tool-outputs").glob("*.txt"))[0]
+    assert len(f.read_text(encoding="utf-8")) == cap
+
+
+def test_public_web_profile_turns_spilling_off(tmp_path):
+    """网页版每访客一个 Bridge、工作区却共用一份 —— 转存等于跨访客可见。
+
+    这里只验"那道开关被对外收敛关掉"这件事实(真调 `apply_public_profile`);
+    它同时会把注册表收成 PUBLIC_TOOLS,所以不能再拿 `big_out` 去跑第二步 ——
+    机制本身由下一支针钉。
+    """
+    from minicode.session import Session
+    from minicode.web_profile import apply_public_profile
+
+    agent, ws, _body, _limit = _spill_agent(tmp_path)
+    assert agent.output_spill is True
+    apply_public_profile(agent, Session(system_prompt="s"), ws)
+    assert agent.output_spill is False
+    assert not (ws / "tool-outputs").exists()
+
+
+def test_spill_off_keeps_the_old_truncation_and_writes_no_file(tmp_path):
+    """开关关掉时:回话与今天逐字节一致,而且一个文件都不许多写。"""
+    agent, ws, body, limit = _spill_agent(tmp_path)
+    agent.output_spill = False
+    out = agent._execute(_big_call())
+    assert out == body[:limit] + f"\n…(输出超过 {limit} 字符,已截断)"
+    assert not (ws / "tool-outputs").exists()
+
+
+# ---------------------------------------------------------------- 同一回合内并发
+# §6 50(b)。针全部用**屏障**:三条 handler 互相等,串行必然超时 ——
+# 所以"真的并行了"这件事不靠计时猜,也不靠读源码断言。
+
+def _barrier_agent(tmp_path, barrier, note="ok"):
+    from minicode.config import Config, Provider
+    from minicode.permission import PermissionGate
+    from minicode.session import Session
+
+    def handler(ctx, **kw):
+        barrier.wait(timeout=6)              # 撞不到别的线程就抛 BrokenBarrier/Timeout
+        return note
+
+    tool = Tool(name="grep", description="", read_only=True, concurrent_safe=True,
+                handler=handler,
+                parameters={"type": "object", "properties": {}})
+    ws = tmp_path / "ws"
+    ws.mkdir(exist_ok=True)
+    cfg = Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",
+                                    api_key="k", model="m")],
+                 active_provider_id="t")
+    agent = Agent(llm=FakeLLM([]), registry=[tool], session=Session(system_prompt="s"),
+                  gate=PermissionGate(cfg, workspace=ws), ui=FakeUI(),
+                  ctx=ToolContext(workspace=ws, config=cfg))
+    return agent, tool
+
+
+def _three_calls():
+    return [ToolCall(id=f"c{k}", name="grep", arguments="{}") for k in (1, 2, 3)]
+
+
+def test_three_safe_calls_really_run_together(tmp_path):
+    barrier = threading.Barrier(3)
+    agent, _tool = _barrier_agent(tmp_path, barrier)
+    agent._dispatch_tool_calls(_three_calls())
+    texts = [m for m in agent.session.messages if m["role"] == "tool"]
+    assert len(texts) == 3, texts
+    assert all(t["content"] == "ok" for t in texts)
+    assert [t["tool_call_id"] for t in texts] == ["c1", "c2", "c3"]   # 顺序不变
+
+
+def test_serial_path_would_break_the_barrier_so_this_proves_the_gate(tmp_path):
+    """反面对照:同一批调用,资格被摘掉后就该串行 —— 屏障必须**等不到人**而报错。
+    没有这条,上面那条针可能只是"三条一起抛错所以看起来跑完了"。"""
+    barrier = threading.Barrier(3)
+    agent, tool = _barrier_agent(tmp_path, barrier)
+    tool.concurrent_safe = False
+    agent._tool_map = {tool.name: tool}
+    agent._dispatch_tool_calls(_three_calls())
+    texts = [m["content"] for m in agent.session.messages if m["role"] == "tool"]
+    assert len(texts) == 3
+    assert all("错误" in t or "超时" in t or "BrokenBarrier" in t for t in texts), texts
+
+
+def test_results_are_archived_in_the_models_order_even_if_they_finish_backwards(tmp_path):
+    """完成顺序与给出顺序相反时,留档仍是模型给的顺序 —— 悬空/错配对儿是 400 的来源。"""
+    from minicode.session import Session
+
+    order_in, order_out = [], []
+    done = threading.Barrier(3)
+
+    def handler(ctx, **kw):
+        order_in.append(kw.get("pattern", ""))
+        done.wait(timeout=6)
+        n = int(kw["pattern"][-1])
+        import time as _t
+        _t.sleep((3 - n) * 0.05)            # c3 先完,c1 后完
+        order_out.append(kw["pattern"])
+        return f"r{n}"
+
+    from minicode.config import Config, Provider
+
+    tool = Tool(name="grep", description="", read_only=True, concurrent_safe=True,
+                handler=handler, parameters={"type": "object", "properties": {}})
+    cfg = Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",
+                                     api_key="k", model="m")], active_provider_id="t")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    agent = Agent(llm=FakeLLM([]), registry=[tool], session=Session(system_prompt="s"),
+                  gate=PermissionGate(cfg, workspace=ws), ui=FakeUI(),
+                  ctx=ToolContext(workspace=ws, config=cfg))
+    calls = [ToolCall(id=f"c{k}", name="grep",
+                      arguments=json.dumps({"pattern": f"p{k}"})) for k in (1, 2, 3)]
+    agent._dispatch_tool_calls(calls)
+    got = [(m["tool_call_id"], m["content"]) for m in agent.session.messages
+           if m["role"] == "tool"]
+    assert got == [("c1", "r1"), ("c2", "r2"), ("c3", "r3")], got
+    assert len(order_in) == 3 and set(order_in) == {"p1", "p2", "p3"}
+    assert order_out != ["p1", "p2", "p3"], "完成顺序恰好等于给出顺序,这支针就没在验什么"
+
+
+def test_a_call_that_would_ask_never_joins_the_batch(tmp_path):
+    """资格第四条:门会问的那一步绝不进池 —— 从工作线程弹确认框是不报错的坏法。"""
+    from minicode.permission import PermissionGate
+    from minicode.sandbox import SandboxPolicy, SandboxState
+    from minicode.session import Session
+
+    from minicode.config import Config, Provider
+
+    asked = []
+
+    def handler(ctx, **kw):
+        asked.append(threading.current_thread() is threading.main_thread())
+        return "读了"
+
+    tool = Tool(name="read_file", description="", read_only=True,
+                concurrent_safe=True, handler=handler,
+                parameters={"type": "object", "properties": {}})
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    outside = tmp_path / "elsewhere.txt"
+    outside.write_text("外面", encoding="utf-8")
+    cfg = Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",
+                                     api_key="k", model="m")], active_provider_id="t")
+    gate = PermissionGate(cfg, sandbox=SandboxState(SandboxPolicy(), ws), workspace=ws)
+    ui = FakeUI()
+    agent = Agent(llm=FakeLLM([]), registry=[tool], session=Session(system_prompt="s"),
+                  gate=gate, ui=ui, ctx=ToolContext(workspace=ws, config=cfg))
+    inside = ws / "a.txt"
+    inside.write_text("里面", encoding="utf-8")
+    calls = [ToolCall(id="c1", name="read_file",
+                      arguments=json.dumps({"path": "a.txt"})),
+             ToolCall(id="c2", name="read_file",
+                      arguments=json.dumps({"path": str(outside.resolve())}))]
+    assert agent._lane_ok(calls[0]) is True         # 第一条有资格
+    assert agent._lane_ok(calls[1]) is False       # 越界那条会问人 → 绝不进池
+    agent._dispatch_tool_calls(calls)
+    assert len(ui.confirmed) == 1                   # 只问了一次,且在主线程
+    assert asked == [True, True], asked   # 都在主线程:一条是单只批次,另一条串行
+    got = [m["tool_call_id"] for m in agent.session.messages if m["role"] == "tool"]
+    assert got == ["c1", "c2"]                      # 两条都有结果,顺序不变
+
+
+def test_lane_ok_reasons_line_by_line(tmp_path):
+    """四条例外逐条钉:非安全名单 / 参数不是 JSON / 参数不是对象 / 门会问。"""
+    barrier = threading.Barrier(1)
+    agent, tool = _barrier_agent(tmp_path, barrier)
+    good = ToolCall(id="c1", name="grep", arguments="{}")
+    assert agent._lane_ok(good) is True
+    tool.concurrent_safe = False
+    assert agent._lane_ok(good) is False, "名单外的工具不许进池"
+    tool.concurrent_safe = True
+    assert agent._lane_ok(ToolCall(id="c2", name="grep",
+                                   arguments="{坏 json")) is False
+    assert agent._lane_ok(ToolCall(id="c3", name="grep",
+                                   arguments="[1,2]")) is False
+    assert agent._lane_ok(ToolCall(id="c4", name="没有这只",
+                                   arguments="{}")) is False
+
+
+def test_concurrent_safe_is_opt_in_and_only_on_read_only_tools():
+    """资格表是白名单:新加工具不会自动进池;而池子里一只只读以外的都不许有。"""
+    from minicode.tools.concurrency import CONCURRENT_SAFE
+    from minicode.tools.registry import build_default_registry
+
+    tools = build_default_registry()
+    named = {t.name: t for t in tools}
+    safe = {t.name for t in tools if t.concurrent_safe}
+    assert safe == set(CONCURRENT_SAFE) & set(named), "名单与实际标记不一致"
+    assert all(named[n].read_only for n in safe), "非只读的工具进了并发名单"
+    # 两类"只读但绝不并发"的危险分子必须在名单外:弹框在 handler 里 / 共用 CDP 会话
+    assert "ask_user" not in safe and "browser_snapshot" not in safe
+    assert "search_knowledge" not in safe     # 检索那一刻要记 kb-hits,两路会错配
+
+
+# -------------------------------------------------- 项目指令文件的首次采纳点头
+# docs/roadmap-分层指令文件.md §四.2⑧ + §七.2。这一件的全部价值在"没点过头就不许
+# 说话",所以针要钉三处:没采纳时提示词里**没有**那一段、点了头当轮就**有**、
+# 而"按推荐/没答/不采纳"三种都不算点头。
+
+_YES = "采纳,以后这一份不再问"
+_NO = "不采纳"
+
+
+class _NodUI(FakeUI):
+    """带提问通道的界面替身:把弹出来的卡记下来,并按测试给的答案回。"""
+
+    def __init__(self, reply):
+        super().__init__()
+        self.reply = reply
+        self.cards = []
+
+    def ask_user(self, questions, note="", label=""):
+        self.cards.append((questions, note))
+        return self.reply
+
+
+def _agents_ws(tmp_path, monkeypatch, text="项目 MARKER-NOD\n"):
+    """工作区放一份项目指令 + 把本机信任账指到 tmp(不指就读写到仓库根那份真的)。"""
+    from minicode import permspec
+    (tmp_path / "AGENTS.md").write_text(text, encoding="utf-8")
+    monkeypatch.setattr(permspec, "trust_path",
+                        lambda: tmp_path / "app" / "perms-trust.json")
+    return tmp_path
+
+
+def test_unadopted_project_file_is_not_in_the_prompt(config, ctx, tmp_path, monkeypatch):
+    """没点过头:那一段一个字都不进提示词,而且界面听得见一句"没采纳"。"""
+    _agents_ws(tmp_path, monkeypatch)
+    ui = FakeUI()                       # 这个形态没有提问通道(无头就是这个样子)
+    agent = make_agent(config, ctx, FakeLLM([AssistantTurn(text="好")]), ui)
+    agent.run_turn("第一问")
+    assert "MARKER-NOD" not in agent.session.messages[0]["content"]
+    assert any("没采纳" in t for t in _infos(ui)), _infos(ui)
+
+
+@pytest.mark.parametrize("reply", [
+    {"mode": "unanswered", "reason": "无头模式没有人能回答"},
+    {"mode": "recommend", "answers": []},
+    {"mode": "answer", "answers": [{"id": 0, "choice": _NO}]},
+    {"mode": "answer", "answers": [{"id": 0, "free": "先别照它做"}]},
+])
+def test_only_an_explicit_yes_adopts(config, ctx, tmp_path, monkeypatch, reply):
+    """没答、按推荐、点了「不采纳」、自己打一句都**不算点头**(§四.2 那条硬口径)。"""
+    _agents_ws(tmp_path, monkeypatch)
+    ui = _NodUI(reply)
+    agent = make_agent(config, ctx, FakeLLM([AssistantTurn(text="好")]), ui)
+    agent.run_turn("第一问")
+    assert "MARKER-NOD" not in agent.session.messages[0]["content"]
+    assert len(ui.cards) == 1
+
+
+def test_the_nod_adopts_and_the_same_turn_already_sees_it(config, ctx, tmp_path,
+                                                          monkeypatch):
+    """点了头当轮就生效:提示词里有那一段,而且不是"下次开会话才认"。"""
+    from minicode import app_setup
+    _agents_ws(tmp_path, monkeypatch)
+    ui = _NodUI({"mode": "answer", "answers": [{"id": 0, "choice": _YES}]})
+    agent = make_agent(config, ctx,
+                       FakeLLM([AssistantTurn(text="一"), AssistantTurn(text="二")]), ui)
+    agent.run_turn("第一问")
+    assert "MARKER-NOD" in agent.session.messages[0]["content"]
+    assert app_setup.agents_adoption(tmp_path)["adopted"] is True
+    # 第二问:指纹没变、已采纳 —— 不该再弹一张卡,也不该再说一次"重新载入"
+    agent.run_turn("第二问")
+    assert len(ui.cards) == 1
+    assert len([t for t in _infos(ui) if "重新载入" in t]) == 0
+
+
+def test_editing_the_file_after_a_nod_asks_again(config, ctx, tmp_path, monkeypatch):
+    """点头记的是**内容指纹**:文件改一个字,那句"我采纳过"就不 covers 新内容了。"""
+    from minicode import app_setup
+    _agents_ws(tmp_path, monkeypatch)
+    ui = _NodUI({"mode": "answer", "answers": [{"id": 0, "choice": _YES}]})
+    agent = make_agent(config, ctx,
+                       FakeLLM([AssistantTurn(text="一"), AssistantTurn(text="二")]), ui)
+    agent.run_turn("第一问")
+    assert app_setup.agents_adoption(tmp_path)["adopted"] is True
+    (tmp_path / "AGENTS.md").write_text("项目 MARKER-NEW\n", encoding="utf-8")
+    assert app_setup.agents_adoption(tmp_path)["adopted"] is False
+    assert "MARKER-NEW" not in agent.session.messages[0]["content"]
+
+
+def test_a_refused_file_is_not_asked_twice_in_one_session(config, ctx, tmp_path,
+                                                          monkeypatch):
+    """拒过一次就这一会话不再追问(否则每一问都弹一遍成了骚扰)。"""
+    _agents_ws(tmp_path, monkeypatch)
+    ui = _NodUI({"mode": "answer", "answers": [{"id": 0, "choice": _NO}]})
+    agent = make_agent(config, ctx,
+                       FakeLLM([AssistantTurn(text="一"), AssistantTurn(text="二")]), ui)
+    agent.run_turn("第一问")
+    agent.run_turn("第二问")
+    assert len(ui.cards) == 1
+    assert len([t for t in _infos(ui) if "没采纳" in t]) == 1
+
+
+def test_subagents_never_ask(config, ctx, tmp_path, monkeypatch):
+    """子代理不弹采纳卡:派出去那一路拿的是任务文本,而提示词那段本来就要求
+    "本机采纳过" —— 在这儿问等于把主会话的一次决定重问 N 遍。"""
+    from minicode.permission import PermissionGate
+    from minicode.session import Session
+
+    _agents_ws(tmp_path, monkeypatch)
+    ui = _NodUI({"mode": "answer", "answers": [{"id": 0, "choice": _YES}]})
+    sub = Agent(llm=FakeLLM([AssistantTurn(text="子")]), registry=[],
+               session=Session(system_prompt="sys"), gate=PermissionGate(config),
+               ui=ui, ctx=ctx, is_sub=True)
+    sub.run_turn("派个活")
+    assert ui.cards == []
+    assert "MARKER-NOD" not in sub.session.messages[0]["content"]
+
+
+def test_the_nod_survives_a_new_session(config, ctx, tmp_path, monkeypatch):
+    """采纳是本机的账,不是这一会话的:同一份内容开新会话不再问第二次。"""
+    from minicode.app_setup import build_system_prompt
+    from minicode.permission import PermissionGate
+    from minicode.session import Session
+
+    _agents_ws(tmp_path, monkeypatch)
+    ui = _NodUI({"mode": "answer", "answers": [{"id": 0, "choice": _YES}]})
+    first = make_agent(config, ctx, FakeLLM([AssistantTurn(text="一")]), ui)
+    first.run_turn("第一问")
+    assert len(ui.cards) == 1
+
+    ui2 = _NodUI({"mode": "answer", "answers": [{"id": 0, "choice": _NO}]})
+    second = Agent(llm=FakeLLM([AssistantTurn(text="二")]),
+                   registry=build_default_registry(),
+                   session=Session(system_prompt="sys"),
+                   gate=PermissionGate(config), ui=ui2, ctx=ctx)
+    second.run_turn("换个会话再问")
+    assert ui2.cards == []                       # 没再问
+    # 新会话的提示词里带着那一段。这里直接问 `build_system_prompt`:真机上它是
+    # create_app 拼好的,而测试那个 Session 的开头是一条占位 system,拿它断言等于
+    # 断言了夹具。
+    assert "MARKER-NOD" in build_system_prompt(tmp_path)
+
+
+# ------------------------------------------------------------------ 回合中途插话
+# §6 6(c):跑着的时候补一句,先进信箱,在**安全边界**读(请求之前、handler 之外)。
+# 针全部走"第二次请求真看到了什么" —— 并进会话这件事只有从下一次请求的消息体里
+# 才看得出来,断言 session 尾部是看得见的下游,不是这件事本身。
+
+class _StepLLM(FakeLLM):
+    """第 n 次请求**返回之后**替界面说一句(on_call 里调 queue_interjection)。
+
+    这等价于"handler 正在跑的时候用户按了 Enter":单线程、可重复,而时序与真机一致。
+    另有一条真线程的用例(test_interjection_from_another_thread...)钉跨线程那一面。
+    """
+
+    def __init__(self, turns, on_call=None):
+        super().__init__(turns)
+        self.on_call = on_call
+
+    def stream_chat(self, messages, tools, **kwargs):
+        n = len(self.calls) + 1
+        turn = super().stream_chat(messages, tools, **kwargs)
+        if self.on_call:
+            self.on_call(n, turn)
+        return turn
+
+
+def _roles(agent):
+    return [m["role"] for m in agent.session.messages]
+
+
+def test_interjection_is_read_between_the_tool_result_and_the_next_request(config, ctx, tmp_path):
+    box = {}
+
+    def on_call(n, turn):
+        if n == 1:
+            assert box["a"].queue_interjection("只看第三章就好") is True
+
+    llm = _StepLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="write_file",
+            arguments=json.dumps({"path": "a.txt", "content": "hi"}))]),
+        AssistantTurn(text="收到"),
+    ], on_call)
+    agent = make_agent(config, ctx, llm, FakeUI())
+    box["a"] = agent
+    agent.run_turn("创建 a.txt")
+
+    assert _roles(agent) == ["system", "user", "assistant", "tool", "user", "assistant"]
+    tail = llm.calls[1][-2:]
+    assert tail[0]["role"] == "tool" and tail[1]["role"] == "user"
+    assert "第三章" in tail[1]["content"]
+
+
+def test_interjection_at_the_end_of_a_turn_keeps_that_turn_going(config, ctx, tmp_path):
+    """正要收口时补的话算**这一轮**的后续步骤(拍过的口径),不是"下一轮才读到"。
+
+    没有插话时这一轮只发一次请求;发了两次就是那条 continue 真走成了 —— 针钉的是
+    第二次请求带着这句用户消息,而不是"多调了一次"这个数。
+    """
+    box = {}
+
+    def on_call(n, turn):
+        if n == 1:
+            box["a"].queue_interjection("再把日期也写上")
+
+    llm = _StepLLM([AssistantTurn(text="第一段"), AssistantTurn(text="第二段")], on_call)
+    agent = make_agent(config, ctx, llm, FakeUI())
+    box["a"] = agent
+    agent.run_turn("写个总结")
+
+    assert len(llm.calls) == 2
+    assert _roles(agent) == ["system", "user", "assistant", "user", "assistant"]
+    assert "再把日期也写上" in llm.calls[1][-1]["content"]
+    assert agent.session.messages[-1]["content"] == "第二段"
+
+
+def test_interjections_keep_the_order_they_were_typed(config, ctx, tmp_path):
+    """一个窗口里补两句:先说的先读到,两句各是一条 user 消息(不合成一句)。"""
+    box = {}
+
+    def on_call(n, turn):
+        if n == 1:
+            box["a"].queue_interjection("第一句")
+            box["a"].queue_interjection("第二句")
+
+    llm = _StepLLM([
+        AssistantTurn(tool_calls=[ToolCall(
+            id="c1", name="write_file",
+            arguments=json.dumps({"path": "a.txt", "content": "hi"}))]),
+        AssistantTurn(text="好了"),
+    ], on_call)
+    agent = make_agent(config, ctx, llm, FakeUI())
+    box["a"] = agent
+    agent.run_turn("创建 a.txt")
+
+    users = [m["content"] for m in agent.session.messages
+             if m["role"] == "user" and not m["content"].startswith("创建")]
+    assert users == ["第一句", "第二句"]
+    assert [c["content"] for c in llm.calls[1][-2:]] == ["第一句", "第二句"]
+
+
+def test_box_is_bounded_and_a_blank_line_does_not_count(config, ctx, tmp_path):
+    """上限与空句子:满了要说得出口(调用方据此回话),空格那句是"按错了"不是"要说话"。"""
+    from minicode.agent import INBOX_MAX
+
+    agent = make_agent(config, ctx, FakeLLM([]), FakeUI())
+    assert agent.queue_interjection("") is False
+    assert agent.queue_interjection("   \n ") is False
+    assert agent._inbox == []
+    for i in range(INBOX_MAX):
+        assert agent.queue_interjection(f"第{i}句") is True
+    assert agent.queue_interjection("溢出来的一句") is False
+    assert len(agent._inbox) == INBOX_MAX
+    assert "溢出" not in "".join(agent._inbox)
+
+
+def test_a_stopped_turn_keeps_the_box_for_the_next_one(config, ctx, tmp_path):
+    """按停止不该吃掉用户已经打出去的那句:话留在信箱,下一轮开头读到。
+
+    时机挑在"边界之后"才测得到这件事:第二次请求已经发出去(上一个安全边界读过了
+    信箱),这时用户补一句并立刻按停止 —— 于是这句只能等下一轮的边界。
+    """
+    box = {}
+    seen = []
+
+    class Stopped:
+        def stream_chat(self, messages, tools, **kwargs):
+            seen.append(len(messages))
+            box["a"].queue_interjection("别忘了只看第三章")
+            raise KeyboardInterrupt
+
+    agent = make_agent(config, ctx, Stopped(), FakeUI())
+    box["a"] = agent
+    agent.run_turn("写个总结")
+    assert len(seen) == 1                       # 被打断在这一轮的第一次请求
+    assert agent.ui.interrupted is True
+    assert agent._inbox == ["别忘了只看第三章"]      # 没并进会话,也没丢
+
+    agent.llm = _StepLLM([AssistantTurn(text="第二段")])
+    agent.run_turn("接着弄")
+    assert agent._inbox == []
+    assert _roles(agent) == ["system", "user", "user", "user", "assistant"]
+    # 补的那句排在"接着弄"**之后**:它是 leftovers,而信箱只在请求前的那个边界被读,
+    # 那一轮的提问早进了会话。顺序是这一个边界的副产品,不是另起一套优先级。
+    assert [m["content"] for m in agent.session.messages[-3:]] == [
+        "接着弄", "别忘了只看第三章", "第二段"]
+
+
+def test_interjection_from_another_thread_lands_in_the_same_turn(tmp_path):
+    """真跨线程:回合卡在 handler 里,界面线程这时收句子。
+
+    上面几条都是单线程换时序 —— 那证不了锁,也证不了"handler 正在跑的时候能收"。
+    """
+    from minicode.config import Config, Provider
+    from minicode.permission import PermissionGate
+    from minicode.session import Session
+
+    inside, release = threading.Event(), threading.Event()
+
+    def handler(ctx, **kw):
+        inside.set()
+        release.wait(timeout=8)
+        return "ok"
+
+    tool = Tool(name="grep", description="", read_only=True, handler=handler,
+                parameters={"type": "object", "properties": {}})
+    ws = tmp_path / "ws"
+    ws.mkdir(exist_ok=True)
+    cfg = Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",
+                                    api_key="k", model="m")],
+                 active_provider_id="t")
+    agent = Agent(llm=_StepLLM([
+        AssistantTurn(tool_calls=[ToolCall(id="c1", name="grep", arguments="{}")]),
+        AssistantTurn(text="好"),
+    ]), registry=[tool], session=Session(system_prompt="s"),
+        gate=PermissionGate(cfg, workspace=ws), ui=FakeUI(),
+        ctx=ToolContext(workspace=ws, config=cfg))
+
+    t = threading.Thread(target=agent.run_turn, args=("先跑这一轮",), daemon=True)
+    t.start()
+    assert inside.wait(timeout=6), "handler 没跑起来,这条用例没测到任何东西"
+    assert agent.queue_interjection("换成只看第三章") is True
+    release.set()
+    t.join(timeout=10)
+    assert not t.is_alive()
+    assert _roles(agent) == ["system", "user", "assistant", "tool", "user", "assistant"]

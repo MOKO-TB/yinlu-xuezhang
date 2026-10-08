@@ -257,3 +257,77 @@ def test_appraisal_note_survives_broken_ledger(ctx, tmp_path, monkeypatch):
     p.write_text("{半截 json\n", encoding="utf-8")
     out = kbmod.search_knowledge(ctx, "国家励志奖学金")
     assert "国家励志奖学金申请通知" in out and "差评提示" not in out
+
+
+# ----------------------------------------------------------- 向量档的两道取用判据
+# 数来自 2026-10-06 在打包态用真权重的实测(150 条真馆藏题名、cls):
+#   不相关 doc-doc:n=11,175,p50 .494 / p90 .604 / p99 .725;旧阈值 0.35 放过 98.6%
+#   真命中(查询=题名前几字):前 8 字 min .642、前 5 字 min .501、前 3 字 p10 .447
+#   第一二名差:8 字均 .147 / 5 字 .081 / 3 字 .050
+# 所以绝对阈值单独做不到判别,而相对第一名不受问句长度影响 —— 下面钉的就是这个组合。
+
+def _unit(cos: float):
+    """给一个与 q=(1,0) 余弦恰好等于 cos 的单位向量(2D 上直接构造,不靠近似)。"""
+    from math import sqrt
+    return [cos, sqrt(max(0.0, 1.0 - cos * cos))]
+
+
+def test_defaults_are_the_measured_pair():
+    assert kbmod.DEFAULT_MIN_SIM == 0.45, "病态下限:3 字真命中 p10=0.447,低于它算病态"
+    assert kbmod.DEFAULT_REL_MARGIN == 0.15, (
+        "相对余量:三个深度的平均第一二名差都远小于它(.147/.081/.050),不伤真命中")
+
+
+def test_rel_margin_cuts_the_long_tail_but_keeps_the_near_top():
+    """相对判据的边界是"第一名 − 余量",算得出、也说得出。"""
+    from minicode import retrieval
+    q = [1.0, 0.0]
+    vecs = [_unit(c) for c in (0.90, 0.80, 0.76, 0.55)]
+    # 第一名 .90 − .15 = .75 是地板:.80 与 .76 在上面,.55(差 .35)切掉
+    assert [i for i, _s in retrieval.rank_by_vector(q, vecs, min_sim=0.0,
+                                                    rel_margin=0.15)] == [0, 1, 2]
+    # 换一个第一名,地板跟着走 —— 这正是"绝对阈值做不到"的地方:短问句整体偏低,
+    # 用固定数会把真命中整批砍掉,用相对数不会。
+    weaker = [_unit(c) for c in (0.52, 0.47, 0.30)]
+    assert [i for i, _s in retrieval.rank_by_vector(q, weaker, min_sim=0.0,
+                                                   rel_margin=0.15)] == [0, 1]
+
+
+def test_absolute_floor_still_drops_a_pathological_whole_batch():
+    """第一名本身就低 → 整档退回关键词,而不是"矮子里拔将军"。"""
+    from minicode import retrieval
+    q = [1.0, 0.0]
+    vecs = [_unit(c) for c in (0.40, 0.38, 0.31)]
+    assert retrieval.rank_by_vector(q, vecs, min_sim=0.45, rel_margin=0.15) == []
+
+
+def test_two_criteria_compose_as_the_stricter_one():
+    from minicode import retrieval
+    q = [1.0, 0.0]
+    vecs = [_unit(c) for c in (0.50, 0.42)]
+    # 相对判据会说".50-.15=.35 以上都收",病态下限把 .42 以下的那条按住
+    assert [i for i, _s in retrieval.rank_by_vector(q, vecs, min_sim=0.45,
+                                                   rel_margin=0.15)] == [0]
+
+
+def test_no_criteria_means_no_filter_backwards_compatible():
+    from minicode import retrieval
+    q = [1.0, 0.0]
+    vecs = [_unit(c) for c in (0.30, 0.90, 0.55)]
+    assert [i for i, _s in retrieval.rank_by_vector(q, vecs)] == [1, 2, 0]
+    # 只给 min_sim 的旧写法结果不变(既有那支针走的就是这条路)
+    assert [i for i, _s in retrieval.rank_by_vector(q, vecs, min_sim=0.5)] == [1, 2]
+
+
+class _Caps:
+    def __init__(self, embeddings):
+        self.capabilities = {"embeddings": embeddings}
+
+
+def test_both_numbers_are_configurable_through_one_reader():
+    assert kbmod._min_sim(_Caps({"min_sim": 0.6})) == 0.6
+    assert kbmod._rel_margin(_Caps({"rel_margin": 0.2})) == 0.2
+    assert kbmod._min_sim(_Caps({})) == kbmod.DEFAULT_MIN_SIM
+    assert kbmod._rel_margin(_Caps({})) == kbmod.DEFAULT_REL_MARGIN
+    # 给了但不像数 → 回落默认,不炸也不静默变成 0(0 = 关掉这道判据,那是个更大的坑)
+    assert kbmod._rel_margin(_Caps({"rel_margin": "很宽一点"})) == kbmod.DEFAULT_REL_MARGIN

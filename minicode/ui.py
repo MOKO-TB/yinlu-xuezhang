@@ -28,7 +28,7 @@ SLASH_COMMANDS = ["/help", "/clear", "/model", "/history", "/resume", "/find",
                   "/instructions", "/rewind", "/memory", "/remember", "/dream",
                   "/plan",
                   "/skills", "/kb", "/library", "/style", "/usage", "/browser",
-                  "/workspace", "/exit", "/quit"]
+                  "/workspace", "/rename", "/archive", "/unarchive", "/fork", "/exit", "/quit"]
 
 REFRESH_INTERVAL = 0.12     # 流式 Markdown 刷新节流
 DIFF_MAX_LINES = 40
@@ -383,6 +383,11 @@ class TerminalUI:
             "  /library      查看馆藏书目库状态;带书名就是搜书:/library 活着\n"
             "  /history      查看上下文消息数与 token 估算\n"
             "  /resume [<n>] 查看/恢复历史会话\n"
+            "  /rename [<新标题>] 给**当前这条会话**改名:只改留档顶上那行名字,\n"
+            "                不删内容;不带参数时看当前叫什么\n"
+            "  /fork [<序号>] 从列表里那条会话复制一份开新任务(原会话不动)\n"
+            "  /archive      把当前会话沉到列表末尾(归档不删:内容照旧能 /resume)\n"
+            "  /unarchive    把归档的会话捞回列表原位(序号来源不变,只是不再沉底)\n"
             "  /find <关键词> 在自己的历史会话留档里搜(与模型侧 search_history 同一份)\n"
             "  /undo         列出本轮我改过的文件(逐处编号;命令改的不在这份账里)\n"
             "  /undo diff <编号> 只看某一处的前像 vs 磁盘现值\n"

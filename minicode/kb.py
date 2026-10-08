@@ -42,10 +42,20 @@ def is_no_hit(result) -> bool:
     """这段工具结果是不是"知识库里没查到"。非字符串一律 False(宁可少标不乱标)。"""
     return isinstance(result, str) and NO_HIT_TEXT in result
 
-# 向量档的相似度闸门:低于它就不算命中。这只是一个**保守闸门**,不是"经验阈值"
-# —— 本仓没有拿真模型跑过阈值曲线,所以不吹某个数是最佳值;要调就在
-# config.json 的 capabilities.embeddings.min_sim 里给,给了就用给的。
-DEFAULT_MIN_SIM = 0.35
+# 向量档的两道判据。两个数都是 2026-10-06 在**打包态用真权重实测**得到的
+# (150 条真馆藏题名、cls 池化;测量脚本用完即删,数记在这儿当凭据):
+#   · 不相关配对(doc-doc 余弦,n=11,175):min .274 / p50 .494 / p90 .604 / p99 .725
+#   · 真命中(查询=题名前几字):前 8 字 min .642、前 5 字 min .501、前 3 字 p10 .447
+#   · 第一二名差:前 8 字平均 .147、前 5 字 .081、前 3 字 .050
+# 所以**单一绝对阈值做不到判别** —— 旧的 0.35 放过 98.6% 的不相关配对,等于没有闸门;
+# 而真命中的分数随问句变短一路掉,抬阈值抬到能滤噪声就会把短问句的真命中一起砍掉。
+# 于是拆成两道:① DEFAULT_MIN_SIM 降格成"病态下限"(整档都不像就退回关键词),
+#   它不再是"命中判据",文案也不许再那么说;② DEFAULT_REL_MARGIN 才是真正在做事的
+#   那道 —— 只收与第一名相差不到这么多的条目。.15 大于三个深度的平均第一二名差,
+#   所以不伤真命中,而能切掉"第一名 .90、后面一串 .55"那种噪声。
+# 要调就在 config.json 的 capabilities.embeddings 里给 min_sim / rel_margin。
+DEFAULT_MIN_SIM = 0.45
+DEFAULT_REL_MARGIN = 0.15
 # 关键词一路先取多少候选送去参与融合(融合是名次级的,候选宽一点不心疼)
 HYBRID_CANDIDATES = 12
 
@@ -230,15 +240,28 @@ class SearchHit:
     via: str
 
 
+def _spec_float(cfg, key: str, default: float) -> float:
+    """capabilities.embeddings 里的一个数:没给用默认,给了但不像数也用默认。
+
+    `min_sim` 与 `rel_margin` 共用这一份取法 —— 两道判据各写一遍读法的话,
+    总有一天一处认 `rel_margin:"0.2"` 另一处不认。
+    """
+    from minicode.embed import embeddings_spec
+    spec = embeddings_spec(cfg)
+    if spec.get(key) is None:
+        return default
+    try:
+        return float(spec[key])
+    except (TypeError, ValueError):
+        return default
+
+
 def _min_sim(cfg) -> float:
-    caps = getattr(cfg, "capabilities", None) or {}
-    spec = caps.get("embeddings") if isinstance(caps, dict) else None
-    if isinstance(spec, dict) and spec.get("min_sim") is not None:
-        try:
-            return float(spec["min_sim"])
-        except (TypeError, ValueError):
-            return DEFAULT_MIN_SIM
-    return DEFAULT_MIN_SIM
+    return _spec_float(cfg, "min_sim", DEFAULT_MIN_SIM)
+
+
+def _rel_margin(cfg) -> float:
+    return _spec_float(cfg, "rel_margin", DEFAULT_REL_MARGIN)
 
 
 def search_hybrid(entries: list[KbEntry], query: str, *, top_k: int = 3,
@@ -264,7 +287,8 @@ def search_hybrid(entries: list[KbEntry], query: str, *, top_k: int = 3,
             "modes": ["关键词 BM25F"], "vector": {"ran": False, "why": "未启用",
                                                   "backend": "none", "cached": 0,
                                                   "missing": 0, "embedded": 0,
-                                                  "elapsed_ms": 0},
+                                                  "elapsed_ms": 0, "pooling": "",
+                                                  "query_prefixed": False},
             "fused": False, "elapsed_ms": 0}
     if not query or not pool:
         return [], meta
@@ -284,7 +308,9 @@ def search_hybrid(entries: list[KbEntry], query: str, *, top_k: int = 3,
         vec_report = embed.ensure_vectors(pool, cfg, build=(build_index or semantic is True))
         cached_ok = vec_report["cached"] or vec_report["embedded"]
         meta["vector"].update(backend=vec_report["backend"], cached=vec_report["cached"],
-                              missing=vec_report["missing"], embedded=vec_report["embedded"])
+                              missing=vec_report["missing"], embedded=vec_report["embedded"],
+                              pooling=vec_report.get("pooling") or "",
+                              query_prefixed=bool(vec_report.get("query_prefixed")))
         if not vec_report["ready"] or not cached_ok:
             meta["vector"]["why"] = vec_report["why"] or (
                 f"索引未建({vec_report['missing']} 条没有向量),本次只走关键词;"
@@ -292,12 +318,13 @@ def search_hybrid(entries: list[KbEntry], query: str, *, top_k: int = 3,
         else:
             qv = None
             try:
-                qv = embed.embed_texts([query], cfg)[0]
+                qv = embed.query_vector(query, cfg)
             except embed.EmbedUnavailable as e:
                 meta["vector"]["why"] = f"查询向量取不到:{e}"
             if qv:
                 ranked = retrieval.rank_by_vector(qv, vec_report["vectors"],
-                                                  min_sim=_min_sim(cfg))
+                                                  min_sim=_min_sim(cfg),
+                                                  rel_margin=_rel_margin(cfg))
                 if ranked:
                     meta["vector"].update(ran=True, why="",
                                           elapsed_ms=vec_report["elapsed_ms"],
@@ -308,8 +335,10 @@ def search_hybrid(entries: list[KbEntry], query: str, *, top_k: int = 3,
                     for i, _s in ranked:
                         via[i] = "关键词+向量" if i in via else "仅向量"
                 else:
-                    meta["vector"]["why"] = ("向量档跑了但没有任何条目过相似度闸门"
-                                             f"({_min_sim(cfg):.2f}),本次只走关键词")
+                    meta["vector"]["why"] = (
+                        "向量档跑了,但没有一条够取用标准(与第一名相差超过 "
+                        f"{_rel_margin(cfg):.2f},或低于病态下限 {_min_sim(cfg):.2f}),"
+                        "本次只走关键词")
     if len(rankings) > 1:
         meta["fused"] = True
         fused = retrieval.rrf(rankings, weights)
@@ -347,6 +376,12 @@ def _mode_line(meta: dict | None) -> str:
     vec = meta.get("vector") or {}
     if vec.get("ran"):
         vpart = f"向量档已跑(后端 {vec.get('backend')},缓存 {vec.get('cached')} 条"
+        # 池化与"查询侧带不带指令"都会改向量本身,所以摆在口径这一行里,
+        # 不让人事后猜这次到底是哪一套空间算出来的。
+        if vec.get("pooling"):
+            vpart += f",池化 {vec.get('pooling')}"
+        if vec.get("backend") == "local":
+            vpart += ",查询带指令" if vec.get("query_prefixed") else ",查询无指令"
         if vec.get("embedded"):
             vpart += f",本次新算 {vec.get('embedded')} 条"
         vpart += f",{vec.get('elapsed_ms')}ms)"

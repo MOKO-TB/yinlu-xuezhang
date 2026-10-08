@@ -218,6 +218,20 @@ class Provider:
                 for e in self.model_entries() if e.get("enabled", True)
                 and str(e.get("name") or "").strip()]
 
+    def model_entry(self, name: str = "") -> dict:
+        """按模型名取那一条(名对不上返回空 dict)。配置编辑器与运行时都读这一处。
+
+        名字比对忽略大小写与首尾空白 —— 与 `enabled_models`/去重同一口径,否则
+        "用户填 DeepSeek-V4"与"配置里写着 deepseek-v4"会被当成两个模型。
+        """
+        want = str(name or self.model or "").strip().lower()
+        if not want:
+            return {}
+        for entry in self.model_entries():
+            if str(entry.get("name") or "").strip().lower() == want:
+                return dict(entry)
+        return {}
+
     def sync_model(self) -> str:
         """把 `model` 同步成第一个启用模型;一个都没启用时保持原值。
 
@@ -337,6 +351,21 @@ class Config:
     def model(self) -> str:
         return self.provider.model if self.provider else ""
 
+    def model_cfg(self, model: str = "") -> dict:
+        """当前(或指定)模型那份配置。没声明过就是空 dict —— 一切照旧。
+
+        为什么要带 `model` 参数:会话内可以单独切模型、子代理可以按档位换模型
+        (`_effective_config`),那两种情况下"配置该读哪一条"读的是**真正在发请求
+        的那个模型名**,不是全局那个。读错的结果不是崩,而是"给 A 配的窗口
+        算到 B 头上"——与 v0.9.95 那笔用量归因同一类错。
+        """
+        p = self.provider
+        if p is None:
+            return {}
+        entry = p.model_entry(model or self.model)
+        cfg = entry.get("cfg")
+        return dict(cfg) if isinstance(cfg, dict) else {}
+
     @property
     def api_key_configured(self) -> bool:
         return self.api_key.strip() not in API_KEY_PLACEHOLDERS
@@ -411,21 +440,73 @@ def _models_from_raw(raw) -> list[dict]:
 
     只做结构清洗,不在这里判重 —— 去重交给保存路径(save_providers),那里
     才有"告诉用户为什么要拒绝"的位置。
+
+    `cfg` 是**这个模型自己的配置**(§6 47 那条雷):以前这里和 `_dedupe_models`
+    都把条目重铸成 `{name, enabled}`,于是界面上编辑出来的上下文窗口/推理档位
+    会在下一次保存时被**静默抹平** —— 字段没丢在界面上,是丢在归一化里。
     """
+    if not raw:
+        return []
     if not isinstance(raw, list):
         return []
     out: list[dict] = []
     for item in raw:
         if isinstance(item, str):
-            name, enabled = item, True
+            name, enabled, cfg = item, True, {}
         elif isinstance(item, dict):
             name = str(item.get("name") or item.get("model") or "").strip()
             enabled = item.get("enabled", True) is not False
+            cfg = model_cfg_from_raw(item.get("cfg"))
         else:
             continue
         name = name.strip()
         if name:
-            out.append({"name": name, "enabled": enabled})
+            entry = {"name": name, "enabled": enabled}
+            if cfg:
+                entry["cfg"] = cfg
+            out.append(entry)
+    return out
+
+
+# 一份模型配置里认得的键。**只认这些**:多出来的键一律不存,否则"界面有、后端不认"
+# 会变成第三种样子货(控件在、值存着、谁都不读)。
+MODEL_CFG_KEYS = ("context_window", "max_output_tokens", "vision",
+                  "reasoning_levels", "reasoning_param", "system_in_messages")
+
+
+def _pos_int(value) -> int | None:
+    n = value if isinstance(value, int) and not isinstance(value, bool) else None
+    if n is None and isinstance(value, str) and value.strip().isdigit():
+        n = int(value.strip())
+    return n if isinstance(n, int) and n > 0 else None
+
+
+def model_cfg_from_raw(raw) -> dict:
+    """清洗一份模型配置。认不出的键丢掉,值不合法就整键丢(不猜、不填默认)。
+
+    空 dict 表示"这个模型没声明过任何东西" —— 那时一切行为与今天逐字节一致
+    (窗口走探测与内置表、思考档位走 `reasoning` 那张按模型名登记的表)。
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {}
+    for key in ("context_window", "max_output_tokens"):
+        n = _pos_int(raw.get(key))
+        if n:
+            out[key] = n
+    for key in ("vision", "system_in_messages"):
+        if isinstance(raw.get(key), bool):
+            out[key] = raw[key]
+    levels = raw.get("reasoning_levels")
+    if isinstance(levels, str):
+        levels = [s for s in levels.replace(",", " ").split()]
+    if isinstance(levels, (list, tuple)):
+        cleaned = [str(s).strip() for s in levels if str(s).strip()][:8]
+        if cleaned:
+            out["reasoning_levels"] = cleaned
+    param = str(raw.get("reasoning_param") or "").strip()
+    if param:
+        out["reasoning_param"] = param[:200]
     return out
 
 
@@ -445,7 +526,11 @@ def _dedupe_models(entries: list[dict]) -> list[dict]:
         if key in seen:
             continue
         seen.add(key)
-        out.append({"name": name, "enabled": bool(entry.get("enabled", True))})
+        row = {"name": name, "enabled": bool(entry.get("enabled", True))}
+        cfg = model_cfg_from_raw(entry.get("cfg"))
+        if cfg:
+            row["cfg"] = cfg           # 去重这一趟也不许把配置吃掉
+        out.append(row)
     return out
 
 
