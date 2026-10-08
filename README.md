@@ -149,6 +149,7 @@ python main.py                      # 交互式 REPL
 python main.py "修复 pytest 报错"    # 一次性执行
 echo "列出 TODO" | python main.py   # 管道输入
 python main.py --json "任务"         # 无头:stdout 只有一份 JSON,退出码说清结局
+python main.py --output-schema s.json "任务"   # 同上,另按 schema 要一份结构化结果(不合 → 退出码 6)
 python main.py --workspace "D:\我的资料"   # 指定工作区启动(路径不合法直接报错退出)
 ```
 
@@ -159,6 +160,19 @@ python main.py --workspace "D:\我的资料"   # 指定工作区启动(路径不
 第 3 码是这条路上的安全边界:**换入口不换权限** —— confirm 档该弹框的步骤,无头模式一律
 按"不点头"处理并把它说出来(文件不会被写出来),而不是替你批一次从此不问。
 `--output-format` 认不出的值直接报错,不静默退回纯文本。
+- **要一份结构化结果(v0.9.136)**:`--output-schema <内联 JSON 或文件路径>` 让模型按你给的
+  JSON Schema 只输出一个 JSON 对象,结果里多两个固定字段:`structured_output`(**按 schema 验
+  过了**的值,不合就是 null)与 `schema_violations`(人话清单,每条带路径如 `notes[1]:类型应是
+  string`)。给了这个旗标就自动按 JSON 出(那份结果本来就是给机器读的)。**这一条做的是"问过
+  它 + 验回来",不是网关侧的受约束解码** —— 后者能**保证**模型只能吐出合 schema 的字节,我们
+  不知道接的这家端点支不支持,所以只保证"不合就明说"(退出码 6,与 `status: schema_violation`
+  同一条)。把前者说成后者,就是这一路最容易犯的"界面上说安全、实际没拦"。schema 里**影响
+  合法性判定的关键字这一版验不了就当场拒收**(`anyOf` 有、`$ref`/`pattern`/`patternProperties`/
+  `minimum`/`minItems`/`not` 无),而不是默默忽略 —— 忽略一条 = "我按 schema 验过了"成了假话;
+  `description`/`title`/`default` 这些不影响判定的元数据可以随便写。schema 读不出来就在**进
+  Agent 之前**以退出码 2 退,不花那一轮额度。那句输出要求走系统侧、只活这一回合,**不并进
+  用户原话**(否则它会进留档、被「编辑重发」原样带回、被 `/history` 念出来 —— 机器加的
+  东西不该冒充人话)。
 **第一次运行例外**:全新安装还没有 `config.json` 时,CLI 会先从模板生成它并以退出码 1 结束
 (就是那句"直接重新启动即可")—— 这是 CLI 一直以来的首启行为,无头模式不绕过它;第二次起才是上面那套契约。
 

@@ -34,6 +34,36 @@ EXIT_ARGS = 2           # 命令行参数不对(与 --py / --workspace 的既有
 EXIT_ASK_REFUSED = 3    # 需要确认,但这条路上没有人能点头
 EXIT_LIMITED = 4        # 被上限收尾(步数 / 时限 / 预算 / 同一工具连挂)
 EXIT_INTERRUPTED = 5    # Ctrl+C 或管道关闭
+EXIT_SCHEMA_VIOLATION = 6    # 这一轮答完了,但回答不合 `--output-schema` 那份 schema
+
+# `--output-schema` 给的 schema(内联 JSON 或文件路径)。空 = 不按 schema 要东西。
+SCHEMA_FLAG = "--output-schema"
+
+
+def pop_output_schema(argv: list[str]) -> "tuple[str | None, list[str]]":
+    """摘出 `--output-schema`(它要与 `--json` 一起用,但**给了它就自动按 json 出**)。
+
+    没给值就报参数错,而不是"当没这个旗标":CI 脚本里 `--output-schema` 后面漏了
+    文件名,静默退化成"没有 schema 那份 JSON"是最难查的一种坏 —— 它看起来完全成功。
+    """
+    raw, rest, i = None, [], 0
+    while i < len(argv):
+        item = argv[i]
+        if item == SCHEMA_FLAG or item.startswith(SCHEMA_FLAG + "="):
+            if "=" in item:
+                raw = item.split("=", 1)[1]
+                i += 1
+            else:
+                if i + 1 >= len(argv) or argv[i + 1].startswith("--"):
+                    raise UsageError(f"{SCHEMA_FLAG} 需要一个值:内联 JSON 或 schema 文件路径")
+                raw = argv[i + 1]
+                i += 2
+            continue
+        rest.append(item)
+        i += 1
+    if raw is not None and not raw.strip():
+        raise UsageError(f"{SCHEMA_FLAG} 的值是空的")
+    return raw, rest
 
 
 class UsageError(Exception):
@@ -240,8 +270,13 @@ def _brief(args: dict, cap: int = 160) -> dict:
     return out
 
 
-def exit_code_for(ui: HeadlessUI) -> int:
-    """结局 → 退出码。优先级照"离真相最近"排,不按发生先后。"""
+def exit_code_for(ui: HeadlessUI, schema_violations: "list | None" = None) -> int:
+    """结局 → 退出码。优先级照"离真相最近"排,不按发生先后。
+
+    `schema_violation` 排在最后一条:这一轮如果是被中断/报错/撞上限/没人点头收尾的,
+    那句"回答不合 schema"只是那些事的**后果**,拿它当结论会让人去修 schema 而不是修
+    真因。只有"这一轮本来做成了、只是形状不对"才轮到 6。
+    """
     if ui.interrupted:
         return EXIT_INTERRUPTED
     if ui.llm_error:
@@ -250,11 +285,13 @@ def exit_code_for(ui: HeadlessUI) -> int:
         return EXIT_LIMITED
     if ui.asks_refused:
         return EXIT_ASK_REFUSED
+    if schema_violations:
+        return EXIT_SCHEMA_VIOLATION
     return EXIT_OK
 
 
 def build_result(ui: HeadlessUI, agent, session, config, *, task: str,
-                 elapsed_ms: int, fmt: str) -> dict:
+                 elapsed_ms: int, fmt: str, schema: "dict | None" = None) -> dict:
     """攒出那一份给机器读的结果。字段一次给全,拿不到的给 null 而不是不写。"""
     answer = ""
     for msg in reversed(getattr(session, "messages", []) or []):
@@ -269,13 +306,29 @@ def build_result(ui: HeadlessUI, agent, session, config, *, task: str,
     except Exception:
         pass
     log = getattr(session, "log_path", None)
+    structured, violations = None, []
+    if schema is not None:
+        from minicode import schema as schema_mod
+        structured, why = schema_mod.extract(answer)
+        if structured is None:
+            structured, violations = None, [why]
+        else:
+            violations = schema_mod.validate(structured, schema)
+            if violations:
+                structured = None      # 不合 schema 就不给半对的值:给了,调用方会拿它当真数据
     return {
-        "ok": exit_code_for(ui) == EXIT_OK,
-        "status": status_for(ui),
-        "exit_code": exit_code_for(ui),
+        "ok": exit_code_for(ui, violations) == EXIT_OK,
+        "status": status_for(ui, violations),
+        "exit_code": exit_code_for(ui, violations),
         "format": fmt,
         "task": task,
         "response": answer,
+        # 只有给了 --output-schema 才有这两项的位置:`structured_output` 是按 schema
+        # 验**过了**的值(不合就 null,不给半对的),`schema_violations` 是人话清单。
+        # 没给 schema 时它们也必须在 —— 字段集合固定,调用方才不会在"这次没有这个键"
+        # 上写错分支(那类 bug 只在少数几次运行里出现)。
+        "structured_output": structured,
+        "schema_violations": violations or None,
         "model": getattr(config, "model", ""),
         # `config.provider` 是**返回 Provider 对象**的 property,而 Provider 是
         # dataclass、repr 里带 api_key —— 走 default=str 就等于把密钥打进一份常被
@@ -298,7 +351,7 @@ def build_result(ui: HeadlessUI, agent, session, config, *, task: str,
     }
 
 
-def status_for(ui: HeadlessUI) -> str:
+def status_for(ui: HeadlessUI, schema_violations: "list | None" = None) -> str:
     if ui.interrupted:
         return "interrupted"
     if ui.llm_error:
@@ -307,6 +360,8 @@ def status_for(ui: HeadlessUI) -> str:
         return "limited"
     if ui.asks_refused:
         return "ask_refused"
+    if schema_violations:
+        return "schema_violation"
     return "ok"
 
 

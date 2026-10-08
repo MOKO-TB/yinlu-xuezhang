@@ -5,6 +5,7 @@
   python main.py "任务描述"     一次性执行后退出
   echo "任务" | python main.py 从管道读取一条任务执行后退出
   python main.py --json "..."  无头:stdout 只有一份 JSON,退出码说清结局
+  python main.py --output-schema schema.json "..."  同上,另按 schema 要一份结构化结果(不合 schema → 退出码 6)
 """
 from __future__ import annotations
 
@@ -815,9 +816,24 @@ def main() -> None:
     # (`unmanagle_slash_command` 是把剩下的参数整个 join 起来当提问的)。
     try:
         out_fmt, argv_for_ws = headless.pop_output_flags(sys.argv[1:])
+        schema_raw, argv_for_ws = headless.pop_output_schema(argv_for_ws)
     except headless.UsageError as e:
         print(f"错误: {e}", file=sys.stderr)
         raise SystemExit(headless.EXIT_ARGS)
+    # `--output-schema` 给了就按 json 出:那份结构化结果本来就是给机器读的,
+    # 让人去看一行缩进 JSON 不是它的读者。
+    if schema_raw:
+        out_fmt = "json"
+    schema = None
+    if schema_raw:
+        from minicode import schema as schema_mod
+        try:
+            schema = schema_mod.load(schema_raw)
+        except schema_mod.SchemaError as e:
+            # 在读到 schema 这一步就退,不进 Agent 一步:花掉一轮额度之后才说
+            # "这份 schema 我不认",是把用户的钱和时间拿去换一句报错。
+            print(f"错误: --output-schema 不能用 —— {e}", file=sys.stderr)
+            raise SystemExit(headless.EXIT_ARGS)
     if out_fmt == "json":
         # 那份 JSON 必须按 UTF-8 出去:控制台代码页对管道无效,默认会按 cp936 建流,
         # 中文回答与中文路径当场变乱码(打包态真跑抓到的)。
@@ -840,22 +856,24 @@ def main() -> None:
 
     try:
         _repl(config, workspace, active, agent, session, argv=rest_argv,
-              hui=hui)
+              hui=hui, schema=schema)
     finally:
         agent.close()      # 关掉 MCP 子进程,不留孤儿
 
 
-def run_json(config, agent, session, hui, task: str) -> None:
+def run_json(config, agent, session, hui, task: str, schema=None) -> None:
     """无头那一条路:跑一轮,把结局攒成一份 JSON 交给 stdout,按结局退出。
 
     放在 main 这一侧而不是 headless 里:它要的是"什么时候开始跑"这种进程级
     事实;headless 只管形状与判断,这样它能被测试直接调。
     """
     started = time.perf_counter()
-    agent.run_turn(task)
+    from minicode import schema as schema_mod
+    agent.run_turn(task, output_directive=(
+        schema_mod.instruction(schema) if schema else ""))
     result = headless.build_result(hui, agent, session, config, task=task,
                                    elapsed_ms=int((time.perf_counter() - started) * 1000),
-                                   fmt="json")
+                                   fmt="json", schema=schema)
     print(headless.render(result), flush=True)
     raise SystemExit(result["exit_code"])
 
@@ -874,7 +892,8 @@ def _warn_library_health(workspace: Path, ui: TerminalUI) -> None:
         ui.error(notice)
 
 
-def _repl(config, workspace, ui, agent, session, argv=None, hui=None) -> None:
+def _repl(config, workspace, ui, agent, session, argv=None, hui=None,
+          schema=None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
     # 一次性模式:命令行参数或管道输入(斜杠命令同样支持)
     task = unmanagle_slash_command(argv) if argv else None
@@ -889,7 +908,7 @@ def _repl(config, workspace, ui, agent, session, argv=None, hui=None) -> None:
             # 斜杠命令的输出是给人看的一段话 —— 让它进来,stdout 那份 JSON 就废了。
             print("错误: --json 只跑一条任务,不跑斜杠命令。", file=sys.stderr)
             raise SystemExit(headless.EXIT_ARGS)
-        run_json(config, agent, session, hui, task)
+        run_json(config, agent, session, hui, task, schema=schema)
         return
     if task is not None:
         if task.startswith("/workspace"):

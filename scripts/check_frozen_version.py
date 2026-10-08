@@ -279,7 +279,19 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.headless": ("HeadlessUI", "pop_output_flags", "exit_code_for",
                           "headless_flags_in",
                           "build_result", "render", "status_for", "_brief",
-                          "OUTPUT_FORMATS", "EXIT_ASK_REFUSED", "UsageError"),
+                          "OUTPUT_FORMATS", "EXIT_ASK_REFUSED", "UsageError",
+                          # v0.9.136 --output-schema:漏 `pop_output_schema` = 这个旗标
+                          # 会被当成一次性任务的一部分(它进的是 argv),漏
+                          # `EXIT_SCHEMA_VIOLATION` = 不合 schema 与"做成了"共用退出码 0,
+                          # CI 就永远看不出那次拿到的不是结构化结果
+                          "pop_output_schema", "EXIT_SCHEMA_VIOLATION",
+                          "SCHEMA_FLAG", "EXIT_INTERRUPTED", "EXIT_LIMITED"),
+    # v0.9.136 结构化输出这一格的三件事:读 schema、要 schema、验 schema。
+    # 漏 `load` = 旗标能传但没人核对形状(什么怪形状都会流到模型面前);
+    # 漏 `validate` = "不合 schema 就明说"这句承诺没了;漏 `extract` = 代码围栏里
+    # 那份正确的 JSON 会被判成"回答里找不到 JSON",而回答明明是对的。
+    "minicode.schema": ("load", "validate", "extract", "instruction",
+                        "SchemaError", "SUPPORTED", "IGNORABLE", "TYPES"),
 
     # ---- v0.9.22:安装版可用性(数据目录写探针 + 诊断下发) ----
     "minicode.app_setup": (

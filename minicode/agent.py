@@ -163,6 +163,10 @@ class Agent:
         self._undo_open: list[int] = []   # 等这次真落盘之后补"改后指纹"的那几条 seq
         self._narration = ""       # 本轮模型写的说明文字:权限确认框里当"为什么要做"的兜底
         self._pending_prior = ""   # B1:下一步 search_knowledge 命中历史差评时的那句系统侧先验
+        # 只活这一回合的系统侧附加句(`--output-schema` 那一句)。空串必须是**建对象时
+        # 就有**:`_messages_for_request` 每一步都读它,而直接调调度器的路径(测试、
+        # 子代理复用同一段)不经过 `run_turn`,没有这行就是 AttributeError。
+        self._output_directive = ""
         # 失败连击的两个格子**在建对象时就要有**:`run_turn` 每回合开头会重置,但
         # 落账那条路(`_account` → `_fail_streak_hit`)不该依赖"回合已经开过"——
         # 直接调调度器(测试、子代理复用同一段)时,表现是 AttributeError 而不是判错。
@@ -259,12 +263,19 @@ class Agent:
             self.session.add_user(text)
         return len(pending)
 
-    def run_turn(self, user_input: str, content=None, *, add_user: bool = True) -> None:
+    def run_turn(self, user_input: str, content=None, *, add_user: bool = True,
+                 output_directive: str = "") -> None:
         """跑一个回合。content 可选:带附件时的多模态消息体(list[dict])。
 
         `add_user=False` 给用户点「重新生成」用:那句提问已经在上下文里了(而且带着
         当时的附件消息体),再追加一遍会让模型把同一句话看到两遍,答出来的是"下一题"。
+
+        `output_directive` 是**只活这一回合**的系统侧附加句(目前只有无头模式的
+        `--output-schema` 用)。它刻意不并进用户原话:那句话要进留档、要被"编辑重发"
+        原样带回去、要被 `/history` 念出来,而机器加的输出要求不是用户说的 —— 混进去
+        等于让一份 CLI 旗标冒充人话。
         """
+        self._output_directive = output_directive or ""
         # 先问项目指令采不采纳(它可能改提示词内容),再按指纹决定要不要重建 ——
         # 顺序反了就会"跨天/换规矩"这一句抢在一次点头之前说,而说的还是旧的那份。
         self._refresh_clock(self._ask_project_agents())
@@ -562,13 +573,20 @@ class Agent:
         if brief:
             out.append({"role": "user", "content": brief})
         prior = self._pending_prior
-        if not prior:
+        # 回合级的输出要求(`--output-schema` 附的那句)与 `_pending_prior` **走同一个
+        # 注入点但活得更久**:先验只在这次请求里(用完即清,否则同一条会在每一步重复
+        # 出现),而"只输出一个合 schema 的 JSON"必须每一步都说 —— 模型往往先调几轮
+        # 工具才给最终答案,只在这次请求里说等于对它最想说的那一步没说。
+        directive = self._output_directive
+        combined = "\n\n".join(x for x in (prior, directive) if x)
+        if not combined:
             return out
         self._pending_prior = ""
         if out and isinstance(out[0], dict) and out[0].get("role") == "system":
-            out[0] = {**out[0], "content": f"{out[0].get('content') or ''}\n\n{prior}"}
+            out[0] = {**out[0],
+                      "content": f"{out[0].get('content') or ''}\n\n{combined}"}
         else:
-            out.insert(0, {"role": "system", "content": prior})
+            out.insert(0, {"role": "system", "content": combined})
         return out
 
     def _effective_config(self):
