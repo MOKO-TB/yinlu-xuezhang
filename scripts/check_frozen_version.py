@@ -268,6 +268,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # (可能是同学的课件原文或凭据)整包进那份常被贴进 CI 日志的输出。
     # v0.9.126:`headless_flags_in` 是图形入口那道闸唯一的判定来源(漏收 =
     # GUI 又回到"给了 --json 也静默开一个永不退出的窗口")
+    # v0.9.131 改动前像落盘:漏收的表现是"重启后清单空了"这件本该被修好的事
+    # 又回来了,而且没人报错 —— 读不懂的账本一律当没有,是设计而不是故障。
+    "minicode.checkpoints": ("encode_stack", "decode_stack", "save", "load",
+                             "sweep_orphans", "drop", "CKPT_MAX_FILE_BYTES",
+                             "CKPT_MAX_RECORDS", "CKPT_VERSION"),
     "minicode.headless": ("HeadlessUI", "pop_output_flags", "exit_code_for",
                           "headless_flags_in",
                           "build_result", "render", "status_for", "_brief",

@@ -50,6 +50,7 @@ class StateFile:
 # 的 `SHIP_INTENTIONALLY` 管;混进这份"删掉"清单会把开箱即用删没。
 SHIP_NEVER: tuple[StateFile, ...] = (
     StateFile("sessions", DIR, "会话留档:构建机上跑过的每一句对话都在这里"),
+    StateFile("checkpoints", DIR, "改动前像(/undo 与 /rewind 的账本):里面是别人的文件改之前的原文,绝不外发"),
     StateFile("config.json", FILE, "用户配置:构建机这份含模型 Key,由 spec 另行注入内置 Key"),
     StateFile("model_caps.json", FILE, "能力探测缓存:里面是本机模型服务的指纹"),
     StateFile("token-usage.db", FILE, "token 用量库:装着构建机的用量记录"),

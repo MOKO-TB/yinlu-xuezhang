@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 config.json
 sessions/
+checkpoints/
 web-sessions/
 web-usage.log
 /web-daily.json

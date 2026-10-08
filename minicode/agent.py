@@ -265,6 +265,9 @@ class Agent:
         self._note_daily_budget()  # C1:日预算接近/超支,当天各提醒一次
         self.gate.new_turn()
         self._micro_noted = False   # 新的一问,那句"省略了多少"还可以再说一次
+        # 检查点账本在**第一问之前**读回来(一个进程只读一次,见 _load_checkpoints)。
+        # 放在这里而不是 __init__:那时留档文件名可能还不存在。
+        self._load_checkpoints()
         if add_user:
             self.session.add_user(user_input, content)
         # 这一回合是第几问(1 起)。`add_user=False`(重新生成)时那句提问本来就在,
@@ -857,7 +860,9 @@ class Agent:
         out = self._apply_undo(rec)
         if out.get("failed"):
             self._undo_stack.append(rec)     # 没退成的留在栈里,别让它凭空消失
+            self._save_checkpoints()
             return out["msg"]
+        self._save_checkpoints()
         return out["msg"] + self._undo_extra_tail(rec)
 
     def undo_all(self) -> str:
@@ -874,6 +879,7 @@ class Agent:
             (failed if out.get("failed") else done).append(out)
             if out.get("failed"):
                 self._undo_stack.append(rec)
+        self._save_checkpoints()
         n = len(done)
         listed = "、".join(d["path"] for d in done[:5])
         if n > 5:
@@ -962,6 +968,7 @@ class Agent:
                 failed.append(out["path"])
             else:
                 done.append(out["path"])
+        self._save_checkpoints()
         names = "、".join(done[:5]) + (f" 等 {len(done)} 处" if len(done) > 5 else "")
         tail = (f"另有 {len(failed)} 处写不回去(仍在栈里:{'、'.join(failed[:3])})。"
                 if failed else "")
@@ -1518,6 +1525,45 @@ class Agent:
                 return True
         return False
 
+    # ------------------------------------------------------------ 检查点落盘
+
+    @property
+    def _ckpt_file(self):
+        """这本账落在哪 —— 按会话留档文件名分家,所以 `/resume` 回来还是那一本。"""
+        from minicode.checkpoints import CKPT_DIR_NAME
+        from minicode.paths import app_path
+        log = getattr(self.session, "log_path", None)
+        if not log:
+            return None
+        return app_path(CKPT_DIR_NAME) / (Path(log).stem + ".json")
+
+    def _save_checkpoints(self) -> None:
+        from minicode import checkpoints
+        checkpoints.save(self._ckpt_file, self._undo_stack,
+                         self._undo_seq, self._epoch)
+
+    def _load_checkpoints(self) -> None:
+        """只在这个进程里读一次。
+
+        为什么不在 `__init__` 读:那时 `session.log_path` 可能还没落出来(留档是懒建的),
+        文件名都不存在。为什么只读一次:这本账是活的,读第二遍会把用户刚刚退掉的那条
+        又捞回来 —— 那是清单说谎。
+        """
+        if getattr(self, "_ckpt_loaded", False):
+            return
+        self._ckpt_loaded = True
+        if self._undo_stack:
+            return
+        from minicode import checkpoints
+        rows, seq, epoch = checkpoints.load(self._ckpt_file)
+        if not rows:
+            return
+        self._undo_stack = rows
+        self._undo_seq = max(seq, max(r["seq"] for r in rows))
+        # 纪元必须一起还原:staleness 判的是精确不等,不还原就等于把恢复出来的每一条
+        # 都标成"这中间压过一次历史,我不敢退"。
+        self._epoch = epoch
+
     def _snapshot_before_mutation(self, tool: Tool, args: dict) -> None:
         # 子代理的工具名带类型前缀(implement·write_file),取末段比对 ——
         # 不剥前缀的话,子代理的写永远不进快照,「/undo 撤不掉子代理的改动」。
@@ -1540,6 +1586,9 @@ class Agent:
         # `_mark_after_mutation` 补上"改后指纹"(见那里的理由),没成功就把这条摘掉 ——
         # 清单里留一条退不动的改动,比少列一条更容易骗人。
         self._undo_open = self._undo_seq
+        # 工具还没跑就先落盘:写到一半进程没了,前像也已经在盘上 —— 这一条是这份
+        # 持久化有没有意义的关键,放在“改完之后”就晚了。
+        self._save_checkpoints()
 
     def _mark_after_mutation(self, tool: Tool, args: dict, result: str) -> None:
         """给刚才那条快照补上"我改完之后它长什么样"的指纹。

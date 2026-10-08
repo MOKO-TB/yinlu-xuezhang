@@ -365,9 +365,16 @@ def apply_retention(config: Config, ui, current: "Path | None" = None,
 
     `current` 是这次启动接着用的那份留档:它永远不进删除名单,哪怕时钟被手改过。
     """
+    from minicode import checkpoints
     from minicode.session import prune_sessions
     removed = prune_sessions(sessions_dir, config.session_keep_last,
                              protect={current} if current else None)
+    # 留档没了、前像还留着 = 同学课件原文无声地留在盘上。这一趟无条件跑,
+    # 因为上面那件只在配了 session_keep_last 时才动。
+    orphans = checkpoints.sweep_orphans(sessions_dir)
+    if orphans and ui is not None:
+        ui.info(f"顺手清掉 {orphans} 份「留档已不存在」的改动前像"
+                f"({checkpoints.CKPT_DIR_NAME}/)—— 那些会话已经不在了。")
     if removed and ui is not None:
         ui.info(f"按 session_keep_last={config.session_keep_last} 删掉 {len(removed)} 份"
                 f"旧会话留档({sessions_dir})—— 当前接着用的这份没动。")

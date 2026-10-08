@@ -100,6 +100,9 @@ class Entry:
 
 TABLE: tuple[Entry, ...] = (
     # ---- 我的内容
+    Entry("checkpoints", "改动前像(撤销用)", PERSONAL, False, kind="family",
+          pattern="*.json",
+          note="/undo 与 /rewind 的账本:存的是文件被改之前的原文 —— 换一台机器拿去退没有意义还可能退错,所以**永不进迁移包**"),
     Entry("sessions", "聊天记录", PERSONAL, True, kind="family", pattern="*.jsonl",
           note="每一次对话的留档;包太大可以在导出时不勾它"),
     Entry("memory/MEMORY.md", "长期记忆(跨项目)", PERSONAL, True, root="home",
