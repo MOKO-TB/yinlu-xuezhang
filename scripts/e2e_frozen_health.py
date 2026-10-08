@@ -2,7 +2,8 @@
 
 用 dist/引路学长/引路学长-CLI.exe(安装版同源)。cwd 指向一个临时工作区,里面放
 0 字节的 library.db + 真凭证(凭证说应有 1.31 GB)→ 大小对不上 → 必须报 incomplete。
-不改动构建产物本身。
+不改动构建产物本身 —— 但**首启那一次会在应用目录里生成 config.json**(那是运行时文件,
+不是构建产物),所以这份脚本跑完之后由打包那一步把它连同 sessions/ 一起清掉再分享。
 """
 from __future__ import annotations
 import os
@@ -27,6 +28,11 @@ try:
     shutil.copy2(STAMP, d / "library.db.stamp.json")
 
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    # 先跑一次**不看结果**的暖机:刚构建完的那份 `dist/引路学长/` 里没有 config.json,
+    # 第一次运行必然走"从模板生成 + 退出码 1"那条首启路(与 e2e_headless 的探针同一个坑,
+    # v0.9.120 就为那支脚本修过),拿这一次的输出去判"包没识别出库不完整"是误判。
+    subprocess.run([str(CLI), "/library"], cwd=str(ws), capture_output=True,
+                   timeout=180, env=env)
     out = subprocess.run([str(CLI), "/library"], cwd=str(ws), capture_output=True,
                          timeout=180, env=env)
     raw = out.stdout + out.stderr
