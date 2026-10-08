@@ -1,6 +1,8 @@
 """文档与数据边界的对账(v0.9.28 A 批)。五件事只要漂了就当场红,不等用户发现。
 
-1. **版本号只有一处真相**:HANDOFF 抬头写的 `v0.9.xx` 必须等于 `minicode.__version__`。
+1. **版本号只有一处真相**:HANDOFF 抬头写的 `v0.9.xx` **和 §2 最新那一行里程碑**都要
+   等于 `minicode.__version__`(第二问是 v0.9.132 补的:v0.9.131 那轮只忘了点源码的
+   `__version__`,两处一起停在旧值时第一问自洽地绿,包里的 exe 因此带着错版本)。
 2. **个人数据文件三处同步**:代码里凡是往数据目录写的每一份本机文件(`app_path("x")`
    与 `APP_DIR / "x"`),必须**同时**出现在 `.gitignore` 和
    `minicode/state_files.py::SHIP_NEVER`(那份清单就是打包时删除的那一份)里,
@@ -107,14 +109,50 @@ def state_targets() -> dict[str, list[str]]:
     return out
 
 
-def check_version() -> list[str]:
-    text = (ROOT / "HANDOFF.md").read_text(encoding="utf-8")
+def _milestone_versions(text: str) -> list[str]:
+    """HANDOFF §2 那张表里的里程碑版本号(按行序)。表头行 `| 里程碑 | 内容 |` 天然不匹配。"""
+    section = text.split("## 2.", 1)
+    if len(section) < 2:
+        return []
+    return re.findall(r"^\| v([0-9.]+) ", section[1].split("\n## ")[0], re.M)
+
+
+def _ver_key(v: str) -> tuple:
+    return tuple(int(x) if x.isdigit() else 0 for x in v.split("."))
+
+
+def version_problems(text: str, source: str) -> list[str]:
+    """版本对账的判定(拆成纯函数是为了让测试能喂假文本 —— 同 count_problems)。
+
+    两处各自独立地跟着源码比,防的是两种不同的漂法:
+    - **抬头 vs 源码**:项目一直在守的那条(对外一句话现状不能说成上一个版本);
+    - **§2 最新那一行 vs 源码**:v0.9.131 就是从这里漂的 —— `71ecb39` 写了 §2 的行、
+      README 的一行、《使用说明》的第 113 条、冻结针八根,唯独没点 `__version__`,
+      于是「文档说 131、装出来的 exe 叫 0.9.130」。当时的闸只比抬头,而那一轮连抬头
+      都忘了改,两处一起停在旧值,检查器自洽地绿着 —— 只有「最新里程碑必须等于源码」
+      这一条抓得住它。
+    """
+    problems: list[str] = []
     m = re.search(r"^>\s*更新:[^（(]*[（(]v([0-9.]+)[)）]", text, re.M)
     if not m:
-        return ["HANDOFF 抬头没找到「更新:YYYY-MM-DD(vX.Y.Z)」这一行"]
-    if m.group(1) != version_from_source():
-        return [f"HANDOFF 抬头写 v{m.group(1)},源码是 v{version_from_source()}"]
-    return []
+        problems.append("HANDOFF 抬头没找到「更新:YYYY-MM-DD(vX.Y.Z)」这一行")
+    elif m.group(1) != source:
+        problems.append(f"HANDOFF 抬头写 v{m.group(1)},源码是 v{source}")
+    rows = _milestone_versions(text)
+    if not rows:
+        problems.append("HANDOFF §2 找不到里程碑行(表被改写了?版本对账第二问失效)")
+    else:
+        newest = max(rows, key=_ver_key)
+        if newest != source:
+            problems.append(
+                f"HANDOFF §2 最新里程碑是 v{newest},源码是 v{source} —— "
+                f"这一轮的版本号没跟着涨(或涨了没写行),包里的 exe 会带着错的版本")
+    return problems
+
+
+def check_version() -> list[str]:
+    return version_problems((ROOT / "HANDOFF.md").read_text(encoding="utf-8"),
+                            version_from_source())
 
 
 def _ship_never() -> dict[str, str]:
@@ -192,10 +230,9 @@ def check_ship_never_manifest() -> list[str]:
 def check_handoff_size() -> list[str]:
     """§2 里程碑行数超了就提醒归档(不做自动搬:搬文档要人看一眼连贯性)。"""
     text = (ROOT / "HANDOFF.md").read_text(encoding="utf-8")
-    section = text.split("## 2.", 1)
-    if len(section) < 2:
+    if "## 2." not in text:
         return ["HANDOFF 找不到 §2 里程碑表"]
-    rows = re.findall(r"^\| v([0-9.]+) ", section[1].split("\n## ")[0], re.M)
+    rows = _milestone_versions(text)
     if len(rows) > MAX_ROUNDS_KEPT:
         return [f"HANDOFF §2 留了 {len(rows)} 轮里程碑(上限 {MAX_ROUNDS_KEPT}),"
                 f"把最老的挪进 docs/handoff/(现在最老的几轮:{'、'.join(rows[MAX_ROUNDS_KEPT:])})"]

@@ -26,6 +26,39 @@ def test_handoff_header_matches_source_version():
     assert check_docs.check_version() == [], "HANDOFF 抬头的版本号和源码不是一处真相"
 
 
+def test_version_gate_bites_when_the_milestone_row_outruns_the_source():
+    """复现 v0.9.131 那次漂移:§2 写了新一轮,`__version__` 忘了点。
+
+    当时那道闸只比抬头,而那一轮连抬头都没改 —— 两处一起停在 v0.9.130 时它是自洽地
+    绿的,于是文档、README、《使用说明》、冻结针都说 131,装出来的 exe 却叫 0.9.130。
+    """
+    text = ("> 更新:2026-10-08（v0.9.130）\n\n"
+            "## 2. 里程碑\n\n| 里程碑 | 内容 |\n|---|---|\n"
+            "| v0.9.129 旧的一轮 | x |\n| v0.9.130 旧的一轮 | x |\n"
+            "| v0.9.131 新的一轮 | x |\n\n## 3. 下一节\n")
+    problems = check_docs.version_problems(text, "0.9.130")
+    assert problems and all("0.9.131" in p for p in problems), problems
+    # 把这一轮补完整(抬头与源码都跟上)后同一张表就该绿 —— 防"行里出现新数就永远红"
+    assert check_docs.version_problems(
+        text.replace("（v0.9.130）", "（v0.9.131）"), "0.9.131") == []
+
+
+def test_version_gate_still_bites_on_the_header_alone():
+    """第二问不能把第一问顶掉:抬头单独漂时仍要报,且两条互不遮蔽。"""
+    text = ("> 更新:2026-10-08（v0.9.130）\n\n## 2. 里程碑\n"
+            "| v0.9.131 一轮 | x |\n\n## 3. x\n")
+    problems = check_docs.version_problems(text, "0.9.131")
+    assert any("抬头" in p for p in problems), problems
+    assert not any("里程碑" in p for p in problems), problems
+
+
+def test_version_gate_names_the_check_when_the_table_shape_changes():
+    """表被改写导致第二问扫不到行时,必须红着说"我没在查",不能静默绿。"""
+    assert any("§2" in p for p in check_docs.version_problems(
+        "> 更新:2026-10-08（v0.9.131）\n\n## 2. 里程碑\n\n没有表格\n\n## 3. x\n",
+        "0.9.131"))
+
+
 def test_every_local_state_file_is_ignored_and_cleaned():
     """新增本机状态文件却忘了清理清单 = 把同学自己的数据随安装包发出去。"""
     assert check_docs.check_state_targets() == []
