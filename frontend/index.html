@@ -4173,6 +4173,13 @@ function resetMap() {
     window.CampusMap.close();
   }
 }
+/* 一批事件:后端把流式增量攒成一批再送(一次 JS 往返搬 600 条 vs 600 次往返,
+   实测差 260 倍 —— 见 scripts/e2e_ui_lag.py)。这里**只是循环**,渲染路径仍然只有
+   __gcodeEvent 那一条:第二条渲染路迟早与第一条对不上,那是界面最坏的坏法。 */
+window.__gcodeEvents = function (list) {
+  if (!list || !list.length) return;
+  for (let i = 0; i < list.length; i++) window.__gcodeEvent(list[i]);
+};
 window.__gcodeEvent = function (e) {
   // 全局刷新信号(不属于任何会话):技能增删后所有窗口都要刷新技能面板
   if (e.type === "skills_changed") {

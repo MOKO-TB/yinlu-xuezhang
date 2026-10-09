@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 import time
@@ -14,6 +15,13 @@ from minicode.tools.base import Tool
 
 LIVE_CAP = 200            # 实时表最多记多少条(只丢已完成的最老行,在跑的永不丢)
 CHILD_CAP = 40            # 一路子代理最多往父行下挂几步(超了丢最老的,并如实报丢了几个)
+# 流式增量要攒一批再送。理由是量出来的(scripts/e2e_ui_lag.py):600 条 text_delta
+# 一条一次 `evaluate_js` 共 1767 ms,而同样的内容放进**一次**调用里循环只要 6.6 ms
+# —— 往返本身占了 100%。按 40 token/s 算,那是每秒 117 ms 花在"把一句话搬进窗口"上,
+# 而且这一趟是同步的:它把读流的那条线程一起拖住,表现就是用户说的"有明显的卡顿感"。
+COALESCED_EVENTS = ("text_delta", "reasoning_delta")
+FLUSH_MS = 80.0           # 与前端 renderAssistant 那 90 ms 的渲染节流同一档:再攒就是白等
+FLUSH_CHARS = 400         # 一次吐得多的大段不必等满 80 ms:攒够字数立刻送
 
 
 class GuiUI:
@@ -31,6 +39,11 @@ class GuiUI:
         # 监控栏据此如实说,不假装翻得出历史。落库的那份按请求记,在 agent 层。
         self._retries = 0
         self._send_lock = threading.Lock()
+        # 流式增量的缓冲区(见 COALESCED_EVENTS 那段理由)。只在 _send_lock 里动。
+        self._pending: list[dict] = []
+        self._pending_chars = 0
+        self._pending_since = 0.0
+        self._timer: threading.Timer | None = None
         # ---- 实时表(v0.9.37):每个工具调用的**真实**开始/结束时刻。
         # 会话消息里没有时间戳(留档只有会话开始那一行),所以"跑了多久"这件事
         # 只有在这里记一次才可能是真的。记不到的行(并行子代理被 _QuietUI 吞掉的、
@@ -48,14 +61,79 @@ class GuiUI:
     # ------------------------------------------------------------ 推送
 
     def push(self, type_: str, **payload) -> None:
+        """往窗口送一条事件。流式增量攒成一批一次送,其余一律立刻送。
+
+        **顺序是这一段的硬约束**:非增量事件先冲掉缓冲区再送自己,所以屏幕上
+        不会出现"工具卡已经插进正文中间,而它上面那半句才补上来"。
+        """
         payload["type"] = type_
-        data = json.dumps(payload, ensure_ascii=False)
         with self._send_lock:
-            if self.window is not None:
-                try:
-                    self.window.evaluate_js(f"window.__gcodeEvent({data})")
-                except Exception:
-                    pass  # 窗口关闭中/未就绪时丢弃事件
+            if type_ not in COALESCED_EVENTS:
+                self._flush_locked()
+                self._send_locked(payload)
+                return
+            self._queue_locked(payload)
+            if self._due_locked():
+                self._flush_locked()
+
+    def flush(self) -> None:
+        """把攒着的增量送出去。回合收尾之外,**停止**与**关窗**也要有人调 ——
+        不然最后那半句会留在缓冲区里,而它再也没有下一次 push 来冲它。
+        """
+        with self._send_lock:
+            self._flush_locked()
+
+    # ---- 缓冲区(三处都只在 _send_lock 里被调,自己不再取锁)
+    def _queue_locked(self, payload: dict) -> None:
+        text = payload.get("text") or ""
+        if self._pending and self._pending[-1].get("type") == payload.get("type"):
+            # 相邻同类型合成一条:屏幕上"这一截正文"本来就是一起到的,合成一条
+            # 就少一次 DOM 改动 —— 这才是这一轮真正省下来的第二笔。
+            last = self._pending[-1]
+            last["text"] = (last.get("text") or "") + text
+        else:
+            self._pending.append(payload)
+        self._pending_chars += len(text)
+        if not self._pending_since:
+            self._pending_since = time.monotonic()
+            # **必须自己定时**:攒批若只靠"下一次 push 来冲",模型吐一句停三秒
+            # (长思考与慢工具之间很常见)时,那半句就三秒不上屏 —— 省下来的往返
+            # 会变成新的卡顿,这一轮就白做了。一次性定时器:起一次、冲一次、销一次。
+            self._timer = threading.Timer(FLUSH_MS / 1000.0, self._timer_flush)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _timer_flush(self) -> None:
+        with self._send_lock:
+            self._flush_locked()
+
+    def _due_locked(self) -> bool:
+        if self._pending_chars >= FLUSH_CHARS:
+            return True
+        return (time.monotonic() - self._pending_since) * 1000.0 >= FLUSH_MS
+
+    def _flush_locked(self) -> None:
+        timer, self._timer = self._timer, None
+        if timer is not None:
+            with contextlib.suppress(Exception):
+                timer.cancel()
+        batch, self._pending = self._pending, []
+        self._pending_chars = 0
+        self._pending_since = 0.0
+        if batch:
+            self._send_locked(batch)
+
+    def _send_locked(self, data) -> None:
+        if self.window is None:
+            return              # 窗口未就绪/关闭中:丢弃,与旧口径一致
+        # 一批走 __gcodeEvents(前端那一只只是循环调 __gcodeEvent,不另写渲染路),
+        # 单条仍走 __gcodeEvent —— 确认框、提问卡那些路径的报文形状一个字都不动。
+        fn = "__gcodeEvents" if isinstance(data, list) else "__gcodeEvent"
+        try:
+            self.window.evaluate_js(
+                f"window.{fn}({json.dumps(data, ensure_ascii=False)})")
+        except Exception:
+            pass  # 窗口关闭中/未就绪时丢弃事件
 
     def request_stop(self) -> None:
         self.stop_requested = True
@@ -97,6 +175,7 @@ class GuiUI:
     def _check_stop(self) -> None:
         if self.stop_requested:
             self.stop_requested = False
+            self.flush()    # 攒着的最后那半句要先落地:中断之后不会再有 push 来冲它
             raise KeyboardInterrupt
 
     # --------------------------------------------------- Agent 依赖的接口

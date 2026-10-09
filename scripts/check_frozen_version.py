@@ -235,6 +235,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "plan_review", "plan_review_handler",
                         "live_rows", "live_now", "live_abandon", "_live_begin",
                         "_live_end", "LIVE_CAP",
+                        # v0.9.139 流式增量攒批(漏收 = 包里还是"每个增量一次
+                        # evaluate_js"那一版:往返占掉 100% 的时间,用户点开的
+                        # 装好的包继续卡,而开发态跑得动 —— 这类坏法不报错)
+                        "flush", "_queue_locked", "_due_locked", "_flush_locked",
+                        "_send_locked", "_timer_flush",
+                        "COALESCED_EVENTS", "FLUSH_MS", "FLUSH_CHARS",
                         # v0.9.90:长命令的实时那一行(漏收 = bash 那边 getattr 拿不到方法,
                         # 进度静默没有 —— 而这一轮的卖点恰恰是"中间那段不再是黑的")
                         "tool_progress",
@@ -1264,6 +1270,10 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     "function openSessMenu", "function startSessRename", "sess-rename",
     ".sm", "contextmenu", "archived",
     ".shrc", "copy_share_image", "function costBoth",
+    # v0.9.139 攒批的那一半:后端一次送一批,前端这只必须在场,否则装好的包里
+    # 流式正文**一个字都不出现**(evaluate_js 调一个不存在的函数,异常被 push
+    # 那层吞掉 —— 又是一次"不报错的坏法")。
+    "window.__gcodeEvents",
 )
 
 

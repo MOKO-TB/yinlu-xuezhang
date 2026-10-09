@@ -15,15 +15,25 @@ pytestmark = pytest.mark.slow
 
 
 class FakeWindow:
-    """捕获 evaluate_js 推送的事件。"""
+    """捕获 evaluate_js 推送的事件。
+
+    v0.9.139 起流式增量是**一批一次**送(`window.__gcodeEvents([...])`),其余仍走
+    `__gcodeEvent(…)`。这只替身必须两种都认 —— 只认单条的那种,表现就是
+    "text_delta 凭空消失了",而产品其实好好的(和 v0.9.137 那回同一个形状:
+    替身没跟上真路,红的是测试)。
+    """
 
     def __init__(self):
         self.events = []
 
     def evaluate_js(self, code: str):
-        prefix = "window.__gcodeEvent("
-        assert code.startswith(prefix), code
-        self.events.append(json.loads(code[len(prefix):-1]))
+        for prefix in ("window.__gcodeEvents(", "window.__gcodeEvent("):
+            if code.startswith(prefix):
+                assert code.endswith(")"), code
+                got = json.loads(code[len(prefix):-1])
+                self.events.extend(got if isinstance(got, list) else [got])
+                return
+        raise AssertionError(f"看不懂的推送:{code[:60]}")
 
     def of_type(self, type_name):
         return [e for e in self.events if e["type"] == type_name]
