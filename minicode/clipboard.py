@@ -73,6 +73,18 @@ def _bind(ctypes, user32, kernel32) -> None:
     kernel32.GlobalLock.restype = ctypes.c_void_p
     kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
     kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    # 写方向(复制图片进剪贴板)。这几条原型与读方向同一个理由:
+    # GlobalAlloc / SetClipboardData 返回的是 HGLOBAL 指针,不设 restype 时
+    # ctypes 按 32 位 int 截断,64 位进程上拿到半个句柄 —— 后果不是报错而是
+    # 粘上一块别的内存里的东西(或直接崩)。
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalFree.restype = ctypes.c_void_p
+    user32.EmptyClipboard.restype = ctypes.c_bool
+    user32.EmptyClipboard.argtypes = []
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
 
 
 def _locked_open(user32, ctypes) -> bool:
@@ -170,6 +182,98 @@ def dib_to_file(dib: bytes) -> tuple[bytes, str]:
             return out.getvalue(), "png"
     except Exception:
         return bmp, "bmp"
+
+
+GMEM_MOVEABLE = 0x0002
+
+
+def png_to_dib(data: bytes) -> bytes:
+    """PNG(或任何 Pillow 认得的图)→ CF_DIB 的字节:BITMAPINFOHEADER + 像素。
+
+    CF_DIB 不含那 14 字节 BMP 文件头(读侧 `bmp_from_dib` 就是给它补头的,这里反着来)。
+
+    **刻意选最保守的那一种形状:24bpp、自底向上、biHeight 取正、每行补到 4 字节。**
+    理由不是好看:32bpp 带 alpha 与"负 biHeight(自顶向下)"这两种新形状,在
+    GDI/WinForms/Office 那一族消费者上支持得不一致 —— 有的直接拒收,粘出来是空的;
+    而这类失败**不在我们这一侧报错**(`SetClipboardData` 照样返回成功),用户要到
+    几秒后在别的软件里 Ctrl+V 才发现。分享卡片本来就是**不透明**的一张图,
+    没有需要保留的 alpha,所以没必要为它冒这个险。
+    这一条是 2026-10-09 在本机量不出来时按"取最不会错的那形"定的:那个会话里
+    `OpenClipboard` 回 error 5(模块开头那段实测留痕说的就是它),第三方粘不粘得出来
+    当场测不到 —— 等能在真桌面上测的那天,测出来若与此不符,以实测为准改回来。
+    """
+    from PIL import Image          # 运行时依赖里已有;缺了就交给调用方如实降级
+    with Image.open(io.BytesIO(data)) as im:
+        im = im.convert("RGB")
+        w, h = im.size
+        stride = ((w * 3) + 3) // 4 * 4
+        raw = im.tobytes("raw", "BGR")
+        if stride != w * 3:                      # 行尾补零到 4 字节对齐
+            pad = b"\x00" * (stride - w * 3)
+            raw = b"".join(raw[y * w * 3:(y + 1) * w * 3] + pad for y in range(h))
+        else:
+            raw = b"".join(raw[y * w * 3:(y + 1) * w * 3] for y in range(h))
+        body = b"".join(raw[i:i + stride] for i in range((h - 1) * stride, -1, -stride))
+    header = struct.pack("<IiiHHIIiiII", DIB_INFOHEADER, w, h, 1, 24,
+                         0, len(body), 0, 0, 0, 0)
+    return header + body
+
+
+def write_image(data: bytes, name: str = "") -> dict:
+    """把一张图放进 Windows 剪贴板(CF_DIB)。→ {ok, msg}。
+
+    三条不是显然的规矩:
+    1. **SetClipboardData 成功之后那块内存就归系统了**,绝不能再 GlobalFree ——
+        free 了会粘成垃圾或直接崩,而且崩在用户去粘贴的那一瞬间,离这里隔了几秒;
+       只有失败路径才自己 free。
+    2. 打不开剪贴板 / 非 Windows 一律 `ok=False` 带一句人话,前端照实退回
+       「图已存到某路径」那条老路 —— 复制失败不该让人以为图没生成。
+    3. 先 EmptyClipboard 再写:不清就把新图叠在旧内容后面,粘出来的还是上一张。
+    """
+    if sys.platform != "win32":
+        return {"ok": False, "msg": "这个平台走不了本机剪贴板,图已存在工作区里"}
+    try:
+        dib = png_to_dib(data)
+    except Exception as e:
+        return {"ok": False, "msg": f"这张图转不成位图({type(e).__name__})"}
+    user32, kernel32 = _windll("user32"), _windll("kernel32")
+    if user32 is None or kernel32 is None:
+        return {"ok": False, "msg": "拿不到系统剪贴板接口"}
+    import ctypes
+    _bind(ctypes, user32, kernel32)
+    if not _locked_open(user32, ctypes):
+        return {"ok": False, "msg": "剪贴板正被别的程序占用,再点一次"}
+    handle = None
+    try:
+        handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(dib))
+        if not handle:
+            return {"ok": False, "msg": "剪贴板内存没申请到"}
+        ptr = kernel32.GlobalLock(handle)
+        if not ptr:
+            return {"ok": False, "msg": "剪贴板内存锁不住"}
+        try:
+            ctypes.memmove(ptr, dib, len(dib))
+        finally:
+            kernel32.GlobalUnlock(handle)
+        if not user32.EmptyClipboard():
+            return {"ok": False, "msg": "清不掉剪贴板里的旧内容,没敢覆盖"}
+        if not user32.SetClipboardData(CF_DIB, handle):
+            return {"ok": False, "msg": "放进剪贴板失败,图仍在工作区里"}
+        handle = None                      # 从这一行起那块内存归系统所有
+        return {"ok": True,
+                "msg": ("图片已复制" + (f"({name})" if name else "")) + ",直接 Ctrl+V 粘贴"}
+    except Exception as e:
+        return {"ok": False, "msg": f"复制图片没成功({type(e).__name__})"}
+    finally:
+        if handle:
+            try:
+                kernel32.GlobalFree(handle)
+            except Exception:
+                pass
+        try:
+            user32.CloseClipboard()
+        except Exception:
+            pass
 
 
 def read_clipboard() -> dict:

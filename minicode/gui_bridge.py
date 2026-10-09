@@ -128,6 +128,10 @@ class PublicApi:
         """把某段回答排成一张能发群的卡片图(实现在 Bridge,工作区在那边)。"""
         return self._b.share_image(text)
 
+    def copy_share_image(self) -> dict:
+        """把最近那张分享图复制到剪贴板。零参数:路径是后端自己记着的那一个。"""
+        return self._b.copy_share_image()
+
     def rate_message(self, rating: int, question: str = "", answer: str = "") -> dict:
         """消息级 👍/👎 反馈:落到应用目录的反馈日志。"""
         return self._b.rate_message(rating, question, answer)
@@ -303,6 +307,14 @@ class PublicApi:
 
     def delete_session(self, index) -> dict:
         return self._b.delete_session(index)
+
+    def rename_session(self, index, title: str = "") -> dict:
+        """侧栏会话菜单:改标题(与 CLI /rename 同一只手,只改留档那一行)。"""
+        return self._b.rename_session(index, title)
+
+    def archive_session(self, index, flag=True) -> dict:
+        """侧栏会话菜单:归档 / 取消归档(沉到末尾,不删)。"""
+        return self._b.archive_session(index, flag)
 
     def get_asset(self, rel_path: str) -> dict:
         return self._b.get_asset(rel_path)
@@ -686,6 +698,9 @@ class Bridge:
         self._current: SessionRunner | None = None
         self._confirm_event = threading.Event()
         self._confirm_choice = "no"
+        # 最近一次生成的分享图路径:「复制图片」按它复制,**路径不由界面传进来**
+        # (前端只给"复制上一张"这个意图,不给它一条能指到任意文件口的参数)。
+        self._last_card = ""
         # 确认握手是一次一条的(前端只有一个弹窗):并行子代理同时要确认时
         # 靠这把锁排队,否则两个线程会互抢 event/choice,确认框对不上是谁在等。
         self._confirm_lock = threading.Lock()
@@ -2516,7 +2531,29 @@ class Bridge:
             srcs = got.get("sources") or []
             bits.append(f"来源 {len(srcs)} 条" if srcs else "这段回答里没有来源链接")
             got["msg"] = f"已生成分享图：{got.get('path')}（" + "；".join(bits) + "）"
+            self._last_card = str(got.get("path") or "")
         return got
+
+    def copy_share_image(self) -> dict:
+        """把**最近那张**分享图复制到剪贴板(用户:不想再去文件夹里找它)。
+
+        只认 `_last_card` 那一个路径:界面传不进路径,也就传不进 `..\\..\\某文件`。
+        复制不成回 `ok=False` 带真原因(非 Windows / 剪贴板被占 / 图不见了),
+        那句原样显示 —— 图本来就在磁盘上,复制失败不该让人以为图没生成。
+        """
+        from minicode import clipboard
+        path = self._last_card
+        if not path:
+            return {"ok": False, "msg": "还没有生成过分享图，先点一下 🖼"}
+        try:
+            data = Path(path).read_bytes()
+        except OSError:
+            self._last_card = ""
+            return {"ok": False, "msg": "那张图已经不在了（被移走或清掉了），重新生成一张"}
+        out = clipboard.write_image(data, Path(path).name)
+        if out.get("ok"):
+            out["path"] = path
+        return out
 
     def rate_message(self, rating: int, question: str = "", answer: str = "") -> dict:
         """消息级 👍/👎 反馈:追加到应用目录 message-feedback.jsonl。
@@ -3204,6 +3241,34 @@ class Bridge:
 
     # ------------------------------------------------------------ 会话导出 / 搜索
 
+    def rename_session(self, index, title: str) -> dict:
+        """改一条历史会话的标题(侧栏那个菜单要的也就是这一件)。
+
+        与 CLI 的 `/rename` **同一只手**(`session.set_title` → 改留档开头那行
+        session_start 的 title 字段):两处各写一套改名,迟早一个能改一个不能改。
+        空白与超长由 `normalize_title` 压平;空标题不改一个字节并说清为什么。
+        """
+        from minicode import session as session_mod
+        chosen, _summaries = self._resolve_session_summary(index)
+        if chosen is None:
+            return {"ok": False, "msg": "会话不存在"}
+        # 成败看**判据本身**(`normalize_title` 就是 set_title 用的那一个),不看它回的那句话:
+        # 拿人话的前缀去判 ok,哪天改个措辞就把"改成了"判成"没改成"。
+        ok = bool(session_mod.normalize_title(title or ""))
+        msg = session_mod.set_title(chosen.path, title or "")
+        self._push_sessions()
+        return {"ok": ok, "msg": msg}
+
+    def archive_session(self, index, flag=True) -> dict:
+        """归档 / 取消归档:沉到列表末尾,**不删**。与 CLI `/archive` 同一只手。"""
+        from minicode import session as session_mod
+        chosen, _summaries = self._resolve_session_summary(index)
+        if chosen is None:
+            return {"ok": False, "msg": "会话不存在"}
+        msg = session_mod.set_archived(chosen.path, bool(flag))
+        self._push_sessions()
+        return {"ok": True, "msg": msg}
+
     def export_session(self) -> dict:
         """把当前会话导出成 Markdown(先弹"另存为")。
 
@@ -3490,6 +3555,9 @@ class Bridge:
                 "current": s.path == cur_path,
                 "workspace": ws_name,
                 "ws_current": in_current,
+                # 归档与否要交给界面:菜单上那颗写「归档」还是「取消归档」得看真状态,
+                # 猜错就是一颗按下去什么都不发生的按钮。
+                "archived": bool(getattr(s, "archived", False)),
                 "running": str(s.path) in running_paths})
         self.ui.push("sessions", items=items)
 

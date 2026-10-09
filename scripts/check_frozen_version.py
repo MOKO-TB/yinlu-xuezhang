@@ -60,6 +60,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # v0.9.101 ④L3:侧栏指令层那一行的后端
                             "_instructions_info",
                             "export_session", "search_sessions",
+                            # v0.9.138 侧栏会话菜单那三颗(漏 rename_session = 图形侧
+                            # 还是改不了名,只有 CLI 能用 —— 正是用户报的那件事;
+                            # 漏 archive_session = 菜单上那颗按下去没处回;
+                            # 漏 copy_share_image = 📋 点了静默,图仍只在文件夹里)
+                            "rename_session", "archive_session", "copy_share_image",
                             "rate_message", "get_countdowns",
                             "_provider_credentials",
                             # v0.9.22:按模型能力判定看图 + 写盘失败要说清 + 关窗答复
@@ -164,6 +169,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 那条「xx 想要查看复制到剪贴板的文本和图像」的横条照旧弹(功能"看起来在",
     # 只是每次都违和),所以连 bmp_from_dib 一起钉 —— 它是图片那半的唯一出口。
     "minicode.clipboard": ("read_clipboard", "bmp_from_dib", "dib_to_file",
+                           # v0.9.138 写方向(分享图一键复制)。漏 png_to_dib = 图根本
+                           # 转不成位图,那颗 📋 永远回一句失败;漏 write_image = 桥上有
+                           # 方法、剪贴板那条路是空的(源码态全绿,装好的包里点不动)。
+                           "png_to_dib", "write_image", "GMEM_MOVEABLE",
                            "CF_UNICODETEXT", "CF_DIB", "TEXT", "IMAGE",
                            "EMPTY", "UNAVAILABLE"),
     # v0.9.34:活动面板的数据源整模块(漏收 = 装好的包右边那一栏永远"读不出来")
@@ -1087,6 +1096,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 永远「未知」、风云榜四卡永远空 —— 价目缺行显示未知是**诚实**,
     # 整个模块不在包里是**假绿**(界面照旧弹,只是每一栏都空)。
     "minicode.pricing": ("RATES", "RATES_SOURCE", "OVERRIDE_FILE", "rate_for",
+                         # v0.9.138 命名空间那一步(漏 _query_forms = `global:xxx` 这种
+                         # 带前缀的名字又判成"未知",有价说成没价,与把没价说成 $0 同样坏);
+                         # 以及分币种那两条(漏 _cur 就是人民币报价的行被当成美元合计)
+                         "_query_forms", "_cur", "_sym",
                          "estimate", "summarize", "load_override",
                          "save_override", "effective_rates"),
     "minicode.usage": ("record_usage", "statistics", "budget_state",
@@ -1230,6 +1243,20 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # 总是允许」长得一模一样,误点一次就把一次性的点头变成长期授权)
     "btnRemember", 'confirm_reply("remember")', "can_remember",
     ".b-remember{",
+    # ---- v0.9.138 六件里的界面那五件 ----
+    # 漏 `function thinkTick` = 思考那一行又回到"进行中…"冻住的样子(正文其实
+    # 在 DOM 里,只是那块永远 display:none —— 用户看到的正是"看不到它在想什么");
+    # 漏 `function renderMathBlocks` / `vendor/katex/katex.min.js` = 公式又印成
+    # `\boxed{...}` 源码;漏 `function queueDraft` = Enter 在忙时还是立刻插话,
+    # 打错一个字没有反悔的余地;漏 `function openSessMenu` = 侧栏还是只有一颗 ✕,
+    # 图形侧改不了名;漏 `.shrc` = 分享图那颗复制按钮不见了。
+    "function thinkTick", "function thinkStop", "function isWideCp",
+    "function renderMathBlocks", "function ensureKatex", "function estTokens",
+    "vendor/katex/katex.min.js", "math-d",
+    "function queueDraft", "function renderDrafts", "draftBar",
+    "function openSessMenu", "function startSessRename", "sess-rename",
+    ".sm", "contextmenu", "archived",
+    ".shrc", "copy_share_image", "function costBoth",
 )
 
 

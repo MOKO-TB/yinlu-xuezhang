@@ -34,9 +34,58 @@ def test_rate_lookup_hits_exact_alias_and_prefix():
 
 def test_estimate_never_prices_the_unknown_as_zero():
     r = pricing.estimate("no-such-model", 1000, 2000)
-    assert r == {"usd": None, "priced": False}      # 没有 $0,只有「未知」
+    assert r == {"usd": None, "cny": None, "priced": False}   # 没有 $0,只有「未知」
     assert pricing.estimate("deepseek-chat", None, 10)["priced"] is False
     assert pricing.estimate("deepseek-chat", -1, 10)["priced"] is False
+
+
+# ---------------- 名字外面那层包装:有价却说没价,是同一类坏法的另一半天 ----------------
+
+def test_namespace_and_display_prefix_still_price():
+    """`global:deepseek-v4.1-flash` 与 `wb · global:…` 从前一律判「未知」。
+
+    这不是假想的形状:顶栏那枚 chip 显示的就是 `wb · global:deepseek-v4.1-flash`,
+    而落库的 model 带着 `global:` —— 价目表里明明有 deepseek 那一行,估算却说没价。
+    """
+    for name in ("global:deepseek-v4.1-flash", "wb · global:deepseek-v4.1-flash",
+                 "deepseek/deepseek-v4.1-flash", "openrouter/deepseek/deepseek-flash"):
+        row = pricing.rate_for(name)
+        assert row is not None, name
+        assert row["input"] == pricing.RATES["deepseek-flash"]["input"], name
+    assert pricing.estimate("global:deepseek-v4.1-flash", 1_000_000,
+                            1_000_000)["usd"] == 0.75
+
+
+def test_a_different_tier_is_never_merged_into_a_cheaper_row():
+    """剥前缀不等于并档:`qwen3.8-flash-pro` 不许落进 `qwen3.8-flash` 那行。
+
+    并档的后果是"贵的那档按便宜的价报",而报出来的还是个看起来精确的数。
+    """
+    assert pricing.rate_for("qwen3.8-flash")["input"] == 0.15
+    assert pricing.rate_for("qwen3.8-flash-pro") is None
+    assert pricing.rate_for("qwen3.8-max-preview") is None
+    assert pricing.rate_for("qwen3.8-pro") is None        # 官方页今天没有这一档
+
+
+# ---------------- 币种:各按各家官方页的币种估,合计不跨币种相加 ----------------
+
+def test_cny_row_prices_in_cny_and_never_leaks_into_the_usd_total():
+    r = pricing.estimate("qwen3.8-max", 1_000_000, 1_000_000)
+    assert r["priced"] is True and r["usd"] is None
+    assert r["cny"] == pytest.approx(12.0 + 36.0)
+    rows = [{"model": "qwen3.8-max", "prompt": 1_000_000, "completion": 1_000_000},
+            {"model": "deepseek-chat", "prompt": 1_000_000, "completion": 1_000_000}]
+    out = pricing.summarize(rows)
+    assert out["cost_usd"] == 0.75 and out["cost_cny"] == 48.0
+    assert rows[0]["cost_usd"] is None and rows[1]["cost_cny"] is None
+
+
+def test_rate_note_says_where_the_number_came_from():
+    """悬停那句要带来源与核对日期 —— 用户有权知道"预估"是哪个价目版本算的。"""
+    note = pricing._rate_note(pricing.RATES["deepseek-flash"])
+    assert "DeepSeek 官方定价页" in note and "2026-10-09" in note
+    assert "错峰" in note, "官方有峰谷两档时,取的是哪一档必须说出口"
+    assert "¥" in pricing._rate_note(pricing.RATES["qwen3.8-max"])
 
 
 def test_estimate_math_on_a_known_row():

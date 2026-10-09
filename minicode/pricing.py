@@ -15,10 +15,17 @@
 改价:`pricing-override.json`(「我的数据 → 设置与偏好」里登记的那份),
 只存与默认价**不同**的行,删掉文件即回默认价目。匹配口径:模型名精确 →
 别名 → 最长前缀(带日期后缀的变体名落进主行),都对不上 = 未知。
+名字外面那层包装(`global:` 这类命名空间、`wb · ` 这类展示前缀)在匹配前会被剥掉 ——
+**有价却说没价**与**没价说成 $0** 是同一类坏法的两半,所以剥完仍对不上才回未知。
+
+币种:各家官方页用什么币种报价就按什么币种估(DeepSeek 用 $,阿里云百炼用「元/百万
+Token」),合计也**分币种各列一个数**(`cost_usd` / `cost_cny`)。把它们折成一个币种
+需要引入一个我自己编的汇率,那正是这一族最不该编的数。
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from minicode.paths import app_path
@@ -44,10 +51,12 @@ RATES: dict[str, dict] = {
     "claude-sonnet-5": {"input": 2.0, "output": 10.0, "cache": 0.2, "cache_write": 2.5,
                    "aliases": ["claude-sonnet-5", "anthropic/claude-sonnet-5", "Claude Sonnet 5", "Claude-Sonnet-5", "\"Anthropic: Claude Sonnet 5\"", "openrouter/anthropic/claude-sonnet-5"]},
     "deepseek-flash": {"input": 0.15, "output": 0.6, "cache": 0.003,
+                   "tier": "错峰价;高峰档翻倍", "src": "DeepSeek 官方定价页", "asof": "2026-10-09",
                    "aliases": ["deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4.1-flash", "deepseek-v4-1-flash", "deepseek-chat", "deepseek-reasoner", "openrouter/deepseek/deepseek-chat", "openrouter/deepseek/deepseek-reasoner", "openrouter/deepseek/deepseek-v4-flash", "openrouter/deepseek/deepseek-v4.1-flash", "deepseek-flash", "DeepSeek V4 Flash", "DeepSeek-V4-Flash", "DeepSeek V4.1 Flash", "DeepSeek-V4.1-Flash", "deepseek/deepseek-flash", "openrouter/deepseek/deepseek-flash", "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4.1-flash", "deepseek/deepseek-chat", "deepseek/deepseek-reasoner"]},
     "deepseek-r1": {"input": 0.7, "output": 2.5,
                    "aliases": ["deepseek-r1", "\"DeepSeek: R1\"", "R1", "deepseek/deepseek-r1", "openrouter/deepseek/deepseek-r1"]},
     "deepseek-v4-pro": {"input": 0.66, "output": 1.98, "cache": 0.022,
+                   "tier": "错峰价;高峰档翻倍", "src": "DeepSeek 官方定价页", "asof": "2026-10-09",
                    "aliases": ["deepseek-pro", "openrouter/deepseek/deepseek-v4-pro", "deepseek-v4-pro", "DeepSeek V4 Pro", "DeepSeek-V4-Pro", "deepseek/deepseek-v4-pro", "deepseek/deepseek-pro", "openrouter/deepseek/deepseek-pro"]},
     "gemini-2.5-flash": {"input": 0.3, "output": 2.5, "cache": 0.03, "cache_write": 0.083333,
                    "aliases": ["gemini-2.5-flash", "Gemini 2.5 Flash", "\"Google: Gemini 2.5 Flash\"", "Gemini-2.5-Flash", "google/gemini-2.5-flash", "openrouter/google/gemini-2.5-flash"]},
@@ -129,9 +138,16 @@ RATES: dict[str, dict] = {
                    "aliases": ["qwen3.7-flash", "\"Qwen: Qwen3.7 Flash\"", "Qwen3.7 Flash", "Qwen3.7-Flash", "qwen/qwen3.7-flash", "openrouter/qwen/qwen3.7-flash"]},
     "qwen3.8-flash": {"input": 0.15, "output": 0.47, "cache": 0.016, "cache_write": 0.2,
                    "aliases": ["qwen3.8-flash", "Qwen3.8 Flash", "Qwen3.8-Flash", "\"Qwen: Qwen3.8 Flash\"", "qwen/qwen3.8-flash", "openrouter/qwen/qwen3.8-flash"]},
+    "qwen3.8-max": {"input": 12.0, "output": 36.0, "cur": "CNY",
+                   "tier": "人民币报价;Batch 调用半价、上下文缓存另有折扣未折",
+                   "src": "阿里云百炼《计费说明》", "asof": "2026-10-09",
+                   "aliases": ["qwen3.8-max", "Qwen3.8 Max", "Qwen3.8-Max",
+                               "\"Qwen: Qwen3.8 Max\"", "qwen/qwen3.8-max",
+                               "dashscope/qwen3.8-max", "global:qwen3.8-max"]},
 }
 
-RATES_SOURCE = "dsh-watcher 0.7.0 pricing/models.yaml(2026-09-19,MIT)"
+RATES_SOURCE = ("dsh-watcher 0.7.0 pricing/models.yaml(2026-09-19,MIT);"
+                "带 src 字段的行是 2026-10-09 逐条回官方页核对过的")
 
 _OVERRIDE: "tuple[float, dict[str, dict]] | None" = None   # (mtime, 解析结果)
 _TABLE: dict[str, dict] | None = None
@@ -189,49 +205,107 @@ def _table() -> dict[str, dict]:
     return merged
 
 
+def _query_forms(model: str) -> "list[str]":
+    """一个模型名的**几种可认写法**(按优先顺序,去重保序)。
+
+    真实形状里名字外面会包着东西:界面那枚 chip 是 `wb · global:deepseek-v4.1-flash`,
+    落库的 `model` 是 `global:deepseek-v4.1-flash`,而价目表里那行叫 `deepseek-flash`
+    (官方页今天就是这么列的)。原来只按整串去匹配,于是**带命名空间的名字一律"未知"**
+    —— 有价却说没价,与把没价说成 $0 是同一类坏法的另一半。
+    所以:先剥展示名前缀(`·` 之前那段),再从左往右逐段剥 `ns:` / `ns/`,
+    每剥一次都当一次候选。**剥不出来的仍回"未知"**,不猜。
+    """
+    raw = _norm(model)
+    if not raw:
+        return []
+    out = [raw]
+    if "·" in raw:
+        out.append(raw.rsplit("·", 1)[-1].strip())
+    for base in list(out):
+        cur = base
+        while True:
+            nxt = re.sub(r"^[a-z0-9_.-]+[:/]", "", cur, count=1)
+            if nxt == cur or not nxt:
+                break
+            cur = nxt
+            out.append(cur)
+    seen, ordered = set(), []
+    for s in out:
+        if s and s not in seen:
+            seen.add(s)
+            ordered.append(s)
+    return ordered
+
+
 def rate_for(model: str, table: "dict | None" = None) -> "dict | None":
     """这一模型的生效价目:精确/别名 → 最长前缀 → None(未知,不当 $0)。
 
     `table` 给定时在这份表里找(save_override 要对**默认表**比 diff,
     不能对已生效的覆盖比 —— 否则重存一次同价会把用户上一轮的改价静默丢掉)。
+
+    前缀匹配刻意**保留后缀**:命中之后还要看剩下的那截是不是"另一个档"
+    (`qwen3.8-flash` 与 `qwen3.8-flash-pro` 不是一回事时,宁可判成未知也不并档)。
     """
-    m = _norm(model)
-    if not m:
+    forms = _query_forms(model)
+    if not forms:
         return None
     tab = table if table is not None else _table()
-    hit = tab.get(m)
-    if hit is not None:
-        return hit
-    best = ""
+    for m in forms:
+        hit = tab.get(m)
+        if hit is not None:
+            return hit
+    m = forms[-1]                      # 前缀这一轮只用剥到最干净的那一个写法
+    best, hit = "", None
     for key, row in tab.items():
         if len(key) > len(best) and m.startswith(key):
             best, hit = key, row
+    if hit is not None and best:
+        rest = m[len(best):]
+        # 剩下的那段是**另一个档**(pro/max/lite/…):不并档,判未知。主表里若真有
+        # 那一行,上面精确/别名两步就已经命中了,走不到这里 —— 所以这里判未知是对的。
+        if re.match(r"^[-.]?(pro|max|turbo|lite|preview|vision|exp)(?![a-z0-9])", rest):
+            return None
     return hit
+
+
+def _sym(row: dict) -> str:
+    """这一行单价的货币符号。官方页各家本来就用不同币种报价(DeepSeek 用 $,
+    阿里云百炼用「元/百万 Token」),把它们折成一个币种就得引入一个我自己编的汇率 ——
+    那是这一族最坏的一种编法,所以**各按各家币种估,合计也分开列**。"""
+    return {"CNY": "¥", "RMB": "¥", "元": "¥"}.get(str(row.get("cur") or "USD").upper(), "$")
+
+
+def _cur(row: dict) -> str:
+    c = str(row.get("cur") or "USD").upper()
+    return "CNY" if c in ("CNY", "RMB", "元") else "USD"
 
 
 def estimate(model: str, prompt_tokens, completion_tokens,
              cached_tokens=None) -> dict:
     """(这笔用量值多少钱, 有没有价可依)。
 
-    没有价目 → {"usd": None, "priced": False}:调用方据此写「未知」,
+    没有价目 → `priced: False` 且两个币种都是 None:调用方据此写「未知」,
     绝不许拿 None 去参加加法(那就是把未知当 0)。缓存价只在这笔用量**真的
     带了缓存明细**时才用;cache 数超出 prompt 视为脏数据,整段按输入价。
+    有价时 `usd` / `cny` **只有一个非空**(按那一行报价用的币种),
+    合计也据此分开列 —— 不跨币种相加。
     """
     p, c = _count(prompt_tokens), _count(completion_tokens)
     if p is None or c is None:
-        return {"usd": None, "priced": False}
+        return {"usd": None, "cny": None, "priced": False}
     row = rate_for(model)
     if row is None:
-        return {"usd": None, "priced": False}
+        return {"usd": None, "cny": None, "priced": False}
     rate_in = float(row.get("input") or 0)
     rate_out = float(row.get("output") or 0)
     cache = _count(cached_tokens)
     if cache is not None and "cache" in row and 0 <= cache <= p:
-        usd = ((p - cache) * rate_in + cache * float(row["cache"])
-               + c * rate_out) / 1e6
+        amount = ((p - cache) * rate_in + cache * float(row["cache"])
+                  + c * rate_out) / 1e6
     else:
-        usd = (p * rate_in + c * rate_out) / 1e6
-    out = {"usd": usd, "priced": True}
+        amount = (p * rate_in + c * rate_out) / 1e6
+    out = {"usd": None, "cny": None, "priced": True,
+          _cur(row).lower(): amount}
     note = _rate_note(row)
     if note:
         out["rate"] = note
@@ -239,12 +313,22 @@ def estimate(model: str, prompt_tokens, completion_tokens,
 
 
 def _rate_note(row: dict) -> str:
-    """悬停提示用的单价一句话(与 estimate 同一把尺,只此一处格式化)。"""
-    bits = [f"输入 ${float(row.get('input') or 0):g}",
-            f"输出 ${float(row.get('output') or 0):g}"]
+    """悬停提示用的单价一句话(与 estimate 同一把尺,只此一处格式化)。
+
+    句尾带**来源与核对日期**与"错峰价"那类限定 —— 用户看到"预估 $0.02"有权知道
+    这个数是从哪一版价目算的、以及它取的是官方两档价里的哪一档。
+    """
+    s = _sym(row)
+    bits = [f"输入 {s}{float(row.get('input') or 0):g}",
+            f"输出 {s}{float(row.get('output') or 0):g}"]
     if "cache" in row:
-        bits.append(f"缓存 ${float(row['cache']):g}")
-    return " / ".join(bits) + " 每 1M token"
+        bits.append(f"缓存 {s}{float(row['cache']):g}")
+    tail = " 每 1M token"
+    if row.get("tier"):
+        tail += f"({row['tier']})"
+    src = row.get("src") or RATES_SOURCE
+    asof = row.get("asof")
+    return " / ".join(bits) + tail + f" · {src}" + (f" {asof}" if asof else "")
 
 
 def summarize(models: list) -> dict:
@@ -252,10 +336,12 @@ def summarize(models: list) -> dict:
 
     口径:主数字只显示**有价可依**的那部分;缺价但有用量的模型列进
     `unpriced_models`(前端写脚注),绝不把它们当 0 混进总数。token 全为 0
-    时 cost_usd 是 0.0 —— 这是唯一允许 $0 的场合。
+    时 cost_usd 是 0.0 —— 这是唯一允许 $0 的场合。两种币种分开:`cost_usd`
+    只加美元报价的行,`cost_cny` 只加人民币报价的行,谁都不冒充对方。
     """
-    total = 0.0
-    priced_any = False
+    total_usd = 0.0
+    total_cny = 0.0
+    usd_any = cny_any = False
     unpriced: list[str] = []
     for m in models or []:
         if not isinstance(m, dict):
@@ -264,15 +350,21 @@ def summarize(models: list) -> dict:
         completion = _count(m.get("completion")) or 0
         r = estimate(m.get("model") or m.get("key"), prompt, completion)
         m["cost_usd"] = r["usd"]
+        m["cost_cny"] = r["cny"]
         m["priced"] = r["priced"]
         if "rate" in r:
             m["rate_note"] = r["rate"]
         if r["priced"]:
-            priced_any = True
-            total += r["usd"]
+            if r["usd"] is not None:
+                usd_any = True
+                total_usd += r["usd"]
+            if r["cny"] is not None:
+                cny_any = True
+                total_cny += r["cny"]
         elif prompt + completion > 0:
             unpriced.append(str(m.get("model") or m.get("key") or "?"))
-    return {"cost_usd": (round(total, 6) if priced_any else None),
+    return {"cost_usd": (round(total_usd, 6) if usd_any else None),
+            "cost_cny": (round(total_cny, 6) if cny_any else None),
             "unpriced_models": unpriced}
 
 

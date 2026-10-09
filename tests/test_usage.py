@@ -35,7 +35,7 @@ def test_record_and_statistics(tmp_path):
     # W0/W2 起摘要多带耗时/重试/会话数与估算费用:记账核心照旧钉全等;
     # 费用两个键只钉"在"(数值口径归 test_pricing,不在这张表里重复一把尺)。
     core = {k: v for k, v in s["summary"].items()
-            if k not in ("cost_usd", "unpriced_models")}
+            if k not in ("cost_usd", "cost_cny", "unpriced_models")}
     assert core == {"prompt": 155, "completion": 35, "total": 190,
                     "requests": 3, "elapsed_ms": 0, "retries": 0,
                     "sessions": 0}
@@ -122,7 +122,7 @@ def test_agent_records_usage_from_turn(tmp_path, config):
     agent.run_turn("q")
     s = usage.statistics(1)
     core = {k: v for k, v in s["summary"].items()
-            if k not in ("cost_usd", "unpriced_models")}
+            if k not in ("cost_usd", "cost_cny", "unpriced_models")}
     assert core == {"prompt": 12, "completion": 3, "total": 15,
                     "requests": 1, "elapsed_ms": 0, "retries": 0,
                     "sessions": 0}

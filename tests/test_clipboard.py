@@ -232,3 +232,129 @@ def test_frozen_targets_include_the_clipboard_module():
     """漏收 = 装好的包里右键粘贴静默退回浏览器授权条(功能"在"但一直不可用)。"""
     text = (ROOT / "scripts" / "check_frozen_version.py").read_text(encoding="utf-8")
     assert "minicode.clipboard" in text
+
+
+# ============================================ 写方向:把分享图复制进剪贴板(v0.9.140)
+
+def _png(w=37, h=11):
+    """非对称尺寸 + 一个角上不一样的像素:行序或步长算错时立刻看得出来。"""
+    from PIL import Image
+    im = Image.new("RGBA", (w, h), (10, 120, 200, 255))
+    im.putpixel((w - 1, h - 1), (250, 20, 30, 255))
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_png_to_dib_header_is_the_conservative_shape():
+    """24bpp + biHeight 取正(自底向上)+ 行补到 4 字节 —— 消费者支持面最宽的那一形。
+
+    带 alpha 的 32bpp 与"负 biHeight"这两种新形状,`SetClipboardData` 一样返回成功,
+    是**对方粘不出来**才看得见的事,而那已经不在我们这一侧了。所以这里钉形状本身。
+    """
+    from minicode import clipboard as cb
+    dib = cb.png_to_dib(_png())
+    size, w, h, planes, bpp, comp, imgsize = struct.unpack("<IiiHHII", dib[:24])
+    assert size == cb.DIB_INFOHEADER
+    assert (w, h) == (37, 11), "biHeight 必须是正数(自底向上);负值有的软件直接拒"
+    assert planes == 1 and bpp == 24 and comp == 0
+    stride = ((37 * 3) + 3) // 4 * 4                 # 111 → 112:行尾补零对齐
+    assert len(dib) == 40 + stride * 11 and imgsize == stride * 11
+
+
+def test_dib_we_hand_out_survives_the_modules_own_reader():
+    """写出去的字节要能被**同一个模块**读回来 —— 补头/偏移/行序算错的表现不是报错,
+    而是粘出来一张错位或翻转过来的图,所以这里真解一遍,连角上那个像素一起对。"""
+    from minicode import clipboard as cb
+    from PIL import Image
+    src = Image.open(io.BytesIO(_png())).convert("RGB")
+    bmp = cb.bmp_from_dib(cb.png_to_dib(_png()))
+    with Image.open(io.BytesIO(bmp)) as im:
+        assert im.size == (37, 11)
+        assert im.convert("RGB").getpixel((36, 10)) == src.getpixel((36, 10)), \
+            "右下角对不上 = 行序翻了(自顶向下与自底向上写反了)"
+        assert im.convert("RGB").getpixel((0, 0)) == src.getpixel((0, 0))
+
+
+def test_write_image_degrades_with_a_sentence_never_a_crash(monkeypatch):
+    from minicode import clipboard as cb
+    got = cb.write_image(b"definitely-not-a-png")
+    assert got["ok"] is False and got["msg"], got
+    monkeypatch.setattr(cb.sys, "platform", "darwin")
+    out = cb.write_image(_png())
+    assert out["ok"] is False and "工作区" in out["msg"], out
+    monkeypatch.undo()
+    monkeypatch.setattr(cb, "_locked_open", lambda u, c: False)
+    busy = cb.write_image(_png())
+    assert busy["ok"] is False and "占用" in busy["msg"], busy
+
+
+def _fake_win_clipboard(monkeypatch, set_ok=True):
+    """一套假 user32/kernel32:只记账 + 一块**真的**内存当 GlobalLock 的返回值。
+
+    不碰真剪贴板 —— 那是用户机上的共享状态,测试把人家复制到一半的东西顶掉，
+    比少一根针糟糕得多。给 memmove 的必须是真地址,否则这一支自己先崩。
+    """
+    import ctypes
+    import types
+    from minicode import clipboard as cb
+    calls = []
+    buf = ctypes.create_string_buffer(1 << 20)
+    addr = ctypes.addressof(buf)
+
+    def mk(name, ret):
+        def fn(*_a):
+            calls.append(name)
+            return ret
+        return fn
+
+    kernel32 = types.SimpleNamespace(
+        GlobalAlloc=mk("GlobalAlloc", 0x1234),
+        GlobalLock=mk("GlobalLock", addr),
+        GlobalUnlock=mk("GlobalUnlock", 1),
+        GlobalFree=mk("GlobalFree", 0),
+        GlobalSize=mk("GlobalSize", 0))
+    user32 = types.SimpleNamespace(
+        OpenClipboard=mk("OpenClipboard", 1),
+        CloseClipboard=mk("CloseClipboard", 1),
+        IsClipboardFormatAvailable=mk("IsClipboardFormatAvailable", 0),
+        GetClipboardData=mk("GetClipboardData", 0),
+        EmptyClipboard=mk("EmptyClipboard", 1),
+        SetClipboardData=mk("SetClipboardData", 0x7777 if set_ok else 0))
+    monkeypatch.setattr(cb.sys, "platform", "win32")
+    monkeypatch.setattr(cb, "_windll",
+                        lambda name: user32 if name == "user32" else kernel32)
+    monkeypatch.setattr(cb, "_locked_open", lambda a, b: True)
+    return calls, buf
+
+
+def test_success_hands_the_block_to_the_system_and_never_frees_it(monkeypatch):
+    """**成功之后绝不许 GlobalFree**:那块内存已归系统所有。
+    自己 free 的后果不是当场报错,而是几秒后用户在别处 Ctrl+V 时才崩 ——
+    现场离这段代码隔了几秒,那种 bug 最难查,所以这一条按调用顺序钉死。"""
+    from minicode import clipboard as cb
+    calls, buf = _fake_win_clipboard(monkeypatch, set_ok=True)
+    png = _png()
+    got = cb.write_image(png, "card.png")
+    assert got["ok"] is True and "card.png" in got["msg"], got
+    assert "GlobalFree" not in calls, calls
+    assert calls.index("EmptyClipboard") < calls.index("SetClipboardData"), calls
+    assert "CloseClipboard" in calls, calls
+    want = cb.png_to_dib(png)[:24]
+    assert bytes(buf.raw[:24]) == want, "交出去的那段头部要与我们算的完全一样"
+
+
+def test_a_failed_handoff_frees_what_it_allocated(monkeypatch):
+    from minicode import clipboard as cb
+    calls, _buf = _fake_win_clipboard(monkeypatch, set_ok=False)
+    got = cb.write_image(_png())
+    assert got["ok"] is False and calls.count("GlobalFree") == 1, (got, calls)
+
+
+def test_copy_share_image_facade_takes_no_path():
+    """门面这一颗**零参数**:要复制的是桥自己记着的那一张。
+    界面传不进路径,也就传不进 `..` 指向的任意文件 —— 这是这颗按钮唯一的注入面。"""
+    import inspect
+    from minicode.gui_bridge import PublicApi
+    assert list(inspect.signature(PublicApi.copy_share_image).parameters) == ["self"]
+    assert {"rename_session", "archive_session"} <= set(dir(PublicApi))

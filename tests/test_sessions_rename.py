@@ -217,3 +217,56 @@ def test_sidebar_row_shows_the_manual_title(config, tmp_path):
     items = [e for e in window.events if e["type"] == "sessions" and e.get("items")][-1]["items"]
     row = next(r for r in items if r["file"] == path.name)
     assert row["title"] == "蓝桥杯·报名材料", row
+
+
+# ---------------------------------------------------- 侧栏那个菜单要的那三件(v0.9.140)
+
+def _row(bridge, window, name):
+    bridge._push_sessions()
+    items = [e for e in window.events if e["type"] == "sessions" and e.get("items")][-1]["items"]
+    return next((r for r in items if r["file"] == name), None)
+
+
+def test_bridge_rename_session_writes_the_log_and_republishes(config, tmp_path):
+    """图形侧改名:真改留档那一行,并把新标题推回侧栏(不是只改前端自己显示的字)。
+
+    原来这一路**根本不存在**:前端只有一颗 ✕,`rename_session` 在桥里没有,
+    改名只有 CLI 的 /rename 能用 —— 用户 2026-10-09 指的"还是无法更改任务的名称"就是它。
+    """
+    from test_gui_bridge import FakeLLM, make
+    bridge, window, _s = make(config, tmp_path, FakeLLM([]))
+    p = _log(tmp_path, "session_menu.jsonl", [_start(title="旧名"), _user()])
+    got = bridge.rename_session(p.name, "  蓝桥杯报名材料  ")
+    assert got["ok"] is True and "已改名为" in got["msg"], got
+    head = json.loads(p.read_text(encoding="utf-8").splitlines()[0])
+    assert head["title"] == "蓝桥杯报名材料", head          # 首尾空白压平,与 CLI 同一只手
+    assert _row(bridge, window, p.name)["title"] == "蓝桥杯报名材料"
+
+
+def test_bridge_rename_refuses_blank_and_missing_without_touching_bytes(config, tmp_path):
+    from test_gui_bridge import FakeLLM, make
+    bridge, window, _s = make(config, tmp_path, FakeLLM([]))
+    p = _log(tmp_path, "session_blank.jsonl", [_start(title="留着"), _user()])
+    before = p.read_bytes()
+    got = bridge.rename_session(p.name, "   ")
+    assert got["ok"] is False and "空" in got["msg"], got
+    assert p.read_bytes() == before, "空标题不该动一个字节"
+    missing = bridge.rename_session("session_none.jsonl", "改成这个")
+    assert missing["ok"] is False and "不存在" in missing["msg"], missing
+    assert p.read_bytes() == before
+
+
+def test_bridge_archive_marks_the_row_and_still_shows_it(config, tmp_path):
+    """归档要能在菜单上被**取消** —— 所以那一行的状态必须推给前端,否则按钮写什么靠猜。"""
+    from test_gui_bridge import FakeLLM, make
+    bridge, window, _s = make(config, tmp_path, FakeLLM([]))
+    p = _log(tmp_path, "session_arch.jsonl", [_start(), _user()])
+    assert _row(bridge, window, p.name)["archived"] is False
+    got = bridge.archive_session(p.name, True)
+    assert got["ok"] is True and "已归档" in got["msg"], got
+    row = _row(bridge, window, p.name)
+    assert row["archived"] is True, row                     # 菜单下一颗要改成「取消归档」
+    assert row is not None                                  # 沉底 ≠ 隐藏
+    assert bridge.archive_session(p.name, False)["ok"] is True
+    assert _row(bridge, window, p.name)["archived"] is False
+

@@ -215,12 +215,21 @@ try {
   .sess-empty{ color:var(--text-2); font-size:12.5px; padding:9px 12px;
                background:var(--glass-lite); border:1px dashed var(--line);
                border-radius:var(--r-m); line-height:1.6; }
-  .sess{ position:relative; padding-right:26px; }
-  .sess .sx{ display:none; position:absolute; top:7px; right:6px; width:20px; height:20px;
+  .sess{ position:relative; padding-right:46px; }
+  .sess .sx,.sess .sm{ display:none; position:absolute; top:7px; width:20px; height:20px;
              border:none; border-radius:6px; background:transparent; color:var(--text-3);
              cursor:pointer; font-size:12px; line-height:1; }
-  .sess:hover .sx{ display:block; }
+  .sess .sm{ right:26px; }
+  .sess .sx{ right:6px; }
+  .sess:hover .sx,.sess:hover .sm{ display:block; }
   .sess .sx:hover{ background:var(--danger-bg); color:var(--danger); }
+  .sess .sm:hover{ background:var(--primary-light); color:var(--primary-text); }
+  /* 重命名是**就地改**:弹 window.prompt 在部分内嵌 WebView 里根本不出现,
+     点了像没反应 —— 那种"看起来没反应"正是用户说的"无法更改名称"。 */
+  .sess input.sess-rename{ width:100%; box-sizing:border-box; font-size:12.5px; font-weight:600;
+             background:var(--glass-strong); border:1px solid var(--primary);
+             border-radius:6px; padding:1px 5px; color:var(--text-1); }
+  .sess.archived .t{ opacity:.62; }
 
   /* 侧栏会话按工作区分组(组头 = 📁 工作区名,点击可切到那个工作区) */
   .ws-group{ margin-bottom:6px; }
@@ -777,7 +786,7 @@ try {
   /* 「重新生成」只对最后一条回答开着:评过分的也照开(不满意才更要重答) */
   .acts button.rt-re[disabled]{ opacity:.3; pointer-events:none; }
   /* 分享图在排队时先"占住"这颗按钮:排一张卡片要几百毫秒,连点会出好几张图 */
-  .acts button.shr.pending{ opacity:.5; pointer-events:none; }
+  .acts button.shr.pending, .acts button.shrc.pending{ opacity:.5; pointer-events:none; }
   /* 「接着做」那一行:逾期/今天到期的是紧急项,给一条主色描边,但不用红 —— 红在这套
      暮色玻璃视觉里是"出错",拿来说"今天要做"会让人误读。 */
   .go-chips .chip-go{ border-color:var(--line-soft); }
@@ -913,6 +922,23 @@ try {
                    border-radius:99px; padding:2px 12px; cursor:pointer; font-size:11.5px;
                    color:var(--text-2); }
   .editbar button:hover{ border-color:var(--danger); color:var(--danger); }
+  /* 跑着的时候按 Enter 攒下的「待插话」草稿条:一句草稿 + 三颗小动作。
+     做成草稿而不是立刻发,是因为立刻发没有反悔的余地 —— 打错一个字就并进
+     了学长手头那一轮,而它已经按这句去取下一步了。 */
+  .draftbar{ display:flex; flex-direction:column; gap:5px; margin-bottom:7px;
+             max-height:132px; overflow-y:auto; }
+  .dchip{ display:flex; align-items:center; gap:8px; padding:5px 8px 5px 10px;
+          background:var(--glass-lite); border:1px solid var(--line-soft);
+          border-radius:var(--r-full); font-size:12px; color:var(--text-1); }
+  .dchip .dt{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
+              white-space:nowrap; }
+  .dchip .da{ flex:none; display:flex; gap:4px; }
+  .dchip button{ background:var(--glass-strong); border:1px solid var(--line-soft);
+                 border-radius:99px; padding:2px 9px; cursor:pointer; font-size:11.5px;
+                 color:var(--text-2); }
+  .dchip button.go{ border-color:var(--primary); color:var(--primary-text); font-weight:700; }
+  .dchip button:hover{ border-color:var(--primary); color:var(--primary-text); }
+  .dchip button.rm:hover{ border-color:var(--danger); color:var(--danger); }
   .composer .box{ display:flex; gap:10px; align-items:flex-end;
                   background:var(--glass-strong);
                   border:1.5px solid var(--primary); border-radius:var(--r-full);
@@ -1067,6 +1093,11 @@ try {
   .mermaid{ background:var(--glass-strong); border:1px solid var(--line-soft);
             border-radius:var(--r-m); padding:10px; margin:6px 0;
             overflow-x:auto; text-align:center; }
+  /* 数学公式:没加载到 KaTeX(或这条解不开)时这里就是 LaTeX 原文,所以字体不能歪 ——
+     思考块里那段是斜体的,公式继承过去会看着像坏了。 */
+  .math{ font-style:normal; }
+  .math.math-d{ display:block; overflow-x:auto; margin:6px 0; }
+  .math .katex{ font-size:1.06em; }
 
   /* ---------------- 弹窗 & 提示 ---------------- */
   .overlay{ position:fixed; inset:0; background:rgba(9,15,23,.5);
@@ -2430,6 +2461,7 @@ try {
         <button class="pi-mute" id="proactiveMute" title="不再检查官网新通知">不再提醒</button>
         <button class="pi-x" id="proactiveClose" title="本次忽略">✕</button>
       </div>
+      <div class="draftbar" id="draftBar" style="display:none"></div>
       <div class="editbar" id="editBar" style="display:none">
         ✎ 编辑重发:发送后将替换该条消息及其后的全部对话
         <button id="btnEditCancel">取消编辑</button>
@@ -3085,7 +3117,35 @@ let nearBottom = true;
 function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-function renderMd(text) { try { return marked.parse(esc(text)); } catch { return esc(text); } }
+/* 数学公式的定界符:$$…$$ / \[…\] / \(…\) 是成对块级;$…$ 是行内。
+   行内那条必须挑得起来,否则"价格 $5 和 $10"会被当成一条公式(内容首尾不许是空白,
+   闭合的 $ 后面不许紧跟数字 —— 与 remark-math 同一套判据,不是我自己拍的)。 */
+const MATH_PAT = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$(?![\s$])((?:[^$\n\\]|\\.)+?)(?<![\s\\])\$(?!\d)/g;
+const CODE_PAT = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/g;
+const MATH_MARK = "⁣";        // 不可见分隔符:marked 与 esc 都不碰它,不会污染版式
+function renderMd(text) {
+  // 先把公式从正文里"抱出来"再交给 markdown:否则 `$s_1$ 与 $s_2$` 里那对下划线
+  // 会被 markdown 当成斜体吃掉,公式就再也拼不回来。代码段里的 $ 不算公式,所以
+  // 按代码/非代码交替切段,只在非代码段里找。
+  const held = [];
+  const masked = String(text || "").split(CODE_PAT).map((seg, i) => {
+    if (i % 2 === 1) return seg;
+    return seg.replace(MATH_PAT, (m, a, b, c, d) => {
+      const tex = a !== undefined ? a : (b !== undefined ? b : (c !== undefined ? c : d));
+      held.push({ tex, disp: a !== undefined || b !== undefined || c !== undefined });
+      return MATH_MARK + "M" + (held.length - 1) + MATH_MARK;
+    });
+  }).join("");
+  let html;
+  try { html = marked.parse(esc(masked)); } catch { html = esc(masked); }
+  return html.replace(new RegExp(MATH_MARK + "M(\\d+)" + MATH_MARK, "g"), (m, n) => {
+    const it = held[+n];
+    if (!it) return m;
+    // 公式原文只进 textContent(经 esc),渲染那一步再换成 KaTeX 的 HTML ——
+    // 拉不起来或解不开时留在屏上的就是这段原文,不是一片空白。
+    return '<span class="math' + (it.disp ? " math-d" : "") + '">' + esc(it.tex) + "</span>";
+  });
+}
 
 function scrollPin() {
   nearBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 120;
@@ -3704,7 +3764,7 @@ function ensureAssistant() {
     <div class="trace" hidden>
       <div class="tr-head" title="点击展开 / 收起思考与工具调用过程">💭 工作过程 · <span class="tr-sum">进行中…</span><span class="arr">▾</span></div>
       <div class="tr-body">
-        <div class="think" hidden><div class="th-head">💭 思考 · <span class="th-time">进行中…</span></div><div class="th-body"></div></div>
+        <div class="think" hidden><div class="th-head" title="点击展开 / 收起思考原文">💭 思考 · <span class="th-time">进行中…</span><span class="arr">▾</span></div><div class="th-body"></div></div>
         <div class="tr-tools"></div>
       </div>
     </div>
@@ -3712,6 +3772,7 @@ function ensureAssistant() {
     <div class="stats" hidden title="本次输出的实测耗时与速度(服务端返回 token 数才显示速度)"></div>
     <div class="acts"><button class="cp" title="复制回复">⧉</button>
       <button class="shr" title="把这段回答排成一张能发群的图片（带来源出处）">🖼</button>
+      <button class="shrc" title="把刚生成的那张分享图复制到剪贴板（不用再去找文件，Ctrl+V 直接粘）">📋</button>
       <span class="rate"><button class="rt-up" title="这个回答有帮助">👍</button><button class="rt-dn" title="这个回答不对/没帮助">👎</button><button class="rt-re" title="撤掉这段回答,照原样再答一次">↻</button></span></div>`;
   chat.appendChild(wrap);
   bindCopy(wrap.querySelector(".cp"), () => wrap.dataset.raw);
@@ -3748,6 +3809,23 @@ function ensureAssistant() {
   });
   rtUp.addEventListener("click", () => doRate(1, rtUp));
   rtDn.addEventListener("click", () => doRate(-1, rtDn));
+  // 「复制图片」:复制的是**最近生成的那一张**,路径由后端自己记着(界面不传路径)。
+  // 没生成过 / 剪贴板被占 / 非 Windows,后端各回各的人话,这里原样显示不缩成"失败"。
+  const shrc = wrap.querySelector(".shrc");
+  shrc.addEventListener("click", () => {
+    const api = window.pywebview && pywebview.api;
+    if (!api || !api.copy_share_image) { toast("复制图片这条桥没接上", true); return; }
+    if (shrc.classList.contains("pending")) return;
+    shrc.classList.add("pending");
+    api.copy_share_image().then(r => {
+      shrc.classList.remove("pending");
+      const ok = !!(r && r.ok);
+      toast(r && r.msg ? r.msg : (ok ? "图片已复制" : "复制图片没成功"), !ok);
+    }).catch(() => {
+      shrc.classList.remove("pending");
+      toast("复制图片没送到后端", true);
+    });
+  });
   // 「重新生成」:把这段回答撤下来,让后端照原样重跑那句提问(带上当时的附件消息体)。
   // 只给最后一条回答开着 —— 更早的那条点重答会把后面整段一起丢掉,所以直接关掉。
   const rtRe = wrap.querySelector(".rt-re");
@@ -3771,14 +3849,21 @@ function ensureAssistant() {
     trace.classList.toggle("open");
     trace.dataset.touched = "1";            // 用户手动开合过,就不再自动折叠
   });
+  // 思考那一块自己也要能开合:它嵌在 trace 里面,外层展开≠里层展开 —— 原来这里没接
+  // 任何监听,而 CSS 的 `.think.open .th-body{display:block}` 因此永远不生效,
+  // 用户看到的就是"思考 · 进行中…"一行字,正文一个字都看不见(2026-10-09 用户截图指的就是这个)。
+  const think = wrap.querySelector(".think");
+  think.querySelector(".th-head").addEventListener("click", () => {
+    think.classList.toggle("open");
+    think.dataset.touched = "1";            // 手动开合过之后,答完不再自动收起它
+  });
   cur = { wrap, body: wrap.querySelector(".body"),
           trace, trSum: wrap.querySelector(".tr-sum"),
           tools: wrap.querySelector(".tr-tools"),
-          think: wrap.querySelector(".think"),
-          thTime: wrap.querySelector(".th-time"),
+          think, thTime: wrap.querySelector(".th-time"),
           stats: wrap.querySelector(".stats"),
           text: "", reasoningText: "", reasonStart: 0, toolCount: 0,
-          lastRender: 0, timer: null };
+          lastRender: 0, timer: null, thTick: null };
   lastTraceTurn = cur;                      // 本轮的工具卡片都落进这个 trace
   return cur;
 }
@@ -3831,6 +3916,53 @@ function showTrace(c) {
   }
   if (!c.reasonStart) c.reasonStart = Date.now();
   if (!c.trace.dataset.reasonStart) c.trace.dataset.reasonStart = String(Date.now());
+}
+/* ---------------- 思考中那一行的实时读数 ---------------- */
+/* token 数在服务器回报 usage 之前拿不到,只能按字符估(CJK 一字约一 token,
+   其余四个字符约一 token)。所以这一行**永远带一个「约」字** —— 答完之后
+   下面那行 ⚡ 用的是服务端真数,两者不是一回事,不能拿估算冒充实测。 */
+function isWideCp(cp) {
+  /* 中日韩文字与全角标点:一个字约一 token。写成码位区间而不是正则里的字面汉字 ——
+     这份 HTML 的 JS 段保持 ASCII,免得第三种编码在 Windows 上咬人。 */
+  return (cp >= 0x3000 && cp <= 0x303f) || (cp >= 0x3040 && cp <= 0x30ff)
+      || (cp >= 0x3400 && cp <= 0x4dbf) || (cp >= 0x4e00 && cp <= 0x9fff)
+      || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xac00 && cp <= 0xd7af)
+      || (cp >= 0xff00 && cp <= 0xffef);
+}
+function estTokens(s) {
+  let wide = 0, other = 0;
+  const str = String(s || "");
+  for (let i = 0; i < str.length; i++) {
+    if (isWideCp(str.codePointAt(i))) wide++; else other++;
+  }
+  return Math.max(1, Math.round(wide + other / 4));
+}
+function thinkLine(c, done) {
+  if (!c || !c.reasonStart) return done ? "已思考" : "进行中…";
+  const sec = Math.max(1, Math.round((Date.now() - c.reasonStart) / 1000));
+  const rate = (estTokens(c.reasoningText) / sec).toFixed(1);
+  return (done ? "已思考 " : "思考中 ") + sec + " 秒 · 约 " + rate + " token/秒";
+}
+function thinkTick(c) {
+  if (!c || !c.think || c.think.dataset.stopped) return;
+  if (c.thTime) c.thTime.textContent = thinkLine(c, false);
+  if (!c.thTick) c.thTick = setInterval(() => {
+    // 节点被摘掉(重新生成会整段摘)或这块已经不再显示,计时器就该自己死 ——
+    // 留着它既费 CPU,又会往一个没人看的节点上写字。
+    if (!c.thTime || !c.think || !document.contains(c.think) || c.think.hidden
+        || c.think.dataset.stopped) {
+      clearInterval(c.thTick); c.thTick = null; return;
+    }
+    c.thTime.textContent = thinkLine(c, false);
+  }, 500);
+}
+function thinkStop(c) {
+  if (!c || !c.think || c.think.dataset.stopped) return;
+  c.think.dataset.stopped = "1";
+  if (c.thTick) { clearInterval(c.thTick); c.thTick = null; }
+  if (c.thTime) c.thTime.textContent = thinkLine(c, true);
+  // 答完了收回成一行,除非用户自己点开过(他要留着看就留着)。
+  if (!c.think.dataset.touched) c.think.classList.remove("open");
 }
 function foldTraceEl(el) {
   if (!el || el.hidden || el.dataset.touched || el.dataset.done) return;
@@ -3935,6 +4067,43 @@ async function renderMermaidBlocks(root) {
   }
 }
 
+/* ---------------- 数学公式:KaTeX 懒加载(与 mermaid 同一套做法) ----------------
+   出现公式才去拉 vendor/katex,平时一个字都不多加载;拉不起来或这条解不开,
+   留在屏上的是 LaTeX 原文(renderMd 已经把原文放进 textContent)——
+   "公式渲染失败变成看不见公式"是这个功能最坏的一种坏法,所以宁可留原文。 */
+let katexLoading = null;
+function ensureKatex() {
+  if (window.katex) return Promise.resolve(true);
+  if (katexLoading) return katexLoading;
+  katexLoading = new Promise(resolve => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "vendor/katex/katex.min.css";
+    document.head.appendChild(link);          // 字体只在真用到时由浏览器去取
+    const s = document.createElement("script");
+    s.src = "vendor/katex/katex.min.js";
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+  return katexLoading;
+}
+async function renderMathBlocks(root) {
+  if (!root) return;
+  const spans = root.querySelectorAll("span.math");
+  if (!spans.length) return;
+  if (!(await ensureKatex())) return;
+  for (const el of spans) {
+    if (el.dataset.kx === "1") continue;
+    el.dataset.kx = "1";                      // 一条只画一次,流式重画不重复排队
+    try {
+      el.innerHTML = katex.renderToString(el.textContent, {
+        displayMode: el.classList.contains("math-d"),
+        throwOnError: false, output: "html" });
+    } catch (e) { el.dataset.kx = "0"; }      // 解不开:把原文留着,下次还能再试
+  }
+}
+
 function renderAssistant(force) {
   const c = cur;
   if (!c) return;
@@ -3948,7 +4117,8 @@ function renderAssistant(force) {
   c.wrap.dataset.raw = c.text;
   c.body.hidden = !hasText;                 // 没有正文就不显示空框
   c.wrap.classList.toggle("trace-only", !hasText);
-  if (hasText) { c.body.innerHTML = renderMd(c.text); fixImages(c.body); }
+  if (hasText) { c.body.innerHTML = renderMd(c.text); fixImages(c.body);
+                 renderMathBlocks(c.body); }
   toBottom();
 }
 
@@ -4039,6 +4209,7 @@ window.__gcodeEvent = function (e) {
   switch (e.type) {
     case "text_delta": {
       const c = ensureAssistant();
+      thinkStop(c);          // 正文开始输出 = 思考结束:实时那一行定稿,计时器收掉
       foldAllTraces();
       lastSent = null;      // 模型真的开始答了:这句是送到了的,不该再放回输入框
       c.text += e.text;
@@ -4049,8 +4220,12 @@ window.__gcodeEvent = function (e) {
       const c = ensureAssistant();
       showTrace(c);
       c.think.hidden = false;
+      // 思考中默认摊开:这一路要的就是"看得见它在想什么"。用户自己开合过就不插手。
+      if (!c.think.dataset.touched && !c.think.classList.contains("open"))
+        c.think.classList.add("open");
       c.reasoningText += e.text;
       c.think.querySelector(".th-body").textContent = c.reasoningText.slice(-3000);
+      thinkTick(c);
       break;
     }
     case "finish_stream":
@@ -4061,11 +4236,13 @@ window.__gcodeEvent = function (e) {
         requestAnimationFrame(() => runFind($("findInput").value, true));
       }
       if (cur) {
+        thinkStop(cur);        // 收尾也要定稿一次:有些厂商整段没有正文增量(纯思考)
         foldTrace(cur);
         foldAllTraces();
         renderAssistant(true);
         fixImages(cur.body || chat);
         renderMermaidBlocks(cur.body || chat);
+        renderMathBlocks(cur.body || chat);
         if (!cur.text.trim()) {          // 纯工具调用/空回复:不给复制按钮
           const acts = cur.wrap.querySelector(".acts");
           if (acts) acts.remove();
@@ -4197,6 +4374,7 @@ window.__gcodeEvent = function (e) {
       if (e.session) currentSessionKey = e.session;   // 新建/切换会话
       cancelEdit(true);
       clearAttachments();
+      drafts.length = 0; renderDrafts();   // 换了会话,上一轮攒的待插话不该还挂在输入框上
       setBusy(false);
       renderHome();
       refreshHomeSuggestions();
@@ -4406,6 +4584,7 @@ function renderHistory(messages) {
   nearBottom = true; toBottom();
   fixImages(chat);
   renderMermaidBlocks(chat);
+  renderMathBlocks(chat);
   rebuildChatRail();      // 轮次导航条(p6):整个会话重建后按真实消息重收刻度
 }
 
@@ -4413,7 +4592,8 @@ function renderSessions(items) {
   sessionItems = items || [];       // 会话切换快捷键(Ctrl+Shift+[ / ])要按这份顺序走
   const box = $("sessions");
   box.innerHTML = "";
-  if (!items.length) {
+  if (!sessionItems.length) {       // 上一行刚把缺省值兜成 [],这一行却读原参数:
+                                    // 载荷里没带 items(桥早期回话/异常回话)时整块侧栏炸在这里
     box.innerHTML = `<div class="sess-empty">暂无历史会话<br>提一个问题就会自动存下来</div>`;
     return;
   }
@@ -4421,7 +4601,7 @@ function renderSessions(items) {
   // 组头可折叠;其他工作区的组头悬停有"切过去"提示(切换入口在上方项目面板)。
   const groups = [];                       // [{name, here, items:[]}]
   const byName = new Map();
-  for (const s of items) {
+  for (const s of sessionItems) {
     const name = s.ws_current ? "__here__" : (s.workspace || "未记录");
     if (!byName.has(name)) {
       const g = { name, here: !!s.ws_current, items: [] };
@@ -4450,9 +4630,11 @@ function renderSessions(items) {
     const wrap = document.createElement("div");
     for (const s of g.items) {
       const el = document.createElement("div");
-      el.className = "sess" + (s.current ? " current" : "") + (s.running ? " running" : "");
+      el.className = "sess" + (s.current ? " current" : "") + (s.running ? " running" : "")
+                   + (s.archived ? " archived" : "");
       el.innerHTML = `<div class="t">${s.running ? '<span class="spin" title="任务正在后台运行"></span>' : ""}<span class="tt"></span></div>`
-        + `<div class="m"></div><button class="sx" title="删除该会话">✕</button>`;
+        + `<div class="m"></div><button class="sm" title="更多操作(重命名 / 归档 / 删除)">⋯</button>`
+        + `<button class="sx" title="删除该会话">✕</button>`;
       // v0.9.98:标题(第一条提问派生)优先 —— 最后一句会漂,题目不该漂;
       // 老留档没有 title 字段时退回原样,兼容不破
       el.querySelector(".tt").textContent = s.title || s.last_user_text || "(无用户消息)";
@@ -4471,11 +4653,93 @@ function renderSessions(items) {
         ev.stopPropagation();
         appConfirm(`删除该会话记录?`, () => pywebview.api.delete_session(s.file || s.index), "删除会话");
       });
+      // 会话菜单:点 ⋯ 或右键整行都呼出。原来这一行只有一颗 ✕(=只能删),
+      // 而重命名只有 CLI 的 /rename 能用 —— 用户 2026-10-09 指的就是这个缺口。
+      el.querySelector(".sm").addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        openSessMenu(ev, s, el);
+      });
+      el.addEventListener("contextmenu", (ev) => {
+        ev.preventDefault();
+        openSessMenu(ev, s, el);
+      });
       wrap.appendChild(el);
     }
     grp.appendChild(wrap);
     box.appendChild(grp);
   }
+}
+
+/* ---------------- 会话菜单(⋯ / 右键) ---------------- */
+let sessMenu = null;
+function closeSessMenu() { if (sessMenu) { sessMenu.remove(); sessMenu = null; } }
+function sessMenuOutside(ev) {
+  if (!sessMenu) return;
+  if (!sessMenu.contains(ev.target)) closeSessMenu();
+}
+function openSessMenu(ev, s, row) {
+  closeSessMenu();
+  const id = s.file || s.index;              // 认文件名:渲染到点击之间序号会错位
+  const items = [
+    { label: "打开这条会话",
+      on: () => pywebview.api.resume_session(id).then(r => { if (r && r.ok === false) toast(r.msg, true); }) },
+    { label: "重命名", on: () => startSessRename(id, row) },
+    { label: s.archived ? "取消归档" : "归档(沉到列表末尾,不删除)",
+      on: () => pywebview.api.archive_session(id, !s.archived).then(r => {
+        if (r && r.msg) toast(r.msg, r.ok === false); }) },
+    { label: "复制会话 ID",
+      on: () => copyText(String(id)).then(ok => toast(ok ? "会话 ID 已复制" : "复制没成功", !ok)) },
+    { label: "删除该会话", danger: true,
+      on: () => appConfirm("删除该会话记录?", () => pywebview.api.delete_session(id), "删除会话") },
+  ];
+  const menu = document.createElement("div");
+  menu.className = "proj-menu show";        // 与项目菜单同一套外观,不另起一种
+  menu.style.minWidth = "196px";
+  for (const it of items) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = it.label;
+    if (it.danger) b.className = "danger";
+    b.addEventListener("click", () => { closeSessMenu(); it.on(); });
+    menu.appendChild(b);
+  }
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.max(6, Math.min(ev.clientX, innerWidth - r.width - 8)) + "px";
+  menu.style.top = Math.max(6, Math.min(ev.clientY, innerHeight - r.height - 8)) + "px";
+  sessMenu = menu;
+  document.addEventListener("mousedown", sessMenuOutside, { once: true });
+}
+function startSessRename(id, row) {
+  const span = row.querySelector(".tt");
+  if (!span || row.querySelector("input.sess-rename")) return;
+  const was = span.textContent;
+  const input = document.createElement("input");
+  input.className = "sess-rename";
+  input.value = was;
+  span.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    const val = input.value.trim();
+    if (!commit || !val || val === was) { input.replaceWith(span); return; }
+    // 改名之后不手工回写 DOM:桥那边 _push_sessions 会重画整条列表,
+    // 屏上看到的就一定是留档里真有的那个标题(而不是前端自己以为改成了)。
+    pywebview.api.rename_session(id, val).then(r => {
+      if (r && r.ok === false) { input.replaceWith(span); toast(r.msg || "改名没成", true); }
+      else if (r && r.msg) toast(r.msg);
+    }).catch(() => { input.replaceWith(span); toast("改名没送到后端", true); });
+  };
+  input.addEventListener("keydown", e => {
+    e.stopPropagation();                     // 别被"Enter 发送"那条全局键处理抢走
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("click", e => e.stopPropagation());
 }
 
 /* ---------------- 会话搜索与导出(v0.9.13) ---------------- */
@@ -5562,9 +5826,18 @@ function rangeLabel(r) {
   if (r.kind === "day") return cn(r.start_date);
   return `${cn(r.start_date)} – ${cn(r.end_date)}${r.kind === "all" ? " · 全部" : ""}`;
 }
-function fmtCost(n) {
-  // 费用显示:小于 1 美元给 4 位小数(几美分的单子两位数全是 0,看不出差别)。
-  return "$" + (n >= 1 ? n.toFixed(2) : n.toFixed(4));
+function fmtCost(n, cur) {
+  // 费用显示:小于 1 单位给 4 位小数(几美分的单子两位数全是 0,看不出差别)。
+  // 币种按**那一行报价用的币种**显示(DeepSeek 报 $,阿里云百炼报 ¥):
+  // 把两种币折成一个数要引入一个我自己编的汇率,那正是这一族最不该编的数。
+  return (cur === "CNY" ? "¥" : "$") + (n >= 1 ? n.toFixed(2) : n.toFixed(4));
+}
+function costBoth(usd, cny) {
+  // 两个币种各列一个数,谁也不冒充谁;都没有才写「未知」。
+  const bits = [];
+  if (usd !== null && usd !== undefined) bits.push(fmtCost(usd));
+  if (cny !== null && cny !== undefined) bits.push(fmtCost(cny, "CNY"));
+  return bits.length ? bits.join(" + ") : null;
 }
 function fmtDur(ms) {
   // W3 耗时显示:毫秒/秒/分/时按量级取整 —— 只格式化实测值,未记录如实写,
@@ -5790,10 +6063,10 @@ function renderUsage(s) {
     heatHtml = renderHeat2D(g);
   // W2 估算费用:主数字只显示有价可依的部分;缺行显示「未知」,绝不当 $0 ——
   // 把不知道的记成零是最会骗人的诚实。
-  const cost = sum.cost_usd;
-  const costLine = (cost === null || cost === undefined)
+  const cost = costBoth(sum.cost_usd, sum.cost_cny);
+  const costLine = cost === null
     ? '<div class="ubig-cost is-unknown">未知 · 估算费用 · 价目缺行</div>'
-    : `<div class="ubig-cost">${fmtCost(cost)} · 估算费用 · 非账单</div>`;
+    : `<div class="ubig-cost">${cost} · 估算费用 · 非账单</div>`;
   // C1 日预算:真的配了预算才画条,没配不占位(不画假的)。
   const budget = (s.today || {}).budget;
   let budgetBar = "";
@@ -5830,12 +6103,14 @@ function renderUsage(s) {
       <td><b>${esc(m.model || m.key)}</b><br><small style="color:var(--text-3)">${esc(m.provider || "")}</small></td>
       <td>${fmtTok(m.prompt)}</td><td>${fmtTok(m.completion)}</td>
       <td><b>${fmtTok(m.total)}</b></td>
-      <td>${m.cost_usd === null || m.cost_usd === undefined ? "未知" : fmtCost(m.cost_usd)}</td></tr>`).join("");
+      <td>${costBoth(m.cost_usd, m.cost_cny) || "未知"}</td></tr>`).join("");
   const unpriced = s.unpriced_models || [];
   const foot = [];
   if (unpriced.length) foot.push(`未标价(没算进总数,不是 $0):${unpriced.map(esc).join("、")}`);
-  foot.push("缓存命中是端点回报了才记的,没回报显示「未记录」;价目是公开挂牌价的本地快照,"
-    + "滞后于官方页、不含折扣 —— 估算,非账单。要改价:「我的数据 → 设置与偏好」里的 pricing-override.json");
+  foot.push("缓存命中是端点回报了才记的,没回报显示「未记录」;价目是各家官方页挂牌价的本地快照,"
+    + "滞后于官方页、不含折扣与峰谷档 —— 估算,非账单。人民币报价的按 ¥ 列、美元报价的按 $ 列,"
+    + "**不折成一个币种**(那需要一个我自己编的汇率);每一行的来源与核对日期在悬停那句里。"
+    + "要改价:「我的数据 → 设置与偏好」里的 pricing-override.json");
   const tile = (v, cap) => `<div class="cell"><b>${v}</b><span>${cap}</span></div>`;
   $("usageBody").innerHTML = `<div class="udash">
     <div class="udash-l">
@@ -5972,8 +6247,8 @@ function renderPersp(s) {
   const act = meta.active_days || 0;
   const lv = perspLevel(span ? act / span : 0);
   $("plTotal").textContent = fmtTok(sum.total);
-  $("plCost").textContent = (sum.cost_usd === null || sum.cost_usd === undefined)
-    ? "未知 · 价目缺行" : `${fmtCost(sum.cost_usd)} · 估算非账单`;
+  const plBoth = costBoth(sum.cost_usd, sum.cost_cny);
+  $("plCost").textContent = plBoth ? `${plBoth} · 估算非账单` : "未知 · 价目缺行";
   $("plActive").innerHTML = span
     ? `${(act / span * 100).toFixed(1)}% <small>(${act} 天 / 共 ${span} 天)</small>` : "—";
   $("plStreak").textContent = streak ? `${streak} 天` : "—";
@@ -6385,6 +6660,66 @@ $("btnSkillSave").addEventListener("click", () => {
    - **画之前把正在流的那段封住**(sealStreamingText):不封就出现"回答长在插话头上"。
    - **不走编辑重发、不带附件**:前者要退文件,后者要先把图拼进多模态消息体,
      而那一步发生在回合线程之外。 */
+/* ---------------- 跑着的时候攒下的「待插话」草稿 ----------------
+   以前 Enter 在忙的时候直接把话塞进这一轮 —— 打错一个字也照样塞进去,而学长
+   已经按那句去取下一步了。现在 Enter 先落成一条草稿,按「↵ 插话」才真的并进这一轮,
+   期间还能 ✎ 改或 🗑 丢掉。附件那条限制原样保留(插话只带文字),所以这里不收附件。 */
+const drafts = [];
+function renderDrafts() {
+  const bar = $("draftBar");
+  if (!bar) return;
+  bar.innerHTML = "";
+  bar.style.display = drafts.length ? "flex" : "none";
+  drafts.forEach((d, i) => {
+    const chip = document.createElement("div");
+    chip.className = "dchip";
+    const t = document.createElement("span");
+    t.className = "dt";
+    t.textContent = "↳ " + d;
+    t.title = d;
+    const acts = document.createElement("span");
+    acts.className = "da";
+    const mk = (label, title, cls, fn) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      b.title = title;
+      if (cls) b.className = cls;
+      b.addEventListener("click", ev => { ev.stopPropagation(); fn(i); });
+      acts.appendChild(b);
+    };
+    mk("↵ 插话", "现在就并进这一轮:学长做完手头这一步就把它读进去", "go", sendDraft);
+    mk("✎", "拿回输入框改一改", "", editDraft);
+    mk("🗑", "不要这句了", "rm", dropDraft);
+    chip.appendChild(t);
+    chip.appendChild(acts);
+    bar.appendChild(chip);
+  });
+}
+function queueDraft(text) {
+  drafts.push(text);
+  $("input").value = "";
+  $("input").style.height = "auto";
+  renderDrafts();
+  toast("已存为待插话 —— 按「↵ 插话」才并进这一轮");
+}
+function sendDraft(i) {
+  const d = drafts.splice(i, 1)[0];
+  renderDrafts();
+  if (d) interject(d, []);
+}
+function editDraft(i) {
+  const d = drafts.splice(i, 1)[0];
+  renderDrafts();
+  if (!d) return;
+  const box = $("input");
+  box.value = box.value.trim() ? box.value + "\n" + d : d;
+  box.style.height = "auto";
+  box.style.height = Math.min(box.scrollHeight, 180) + "px";
+  box.focus();
+}
+function dropDraft(i) { drafts.splice(i, 1); renderDrafts(); }
+
 function interject(text, atts) {
   if (atts.length) { toast("插话只带文字,附件等这一轮跑完再发", true); return; }
   if (!text) return;
@@ -6422,7 +6757,11 @@ function send() {
   const text = $("input").value.trim();
   const atts = attachments.slice();
   if (!text && !atts.length) return;
-  if (busy) { interject(text, atts); return; }   // 跑着的那句是插话,不是新任务
+  if (busy) {                                  // 跑着的那句是插话,不是新任务
+    if (atts.length) { toast("插话只带文字,附件等这一轮跑完再发", true); return; }
+    queueDraft(text);
+    return;
+  }
   if (editing) {
     const { ord, text: expect } = editing;
     const go = (revert) => {
