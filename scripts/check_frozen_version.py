@@ -1009,7 +1009,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
                          "list_tabs", "close_tab",
                          # v0.9.113:登录后的教务往往同时开着框架页与真表页,而
                          # adopt_page 只拿第一张匹配的 —— 先列出有几张才谈逐张试。
-                         "page_targets"),
+                         "page_targets",
+                         # v0.9.139:配置被占用那一族(漏收 = 包里还是"Edge 启动后
+                         # 立刻退出,无法启用浏览器能力"那一句死结,教务导入在
+                         # 装好的包里继续点多少次「再读一次」都是同一个红字)
+                         "BrowserProfileBusy", "_profile_endpoint", "_spawn",
+                         "_write_marker", "_read_marker", "_clear_marker",
+                         "_pid_alive", "_sibling_profiles", "last_note",
+                         "MAX_PROFILE_TRIES"),
     # ---- v0.9.24:MCP 三种传输(stdio 之外只有网址的服务器也连得上) ----
     # v0.9.62:校历补录助手(漏收 = 「贴通知录考试周」在包里做不到,
     # 考试周数据继续空置,A5 考试闭环继续卡着)

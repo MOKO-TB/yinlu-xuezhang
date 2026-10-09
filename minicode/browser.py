@@ -221,6 +221,163 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
+# ------------------------------------------------- "这份配置已被占用"那一类失败
+
+class BrowserProfileBusy(BrowserUnavailable):
+    """起来的那一个立刻退出了 —— 这个 user-data-dir 已被另一个实例拿着。
+
+    单独一类,是为了让上层能分清两件完全不同的事:「这台机器起不了浏览器」
+    (出路是装浏览器/设 `YINLUXS_BROWSER`)与「浏览器起得来,但那本登录态正被
+    别人拿着」(出路是复用或换一份配置)。旧版把两者混成同一句"无法启用浏览器
+    能力",于是用户在教务导入界面上点多少次「再读一次」都是同一个死结。
+    """
+
+    def __init__(self, message: str, *, exit_code: int | None, profile: Path):
+        super().__init__(message)
+        self.exit_code = exit_code
+        self.profile = profile
+
+
+MAX_PROFILE_TRIES = 3        # 原目录 + 最多两份兄弟目录;再多就是在替用户堆垃圾目录
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def _marker_path(profile: Path) -> Path:
+    return profile / "YinluBrowserInstance.json"
+
+
+def _write_marker(profile: Path, *, pid: int, port: int, headless: bool,
+                  exe: str) -> None:
+    """记下"这份配置现在归哪个实例",为的是下一次能认出它、复用它。
+
+    写失败不当回事:标记只是"能不能省掉一次失败启动"的线索,不是正确性依赖 ——
+    没有它,最坏的结局只是走一遍"起来→退出→换目录"的老路。
+    """
+    with contextlib.suppress(Exception):
+        _marker_path(profile).write_text(json.dumps(
+            {"pid": int(pid), "port": int(port), "headless": bool(headless),
+             "exe": exe, "started_at": round(time.time(), 1)},
+            ensure_ascii=False), encoding="utf-8")
+
+
+def _read_marker(profile: Path) -> dict:
+    try:
+        data = json.loads(_marker_path(profile).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _clear_marker(profile: Path, *, only_pid: int | None = None) -> None:
+    """删掉自己那份实例标记。`only_pid` 是给"别把别人刚写的删了"用的。"""
+    with contextlib.suppress(Exception):
+        if only_pid is not None:
+            got = _read_marker(profile).get("pid")
+            if got is not None and int(got) != int(only_pid):
+                return          # 这份标记是另一个实例写的,不归我们清
+        _marker_path(profile).unlink(missing_ok=True)
+
+
+def _pid_alive(pid: int) -> bool:
+    """这个 pid 还在不在。查不到一律当"不在"(宁可多试一次启动,别把能用判成不能用)。"""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    import ctypes
+    try:
+        kernel32 = ctypes.windll.kernel32   # type: ignore[attr-defined]
+        # 必须声明原型:不声明时 ctypes 按 32 位 int 传参与回值,而 64 位 Windows 的
+        # HANDLE 是 64 位 —— 那正是 v0.9.135 在 Job Object 上踩过的静默失效形状。
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.OpenProcess.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_uint]
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+        if not handle:
+            return False
+        kernel32.CloseHandle(handle)
+        return True
+    except Exception:
+        return False
+
+
+def _probe_port(port: int) -> dict | None:
+    """只探一个端口:优先 `/json/version`,再退回这份 profile 自己的端口文件。
+
+    不走 `probe_endpoint`:那条路的兜底读的是**用户默认浏览器**的
+    DevToolsActivePort(`_devtools_files`),拿它来判"我们这份配置活着吗"会误判。
+    """
+    for host in ("127.0.0.1", "localhost"):
+        data = _http_json(f"http://{host}:{int(port)}/json/version", timeout=1.0)
+        if data and data.get("webSocketDebuggerUrl"):
+            return data
+    return None
+
+
+def _profile_endpoint(profile: Path, *, want_headless: bool,
+                      grace: float = 0.0) -> tuple[int, dict] | None:
+    """这份配置若被一个**我们认得的、活着且端口探得到**的实例拿着,把端点还回来。
+
+    `want_headless` 是硬条件而不是美化:教务登录必须有窗口,复用一个无窗口实例
+    等于让用户对着一张看不见的页面输密码;反过来,后台自动浏览也不该去驱动用户
+    眼前那个窗口。所以只有标记里记的形态与请求一致才复用。
+
+    **没有标记就不复用**:老版本残留或别的程序占着时,我们不知道那个实例有没有
+    窗口。拿它做"必须看得见"的教务登录是在赌;换一份新配置的代价只是重登一次,
+    那笔代价看得见、也说得清。
+    """
+    deadline = time.monotonic() + max(0.0, grace)
+    while True:
+        marker = _read_marker(profile)
+        port = marker.get("port")
+        headless = marker.get("headless")
+        if (isinstance(port, int) and 0 < port <= 65535
+                and headless is want_headless and _pid_alive(marker.get("pid", 0))):
+            info = _probe_port(port)
+            if info:
+                return port, info
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.25)
+
+
+def _sibling_profiles(profile: Path) -> list[Path]:
+    """被占用时的退路:`browser-profile` → `-2` → `-3`,只在数据目录里另起。
+
+    只肯在学长自己的数据目录里生成兄弟目录;落在外面的(比如指向 U 盘)不换,
+    因为那本配置可能是用户自己挑的,换掉等于替他把登录态搬到别处去。
+    """
+    out: list[Path] = []
+    try:
+        root = app_path().resolve()
+        target = profile.resolve()
+    except Exception:
+        return out
+    if root not in target.parents:
+        return out
+    for i in range(2, MAX_PROFILE_TRIES + 1):
+        out.append(profile.with_name(f"{profile.name}-{i}"))
+    return out
+
+
+def _wait_pid_gone(pid: int, timeout: float = 3.0) -> bool:
+    """等一个我们刚关掉的浏览器进程真退出 —— 它不退,配置目录就一直被占着。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.1)
+    return not _pid_alive(pid)
+
+
 # ---------------------------------------------------------------- WebSocket / CDP
 
 class _Conn:
@@ -313,6 +470,8 @@ class _State:
     headless: bool = True             # 只说 launch 那一支:有没有窗口(教务登录必须有)
     proc: subprocess.Popen | None = None
     port: int | None = None
+    profile: Path | None = None           # 这一支实例用的是哪本配置(标记文件在它里面)
+    note: str = ""                        # 复用/换配置这类"这次到底发生了什么",要说给人听
     sessions: dict[str, PageSession] = field(default_factory=dict)
 
 
@@ -391,18 +550,90 @@ def _attach_endpoint() -> tuple[str, dict] | None:
 
 
 def launch_browser(*, headless: bool = True, port: int | None = None,
-                   profile_dir: str | Path | None = None) -> tuple[subprocess.Popen, int, dict]:
-    """起一个独立 profile 的浏览器实例(零配置路线),返回 (进程, 端口, /json/version)。"""
+                   profile_dir: str | Path | None = None,
+                   sibling_fallback: bool = True
+                   ) -> tuple[subprocess.Popen | None, int, dict]:
+    """起一个独立 profile 的浏览器实例(零配置路线),返回 (进程, 端口, /json/version)。
+
+    **进程位可能是 None**:那是复用了上一个还活着的实例(见 `_profile_endpoint`)。
+    调用方一律走 `_STATE.proc`,而 `shutdown()` 对 None 的说法是"这个实例不是我起的,
+    我只断连接" —— 所以 None 不是缺数据,是一条明确的归属声明。
+    """
     found = find_browser_exe()
     if found is None:
         raise BrowserUnavailable(
             "本机没找到 Edge/Chrome。装一个 Edge/Chrome,"
             f"或用环境变量 {ENV_BROWSER} 指定浏览器 exe 路径。")
     name, exe = found
-    port = int(port or _free_port())
-    profile = Path(profile_dir or os.environ.get(ENV_PROFILE)
-                   or app_path("browser-profile"))
-    profile.mkdir(parents=True, exist_ok=True)
+    profile = Path(profile_dir) if profile_dir else Path(
+        os.environ.get(ENV_PROFILE) or app_path("browser-profile"))
+    # 用户用环境变量点名了目录,就绝不换:换目录等于绕过他显式指的那本登录态。
+    pinned = bool(profile_dir is None and (os.environ.get(ENV_PROFILE) or "").strip())
+    with _LOCK:
+        _STATE.note = ""
+        _STATE.profile = profile
+
+    hit = _profile_endpoint(profile, want_headless=headless)
+    if hit is not None:
+        got_port, info = hit
+        with _LOCK:
+            _STATE.note = (f"复用了本机上一个还在跑的浏览器实例(端口 {got_port}),"
+                           "没有新开窗口。")
+            _STATE.profile = profile
+        return None, got_port, info
+
+    tries = [profile] + (_sibling_profiles(profile)
+                         if (sibling_fallback and not pinned) else [])
+    busy: BrowserProfileBusy | None = None
+    reasons: list[str] = []
+    for i, pdir in enumerate(tries):
+        pdir.mkdir(parents=True, exist_ok=True)
+        use_port = int(port or _free_port()) if i == 0 else _free_port()
+        try:
+            proc, got_port, info = _spawn(exe, name, use_port, pdir, headless)
+        except BrowserProfileBusy as exc:
+            busy = exc
+            # 起来就退出不等于这事坏了:那多半是"移交给已经带着我们这个端口的实例"。
+            # 所以先给它一点耐心再探一次,能复用就别新开。**只给第一份目录这份耐心** ——
+            # 刚建的兄弟目录不可能有人已经拿着它,在那儿等就是在拖用户。
+            late = _profile_endpoint(pdir, want_headless=headless,
+                                     grace=1.5 if i == 0 else 0.0)
+            if late is not None:
+                with _LOCK:
+                    _STATE.note = (f"复用了本机上一个还在跑的浏览器实例(端口 {late[0]}),"
+                                   "没有新开窗口。")
+                    _STATE.profile = pdir
+                return None, late[0], late[1]
+            reasons.append(f"{pdir.name}:{exc}")
+            continue
+        except BrowserUnavailable as exc:
+            reasons.append(f"{pdir.name}:{exc}")
+            continue
+        _write_marker(pdir, pid=proc.pid, port=got_port, headless=headless, exe=exe)
+        if i:
+            with _LOCK:
+                _STATE.note = (f"原来那份浏览器配置({profile.name})还被上一个实例占着,"
+                               f"这次用的是一个新的独立配置({pdir.name}):"
+                               "教务**要重新登录一次**,登录态不会跟过来。")
+                _STATE.profile = pdir
+        else:
+            with _LOCK:
+                _STATE.profile = pdir
+        return proc, got_port, info
+
+    if busy is not None and len(tries) == 1:
+        raise BrowserUnavailable(
+            f"{busy} 三条出路:① 关掉还开着的那个导入/浏览器窗口再点一次;"
+            f"② 用环境变量 {ENV_PROFILE} 指一个新目录(代价是教务要重登一次);"
+            f"③ 在任务管理器里结束多余的 msedge.exe/chrome.exe 后再试。")
+    raise BrowserUnavailable(
+        f"{name} 起不来(试了 {len(tries)} 份浏览器配置):" + " / ".join(reasons)
+        + f"。要指定别的浏览器可执行文件请用环境变量 {ENV_BROWSER}。")
+
+
+def _spawn(exe: str, name: str, port: int, profile: Path,
+           headless: bool) -> tuple[subprocess.Popen, int, dict]:
+    """起一个进程并等它的调试端口 —— 这一段是原 `launch_browser` 的正文,一字未改语义。"""
     args = [
         exe,
         f"--remote-debugging-port={port}",
@@ -425,7 +656,10 @@ def launch_browser(*, headless: bool = True, port: int | None = None,
     deadline = time.monotonic() + LAUNCH_TIMEOUT
     while time.monotonic() < deadline:
         if proc.poll() is not None:
-            raise BrowserUnavailable(f"{name} 启动后立刻退出(退出码 {proc.returncode}),无法启用浏览器能力。")
+            raise BrowserProfileBusy(
+                f"{name} 起来就退出了(退出码 {proc.returncode})——"
+                f"这份浏览器配置正被另一个实例占用({profile})",
+                exit_code=proc.returncode, profile=profile)
         info = probe_endpoint(port, timeout=1.0)
         if info:
             return proc, port, info
@@ -547,18 +781,24 @@ def ensure_visible(*, timeout: float = LAUNCH_TIMEOUT) -> dict:
                 raise BrowserUnavailable(
                     "现在有一个**无窗口**的浏览器任务还在跑(自动浏览中),"
                     "不能半路给它换窗口。等那条任务结束后再点导入。")
+            if _STATE.proc is None:
+                # 这个无窗口实例是**复用**来的(不是本进程起的):直接 shutdown 只会
+                # 断连接,配置目录仍被它占着,下一步 launch 就撞"已被占用"。
+                _graceful_close_locked()
             shutdown()
         proc, port, info = launch_browser(headless=False)
         try:
             conn = _Conn(info["webSocketDebuggerUrl"])
         except Exception as exc:
             with contextlib.suppress(Exception):
-                proc.terminate()
-                proc.wait(timeout=5)
+                if proc is not None:
+                    proc.terminate()
+                    proc.wait(timeout=5)
             raise BrowserUnavailable(f"浏览器已启动但连不上它的调试端口:{exc}") from exc
         _STATE.conn, _STATE.browser, _STATE.mode = conn, info.get("Browser", "浏览器"), "launch"
         _STATE.proc, _STATE.port, _STATE.headless = proc, port, False
-        return {"ok": True, "mode": "launch", "browser": _STATE.browser}
+        return {"ok": True, "mode": "launch", "browser": _STATE.browser,
+                "note": _STATE.note}
 
 
 def _ensure_session(*, mode: str = "auto", headless: bool = True) -> PageSession:
@@ -1294,6 +1534,25 @@ def close_tab(key: str) -> "dict | None":
         return {"ok": True, "adopted": adopted}
 
 
+def _graceful_close_locked() -> None:
+    """把"复用来的"那个实例按它自己的退出指令关掉,并等它真退出。
+
+    只用在 launch 复用这条支路上(见 `ensure_visible`)。两条边界:
+    - **attach 到用户自己的浏览器时绝不走到这里** —— 那是他的窗口;
+    - 我们不用 `taskkill` 之类的外部手段去结束一个不是自己起的进程:
+      `Browser.close` 是浏览器自己的退出指令,而"结束多余的 msedge.exe"这种话
+      只作为建议写在报错里给用户,不由程序替他做。
+    """
+    conn, profile = _STATE.conn, _STATE.profile
+    pid = _read_marker(profile).get("pid") if profile is not None else None
+    if conn is not None:
+        with contextlib.suppress(Exception):
+            conn.call("Browser.close", {}, timeout=3)
+    if profile is not None and pid is not None:
+        _wait_pid_gone(int(pid))
+        _clear_marker(profile, only_pid=int(pid))
+
+
 def shutdown() -> None:
     """收工:关掉我们自己起的浏览器实例(attach 到用户浏览器的只断连接)。"""
     with _LOCK:
@@ -1305,21 +1564,43 @@ def shutdown() -> None:
         _STATE.sessions.clear()
         conn, _STATE.conn = _STATE.conn, None
         proc, _STATE.proc = _STATE.proc, None
+        profile, _STATE.profile = _STATE.profile, None
+        _STATE.note = ""
         _STATE.mode = ""
         _STATE.browser = ""
         _STATE.headless = True
         if conn is not None:
             conn.close()
+        pid = proc.pid if proc is not None else None
         if proc is not None and proc.poll() is None:
             with contextlib.suppress(Exception):
                 proc.terminate()
                 proc.wait(timeout=5)
+        # 等它真退出再走:配置目录要一直占到那个进程结束为止,否则紧接着的
+        # 一次启动会撞上"已被占用"—— 这正是教务导入那个死结的转世形状。
+        if pid is not None:
+            _wait_pid_gone(pid)
+        # 只清自己起的实例那份标记:复用来的那个还活着,删它的标记等于骗下一个
+        # 人"这份配置没人用",于是他又去起第二个实例。
+        if profile is not None and pid is not None:
+            _clear_marker(profile, only_pid=pid)
 
 
 atexit.register(shutdown)
 
 
 # ---------------------------------------------------------------- 自检
+
+def last_note() -> str:
+    """这一次 `launch_browser` 到底干了什么(复用/换配置),没有则空串。
+
+    单独给一个读出口,是因为"起了个浏览器"这一件事现在有四种真结局:新起、
+    复用上一个实例、换了一份配置(=教务要重登)、起不来。界面只拿得到最后一步的
+    返回值,而这句话属于前一步,不读出来就永远没人知道。
+    """
+    with _LOCK:
+        return _STATE.note or ""
+
 
 def health() -> dict:
     """能不能用浏览器能力:给 /browser 命令与排障用(不主动弹提示)。

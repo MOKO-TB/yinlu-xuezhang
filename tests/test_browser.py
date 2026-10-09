@@ -88,6 +88,10 @@ def isolated_state(monkeypatch):
                                  {"Browser": "Edg/153.0"}))
 
     class FakeProc:
+        # 真 Popen 一定带 pid —— 缺了它,shutdown 里"等它真退出再清标记"那一段
+        # 就从来没被走过(而那是复用实例时最容易写坏的一手)。
+        pid = 424242          # 一个一定不存在的 pid:_wait_pid_gone 立刻放行
+
         def poll(self):
             return None
 
@@ -522,6 +526,8 @@ def test_shutdown_is_idempotent(isolated_state):
 def test_launch_connect_failure_does_not_leak_process(isolated_state, monkeypatch):
     """起了浏览器但 WebSocket 连不上:要把进程收掉,不能 NameError/漏进程。"""
     class FakeProc:
+        pid = 424243          # 同上一条:真 Popen 有 pid,替身也得有
+
         def __init__(self):
             self.terminated = False
 

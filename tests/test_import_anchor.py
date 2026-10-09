@@ -45,6 +45,11 @@ class RecBrowser:
         self.reads = 0
         self.opened = []
 
+    def last_note(self):
+        # 真模块有这一只(复用/换配置那句话从这里出来);替身缺它,第①步那句
+        # 回话里新加的一段就等于没测。
+        return ""
+
     def ensure_visible(self):
         return True
 

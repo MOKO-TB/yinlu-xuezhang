@@ -114,6 +114,9 @@ class FakeBrowser:
     def ensure_visible(self):
         return True
 
+    def last_note(self):
+        return ""
+
     def open_page(self, *a, **k):
         return {"url": a[0] if a else "", "title": "教务"}
 

@@ -160,6 +160,11 @@ class FakeBrowser:
         self.calls.append(("ensure_visible",))
         self.visible = True
 
+    def last_note(self):
+        # 真模块有这一只(复用/换配置那句话要从这里出来),替身缺它就是把
+        # 第 1 步那句回话里新加的那一段测成了空气。
+        return ""
+
     def open_page(self, url, **kw):
         self.calls.append(("open_page", url))
         return {"url": url, "title": "教务系统", "mode": kw.get("mode", "launch")}

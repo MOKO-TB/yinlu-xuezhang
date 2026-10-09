@@ -164,12 +164,16 @@ class ImportFlow:
         # 记住这一步真正开的是哪个站点:后面「接管那张页」按它找,比按内置的
         # HOST_HINT 找准 —— 学校换域名(或界面里填了别的地址)时 Hint 会落空。
         self._last_host = _host_of(str((res or {}).get("url") or url))
+        # 这一次浏览器到底是"新起的""复用的"还是"换了一份配置",必须说给人听:
+        # 换配置那一种意味着教务要重登一次,不说的话用户会以为程序在装糊涂。
+        note = str((res or {}).get("note") or "") or brs.last_note()
         return {"ok": True, "stage": "need_login",
                 "url": str((res or {}).get("url") or url),
                 "title": str((res or {}).get("title") or ""),
                 "msg": ("登录页已经开在弹出的浏览器窗口里了。请**你自己**输账号密码和"
                         "验证码(学长不碰、也不问),然后在教务系统里点开"
-                        "「课表查询 → 学期课表」,把周次选成(全部)。弄好了点「读取课表」。")}
+                        "「课表查询 → 学期课表」,把周次选成(全部)。弄好了点「读取课表」。"
+                        ) + (("\n\n" + note) if note else "")}
 
     # ---- 接管(不导航)
     def _anchor_hints(self) -> list[str]:
