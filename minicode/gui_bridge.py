@@ -446,6 +446,10 @@ class PublicApi:
         """切换当前会话的思考档位(默认/关闭/低/高)。"""
         return self._b.set_reasoning_choice(choice)
 
+    def model_auto_info(self, model: str = "") -> dict:
+        """「智能配置」开关那一条要的一屏:这个模型学长自己会按什么走。"""
+        return self._b.model_auto_info(model)
+
     def set_vision(self, on: bool) -> dict:
         """强制开关"给模型发图":能力表没登记的自定义模型用得上。"""
         return self._b.set_vision(on)
@@ -1970,7 +1974,7 @@ class Bridge:
         snap = reasoning_snapshot(
             model,
             getattr(llm, "reasoning_choice", "default") if llm else "default",
-            cfg=self.config.model_cfg(model))     # 用户自己登记的档位优先
+            cfg=self.config.effective_model_cfg(model))     # 用户自己登记的档位优先
         self.ui.push("reasoning", session=r.key, **snap)
 
     def get_reasoning(self) -> dict:
@@ -1981,9 +1985,33 @@ class Bridge:
         snap = reasoning_snapshot(
             model,
             getattr(llm, "reasoning_choice", "default") if llm else "default",
-            cfg=self.config.model_cfg(model))
+            cfg=self.config.effective_model_cfg(model))
         snap["ok"] = True
         return snap
+
+    def model_auto_info(self, model: str = "") -> dict:
+        """「智能配置」那一屏要给用户看的:开了之后学长按什么走。
+
+        读的是**没有手工声明**的那条链(探测 > 内置目录 > 服务端默认),所以这一份
+        与开关现在是开是关无关 —— 用户要点开关,想知道的正是"变了之后是什么"。
+        不知道的就说不知道:目录里没有也没探测过 → `known=False`,界面必须把那句
+        话摊开,而不是显示一个凭空数的窗口(那等于把"不会配"换成"配错了还不知道")。
+        """
+        from minicode import model_catalog
+        from minicode.reasoning import get_capability
+        name = str(model or "").strip() or (self._active_model_name() or "")
+        got = model_catalog.lookup(name)
+        cap = get_capability(name, cfg={})
+        return {"ok": True, "model": name,
+                "known": bool(got.get("known")),
+                "detected": bool(got.get("detected")),
+                "window": int(got.get("context_window") or 0),
+                "vision": bool(got.get("supports_vision")),
+                # 输出上限没有可解析的来源:智能配置下就是"不带 max_tokens,
+                # 交给服务端默认"。界面上写这句话,不写一个凭空数的数。
+                "max_out": 0,
+                "levels": [str(x) for x in (cap.options or ())],
+                "kind": cap.kind}
 
     def set_reasoning_choice(self, choice: str) -> dict:
         """切换当前会话的思考档位,下一个请求立即生效(不影响其他会话)。
@@ -1998,12 +2026,12 @@ class Bridge:
         if runner.busy:
             return {"ok": False, "msg": "任务进行中,等这轮跑完再切思考档位"}
         model = self._active_model_name(runner)
-        cap = get_capability(model, cfg=self.config.model_cfg(model))
+        cap = get_capability(model, cfg=self.config.effective_model_cfg(model))
         if cap.kind == "hidden":
             return {"ok": False, "msg": f"模型 {model} 暂不支持思考档位设置"}
         if cap.kind == "fixed":
             return {"ok": False, "msg": f"模型 {model} 固定开启思考,不可调节"}
-        choice = normalize_choice(model, choice, cfg=self.config.model_cfg(model))
+        choice = normalize_choice(model, choice, cfg=self.config.effective_model_cfg(model))
         keep = getattr(runner.agent.llm, "reasoning_choice", "default")
         # 换回哪个供应商的凭据由 `LLMClient.scoped` 一处管(会话切模型同一套路)
         pid = (runner.llm_override["provider_id"] if runner.llm_override

@@ -1469,6 +1469,21 @@ try {
     border-radius:var(--r-full); color:var(--text-2); cursor:pointer;
     padding:4px 10px; font-size:12px; }
   .mcf-model{ font-family:Consolas,monospace; font-size:12px; color:var(--text-3); }
+  /* 智能配置那一行(v0.9.142):开关 + 一句"现在按什么走"。
+     摊开着的那一行是必需的 —— 关掉下面那些输入框却不告诉用户为什么灰了,
+     就是"界面上有东西不动了",而这正是这一轮要消灭的那类困惑。 */
+  .mcf-auto{ display:flex; align-items:center; gap:9px; margin-top:4px;
+             padding:9px 11px; border-radius:11px;
+             background:var(--glass-soft); border:1px solid var(--line-soft); }
+  .mcf-auto b{ font-size:12.5px; }
+  .mcf-auto-note{ flex:1; min-width:0; font-size:11.5px; color:var(--text-2);
+                  line-height:1.5; }
+  .mcf-auto-note.on{ color:var(--ok); }
+  .mcf-auto-note.warn{ color:var(--warn); }
+  .mcf-dialog.auto .mcf-row > label{ opacity:.45; }
+  .mcf-dialog.auto input, .mcf-dialog.auto select,
+  .mcf-dialog.auto textarea, .mcf-dialog.auto .mcf-add{
+    opacity:.45; pointer-events:none; }
   .mm-note{ font-size:11px; color:var(--text-2); line-height:1.6; min-height:16px; }
   .mm-note.bad{ color:var(--danger); }
   .mm-note.good{ color:var(--ok,#2f9e6e); }
@@ -2934,8 +2949,14 @@ try {
 
 
 <div class="overlay" id="mmCfgOverlay">
-  <div class="dialog" style="max-width:520px">
+  <div class="dialog mcf-dialog" style="max-width:520px">
     <h3>编辑模型配置 <span class="mcf-model" id="mcfModel"></span></h3>
+    <div class="mcf-auto">
+      <label class="sw" title="开了之后下面这些你填的全部让位:窗口、图片输入、推理档位都由学长按「探测结果 → 内置目录 → 服务端默认」自己定"><input
+        type="checkbox" id="mcfAuto"><span></span></label>
+      <b>智能配置</b>
+      <div class="mcf-auto-note" id="mcfAutoNote"></div>
+    </div>
     <div class="mcf-hint" style="margin-left:0">
       填了的数**真的生效**:窗口决定什么时候压缩、最大输出决定请求里的
       <code>max_tokens</code>、推理档位决定 🧠 按钮上那几个选项怎么发。
@@ -5126,13 +5147,57 @@ function mcfOpen(p, m) {
   $("mcfVision").value = cfg.vision === true ? "1" : (cfg.vision === false ? "0" : "");
   mcfRenderLevels(cfg.reasoning_levels || []);
   $("mcfParam").value = cfg.reasoning_param || "";
+  $("mcfAuto").checked = cfg.auto_config === true;
   $("mmCfgOverlay").classList.add("show");
+  mcfApplyAuto();
 }
+
+/* 智能配置那一格:灰掉下面的输入框,并把"开了之后按什么走"摊开写。
+   灰掉却不解释 = 界面上多了个看不懂的东西,那不如不做。 */
+function mcfApplyAuto() {
+  const on = $("mcfAuto").checked;
+  const box = document.querySelector("#mmCfgOverlay .mcf-dialog");
+  if (box) box.classList.toggle("auto", on);
+  const note = $("mcfAutoNote");
+  if (!on) {
+    note.className = "mcf-auto-note";
+    note.textContent = "关着:下面填了什么就按什么走(留空的项才走探测/目录)。";
+    return;
+  }
+  const name = (mcfTarget && mcfTarget.m && mcfTarget.m.name) || "";
+  note.className = "mcf-auto-note";
+  note.textContent = "开着:正在问这台机器知道些什么…";
+  pywebview.api.model_auto_info(name).then(r => {
+    if (!$("mcfAuto").checked) return;      // 期间被关掉了:别把话写回已经收起的那一行
+    if (!r || !r.ok) {
+      note.className = "mcf-auto-note warn";
+      note.textContent = "开着,但这一屏没取到数 —— 保险起见先关掉自己填。";
+      return;
+    }
+    const win = r.window ? ("窗口 " + r.window.toLocaleString()) : "窗口未知";
+    const vis = r.vision ? "图片输入:支持" : "图片输入:不支持";
+    const lev = (r.levels && r.levels.length)
+      ? ("推理档位:" + r.levels.join("/")) : "推理档位:不给(交给服务端默认)";
+    note.className = "mcf-auto-note" + (r.known ? " on" : " warn");
+    note.textContent = "开着 → " + win + " · " + vis + " · " + lev
+      + " · 最大输出不限制。"
+      + (r.known ? (r.detected ? "(窗口来自这台机器实测的探测结果)" : "(来自内置目录)")
+                 : " —— 这个模型目录里没有、也没探测过,开着会退回配置里的默认窗口。"
+                   + "建议先点一次「测试」让它探一探,或关掉自己填。");
+  }).catch(() => {
+    note.className = "mcf-auto-note warn";
+    note.textContent = "开着,但问不到(桥没应答)—— 保险起见先关掉自己填。";
+  });
+}
+$("mcfAuto").addEventListener("change", mcfApplyAuto);
 
 function mcfClose() { $("mmCfgOverlay").classList.remove("show"); mcfTarget = null; }
 
 function mcfCollect() {
   const cfg = {};
+  // 灰掉的输入框**照原样带着走**:那些数只是暂时不参与运行时,关掉开关就回到
+  // 用户自己填的那一份。清空它们等于替用户做一次不可逆的"我忘了我填过什么"。
+  if ($("mcfAuto").checked) cfg.auto_config = true;
   const w = parseInt($("mcfWindow").value, 10);
   if (w > 0) cfg.context_window = w;
   const o = parseInt($("mcfMaxOut").value, 10);
@@ -5161,7 +5226,8 @@ function mcfSave() {
   target.m.cfg = cfg;
   saveProvItems(true).then(ok => {
     if (!ok) { toast("没保存成功:配置被后端拒了", true); return; }
-    toast("这个模型的配置已保存,下一步请求就按它走");
+    toast(cfg.auto_config ? "已改成智能配置:下面填的那几项先收着,不参与运行时"
+                          : "这个模型的配置已保存,下一步请求就按它走");
     renderModelRows(target.p);
     pywebview.api.get_reasoning().then(renderReasoning).catch(() => {});
     mcfClose();
@@ -5177,6 +5243,7 @@ $("mcfLevelAdd").addEventListener("click", () => {
 $("mcfReset").addEventListener("click", () => {
   $("mcfWindow").value = ""; $("mcfMaxOut").value = "";
   $("mcfVision").value = ""; $("mcfParam").value = ""; mcfRenderLevels([]);
+  $("mcfAuto").checked = false; mcfApplyAuto();
 });
 $("mcfCancel").addEventListener("click", mcfClose);
 $("mcfSave").addEventListener("click", mcfSave);

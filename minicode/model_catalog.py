@@ -119,7 +119,9 @@ def model_info(config, model: str = "") -> dict:
     """
     name = str(model or getattr(config, "model", "") or "").strip()
     info = dict(lookup(name))
-    cfg = config.model_cfg(name) if config is not None else {}
+    raw = config.model_cfg(name) if config is not None else {}
+    info["auto_config"] = bool(raw.get("auto_config"))
+    cfg = config.effective_model_cfg(name) if config is not None else {}
     window = cfg.get("context_window")
     if isinstance(window, int) and not isinstance(window, bool) and window > 0:
         info["context_window"] = window

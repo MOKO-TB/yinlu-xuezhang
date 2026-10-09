@@ -378,6 +378,18 @@ class Config:
         cfg = entry.get("cfg")
         return dict(cfg) if isinstance(cfg, dict) else {}
 
+    def effective_model_cfg(self, model: str = "") -> dict:
+        """运行时该读的那一份声明:开了「智能配置」的模型回**空**。
+
+        让位的是**整份**而不是逐键 —— 混着读会造出一个没人能解释的模型:窗口按
+        内置表、`max_tokens` 按你半年前手填的 384000、推理档位按你抄来的那串模板。
+        要么你说了算,要么学长按它真知道的那份来,不能一半一半。
+
+        声明本身不删(还在 `model_cfg()` 里),关掉开关就逐字回到今天填的那些数。
+        """
+        cfg = self.model_cfg(model)
+        return {} if cfg.get("auto_config") else cfg
+
     @property
     def api_key_configured(self) -> bool:
         return self.api_key.strip() not in API_KEY_PLACEHOLDERS
@@ -483,7 +495,8 @@ def _models_from_raw(raw) -> list[dict]:
 # 一份模型配置里认得的键。**只认这些**:多出来的键一律不存,否则"界面有、后端不认"
 # 会变成第三种样子货(控件在、值存着、谁都不读)。
 MODEL_CFG_KEYS = ("context_window", "max_output_tokens", "vision",
-                  "reasoning_levels", "reasoning_param", "system_in_messages")
+                  "reasoning_levels", "reasoning_param", "system_in_messages",
+                  "auto_config")
 
 
 def _net_policy_or_empty(raw) -> dict:
@@ -542,6 +555,10 @@ def model_cfg_from_raw(raw) -> dict:
     param = str(raw.get("reasoning_param") or "").strip()
     if param:
         out["reasoning_param"] = param[:200]
+    # 「智能配置」(v0.9.142):这一份声明整个让位给 探测 > 内置目录 > 服务端默认。
+    # 只认真写的布尔 —— 缺键就是"没开",今天的每一份配置都照原样跑。
+    if isinstance(raw.get("auto_config"), bool):
+        out["auto_config"] = raw["auto_config"]
     return out
 
 

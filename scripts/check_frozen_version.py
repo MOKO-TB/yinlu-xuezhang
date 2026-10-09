@@ -46,10 +46,17 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # v0.9.130 模型配置编辑器:漏收这两根 = 界面上填的 cfg 存不下来,
                         # 而保存照样回「已保存」—— 数值静默漂回探测与内置目录。
                         "model_cfg_from_raw", "MODEL_CFG_KEYS",
+                        # v0.9.142 智能配置:让位的是整份声明,读的一只手必须换
+                        # (漏 `effective_model_cfg` = 开关存进去了、界面灰掉了,
+                        #  而运行时照读手填的那几项 —— 又一个样子货)
+                        "effective_model_cfg",
                         # v0.9.133 P0-1:漏收 = config.json 里那枚开关没人读,
                         # 界面说明写「关掉就回到以前的行为」而实际关不掉 —— 一句假话
                         "read_before_edit"),
     "minicode.gui_bridge": ("test_model", "fetch_models",
+                            # v0.9.142「智能配置」那一屏的数据源(漏收 = 前端那只开关
+                            # 永远停在「正在问这台机器知道些什么…」,而界面看着正常)
+                            "model_auto_info",
                             # v0.9.106 Q1:MCP 热重载换过注册表要重新对齐工具表
                             # (漏收 = 装好的包里那条「现有会话下一轮即可用」又是假的)
                             "refresh_registry",
@@ -1286,6 +1293,9 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # 流式正文**一个字都不出现**(evaluate_js 调一个不存在的函数,异常被 push
     # 那层吞掉 —— 又是一次"不报错的坏法")。
     "window.__gcodeEvents",
+    # v0.9.142「智能配置」那一格(漏 `mcfApplyAuto` = 开关点下去什么都不发生;
+    # 漏 `mcfAutoNote` = 灰掉了却不解释,那正是这一轮要消灭的"不会配")
+    "mcfApplyAuto", "mcfAutoNote", "id=\"mcfAuto\"", "function mcfApplyAuto",
 )
 
 
