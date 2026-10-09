@@ -943,7 +943,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                                "PRIVILEGED_KEYS", "NEVER_CHILD_TOOLS"),
     # v0.9.95:换模型重建客户端的那条构造(漏收 = 档位分模型整块没了)
     "minicode.llm": ("scoped",                 # v0.9.110:400 摘字段重发的那张梯子
-                             "LEAN_LADDER", "BODY_PARSE_MARKS", "lean"),
+                             "LEAN_LADDER", "BODY_PARSE_MARKS", "lean",
+                             # v0.9.143 撞超限压一次再试(漏 `is_context_overflow` =
+                             # agent 那边 import 就炸;漏标记表 = 认不出超限,白压或漏压)
+                             "is_context_overflow", "_OVERFLOW_MARKERS"),
     # v0.9.96:提问的"形状与说法"一份真相(漏收 = 工具、桥、界面三层各判各的,
     # 最坏的那种是"没等到回答"被写成"用户同意了")
     "minicode.asking": ("normalize", "format_answers", "ask_user",

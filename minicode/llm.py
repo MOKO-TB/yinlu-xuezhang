@@ -35,6 +35,26 @@ class FallbackUnavailable(RuntimeError):
 RETRYABLE_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError,
                     InternalServerError)
 
+# 「上下文太长」这一类失败长什么样:端点与网关各说各话,只能按标记串认。
+_OVERFLOW_MARKERS = (
+    "context_length_exceeded", "maximum context length", "context length",
+    "too many tokens", "reduce the length", "input is too long",
+    "prompt is too long", "exceeds the model", "超出上下文", "上下文长度",
+    "超过最大长度", "token 超限",
+)
+
+
+def is_context_overflow(exc) -> bool:
+    """这一次失败是不是"上下文太长"。
+
+    判据是端点回的那句话里的标记串,不是 HTTP 状态码 —— 网关把 400 包成
+    `BadRequestError`,而"参数写错了"与"太长了"共用这一个码;认错就会白压一次,
+    而**压缩是有损的**。所以认不准一律判"不是":宁可把这次失败照原样交给用户,
+    也不要在不该压的时候把对话压掉。
+    """
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(marker in text for marker in _OVERFLOW_MARKERS)
+
 
 def _is_direct_host(host: str) -> bool:
     """本地回环与私网地址(10/172.16-31/192.168)直连,不走系统代理。"""

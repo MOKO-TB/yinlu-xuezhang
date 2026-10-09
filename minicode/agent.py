@@ -19,7 +19,7 @@ from datetime import date
 from pathlib import Path
 
 from minicode.compaction import compact, estimate_tokens, microcompact, schema_tokens
-from minicode.llm import LLMClient, ToolCall
+from minicode.llm import LLMClient, ToolCall, is_context_overflow
 from minicode.model_catalog import window_for
 from minicode.permission import ASK, REJECT, PATCH_TOOL_NAME, PermissionGate
 from minicode import toolsum
@@ -326,23 +326,42 @@ class Agent:
             steps += 1
             self._maybe_compact()
             self._take_inbox()      # 插话在发这一次请求之前并入(见 _take_inbox)
-            try:
-                turn = self.llm.stream_chat(
-                    self._messages_for_request(),
-                    self.registry,
-                    on_text=self.ui.on_text_delta,
-                    on_reasoning=self.ui.on_reasoning_delta,
-                    on_retry=self._on_retry,
-                    fallback_provider_id=self._fallback_provider(),
-                    on_fallback=lambda e, n: self.ui.push(
-                        "info", text=str(e)) if hasattr(self.ui, "push") else None,
-                )
-            except KeyboardInterrupt:
-                self.ui.turn_interrupted()
-                return
-            except Exception as e:
-                self.ui.llm_error(e)
-                return
+            turn = None
+            for attempt in (1, 2):
+                try:
+                    turn = self.llm.stream_chat(
+                        self._messages_for_request(),
+                        self.registry,
+                        on_text=self.ui.on_text_delta,
+                        on_reasoning=self.ui.on_reasoning_delta,
+                        on_retry=self._on_retry,
+                        fallback_provider_id=self._fallback_provider(),
+                        on_fallback=lambda e, n: self.ui.push(
+                            "info", text=str(e)) if hasattr(self.ui, "push") else None,
+                    )
+                    break
+                except KeyboardInterrupt:
+                    self.ui.turn_interrupted()
+                    return
+                except Exception as e:
+                    # 撞上下文超限:就地压一次、再试一次,**只有一次**。
+                    # 为什么值得再试:今天这一格的结局是一句模型报错(无头那边还是
+                    # 退出码 1),而窗口是量出来的 —— 超了就是超了,压一压真能过去。
+                    # 为什么不循环:压不动还接着撞,就是拿有损压缩换一次次白等。
+                    # 为什么认不出就不压:`is_context_overflow` 只认端点原话里的标记,
+                    # 认错一次的代价是把不该压的对话压掉了(压缩有损)。
+                    if (attempt == 1 and is_context_overflow(e)
+                            and self._maybe_compact(force=True)):
+                        # 与旁边那条 `on_fallback` 同一个口径:`push` 不是每个 UI 都有
+                        # (测试桩、子代理那一份静默 UI 都没有),不许因为"要说一句话"
+                        # 把这次救场本身弄崩。
+                        if hasattr(self.ui, "push"):
+                            self.ui.push("info", text=(
+                                "这一次请求被端点判成超出上下文窗口,已就地压缩一次再试。"
+                                "压缩是有损整理:较早的详细内容会被摘要取代,不保证每条都在。"))
+                        continue
+                    self.ui.llm_error(e)
+                    return
 
             self.ui.finish_stream()
             self.session.add_assistant(turn)
