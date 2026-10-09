@@ -286,6 +286,12 @@ class Config:
     # 记忆在内存里,不落盘不重复弹);0 = 不启用。与 session_token_limit 的
     # 分工:那个管"这个会话",这个管"这台机器今天"。
     daily_token_budget: int = 0
+    # 出站网址策略(N1,v0.9.141):模型能自己填网址的那三条路(web_crawl /
+    # page_parse / browser_open)要不要问一次或直接拒。形状
+    # {"mode": "off"|"ask"|"deny", "allow": ["*.school.edu"], "deny": []}。
+    # 默认 off = 逐字回到今天。**这是策略不是沙箱**,管不着 bash 里的 curl、
+    # 配置的模型/MCP 端点与页面自己的子请求(理由与边界写在 minicode/netguard.py)。
+    net_policy: dict = field(default_factory=dict)
     # 会话留档保留个数(0=全部保留,默认):启动时按 mtime 删旧的。
     # 刻意只给这一个数 —— 年龄/体积的花样讲不清,一个数用户写得对。
     session_keep_last: int = 0
@@ -480,6 +486,29 @@ MODEL_CFG_KEYS = ("context_window", "max_output_tokens", "vision",
                   "reasoning_levels", "reasoning_param", "system_in_messages")
 
 
+def _net_policy_or_empty(raw) -> dict:
+    """把 `net_policy` 收成"只可能是三种档 + 两份字符串名单"的那一份。
+
+    认不出的 mode 一律退回**没有策略**(逐字回到今天),而不是猜一个最严的档 ——
+    写错一个字母就把这台机器的联网整个关掉,是比"没生效"更难查的坏法。名单里的
+    非字符串与空白项直接丢掉:它们匹配不到任何主机,留着只会在下一次读配置的人
+    心里种疑问。
+    """
+    if not isinstance(raw, dict):
+        return {}
+    mode = str(raw.get("mode") or "").strip().lower()
+    if mode not in ("off", "ask", "deny"):
+        return {}
+    out: dict = {"mode": mode}
+    for key in ("allow", "deny"):
+        got = raw.get(key)
+        if isinstance(got, (list, tuple)):
+            items = [x.strip().lower() for x in got if isinstance(x, str) and x.strip()]
+            if items:
+                out[key] = items
+    return out
+
+
 def _pos_int(value) -> int | None:
     n = value if isinstance(value, int) and not isinstance(value, bool) else None
     if n is None and isinstance(value, str) and value.strip().isdigit():
@@ -572,6 +601,7 @@ def _config_from_raw(raw: dict) -> Config:
         turn_time_limit_seconds=max(0, int(raw.get("turn_time_limit_seconds", 1800) or 0)),
         session_token_limit=max(0, int(raw.get("session_token_limit", 0) or 0)),
         daily_token_budget=max(0, int(raw.get("daily_token_budget", 0) or 0)),
+        net_policy=_net_policy_or_empty(raw.get("net_policy")),
         session_keep_last=max(0, int(raw.get("session_keep_last", 0) or 0)),
         subagent_time_limit_seconds=max(0, int(
             raw.get("subagent_time_limit_seconds", 600) or 0)),
@@ -695,6 +725,7 @@ def save_config(path: Path, cfg: Config) -> None:
         "turn_time_limit_seconds": cfg.turn_time_limit_seconds,
         "session_token_limit": cfg.session_token_limit,
         "daily_token_budget": cfg.daily_token_budget,
+        "net_policy": cfg.net_policy,
         "session_keep_last": cfg.session_keep_last,
         "subagent_time_limit_seconds": cfg.subagent_time_limit_seconds,
         # 空 dict 也照样存:用户写过就该在 config.json 里看得见(看不见就会被当成没生效)

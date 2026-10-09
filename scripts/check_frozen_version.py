@@ -36,6 +36,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # v0.9.95:按档位分模型(漏收 = config.json 里写了 subagent_models 没人读,
                         # 而报告还在说「本档模型 X」—— 那就是当着面编一句没依据的话)
                         "subagent_models",
+                        # v0.9.141 出站策略(漏收 = config.json 里写了 net_policy
+                        # 没人读,而模板与说明都宣称这三档存在)
+                        "net_policy", "_net_policy_or_empty",
                         # v0.9.39 B0/B1:回灌开关(漏收 = config.json 里写了没人读)
                         "feedback_recall",
                         # v0.9.40 D2:回合步数上限(漏收 = 配置文件里的数字没人读)
@@ -666,6 +669,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                          "GIT_PATH_TOKEN", "GIT_DIR_NAME", "SCRIPT_GIT_PATTERNS"),
     "minicode.permission": ("note_external", "_is_sensitive_action",
                             "_credential_hit", "_same_site",
+                            # v0.9.141 出站策略进了权限门(漏 `netguard` = 包里的门
+                            # 根本不查这一层,config.json 里的 net_policy 成了装饰,
+                            # 而《使用说明》第 127 条还在教用户怎么配它)
+                            "netguard",
                             # v0.9.129 规划锁排在档位之前(漏 `plan_locked` = 包里的门
                             # 根本不问这把锁 → 核对单白批;漏 `_plan_locked_denial` =
                             # 拒了却不给出口,模型只能原地打转或劝用户去改错的地方)
@@ -718,6 +725,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                     # 只在那一处判)。漏收 = 包里还是旧接线 embed_texts([query]),
                     # 文档向量与查询向量两头不一致 —— 不报错,只是语义命中悄悄变差。
                     "query_vector"),
+    # ---- v0.9.141:出站网址策略(N1)。漏收 = 装好的包里这一层根本不存在,
+    # 而 config.example 与《使用说明》第 127 条都在教用户配它 —— 那正是
+    # "配置写了没人读"这一族最难自己发现的形状。
+    "minicode.netguard": ("URL_TOOLS", "host_of", "decide", "gate", "note",
+                          "_match", "_any", "policy", "ALLOW", "ASK", "REJECT"),
     # ---- v0.9.18:课表持久化 + 天气 chip ----
     "minicode.schedule": ("parse_weeks", "classes_on", "next_class_note",
                           "schedule_prompt_section",

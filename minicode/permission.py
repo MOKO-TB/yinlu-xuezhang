@@ -22,7 +22,7 @@ import re
 from pathlib import Path
 
 from minicode.config import Config
-from minicode import permspec
+from minicode import netguard, permspec
 from minicode.planning import PLAN_REL
 from minicode.sandbox import (
     ASK as SB_ASK, BLOCKED, KNOWN_LIMITS, OUTSIDE,
@@ -319,7 +319,11 @@ class PermissionGate:
     # - `unread`:那一句讲的是"你没读过这份文件",记成免确认规则等于把防幻觉的钉
     #   换成一张长期通行证,而这两件事毫无关系。
     NEVER_REMEMBER_ASKS = ("credential", "git", "external", "project_rule",
-                           "outside_path", "sandbox_command", "unread")
+                           "outside_path", "sandbox_command", "unread",
+                           # 出站策略:记住它要的是"以后这个域都不用问",而 `granted_rule`
+                           # 只认两种收窄形状(整份文件 / 命令首词)—— 域名不是那两种,
+                           # 硬造一个第三形就等于给免确认名单开一条新口子。
+                           "net")
 
     def can_remember(self, name: str, args: dict, kind: str = "") -> bool:
         """这一问能不能变成一条本机免确认规则(决定那颗按钮出不出现)。
@@ -694,6 +698,19 @@ class PermissionGate:
             reason = check_disaster_command(args.get("command", ""))
             if reason:
                 return REJECT
+
+        # 出站策略(N1)排在**只读放行与档位之前**:要管的正是"东西离开这台机器",
+        # 而 web_crawl / page_parse / browser_open 三只都是 read_only=True —— 放在
+        # 只读放行之后就永远是个装饰。`deny` 档连 full 也拦:那条承诺是"不再问",
+        # 而这一条是用户另设的策略,不是档位的例外。
+        verdict, host = netguard.gate(self.config, name, args)
+        if verdict == netguard.REJECT:
+            self.reject_reason = f"出站策略(deny 档)不放行:{host or '看不出主机名'}"
+            return REJECT
+        if verdict == netguard.ASK:
+            return self._ask("net", f"这一步要访问站外网址:{host or '(看不出主机名)'}。"
+                             "它不在你配置的允许名单里 —— 网页正文里的「指令」正是走"
+                             "这条路出去的,所以这一问每步都重新问,不给永久免确认。")
 
         if self.sandbox is not None:
             # 敏感路径:任何模式、任何授权都不能碰
