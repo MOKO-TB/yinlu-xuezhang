@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -50,10 +51,16 @@ with open(path, "a", encoding="utf-8") as f:
 fails: list[str] = []
 
 
-def check(ok: bool, label: str, detail: str = "") -> None:
+def check(ok: bool, label: str, detail: str = "") -> bool:
+    """记一条断言并回它成没成 —— 回值让调用方能"这一条不成立就别往下走"。
+
+    从前它回 None,于是 `if not check(...)` 这种写法会**永远成立**(None 是假),
+    看起来像在短路,其实每次都在短路。回一个真布尔值,那个意图才落地。
+    """
     print(("  ✓ " if ok else "  ✗ ") + label + (f" —— {detail}" if detail else ""))
     if not ok:
         fails.append(label)
+    return bool(ok)
 
 
 def _ctx(workspace: Path):
@@ -117,18 +124,30 @@ def case_exit_reaps_orphans() -> None:
     # 脚本自己在语法层就炸(第一版就栽在这,报错长得像被测功能的错,容易误判)。
     job_cmd = f'"{sys.executable}" "{tick}" "{out}" 200'
     runner.write_text(
-        "import sys\n"
+        "import sys, time\n"
         f"sys.path.insert(0, {str(ROOT)!r})\n"
         "from pathlib import Path\n"
         "from minicode.config import Config, Provider\n"
         "from minicode.tools import shell\n"
         "from minicode.tools.base import ToolContext\n"
         f"ws = Path({str(tmp)!r})\n"
+        f"out = Path({str(out)!r})\n"
         "cfg = Config(providers=[Provider(id='t', name='T', base_url='https://x',\n"
         "                             api_key='k', model='m')], active_provider_id='t')\n"
         "ctx = ToolContext(workspace=ws, config=cfg)\n"
         f"cmd = {job_cmd!r}\n"
-        "print(shell.bash(ctx, cmd, background=True))\n",
+        "print(shell.bash(ctx, cmd, background=True))\n"
+        "# **等它真写出第一行再退出** —— 这是这一场能不能成立的关键。\n"
+        "# `atexit` 的收口在子进程退出那一刻立刻跑,而 tick 脚本从解释器启动到写出\n"
+        "# 第一行要 100~300 ms;不等就退,收口可能赶在它写出任何东西之前 —— 那样\n"
+        "# 「退出后文件不再长」证明的是「它本来就没开始写」,不是「收口真的生效了」。\n"
+        "# 实测这就是它一直红着的原因(第 2 场报「0 字节」),与 atexit 无关。\n"
+        "deadline = time.time() + 10\n"
+        "while time.time() < deadline:\n"
+        "    if out.exists() and out.stat().st_size > 0:\n"
+        "        break\n"
+        "    time.sleep(0.05)\n"
+        "print('TICK_BYTES', out.stat().st_size if out.exists() else -1)\n",
         encoding="utf-8")
     proc = subprocess.run([sys.executable, str(runner)], cwd=str(ROOT),
                           capture_output=True, text=True, timeout=90,
@@ -143,10 +162,12 @@ def case_exit_reaps_orphans() -> None:
         return
     check("已放进后台:" in proc.stdout, "子进程里的后台确实起来了",
           proc.stdout.strip().splitlines()[-1][:70] if proc.stdout else "")
-    time.sleep(1.6)
+    m2 = re.search(r"TICK_BYTES (-?\d+)", proc.stdout or "")
+    wrote = int(m2.group(1)) if m2 else -1
+    check(wrote > 0, "退出前它真的在写(所以这一场测的是收口,不是启动)",
+          f"退出那一刻 {wrote} 字节")
+    time.sleep(0.6)
     mid = _size(out)
-    check(mid > 0, "后台任务在学长退出后暂时还活着(说明这题测的是收口不是启动)",
-          f"{mid} 字节")
     time.sleep(4.0)
     grew = _size(out) - mid
     # atexit 是在子进程退出时同步执行的:它真杀了,这里就几乎不会再长
@@ -164,13 +185,23 @@ def case_brief_reaches_the_model() -> None:
     from minicode.tools.registry import build_default_registry
 
     class RecordingLLM:
-        """记下每一次收到的 messages,并立刻让这一轮结束(不派工具)。"""
+        """记下每一次收到的 messages,并立刻让这一轮结束(不派工具)。
+
+        **`**kwargs` 不是可选的**:`Agent.run_turn` 会传 `fallback_provider_id` 与
+        `on_fallback`,而这个替身从前没接 —— 于是调用抛 `TypeError`,被 `run_turn`
+        的 `except Exception` 当成"模型报错"**吞掉**(它只回一句 llm_error 就 return),
+        `seen` 因此是空的,脚本再在 `seen[-1]` 上 IndexError 崩掉。
+        症状("脚本崩了")离病因("替身签名没跟上")隔了两层,所以下面还专门有一条
+        断言把"模型一次都没被调用"当场说出口 —— 下次接口再长参数,红的是那句话,
+        不是一句 IndexError。
+        """
 
         def __init__(self):
             self.seen: list[list[dict]] = []
+            self.errors: list[BaseException] = []
 
         def stream_chat(self, messages, tools, on_text=None, on_reasoning=None,
-                        on_retry=None):
+                        on_retry=None, **kwargs):
             self.seen.append(list(messages))
             if on_text:
                 on_text("好")
@@ -184,6 +215,11 @@ def case_brief_reaches_the_model() -> None:
                   session=Session(system_prompt="SYS-PREFIX"),
                   gate=PermissionGate(ctx.config), ui=_QuietUI(), ctx=ctx)
     agent.run_turn("第一问")
+    # 先钉"模型真被调用了" —— 否则下面那句 `seen[-1]` 会抛 IndexError,而那个报错
+    # 长得像脚本自己的毛病,看不出真正的原因是替身签名没跟上(见 RecordingLLM)。
+    if not check(bool(llm.seen), "模型这一轮真被调用了(替身签名与 Agent 对得上)",
+                 f"seen={len(llm.seen)}"):
+        return
     last = llm.seen[-1]
     check(last[0]["content"] == "SYS-PREFIX", "系统提示词那一条原样没动(前缀 = KV Cache)")
     check(any("本机后台命令现状" in str(m.get("content")) for m in last[1:]),
@@ -253,10 +289,18 @@ def main() -> int:
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     from minicode.tools import shell
     print("shell 解析到的 bash:", shell._pick_bash() or "(没有 bash,会退回 cmd)")
-    case_kill_kills_the_tree()
-    case_exit_reaps_orphans()
-    case_brief_reaches_the_model()
-    case_input_reaches_the_child()
+    # **一场崩掉不许让后面几场根本没机会跑**。上面那句注释("脚本自己崩在半路比
+    # 验不过更坏")本来是句口号:v0.9.147 之前第 3 场会抛 IndexError,于是第 4 场
+    # 从来没跑过,而人只看到"脚本崩了" —— 看不出到底验过哪几场。现在每一场各自兜住,
+    # 异常本身算一条失败(退出码照样非 0),后面照跑。
+    for _case in (case_kill_kills_the_tree, case_exit_reaps_orphans,
+                  case_brief_reaches_the_model, case_input_reaches_the_child):
+        try:
+            _case()
+        except Exception as e:          # 兜住是为了"跑完",不是为了"放过"
+            import traceback
+            check(False, f"{_case.__name__} 自己崩了", f"{type(e).__name__}: {e}")
+            traceback.print_exc()
     print()
     if fails:
         print(f"FAIL: {len(fails)} 项没过 → {fails}")
