@@ -36,7 +36,12 @@ def test_no_duplicate_test_names_in_one_file():
 
 
 # 起浏览器那一份退路,不许再长出新副本(§6 #50(e)② 那笔账的"止血"部分)
-OWN_FALLBACK_CEILING = 29
+#
+# 2026-10-10(v0.9.150)从 29 降到 28:按这一支自己给的处方("真要收,一次一支、
+# 跑通再挪")收了第一支 —— `scripts/e2e_ui_find.py`,迁移前后各真跑一遍都是 PASS。
+# 剩下的 28 支照旧"只准减少":这个数是**实测**出来的,不是估的,所以每收一支
+# 都要跟着往下改一格,否则这条闸就变成一句空话。
+OWN_FALLBACK_CEILING = 28
 
 
 def test_no_new_hand_rolled_browser_fallback():

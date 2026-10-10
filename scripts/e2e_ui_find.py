@@ -30,8 +30,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+# `scripts/` 也要在 path 上:起浏览器那件事只有一份真相(`e2e_launch.py`),
+# 不再在这一支里抄一遍退路(v0.9.150 收的第 1/29 支,见 §6 53(e))。
+for _p in (str(ROOT), str(ROOT / "scripts")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from e2e_launch import launch          # noqa: E402
 
 STUB_JS = """
 window.__RESUME__ = [];
@@ -80,18 +85,6 @@ def _serve(directory: Path):
     return f"http://127.0.0.1:{httpd.server_address[1]}/index.html", httpd.shutdown
 
 
-def _launch(p):
-    try:
-        return p.chromium.launch()
-    except Exception:
-        import os
-        base = os.environ.get("LOCALAPPDATA", "")
-        for d in sorted(Path(base, "ms-playwright").glob("chromium-*/chrome-win*/chrome.exe"),
-                        reverse=True):
-            return p.chromium.launch(executable_path=str(d), headless=True)
-        raise
-
-
 def main() -> int:
     from playwright.sync_api import sync_playwright
 
@@ -106,7 +99,7 @@ def main() -> int:
 
     stub = STUB_JS
     with sync_playwright() as p:
-        browser = _launch(p)
+        browser = launch(p)
         page = browser.new_page(viewport={"width": 1280, "height": 860})
         page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
         page.add_init_script(stub)
