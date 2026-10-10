@@ -315,7 +315,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           # 只看号码一切正常,坏的是载荷。
                           "pop_output_schema", "EXIT_SCHEMA_VIOLATION",
                           "SCHEMA_FLAG", "EXIT_INTERRUPTED", "EXIT_LIMITED",
-                          "llm_failure"),
+                          "llm_failure",
+                          # v0.9.144 --output-format stream-json:漏 `EventStream` =
+                          # 装好的包里那三种写法里少了事件流这一条(旗标当场报错),
+                          # 而 README/《使用说明》已经在教它怎么用。
+                          "EventStream"),
     # v0.9.136 结构化输出这一格的三件事:读 schema、要 schema、验 schema。
     # 漏 `load` = 旗标能传但没人核对形状(什么怪形状都会流到模型面前);
     # 漏 `validate` = "不合 schema 就明说"这句承诺没了;漏 `extract` = 代码围栏里
@@ -824,7 +828,8 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # 读者没了 —— 技能缺依赖还是只有子代理自己撞上去才知道)
                         "gap_clause"),
     # v0.9.39:一轮总时限是真的在拦东西(漏收 = 配置文件里的数字没人读)
-    "minicode.agent": ("run_turn", "turn_time_limited",
+    "minicode.agent": ("run_turn", "turn_time_limited", "TASK_BUDGET_NOTE",
+                       "DAILY_BUDGET_NOTE",
                        # v0.9.105 /rewind 点头前那一屏:预览与动手共用一份筛选
                        # (漏 rollback_preview = 命令行只能盲退;漏 _rollback_scope =
                        # 两处各筛一遍,总有一天预览说 2 处而实际退 1 处)
@@ -1083,6 +1088,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                      # 而侧栏报的还是服务器声明的那只数 —— 两处数字各说各话)
                      "mount_names", "client_mount", "mount_line",
                      "allow_tools", "deny_tools"),
+    # v0.9.144 MCP server 模式:本 agent 反过来被外部客户端按 stdio 调用。
+    # 漏收的表现全是"不报错的那种":装好的包里 `--mcp-serve` 无人应答(客户端
+    # 握手超时),或白名单/排除表被截断成"少暴露一只"而没人发现。
+    "minicode.mcp_server": ("serve", "SERVE_TOOLS", "EXCLUDED_TOOLS", "_Server",
+                            "_spec", "_NoUI", "pop_mcp_serve_flag",
+                            "PROTOCOL_VERSION", "SERVE_FLAG"),
     # ---- v0.9.24:计划面板(漏收 = 顶栏「🗂 计划」点开永远说没计划) ----
     # v0.9.33:对话流里的计划卡片靠 in_progress/running 画出"正在做哪一步"
     # (漏收 = 卡片只剩一堆待办和勾,转圈的那一行永远不出现)
@@ -1138,6 +1149,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
                          "estimate", "summarize", "load_override",
                          "save_override", "effective_rates"),
     "minicode.usage": ("record_usage", "statistics", "budget_state",
+                       "continue_daily_budget", "reset_daily_budget_override",
                        # v0.9.114 W0/W5/W6:三列迁移 + 按模型画像(漏 _model_profile
                        # = 风云榜四卡没有数据来源;漏 _extra_totals = 头部累计耗时
                        # 与会话数永远 0 —— 不是没数据,是没人去数)

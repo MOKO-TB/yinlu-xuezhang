@@ -32,6 +32,7 @@ from minicode.paths import app_path
 _LOCK = threading.Lock()
 _CONN: sqlite3.Connection | None = None
 _DB_PATH: Path | None = None    # 测试注入用
+_DAILY_BUDGET_OVERRIDE = False  # 一次一放,只在进程内存里,重启即恢复闸门
 
 
 def db_path() -> Path:
@@ -279,7 +280,7 @@ def budget_state(limit: int) -> dict:
     spent = today_total()
     if limit <= 0:
         return {"enabled": False, "spent": spent, "limit": 0,
-                "ratio": 0.0, "level": "off"}
+                "ratio": 0.0, "level": "off", "overridden": False}
     ratio = spent / limit
     if ratio >= 1.0:
         level = "over"
@@ -289,7 +290,22 @@ def budget_state(limit: int) -> dict:
         level = "ok"
     return {"enabled": True, "spent": spent, "limit": limit,
             "ratio": round(ratio, 4), "level": level,
-            "remaining": max(0, limit - spent)}
+            "remaining": max(0, limit - spent),
+            "overridden": _DAILY_BUDGET_OVERRIDE}
+
+
+def continue_daily_budget() -> None:
+    """用户显式放行本次运行的日预算硬闸;不改 level、不落盘。"""
+    global _DAILY_BUDGET_OVERRIDE
+    with _LOCK:
+        _DAILY_BUDGET_OVERRIDE = True
+
+
+def reset_daily_budget_override() -> None:
+    """恢复日预算硬闸(测试与新进程的默认状态)。"""
+    global _DAILY_BUDGET_OVERRIDE
+    with _LOCK:
+        _DAILY_BUDGET_OVERRIDE = False
 
 
 def _extra_totals(days: int) -> "tuple[int, int, int]":

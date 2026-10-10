@@ -276,6 +276,18 @@ class GuiUI:
                                f"(正在执行的那一步不会被强杀)。"
                                f"可提高上限或新开会话再继续。")
 
+    def task_budget_reached(self, limit: int, used: int) -> None:
+        self.push("info", text=f"本回合累计消耗约 {used} token,已到 "
+                               f"task_token_budget({limit})上限,本轮先停在这里"
+                               f"(正在执行的那一步不会被强杀)。"
+                               f"说「继续」会重新起算一格。")
+
+    def daily_budget_reached(self, limit: int, used: int) -> None:
+        self.push("info", text=f"今天累计消耗约 {used} token,已到 "
+                               f"daily_token_budget({limit})上限,本轮先停在这里"
+                               f"(正在执行的那一步不会被强杀)。"
+                               f"可等明天,或显式选择今天继续(只对本次运行有效)。")
+
     def compacted(self, before: int, after: int) -> None:
         self.push("compacted", before=before, after=after)
 

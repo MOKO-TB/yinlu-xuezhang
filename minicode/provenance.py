@@ -79,7 +79,7 @@ INJECTION_LOG_CAP_LINES = 500   # v0.9.66:留排查现场,但别无限长
 
 
 def log_escalation(gate_name: str, tool_name: str, args: dict, note: str,
-                   choice: str) -> None:
+                   choice: str, client: str = "") -> None:
     """把"安全门过问过的敏感动作"记一行本地日志(注入防御 M6)。
 
     `gate_name` 用的是门**自己的名字**(`PermissionGate.ask_kind`:credential / git /
@@ -91,6 +91,10 @@ def log_escalation(gate_name: str, tool_name: str, args: dict, note: str,
     "先接触了哪个外部来源、后来想干什么、用户点了什么"。
     只记安全门开口的动作(不是每次工具调用),量极小;写失败静默忽略 ——
     留痕绝不可能拖垮对话。
+
+    `client`(v0.9.144)是**外部 MCP 客户端自述的标签**(`clientInfo.name/version`),
+    只有 `--mcp-serve` 那条路会传:它无凭据无校验,**只能进日志,不能进判定**。
+    不传时记录里没有这个键 —— 老调用方的日志形状一个字节都不变。
     """
     if not note:
         return
@@ -112,6 +116,8 @@ def log_escalation(gate_name: str, tool_name: str, args: dict, note: str,
             "why": note[:300],
             "user": choice,
         }
+        if client:
+            rec["client"] = client
         path = app_path("injection-events.log")
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")

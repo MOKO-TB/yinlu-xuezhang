@@ -158,7 +158,9 @@ python main.py                      # 交互式 REPL
 python main.py "修复 pytest 报错"    # 一次性执行
 echo "列出 TODO" | python main.py   # 管道输入
 python main.py --json "任务"         # 无头:stdout 只有一份 JSON,退出码说清结局
+python main.py --output-format stream-json "任务"   # 无头:stdout 是 NDJSON 事件流(最后一行 result)
 python main.py --output-schema s.json "任务"   # 同上,另按 schema 要一份结构化结果(不合 → 退出码 6)
+python main.py --mcp-serve          # 作 MCP 服务端(stdio):把校园只读能力暴露给外部 MCP 客户端
 python main.py --workspace "D:\我的资料"   # 指定工作区启动(路径不合法直接报错退出)
 ```
 
@@ -169,6 +171,15 @@ python main.py --workspace "D:\我的资料"   # 指定工作区启动(路径不
 第 3 码是这条路上的安全边界:**换入口不换权限** —— confirm 档该弹框的步骤,无头模式一律
 按"不点头"处理并把它说出来(文件不会被写出来),而不是替你批一次从此不问。
 `--output-format` 认不出的值直接报错,不静默退回纯文本。
+- **要过程可判就上事件流(v0.9.144)**:`--output-format stream-json` 让 stdout 变成一行一条的
+  NDJSON:第一行 `stream_start`、中间是 `text_delta` / `reasoning_delta` / `tool_start` /
+  `tool_done` / `hard_reject` / `compacted` / `retry`,最后一行是与 `--json` **同构**的
+  `result`。每条都带从 1 起严格递增的 `seq`,每行立刻 flush;人读的话(`info` / `error` /
+  进度)仍旧只走 stderr。它面向的读者是**把学长当子进程驱动的编排层**(CI、外层 agent),
+  不是盯着日志看的人,所以**不新增退出码**、结局仍以最后那份结果对象为准。`--json` 与它
+  **互斥**(两个一起给报参数错,靠位置决定形状是这类旗标最贵的坏法);`--output-schema`
+  与它**可以一起用**,那时格式仍是事件流,`structured_output` 只出现在 `result` 行里。
+  stdout 被下游关掉(管道关闭)按中断处理,退出码 5,且停发后续事件。
 - **要一份结构化结果(v0.9.136)**:`--output-schema <内联 JSON 或文件路径>` 让模型按你给的
   JSON Schema 只输出一个 JSON 对象,结果里多两个固定字段:`structured_output`(**按 schema 验
   过了**的值,不合就是 null)与 `schema_violations`(人话清单,每条带路径如 `notes[1]:类型应是
@@ -367,6 +378,8 @@ GUI 顶栏的「🛡 沙箱开/关」可随时切换(写回 config.json);CLI 用
 
 **能力协商照实说(v0.9.82)**:握手时学长声明的 `capabilities` 是空的 —— 它只实现了 MCP 的 `tools` 这一个原语,`resources` / `prompts` / `sampling` / `logging` 都没接,所以不假装支持。对端在握手里声明了什么则**原样留着并说给你听**:添加服务器成功那句话会带上「对端声明: prompts、resources、tools;学长只接了 tools(prompts、resources 没实现,不会去调)」,侧栏 🔌 MCP 健康行悬停是同一句;没连上(没握过手)的服务器**不编能力表**,直说拿不到。`mcp action=list` 仍是配置层口径(它不去连服务器),活状态与能力在这两处。
 
+**本 agent 反过来也能当服务器(v0.9.144)**:`引路学长-CLI.exe --mcp-serve`(源码态 `python main.py --mcp-serve`)在本机起一个 stdio MCP 服务端,把**校园只读能力**暴露给 Claude Code / Cursor / Qoder 一类 MCP 客户端 —— `library_search` / `library_guide` / `campus_calendar` / `gpa_calc` / `search_knowledge` / `campus_notices` / `get_weather` 与地图五件,共 12 只,**清单显式列举**(绝不用 `read_only` 标志过滤:`read_file`/`glob`/`grep` 也是只读,而工作区根就有含内置 Key 的 `config.local.json`)。两条硬边界:① 外部来的每一步都走**同一道权限门**,需要人点头的一律拒绝 —— 没有人能替这台机器的主人点头,也**没有** `--mcp-yolo` 这种例外档;② stdout 只走协议报文,人读的话全走 stderr。写盘 / 执行命令 / 读文件 / 私有数据(成绩、情绪、记忆、课表)一律不在名单里;被拒的那一次会在本机 `injection-events.log` 留一行(带客户端自述标签,`clientInfo` 只进日志、不进判定)。只做 stdio、一个进程一个客户端:不开端口、不做 http/sse、不连出站 MCP。
+
 在 `config.json` 里配置(完整示例见 `config.example.json`):
 
 ```json
@@ -498,6 +511,7 @@ minicode/
 ├── llm.py          # OpenAI 兼容流式调用 + 工具调用增量聚合 + 重试 + 本地代理绕行
 ├── skills.py       # SKILL.md 技能加载 + use_skill 工具处理器
 ├── mcp.py          # MCP 客户端:stdio / Streamable HTTP / HTTP+SSE 三种传输 + 工具发现 / 调用 / 进程回收
+├── mcp_server.py   # MCP 服务端(--mcp-serve):stdio,把校园只读能力接给外部 MCP 客户端
 ├── sandbox.py      # 沙箱策略:路径分级(工作区/外部/敏感)+ 命令管控 + 超时
 ├── workspace.py    # 工作区:选择校验(拒敏感目录)+ 最近列表持久化 + 启动回退
 ├── attachments.py  # 附件:落盘去重 / 图片压缩 / 多模态消息构造

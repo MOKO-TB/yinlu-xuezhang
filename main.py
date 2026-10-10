@@ -5,7 +5,9 @@
   python main.py "任务描述"     一次性执行后退出
   echo "任务" | python main.py 从管道读取一条任务执行后退出
   python main.py --json "..."  无头:stdout 只有一份 JSON,退出码说清结局
+  python main.py --output-format stream-json "..."  无头:stdout 是 NDJSON 事件流(最后一行 result)
   python main.py --output-schema schema.json "..."  同上,另按 schema 要一份结构化结果(不合 schema → 退出码 6)
+  python main.py --mcp-serve [--workspace 路径]  作 MCP 服务端被外部客户端按 stdio 调用(只读校园能力)
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from minicode.app_setup import apply_retention, create_agent
 from minicode.config import load_config
-from minicode import headless
+from minicode import headless, mcp_server
 from minicode import model_probe
 from minicode.paths import SESSIONS_DIR
 from minicode import workspace as ws
@@ -820,9 +822,11 @@ def main() -> None:
     except headless.UsageError as e:
         print(f"错误: {e}", file=sys.stderr)
         raise SystemExit(headless.EXIT_ARGS)
-    # `--output-schema` 给了就按 json 出:那份结构化结果本来就是给机器读的,
-    # 让人去看一行缩进 JSON 不是它的读者。
-    if schema_raw:
+    # `--output-schema` 给了、且没显式要事件流时,按 json 出:那份结构化结果本来
+    # 就是给机器读的,让人去看一行缩进 JSON 不是它的读者。**只有 text 才强制改** ——
+    # schema 只做两件事(照它问模型、验回来),与"过程怎么上线"正交,所以
+    # `stream-json` + schema 仍然出事件流,`structured_output` 只出现在 `result` 行里。
+    if schema_raw and out_fmt == "text":
         out_fmt = "json"
     schema = None
     if schema_raw:
@@ -834,7 +838,19 @@ def main() -> None:
             # "这份 schema 我不认",是把用户的钱和时间拿去换一句报错。
             print(f"错误: --output-schema 不能用 —— {e}", file=sys.stderr)
             raise SystemExit(headless.EXIT_ARGS)
-    if out_fmt == "json":
+    # `--mcp-serve`:本 agent 反过来作 MCP 服务端,被外部客户端(Claude Code /
+    # Cursor / Qoder 一类)按 stdio 调用。分支必须在 `TerminalUI` **之前** return
+    # —— 它会往 stdout 打横幅,而服务端的 stdout 只能是协议报文。
+    serve, argv_for_ws = mcp_server.pop_mcp_serve_flag(argv_for_ws)
+    if serve and out_fmt != "text":
+        print("错误: --mcp-serve 与 --json / --output-format 不能同时给"
+              "(服务端的 stdout 只能是协议报文)。", file=sys.stderr)
+        raise SystemExit(headless.EXIT_ARGS)
+    if serve:
+        explicit_ws, _ = pop_workspace_flag(argv_for_ws)
+        workspace = startup_workspace(explicit_ws)
+        raise SystemExit(mcp_server.serve(config, workspace))
+    if out_fmt in ("json", "stream-json"):
         # 那份 JSON 必须按 UTF-8 出去:控制台代码页对管道无效,默认会按 cp936 建流,
         # 中文回答与中文路径当场变乱码(打包态真跑抓到的)。
         headless.ensure_utf8_stdout()
@@ -843,9 +859,12 @@ def main() -> None:
     explicit_ws, rest_argv = pop_workspace_flag(argv_for_ws)
     workspace = startup_workspace(explicit_ws)
     ui = TerminalUI(config, workspace)
-    # --json:外面再包一层静默 UI。横幅/进度/错误一律改道 stderr,要人点头的
-    # 入口全部答"不",结局由退出码与那一份 JSON 说 —— 见 minicode/headless.py。
-    hui = headless.HeadlessUI(ui) if out_fmt == "json" else None
+    # --json / stream-json:外面再包一层静默 UI。横幅/进度/错误一律改道 stderr,
+    # 要人点头的入口全部答"不",结局由退出码与最后那份结果说 —— 见 minicode/headless.py。
+    hui = (headless.HeadlessUI(
+        ui, events=(headless.EventStream()
+                    if out_fmt == "stream-json" else None))
+        if out_fmt != "text" else None)
     active = hui or ui
     active.banner(key_ok=config.api_key_configured)
     _warn_library_health(workspace, active)
@@ -856,25 +875,38 @@ def main() -> None:
 
     try:
         _repl(config, workspace, active, agent, session, argv=rest_argv,
-              hui=hui, schema=schema)
+              hui=hui, schema=schema, fmt=out_fmt)
     finally:
         agent.close()      # 关掉 MCP 子进程,不留孤儿
 
 
-def run_json(config, agent, session, hui, task: str, schema=None) -> None:
-    """无头那一条路:跑一轮,把结局攒成一份 JSON 交给 stdout,按结局退出。
+def run_json(config, agent, session, hui, task: str, schema=None,
+             fmt: str = "json") -> None:
+    """无头那一条路:跑一轮,把结局交给 stdout,按结局退出。
 
-    放在 main 这一侧而不是 headless 里:它要的是"什么时候开始跑"这种进程级
-    事实;headless 只管形状与判断,这样它能被测试直接调。
+    `fmt="json"` 出单份 JSON(调用方 `json.loads(stdout)`);`fmt="stream-json"`
+    出 NDJSON 事件流:第一行 `stream_start`,中间是过程事件,最后一行是与前者
+    **同构**的 `result`。放在 main 这一侧而不是 headless 里:它要的是"什么时候
+    开始跑"这种进程级事实;headless 只管形状与判断,这样它能被测试直接调。
     """
     started = time.perf_counter()
     from minicode import schema as schema_mod
+    events = getattr(hui, "events", None)
+    if events is not None:
+        events.emit("stream_start", task=task, format=fmt,
+                    model=getattr(config, "model", "") or "")
     agent.run_turn(task, output_directive=(
         schema_mod.instruction(schema) if schema else ""))
+    if events is not None and events.broken:
+        # 下游把 stdout 关了:与 Ctrl+C 同一归宿(退出码 5),不新开判断。
+        hui.interrupted = True
     result = headless.build_result(hui, agent, session, config, task=task,
                                    elapsed_ms=int((time.perf_counter() - started) * 1000),
-                                   fmt="json", schema=schema)
-    print(headless.render(result), flush=True)
+                                   fmt=fmt, schema=schema)
+    if events is not None:
+        events.emit("result", **result)     # 最后一行:与 --json 那份同构 + type/seq
+    else:
+        print(headless.render(result), flush=True)
     raise SystemExit(result["exit_code"])
 
 
@@ -893,22 +925,24 @@ def _warn_library_health(workspace: Path, ui: TerminalUI) -> None:
 
 
 def _repl(config, workspace, ui, agent, session, argv=None, hui=None,
-          schema=None) -> None:
+          schema=None, fmt: str = "json") -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
     # 一次性模式:命令行参数或管道输入(斜杠命令同样支持)
     task = unmanagle_slash_command(argv) if argv else None
     if task is None and not sys.stdin.isatty():
         task = sys.stdin.read().strip() or None
     if hui is not None:
-        # --json 只在一次性模式里有意义:REPL 里静默不渲染不叫"无头",叫"看不见"。
+        # 无头只在一次性模式里有意义:REPL 里静默不渲染不叫"无头",叫"看不见"。
+        flag = "--json" if fmt == "json" else f"--output-format {fmt}"
         if not task:
-            print("错误: --json 需要一条任务(命令行参数或管道输入)。", file=sys.stderr)
+            print(f"错误: {flag} 需要一条任务(命令行参数或管道输入)。",
+                  file=sys.stderr)
             raise SystemExit(headless.EXIT_ARGS)
         if task.startswith("/"):
             # 斜杠命令的输出是给人看的一段话 —— 让它进来,stdout 那份 JSON 就废了。
-            print("错误: --json 只跑一条任务,不跑斜杠命令。", file=sys.stderr)
+            print(f"错误: {flag} 只跑一条任务,不跑斜杠命令。", file=sys.stderr)
             raise SystemExit(headless.EXIT_ARGS)
-        run_json(config, agent, session, hui, task, schema=schema)
+        run_json(config, agent, session, hui, task, schema=schema, fmt=fmt)
         return
     if task is not None:
         if task.startswith("/workspace"):

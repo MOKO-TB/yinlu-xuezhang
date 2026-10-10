@@ -22,7 +22,7 @@ def test_budget_state_off_and_levels(tmp_path, monkeypatch):
     # 0 = 不启用:只报今天的数
     st = usage_mod.budget_state(0)
     assert st == {"enabled": False, "spent": 800, "limit": 0,
-                  "ratio": 0.0, "level": "off"}
+                  "ratio": 0.0, "level": "off", "overridden": False}
     # 80%~100% = near
     st = usage_mod.budget_state(1000)
     assert st["level"] == "near" and st["remaining"] == 200
@@ -32,6 +32,21 @@ def test_budget_state_off_and_levels(tmp_path, monkeypatch):
     # <80% = ok
     st = usage_mod.budget_state(5000)
     assert st["level"] == "ok"
+
+
+def test_daily_budget_override_is_process_memory_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(usage_mod, "db_path", lambda: tmp_path / "u.db")
+    usage_mod.set_db_path(tmp_path / "u.db")
+    usage_mod.reset_daily_budget_override()
+    usage_mod.record_usage("p", "m", {"prompt_tokens": 900,
+                                      "completion_tokens": 100})
+    st = usage_mod.budget_state(1000)
+    assert st["level"] == "over" and st["overridden"] is False
+    usage_mod.continue_daily_budget()
+    st = usage_mod.budget_state(1000)
+    assert st["level"] == "over" and st["overridden"] is True
+    usage_mod.reset_daily_budget_override()
+    assert usage_mod.budget_state(1000)["overridden"] is False
 
 
 def test_agent_notes_budget_once_per_level(tmp_path, monkeypatch):
@@ -89,6 +104,7 @@ def test_get_token_usage_carries_today_and_budget(tmp_path, monkeypatch):
     assert out["ok"] is True
     assert out["today"]["total"] == 150
     assert out["today"]["budget"]["enabled"] is True and out["today"]["budget"]["limit"] == 5000
+    assert out["today"]["budget"]["overridden"] is False
 
 
 def test_get_usage_dashboard_carries_today_and_budget(tmp_path, monkeypatch):
@@ -110,3 +126,4 @@ def test_get_usage_dashboard_carries_today_and_budget(tmp_path, monkeypatch):
     assert out["today"]["total"] == 150
     assert out["today"]["budget"]["enabled"] is True
     assert out["today"]["budget"]["limit"] == 5000
+    assert out["today"]["budget"]["overridden"] is False

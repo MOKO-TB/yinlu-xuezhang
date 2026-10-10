@@ -46,8 +46,8 @@ def test_equals_form_and_missing_value():
 def test_unknown_format_is_an_error_not_a_silent_fallback():
     # 拼错了却以为自己解析成功 —— 这类旗标最贵的一种坏法,当场拒。
     with pytest.raises(headless.UsageError) as e:
-        headless.pop_output_flags(["--output-format", "stream-json", "任务"])
-    assert "stream-json" in str(e.value)
+        headless.pop_output_flags(["--output-format", "jsonl", "任务"])
+    assert "jsonl" in str(e.value)
 
 
 def test_flags_never_leak_into_the_task():
@@ -159,6 +159,10 @@ def _endings():
         (lambda u: u.confirm_tool(_tool(), {"path": "a.py"}, "要写文件"),
          headless.EXIT_ASK_REFUSED, "ask_refused"),
         (lambda u: u.max_steps_reached(40), headless.EXIT_LIMITED, "limited"),
+        (lambda u: u.daily_budget_reached(1000, 1000),
+         headless.EXIT_LIMITED, "limited"),
+        (lambda u: u.task_budget_reached(500, 500),
+         headless.EXIT_LIMITED, "limited"),
         (lambda u: u.llm_error(RuntimeError("APITimeoutError: 连接超时")),
          headless.EXIT_RUNTIME, "llm_error"),
         (lambda u: u.turn_interrupted(), headless.EXIT_INTERRUPTED, "interrupted"),

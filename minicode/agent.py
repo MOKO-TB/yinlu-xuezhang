@@ -100,6 +100,20 @@ TOKEN_LIMIT_NOTE = ("本会话累计 token 消耗已到 session_token_limit 上�
                     "请向用户如实说明:这一轮做到哪了、还剩什么没做;想继续可以提高 "
                     "config.json 里的 session_token_limit,或新开一个会话再接着做。")
 
+TASK_BUDGET_NOTE = ("本回合累计 token 消耗已到 task_token_budget 上限,这一次不许再调用工具。"
+                    "请向用户如实说明:这一轮做到哪了、还剩什么没做;用户说「继续」会重新"
+                    "开启一个任务预算,是否继续由用户决定。")
+
+DAILY_BUDGET_NOTE = ("今天累计 token 消耗已到 daily_token_budget 上限,这一次不许再调用工具。"
+                     "请向用户如实说明:今天做到哪了、还剩什么没做;可以等明天再继续,"
+                     "或由用户显式选择「今天继续」(该放行只对本次运行有效)。")
+
+# ③ 会话闸与日预算**同时**触顶时的补句:正文报会话那条(它数的是本实例的账,
+# 用户当场改一个数就能继续),但日预算的原因也要说出口 —— 把"今天也已经超了"
+# 藏起来就是"有超支说成没超支"。
+DAILY_ALSO_OVER_SUFFIX = ("此外,今天这台机器的 daily_token_budget 累计也已经超了 —— "
+                          "想今天就继续,同样需要由用户显式放行「今天继续」。")
+
 
 @dataclass
 class Prepared:
@@ -304,6 +318,9 @@ class Agent:
         # 与 deadline 一样在循环顶部查 —— 用的是"上一回合结束"时的数,正在跑的
         # 那一步不受影响,天然满足"不强杀"的口径。
         token_limit = max(0, int(getattr(self.ctx.config, "session_token_limit", 0) or 0))
+        task_budget = max(0, int(getattr(self.ctx.config, "task_token_budget", 0) or 0))
+        daily_budget = max(0, int(getattr(self.ctx.config, "daily_token_budget", 0) or 0))
+        self._run_tokens = 0
         steps = 0
         # 失败连击只在本回合内计数:跨回合的旧失败不该约束新回合的新决定
         # (B0 同款口径:一次任务里换关键词补搜不算)。
@@ -312,10 +329,31 @@ class Agent:
             if token_limit and int(getattr(self, "turn_tokens", 0) or 0) > token_limit:
                 used = int(getattr(self, "turn_tokens", 0) or 0)
                 self.ui.token_limit_reached(token_limit, used)
+                # ③ 同时触顶报哪一条:正文报会话那条,但两条原因都留痕 ——
+                # 日预算此刻若也超了,补记一条并在收尾正文里补一句。
+                note = TOKEN_LIMIT_NOTE
+                if daily_budget:
+                    daily_state = self._daily_budget_over(daily_budget)
+                    if daily_state is not None:
+                        self.ui.daily_budget_reached(
+                            daily_budget, int(daily_state.get("spent", 0) or 0))
+                        note = TOKEN_LIMIT_NOTE + DAILY_ALSO_OVER_SUFFIX
                 # 同两条时限/止损的口径:此刻不再开新的工具轮,但正在跑的
                 # 步骤照常收尾 —— 收尾那一次调用本身也会耗一点,如实告诉模型。
-                self._wrap_up(TOKEN_LIMIT_NOTE)
+                self._wrap_up(note)
                 return
+            if task_budget and int(getattr(self, "_run_tokens", 0) or 0) > task_budget:
+                used = int(getattr(self, "_run_tokens", 0) or 0)
+                self.ui.task_budget_reached(task_budget, used)
+                self._wrap_up(TASK_BUDGET_NOTE)
+                return
+            if daily_budget:
+                daily_state = self._daily_budget_over(daily_budget)
+                if daily_state is not None:
+                    self.ui.daily_budget_reached(
+                        daily_budget, int(daily_state.get("spent", 0) or 0))
+                    self._wrap_up(DAILY_BUDGET_NOTE)
+                    return
             if deadline is not None and time.monotonic() > deadline:
                 self.ui.turn_time_limited(limit, steps)
                 # 与撞步数上限同一口径:此刻工具结果已经躺在上下文里,模型还没
@@ -682,6 +720,7 @@ class Agent:
         ct = u.get("completion_tokens")
         if isinstance(pt, int) and pt >= 0 and isinstance(ct, int) and ct >= 0:
             self.turn_tokens = getattr(self, "turn_tokens", 0) + pt + ct
+            self._run_tokens = int(getattr(self, "_run_tokens", 0) or 0) + pt + ct
         if isinstance(pt, int) and not isinstance(pt, bool) and pt > 0:
             # 记的是"这一次请求发出去的量"与**当时的消息条数** —— 配对才有意义:
             # 只记数字的话,压缩或 /resume 之后它就成了另一份上下文的量。
@@ -1767,7 +1806,8 @@ class Agent:
 
         提醒走 ui.push("info")(与 token_limit 同一家族);账记在实例内存
         —— 重启后再达阈值会再提醒一次,那是可接受的(进程内去重,不落盘
-        不新增账本)。读不到用量(库损坏)就静默:预算是提醒,不是闸门。
+        不新增账本)。读不到用量(库损坏)就静默;预算在 100% 后另有一道
+        请求循环顶部的硬闸(读不到账时不会拦,绝不让库故障把对话变成不可用)。
         """
         cfg = getattr(self.ctx, "config", None)
         limit = int(getattr(cfg, "daily_token_budget", 0) or 0)
@@ -1792,6 +1832,23 @@ class Agent:
             self.ui.push("info", text=msg)
         except Exception:
             pass
+
+    def _daily_budget_over(self, limit: int) -> dict | None:
+        """日预算已超**且**未放行时返回状态,否则 None。
+
+        请求循环顶部的日预算硬闸与"会话闸同时触顶"的补记共用这一处判定,
+        免得两处对"算不算超"各执一词。库故障(读不到账)返回 None —— 不拦,
+        绝不让账本故障把对话变成不可用(与 `_note_daily_budget` 同一底线)。
+        """
+        from minicode import usage
+        try:
+            st = usage.budget_state(limit)
+        except Exception:
+            return None
+        if (st.get("enabled") and st.get("level") == "over"
+                and not st.get("overridden")):
+            return st
+        return None
 
     def _fallback_provider(self) -> str:
         """C2(v0.9.108):主供应商 401/404/403 时的备选 —— 第一个「非活动、

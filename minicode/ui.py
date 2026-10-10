@@ -496,3 +496,17 @@ class TerminalUI:
             f"session_token_limit({limit})上限,本轮先停在这里"
             f"(正在执行的那一步不会被强杀)。可提高上限或新开会话再继续。[/yellow]"
         )
+
+    def task_budget_reached(self, limit: int, used: int) -> None:
+        self.console.print(
+            f"[yellow]💰 本回合累计消耗约 {used} token,已到 "
+            f"task_token_budget({limit})上限,本轮先停在这里"
+            f"(正在执行的那一步不会被强杀)。说「继续」会重新起算一格。[/yellow]"
+        )
+
+    def daily_budget_reached(self, limit: int, used: int) -> None:
+        self.console.print(
+            f"[yellow]💰 今天累计消耗约 {used} token,已到 "
+            f"daily_token_budget({limit})上限,本轮先停在这里"
+            f"(正在执行的那一步不会被强杀)。可等明天,或显式选择今天继续。[/yellow]"
+        )

@@ -33,6 +33,11 @@ if hasattr(sys.stdout, "reconfigure"):
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
+# 这一件的东西**全在界面上**,所以出包那一场必须对着包内那份前端再跑一遍:
+# `python scripts/e2e_ui_v09142.py --frontend dist/引路学长/_internal/frontend`
+# (v0.9.138 的教训:只验源码那份等于没验。)
+if "--frontend" in sys.argv:
+    FRONTEND = Path(sys.argv[sys.argv.index("--frontend") + 1]).resolve()
 for _p in (str(ROOT), str(ROOT / "scripts")):
     if _p not in sys.path:
         sys.path.insert(0, _p)

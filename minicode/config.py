@@ -281,10 +281,13 @@ class Config:
     # 真实用量(prompt+completion,不给 usage 的端点这道闸不起作用,文档写明)。
     # 到点与两条时限同一口径:两步之间收手,不强杀在跑的那一步。
     session_token_limit: int = 0
+    # 单次用户任务(一个 run_turn)的真实 token 消耗上限;0 = 不启用。
+    # 跨轮"继续"会重新起算一格 —— 这是任务粒度与会话粒度的分工。
+    task_token_budget: int = 0
     # 日预算(C1,v0.9.108):今天(本地时区)全供应商累计 total tokens 的上限。
-    # 只在**回合开始**检查一次:接近 80% / 达到 100% 各提醒一次(当天各一次,
-    # 记忆在内存里,不落盘不重复弹);0 = 不启用。与 session_token_limit 的
-    # 分工:那个管"这个会话",这个管"这台机器今天"。
+    # 接近 80% / 达到 100% 各提醒一次;100% 后是硬闸,用户可显式放行一次
+    # (只到本次进程,不落盘)。0 = 不启用。与 session_token_limit 的分工:
+    # 那个管"这个会话",这个管"这台机器今天"。
     daily_token_budget: int = 0
     # 出站网址策略(N1,v0.9.141):模型能自己填网址的那三条路(web_crawl /
     # page_parse / browser_open)要不要问一次或直接拒。形状
@@ -617,6 +620,7 @@ def _config_from_raw(raw: dict) -> Config:
         request_timeout_seconds=int(raw.get("request_timeout_seconds", 300)),
         turn_time_limit_seconds=max(0, int(raw.get("turn_time_limit_seconds", 1800) or 0)),
         session_token_limit=max(0, int(raw.get("session_token_limit", 0) or 0)),
+        task_token_budget=max(0, int(raw.get("task_token_budget", 0) or 0)),
         daily_token_budget=max(0, int(raw.get("daily_token_budget", 0) or 0)),
         net_policy=_net_policy_or_empty(raw.get("net_policy")),
         session_keep_last=max(0, int(raw.get("session_keep_last", 0) or 0)),
@@ -741,6 +745,7 @@ def save_config(path: Path, cfg: Config) -> None:
         # 两条时限跟着落盘:用户在设置里改过、下次启动还在(0=不限也照样存下来)
         "turn_time_limit_seconds": cfg.turn_time_limit_seconds,
         "session_token_limit": cfg.session_token_limit,
+        "task_token_budget": cfg.task_token_budget,
         "daily_token_budget": cfg.daily_token_budget,
         "net_policy": cfg.net_policy,
         "session_keep_last": cfg.session_keep_last,

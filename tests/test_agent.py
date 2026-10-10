@@ -83,6 +83,14 @@ class FakeUI:
         self.token_limits = getattr(self, "token_limits", [])
         self.token_limits.append((limit, used))
 
+    def task_budget_reached(self, limit, used):
+        self.task_budgets = getattr(self, "task_budgets", [])
+        self.task_budgets.append((limit, used))
+
+    def daily_budget_reached(self, limit, used):
+        self.daily_budgets = getattr(self, "daily_budgets", [])
+        self.daily_budgets.append((limit, used))
+
 
 class Clock:
     """假时钟:每读一次走 step 秒,让"一轮总时限到点"可测而不用真等。"""
@@ -799,6 +807,97 @@ def test_session_token_limit_counts_across_turns_of_same_session(config, ctx):
     assert getattr(ui, "token_limits", None) is None
     agent.run_turn("第二问")            # 累计 140 > 120,这轮顶部触发
     assert getattr(ui, "token_limits", []) == [(120, 140)]
+
+
+def test_task_token_budget_resets_for_each_user_turn(config, ctx):
+    """任务预算数的是这一句用户指令;下一句「继续」重新起算。"""
+    config.task_token_budget = 60
+    ui = FakeUI()
+    llm = FakeLLM([
+        _turn_with_usage([{"id": "c1", "name": "nope", "args": {"x": 1}}], pt=40, ct=10),
+        AssistantTurn(text="第一轮完"),
+        _turn_with_usage([{"id": "c2", "name": "nope", "args": {"x": 2}}], pt=40, ct=10),
+        AssistantTurn(text="第二轮完"),
+    ])
+    agent = make_agent(config, ctx, llm, ui)
+    agent.max_steps = 20
+    agent.run_turn("第一问")
+    agent.run_turn("继续")
+    assert getattr(ui, "task_budgets", None) is None
+    assert agent.turn_tokens == 100 and agent._run_tokens == 50
+
+
+def test_task_token_budget_stops_between_turns(config, ctx):
+    config.task_token_budget = 50
+    ui = FakeUI()
+    turns = [
+        _turn_with_usage([{"id": "c1", "name": "nope", "args": {"x": 1}}], pt=41, ct=10),
+        _turn_with_usage([{"id": "c2", "name": "nope", "args": {"x": 2}}], pt=41, ct=10),
+        AssistantTurn(text="收尾"),
+    ]
+    llm = FakeLLM(turns)
+    agent = make_agent(config, ctx, llm, ui)
+    agent.max_steps = 20
+    agent.run_turn("做个事")
+    assert getattr(ui, "task_budgets", []) == [(50, 51)]
+    assert "task_token_budget" in llm.calls[-1][-1]["content"]
+    assert any(m.get("tool_call_id") == "c1" for m in agent.session.messages)
+    assert not any(m.get("tool_call_id") == "c2" for m in agent.session.messages)
+
+
+def test_daily_budget_hard_gate_and_one_run_override(config, ctx, tmp_path, monkeypatch):
+    from minicode import usage as usage_mod
+    monkeypatch.setattr(usage_mod, "db_path", lambda: tmp_path / "u.db")
+    usage_mod.set_db_path(tmp_path / "u.db")
+    usage_mod.reset_daily_budget_override()
+    usage_mod.record_usage("p", "m", {"prompt_tokens": 90, "completion_tokens": 10})
+    config.daily_token_budget = 100
+    ui = FakeUI()
+    llm = FakeLLM([
+        _turn_with_usage([{"id": "c1", "name": "nope", "args": {"x": 1}}]),
+        AssistantTurn(text="收尾"),
+    ])
+    agent = make_agent(config, ctx, llm, ui)
+    agent.max_steps = 20
+    agent.run_turn("做个事")
+    assert getattr(ui, "daily_budgets", []) == [(100, 100)]
+    assert "daily_token_budget" in llm.calls[-1][-1]["content"]
+    usage_mod.continue_daily_budget()
+    agent.run_turn("今天继续")
+    assert len(getattr(ui, "daily_budgets", [])) == 1
+    assert usage_mod.budget_state(100)["level"] == "over"
+    assert usage_mod.budget_state(100)["overridden"] is True
+    usage_mod.reset_daily_budget_override()
+    assert usage_mod.budget_state(100)["overridden"] is False
+
+
+def test_session_limit_outranks_daily_limit_but_both_are_recorded(config, ctx,
+                                                                  tmp_path, monkeypatch):
+    """会话闸与日预算**同时**触顶:正文报会话那条,但两条原因都在。
+
+    构造:日预算 100,库里先垫 30;第一回合 LLM 回 70 → 日账正好 100(超),
+    会话累计 70 > 69(超)。第二回合顶部两闸同时命中 —— 会话先判,但不能把
+    日预算那条吞掉:limits 里两条都要有,正文补一句"今天也已经超了"。
+    """
+    from minicode import usage as usage_mod
+    monkeypatch.setattr(usage_mod, "db_path", lambda: tmp_path / "u.db")
+    usage_mod.set_db_path(tmp_path / "u.db")
+    usage_mod.reset_daily_budget_override()
+    usage_mod.record_usage("p", "m", {"prompt_tokens": 20, "completion_tokens": 10})
+    config.session_token_limit = 69
+    config.daily_token_budget = 100
+    ui = FakeUI()
+    llm = FakeLLM([_turn_with_usage([{"id": "c1", "name": "nope",
+                                       "args": {"x": 1}}], pt=60, ct=10),
+                   AssistantTurn(text="收尾")])
+    agent = make_agent(config, ctx, llm, ui)
+    agent.max_steps = 20
+    agent.run_turn("做个事")
+    assert getattr(ui, "token_limits", []) == [(69, 70)]
+    assert getattr(ui, "daily_budgets", []) == [(100, 100)]
+    assert "session_token_limit" in llm.calls[-1][-1]["content"]
+    # 正文补了日预算那条,没把"今天也已经超了"藏起来
+    assert "daily_token_budget" in llm.calls[-1][-1]["content"]
 
 
 # ------------------------------------------- 后台命令状态搭在请求上(v0.9.85)

@@ -1,4 +1,4 @@
-"""无头模式(`--json`):一条命令跑完就退出,输出是给**机器**读的。
+"""无头模式(`--json` / `--output-format stream-json`):一条命令跑完就退出,输出是给**机器**读的。
 
 三条必须先讲清的口径,它们决定了这个模块为什么长这样:
 
@@ -6,6 +6,10 @@
    全部改道 stderr —— 不是"整洁偏好",而是契约:调用方拿到的是
    `json.loads(stdout)`,任何一个多余字符都会让它解析失败,而失败的样子和
    "任务没做成"长得一模一样。
+   `--output-format stream-json` 是这条契约的 NDJSON 版本:stdout 一行一条事件
+   (`seq` 递增、`type` 必在),最后一行是与 `--json` **同构**的 `result` ——
+   它面向的读者是"把学长当子进程驱动的编排层"(CI、外层 agent),要的是**过程可判**;
+   结局仍以最后那份结果对象 + 退出码为准,所以这一轮**不新增退出码**。
 2. **没有人能点头的时候,一律按拒绝,绝不自动放行。** 这不是新规矩:
    `TerminalUI.confirm_tool` 的 docstring 早就写着"非交互场景一律按拒绝处理"
    (管道输入、Ctrl+C、非交互桌面站都走这条路)。无头模式只是把同一条判断
@@ -21,11 +25,12 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from typing import Any
 
 from minicode import toolsum
 
-OUTPUT_FORMATS = ("text", "json")
+OUTPUT_FORMATS = ("text", "json", "stream-json")
 
 # 退出码:每个值只对应一种结局,且都能在结果对象里找到对应字段。
 EXIT_OK = 0
@@ -100,15 +105,21 @@ def pop_output_flags(argv: list[str]) -> tuple[str, list[str]]:
     """摘出输出格式旗标,其余参数原样返回(留给一次性任务)。
 
     认 `--json`、`--output-format json`、`--output-format=json` 三种写法。
-    **两个都给时 `--output-format` 胜出** —— 显式的比简写的说得清楚。
+    `--output-format` 的值是显式声明的,**胜过** `--json` 这个简写,且与出现
+    顺序无关(旧实现是"最后出现的那个赢",同一串参数换个顺序就换了形状)。
+    但 `--json` 与 `--output-format stream-json` **互斥**:前者承诺 stdout 是
+    一份 `json.loads` 得出来的文档,NDJSON 让那个承诺必然落空 —— 两条一起给
+    当场报错,而不是靠位置决定形状(CI 里换个参数顺序就静默换了形状是最贵的一种坏)。
     认不出的值**直接报错**,不静默退回 text:拼错了却以为自己解析成功,
     是这类旗标最贵的一种坏法。
     """
-    fmt, rest, i = "text", [], 0
+    rest, i = [], 0
+    shorthand = False
+    explicit: str | None = None
     while i < len(argv):
         item = argv[i]
         if item == "--json":
-            fmt = "json"
+            shorthand = True
             i += 1
             continue
         if item == "--output-format" or item.startswith("--output-format="):
@@ -117,18 +128,65 @@ def pop_output_flags(argv: list[str]) -> tuple[str, list[str]]:
                 i += 1
             else:
                 if i + 1 >= len(argv):
-                    raise UsageError("--output-format 需要一个值(text / json)")
+                    raise UsageError(
+                        "--output-format 需要一个值(text / json / stream-json)")
                 value = argv[i + 1]
                 i += 2
             if value not in OUTPUT_FORMATS:
                 raise UsageError(
-                    f"--output-format 不认 {value!r},可选 {' / '.join(OUTPUT_FORMATS)}"
-                    "(stream-json 没做:事件流要的是逐段回灌界面,无头模式没有界面)")
-            fmt = value
+                    f"--output-format 不认 {value!r},可选 "
+                    f"{' / '.join(OUTPUT_FORMATS)}")
+            explicit = value
             continue
         rest.append(item)
         i += 1
-    return fmt, rest
+    if shorthand and explicit == "stream-json":
+        raise UsageError(
+            "--json 与 --output-format stream-json 不能同时给:前者承诺 stdout "
+            "是一份 JSON 文档,事件流是 NDJSON,两条一起给会让输出形状取决于参数"
+            "顺序 —— 选一条")
+    if explicit is not None:
+        return explicit, rest
+    return ("json" if shorthand else "text"), rest
+
+
+class EventStream:
+    """`--output-format stream-json` 的事件出口:一行一条 NDJSON,写给**编排层**。
+
+    三条硬约束(与模块开头那份 stdout 契约同源):
+
+    - `seq` 从 1 起**严格递增**、`type` 必在 —— 消费方靠它判断有没有丢行;
+    - 每行 `flush`:编排层要的是"过程可判",攒着不发等于没有过程;
+    - 写失败(下游关了管道)**不是错误**:置 `broken` 停发,由调用方把它并进
+      `interrupted`,让既有的退出码 5 去说这件事 —— 不新开判断。
+
+    人读的话仍旧只走 stderr(`HeadlessUI._note`),stdout 一个字都不掺。
+    `ensure_ascii=False` 与 `render` 同一口径:中文被转成 \\uXXXX 后机器照样能解、
+    人读不了 —— 最难查的那种"看起来没问题"。
+    """
+
+    def __init__(self, stream: Any = None):
+        self._stream = stream            # None = 用当时的 sys.stdout(测试可注入)
+        self._lock = threading.Lock()
+        self._seq = 0
+        self.broken = False
+
+    def emit(self, type_: str, **payload) -> None:
+        with self._lock:
+            if self.broken:
+                return
+            self._seq += 1
+            payload["type"] = type_
+            payload["seq"] = self._seq
+            line = json.dumps(payload, ensure_ascii=False, default=str)
+            try:
+                stream = self._stream if self._stream is not None else sys.stdout
+                stream.write(line + "\n")
+                stream.flush()
+            except (BrokenPipeError, ValueError, OSError):
+                # 下游不再读:停发,别再往一个关了的管道上撞。结局由调用方
+                # 按 `broken` 并进 interrupted,退出码 5 —— 与 Ctrl+C 同一归宿。
+                self.broken = True
 
 
 class HeadlessUI:
@@ -141,8 +199,11 @@ class HeadlessUI:
     没想到的方法一律转给内层(`__getattr__`),不会因为少写一个钩子就 AttributeError。
     """
 
-    def __init__(self, inner: Any):
+    def __init__(self, inner: Any, events: "EventStream | None" = None):
         self.inner = inner
+        # `events` 只有 `--output-format stream-json` 才给:给了就在下面那些回调里
+        # 顺带发一行 NDJSON。json / text 两条路上它是 None,回调里 `_emit` 是空转。
+        self.events = events
         self.text: list[str] = []          # 流式正文(只为"有没有吐过字"留证据)
         self.tool_calls: list[dict] = []
         self.asks_refused: list[dict] = []
@@ -155,6 +216,11 @@ class HeadlessUI:
         self.llm_failure: str = ""
         self.compactions: list[dict] = []
         self._pending: dict = {}
+
+    def _emit(self, type_: str, **payload) -> None:
+        """事件出口(没有 events 就是空转 —— text / json 两条路逐字不变)。"""
+        if self.events is not None:
+            self.events.emit(type_, **payload)
 
     # ------------------------------------------------------------- 吞掉渲染
 
@@ -169,18 +235,23 @@ class HeadlessUI:
 
     def on_text_delta(self, delta: str) -> None:
         self.text.append(delta)
+        self._emit("text_delta", text=delta)
 
     def on_reasoning_delta(self, text: str) -> None:
-        pass
+        self._emit("reasoning_delta", text=text)
 
     def finish_stream(self) -> None:
-        pass
+        self._emit("finish_stream")
 
     def tool_progress(self, text: str) -> None:
         pass
 
     def on_retry(self, e: Exception, attempt: int) -> None:
         self._note(f"重试第 {attempt} 次:{type(e).__name__}")
+        # 前端收不到重试事件(GuiUI.on_retry 把它折成了一句中文 push("info")),
+        # 编排层要读就得解析中文句子 —— 所以这里新起一个 `retry` 事件名。
+        self._emit("retry", attempt=attempt,
+                   error=f"{type(e).__name__}: {e}"[:160])
 
     @staticmethod
     def _note(text: str) -> None:
@@ -191,18 +262,48 @@ class HeadlessUI:
 
     def tool_start(self, tool, args: dict) -> None:
         self._pending = {"name": tool.name, "args": _brief(args)}
+        self._emit("tool_start", name=tool.name,
+                   summary=toolsum.summarize(tool.name, args),
+                   trust=str(getattr(tool, "trust", "") or ""))
 
     def tool_done(self, tool, result: str) -> None:
         row = dict(self._pending or {"name": tool.name})
         row.pop("args", None)
-        row["ok"] = not toolsum.is_failure(str(result))
+        ok = not toolsum.is_failure(str(result))
+        row["ok"] = ok
         row["chars"] = len(str(result))
         self.tool_calls.append(row)
         self._pending = {}
+        self._emit("tool_done", name=tool.name, ok=ok,
+                   error_preview=toolsum.error_preview(str(result)))
 
     def tool_rejected_hard(self, tool, args: dict) -> None:
         # 硬拒是红线挡的,不是"没人点头"挡的 —— 两件事分开记。
         self.hard_rejected.append(tool.name)
+        self._emit("hard_reject", name=tool.name)
+
+    # ------------------------------------------------- 给 agent 走 push 的那几类
+
+    def push(self, type_: str, **payload) -> None:
+        """agent 走 `push` 的信息 / 统计消息在无头里的落点。
+
+        人读的话(`info`/`warn`/`error`)继续只走 stderr —— stdout 是给编排层的
+        NDJSON,不许掺中文;统计类(`turn_stats`/`session_metrics`)在这里没有
+        读者,转给内层(通常没有 `push`,静默丢掉)。
+        **绝不抛**:`hasattr(ui, "push")` 一旦为真,agent 那几处就不再兜异常了,
+        这里抛一下就把一次救场(压缩重试 / 回落提示)弄崩。
+        """
+        if type_ in ("info", "warn", "error"):
+            text = payload.get("text")
+            if text:
+                self._note(str(text))
+            return
+        inner_push = getattr(self.inner, "push", None)
+        if callable(inner_push):
+            try:
+                inner_push(type_, **payload)
+            except Exception:
+                pass
 
     # ----------------------------------------------- 要人点头的入口:都不点头
 
@@ -252,8 +353,15 @@ class HeadlessUI:
     def token_limit_reached(self, limit: int, used: int) -> None:
         self.limits.append({"kind": "token_budget", "limit": limit, "used": used})
 
+    def task_budget_reached(self, limit: int, used: int) -> None:
+        self.limits.append({"kind": "task_budget", "limit": limit, "used": used})
+
+    def daily_budget_reached(self, limit: int, used: int) -> None:
+        self.limits.append({"kind": "daily_budget", "limit": limit, "used": used})
+
     def compacted(self, before: int, after: int) -> None:
         self.compactions.append({"before": before, "after": after})
+        self._emit("compacted", before=before, after=after)
 
     def __getattr__(self, name: str):
         # 只在本类查不到属性时触发;self.inner 在 __init__ 里已设好,不会绕回来。
