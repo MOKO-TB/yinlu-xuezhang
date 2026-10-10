@@ -566,14 +566,20 @@ class PublicApi:
         return self._b.list_project_files(path, subdir)
 
 
-def _instructions_info(workspace) -> dict:
+def _instructions_info(workspace, extra_rels=()) -> dict:
     """侧栏那一行「指令层」的数据:读到几层、各几行、有没有被截。
 
     读不动就当没这一层(空 line → 前端整行不出现),不编一句"未配置指令"占版面。
+
+    `extra_rels`(v0.9.149)是**这一会话里已经被碰到的**子目录层,由调用方把
+    `Agent._agents_layers` 传进来。第三级是"碰到才算",而这一行存在的全部意义就是
+    "它到底读了没有" —— 桥自己递归扫全工作区会报出一批"根本没被碰过、因此不在这一路
+    上下文里"的层,那是多报一层假的,比少报一层坏得多。
     """
     try:
-        layers = instruction_layers(workspace)
-        return {"ok": True, "line": instructions_line(workspace), "layers": layers}
+        layers = instruction_layers(workspace, extra_rels)
+        return {"ok": True, "line": instructions_line(workspace, extra_rels),
+                "layers": layers}
     except Exception as exc:          # 这一行读不出来不该把整个 get_info 带崩
         return {"ok": False, "line": "", "layers": [],
                 "msg": f"读取指令层失败:{type(exc).__name__}: {exc}"}
@@ -894,7 +900,11 @@ class Bridge:
             "paths": paths_diagnostics(),
             # L3(v0.9.101 ④):这一轮实际读到了哪几层指令文件。只报份数与行数,
             # 不贴内容、也不报"命中了哪条" —— 后者是把模型的自述当因果证据。
-            "instructions": _instructions_info(self.workspace),
+            "instructions": _instructions_info(
+                self.workspace,
+                # 第三级(v0.9.149):这一会话碰到过的那些目录层,侧栏要看得见 ——
+                # 没采纳的还会缀「、未采纳」,那一行就是"它到底读了没有"的唯一出口。
+                sorted(getattr(self.agent, "_agents_layers", ()))),
             "campus_map": campus_map_data(),
             # 馆藏库自检:共享给同学后「图书馆搜书用不了」的头号原因就是库没装全
             # (1.3 GB 的大文件)。启动就把结论一并下发给界面,不用等搜书失败。

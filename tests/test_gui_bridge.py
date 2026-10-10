@@ -1164,6 +1164,31 @@ def test_get_info_reports_instruction_layers(config, tmp_path, monkeypatch):
     assert d2["layers"][1]["adopted"] is True
 
 
+def test_get_info_reports_the_touched_directory_layers(config, tmp_path, monkeypatch):
+    """第三级(v0.9.149):**这一会话碰到过的**目录层要出现在侧栏那一行里。
+
+    只报碰到过的那几层 —— 桥自己递归扫全工作区会报出一批"根本没被碰过、因此不在
+    这一路上下文里"的层,而这一行存在的全部意义就是"它到底读了没有":
+    多报一层假的,比少报一层坏得多。
+    """
+    from minicode import app_setup, permspec
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(app_setup, "app_path", lambda *p: home.joinpath(*p))
+    monkeypatch.setattr(permspec, "trust_path",
+                        lambda: home / "perms-trust.json")
+    (tmp_path / "AGENTS.md").write_text("根\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "AGENTS.md").write_text("甲\n乙\n", encoding="utf-8")
+    (tmp_path / "untouched").mkdir()            # 这一层**从没被碰过**
+    (tmp_path / "untouched" / "AGENTS.md").write_text("丙\n", encoding="utf-8")
+    bridge, _window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
+    bridge.agent._agents_layers = {"sub"}
+    line = bridge.get_info()["instructions"]["line"]
+    assert "目录级 sub/(2 行、未采纳)" in line, line
+    assert "untouched" not in line, f"没碰过的目录不该出现在这一行里:{line}"
+
+
 def test_board_reads_the_four_real_accounts(config, tmp_path):
     """桥这一侧不重算:看板里计划那几行出自 plans/plan.md 这本真账。"""
     (tmp_path / "plans").mkdir(exist_ok=True)
