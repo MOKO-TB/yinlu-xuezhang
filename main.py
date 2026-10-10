@@ -8,6 +8,7 @@
   python main.py --output-format stream-json "..."  无头:stdout 是 NDJSON 事件流(最后一行 result)
   python main.py --output-schema schema.json "..."  同上,另按 schema 要一份结构化结果(不合 schema → 退出码 6)
   python main.py --mcp-serve [--workspace 路径]  作 MCP 服务端被外部客户端按 stdio 调用(只读校园能力)
+  python main.py --version     打印名字与版本就退出(不发请求、不读配置)
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from minicode.app_setup import apply_retention, create_agent
 from minicode.config import load_config
+from minicode import APP_NAME, __version__
 from minicode import headless, mcp_server
 from minicode import model_probe
 from minicode.paths import SESSIONS_DIR
@@ -780,6 +782,15 @@ def _fix_console_encoding() -> None:
 def main() -> None:
 
     _fix_console_encoding()
+
+    # --version:零成本的本地旗标 —— 打印名字与版本就退,**不发请求、不读配置**。
+    # 为什么要有它:从前"问版本"会被当成一次性任务发给模型(花一次额度),而网关
+    # 不通时回来的是一串 401 —— 版本号是最不该依赖网络的东西。放在 `load_config()`
+    # **之前**就是这条承诺的实现方式:配置坏掉、Key 没配、网关不可达都照样答得出。
+    # 刻意不加 `-v`:那个字母在别处通常指 verbose,这里只认长写法。
+    if "--version" in sys.argv:
+        print(f"{APP_NAME} {__version__}")
+        raise SystemExit(0)
 
     # --web:切到网页版(校园助手形态),其余参数原样转交
     if "--web" in sys.argv:

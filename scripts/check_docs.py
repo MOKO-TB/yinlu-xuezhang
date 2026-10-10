@@ -227,16 +227,28 @@ def check_ship_never_manifest() -> list[str]:
     return problems
 
 
-def check_handoff_size() -> list[str]:
-    """§2 里程碑行数超了就提醒归档(不做自动搬:搬文档要人看一眼连贯性)。"""
-    text = (ROOT / "HANDOFF.md").read_text(encoding="utf-8")
+def handoff_size_problems(text: str) -> list[str]:
+    """§2 里程碑行数对账(拆成纯函数是为了让测试能喂它假文本 —— 同 version_problems)。
+
+    不做自动搬:搬文档要人看一眼连贯性。
+    """
     if "## 2." not in text:
         return ["HANDOFF 找不到 §2 里程碑表"]
     rows = _milestone_versions(text)
     if len(rows) > MAX_ROUNDS_KEPT:
+        # `rows` 是按文档顺序(最老在前)取的,所以要挪走的是**开头**那几个。
+        # v0.9.145 修:这里原来写的是 `rows[MAX_ROUNDS_KEPT:]` —— 那句话报出来的是
+        # **最新**的几轮(实测把它读成"要搬 v0.9.144"),与"把最老的挪进"正好相反。
+        # 一条会把人指反的提示,比没有提示更贵。
+        oldest = rows[:len(rows) - MAX_ROUNDS_KEPT]
         return [f"HANDOFF §2 留了 {len(rows)} 轮里程碑(上限 {MAX_ROUNDS_KEPT}),"
-                f"把最老的挪进 docs/handoff/(现在最老的几轮:{'、'.join(rows[MAX_ROUNDS_KEPT:])})"]
+                f"把最老的挪进 docs/handoff/(现在最老的几轮:{'、'.join(oldest)})"]
     return []
+
+
+def check_handoff_size() -> list[str]:
+    """§2 里程碑行数超了就提醒归档。"""
+    return handoff_size_problems((ROOT / "HANDOFF.md").read_text(encoding="utf-8"))
 
 
 def claimed_counts(text: str) -> set[int]:

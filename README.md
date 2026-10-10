@@ -162,6 +162,7 @@ python main.py --output-format stream-json "任务"   # 无头:stdout 是 NDJSON
 python main.py --output-schema s.json "任务"   # 同上,另按 schema 要一份结构化结果(不合 → 退出码 6)
 python main.py --mcp-serve          # 作 MCP 服务端(stdio):把校园只读能力暴露给外部 MCP 客户端
 python main.py --workspace "D:\我的资料"   # 指定工作区启动(路径不合法直接报错退出)
+python main.py --version             # 打印名字与版本就退出(不发请求、不读配置)
 ```
 
 **无头模式那条**是给脚本用的,不是给人看的:`--json`(等价 `--output-format json`)把横幅、

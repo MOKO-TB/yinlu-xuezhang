@@ -59,6 +59,28 @@ def test_version_gate_names_the_check_when_the_table_shape_changes():
         "0.9.131"))
 
 
+def test_archive_hint_names_the_oldest_round_not_the_newest():
+    """v0.9.145 修的那一处:提示要指**最老的**,不是最新的。
+
+    原来写的是 `rows[MAX_ROUNDS_KEPT:]`,而 `rows` 是最老在前 —— 于是它把刚写进去的
+    那一轮报成"最老的"。本轮实测就踩了这个:它说"要搬 0.9.144",而该搬的是 0.9.139。
+    一条会把人指反的提示比没有提示更贵,所以这里连"指对了"一起钉住。
+    """
+    rows = "\n".join(f"| v0.9.{n} 第 {n} 轮 | x |" for n in range(141, 147))
+    text = f"> 更新:2026-10-10（v0.9.146）\n\n## 2. 里程碑\n\n| 里程碑 | 内容 |\n|---|---|\n{rows}\n\n## 3. x\n"
+    problems = check_docs.handoff_size_problems(text)
+    assert problems, "6 轮超过上限 5,应该报"
+    msg = problems[0]
+    assert "0.9.141" in msg, f"该报最老的 0.9.141,实际:{msg}"
+    assert "0.9.146" not in msg, f"最新的那一轮不该出现在'最老的'清单里:{msg}"
+    # 上限之内不报 —— 防"表里出现数字就永远红"
+    inside = "\n".join(f"| v0.9.{n} 第 {n} 轮 | x |" for n in range(142, 147))
+    assert check_docs.handoff_size_problems(
+        f"## 2. 里程碑\n\n{inside}\n\n## 3. x\n") == []
+    # 表被改写扫不到行时仍要红着说"我没在查"
+    assert check_docs.handoff_size_problems("没有第二节\n")
+
+
 def test_every_local_state_file_is_ignored_and_cleaned():
     """新增本机状态文件却忘了清理清单 = 把同学自己的数据随安装包发出去。"""
     assert check_docs.check_state_targets() == []
