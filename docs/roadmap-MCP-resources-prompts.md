@@ -1,4 +1,11 @@
-# MCP 的 resources / prompts / sampling / logging 要不要接 · 方案,未开工
+# MCP 的 resources / prompts / sampling / logging 要不要接 · **resources 已接(v0.9.102);prompts 判「缓」;sampling / logging 明确不做**
+
+> **改口说明(2026-10-10 复核)**:标题原来写「方案,未开工」,而 `resources` 那一半
+> 已经在 `minicode/mcp.py` 里(`CLIENT_PRIMITIVES = ("tools", "resources")`,
+> `resources/list` + `resources/read`,未声明时如实报),工具面是 `mcp_resource`。
+> **prompts 仍未接**(本文 §判定为「缓」,不是漏做 —— 要先回答「两套模板谁优先」);
+> **sampling 有明确的不做口径**(「花额度的事必须由人点头」),别当漏做重提。
+> 下面那份设计稿留着当"当初怎么判"的记录。
 
 > 基线:D:\game\mini-code v0.9.99(P3 之后,`mcp.summary_rows` 已是共用真相)。
 > 来源:§6 #45 那条「确认过不是漏做而是压根没接」—— 本文档把它从"疑案"升级成

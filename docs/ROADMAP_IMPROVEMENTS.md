@@ -30,7 +30,7 @@
 ### P0 安全防线（实质性差距）
 
 1. **无 OS 级沙箱**——Codex Landlock+seccomp、Claude Code Bash/PowerShell 沙箱、Cursor/Cline 都有。你的黑名单 + 确认框是「问人」路线，人家是「操作系统让它不能做」。Agent 学会绕过确认时（如 `powershell Start-Process -NoNewWindow`），确认框形同虚设。（登记为 P0-5，见 `docs/plan-P0-安全与正确性收口.md`；建议先做只加 Job Object 的 S5a，不动权限语义。）
-2. **无 apply_patch 工具**——Codex、Cline、Cursor 标配。只有 edit_file 字符串替换在复杂重构时爆炸。（登记为 P0-3。）
+2. ~~**无 apply_patch 工具**~~ —— **v0.9.134 已落地**（`minicode/patch.py` + `apply_patch`：统一 diff 多文件段一次交齐，任一文件对不上就整包一个字节都不写）。登记时那句话留着说明它为什么值得做：Codex、Cline、Cursor 标配，而只有 `edit_file` 字符串替换时，复杂重构会爆炸。
 3. ~~**计划模式无「未批不许写」只读态**~~ —— **已落地，本条作废（v0.9.129，2026-10-08 复核）**：原判断来自「`permission.py` 里 grep `plan_mode` 零命中」，而实现用的名字是 `plan_lock`/`plan_locked`。现状：`sandbox.py:662-677` 上锁/解锁（锁跨回合保留）→ `permission.py:181,195` 判定 → **排在档位与白名单之前**（`permission.py:586-591`，所以 `accept_all`/`full`/项目白名单都放不过）→ 只有核对单 verdict=`approve` 才解（`planning.py:487,521,578`），界面「批准这版计划」走同一个 `unlock_plan`（`gui_bridge.py:1250-1263`），`tests/test_plan_lock.py` 钉住五条行为。**留着这段划掉的字是为了记方法论：找不到时先怀疑关键词。**
 4. **@ 引用 / 子目录规则嵌套**——Claude Code 四级 CLAUDE.md、Cursor 四类 Rules+AGENTS.md、Cline 跨工具兼容、Roo Code 兼容 .roorules。你只有两层（用户级+项目级根），不支持 @import 递归。
 
@@ -58,7 +58,7 @@
 | 编号 | 功能 | 理由 | 最低实现 |
 |---|---|---|---|
 | A | 项目级 AGENTS.md 支持子目录嵌套 | 生态位，竞品全在做，边际成本最低 | 递归扫描子目录 AGENTS.md + basename 排序 + 现有注入顺序 |
-| B | apply_patch 工具 | multi-file 重构时 edit_file 字符串替换爆炸，竞品全包 | patch_text → files[]{path,type,structuredPatch[],gitDiff{}}，错误码编号化 |
+| ~~B~~ | ~~apply_patch 工具~~ **已于 v0.9.134 落地**（`minicode/patch.py`；矩阵 §10D「专用补丁工具」那一格 ✖→✅） | multi-file 重构时 edit_file 字符串替换爆炸，竞品全包 | patch_text → files[]{path,type,structuredPatch[],gitDiff{}}，错误码编号化 |
 | ~~D~~ | ~~Plan mode「未批不许写」态~~ **已于 v0.9.129 落地**（见 §三 P0 第 3 条的行号） | 安全红线，Qoder/ZCode 都有 | 实现形状与原文设想不同但覆盖相同：不是 `EnterPlanMode/ExitPlanMode` 两个工具，而是 `plan(action=write)` 上锁 + 核对单 `approve` 才解 + 判定排在档位之前（因此钩子的 `allow` 也绕不过，与 v0.9.115「pre 改写后重跑门」同一条根） |
 
 ### 阶段二：运行时硬实力
@@ -66,8 +66,8 @@
 | 编号 | 功能 | 理由 | 最低实现 |
 |---|---|---|---|
 | C | MCP OAuth 动态授权 | ZCode 都做了，缺的话 MCP 产品力低一档 | type:client_credentials + type:authorization_code 两条流，${ENV} 二次注入 |
-| F | Hook 失败语义 fail_open/fail_closed | 钩子从「能用」变「可配」，Cline 有 | hooks.py 加 failure_mode 配置；pre 脚本失败走之 |
-| G | 会话级 spend limit（硬预算） | session_token_limit 现在是交代而非「停」 | agent.py 请求循环顶部查 tokens_used >= budget，超走 max_steps_reached 同出口 |
+| ~~F~~ | ~~Hook 失败语义 fail_open/fail_closed~~ **本来就不成立**（2026-10-10 复核）：`minicode/hooks.py` 早就有 `on_error`（`block`=fail-closed 是默认 / `continue`=fail-open）与 per-entry `timeout` —— 它只是**名字不叫 `failure_mode`**，又是一次「grep 关键词零命中」 | 钩子从「能用」变「可配」，Cline 有 | hooks.py 加 failure_mode 配置；pre 脚本失败走之 |
+| ~~G~~ | ~~会话级 spend limit（硬预算）~~ **早就在**（2026-10-10 复核）：`session_token_limit` 在请求循环顶部查、触顶这一次不许再调工具（`agent.py`）；**日预算那一半由 v0.9.144 补成硬闸** | session_token_limit 现在是交代而非「停」 | agent.py 请求循环顶部查 tokens_used >= budget，超走 max_steps_reached 同出口 |
 | L | 子代理并发上限 + 嵌套 | Claude Code 嵌套3/并发20、Qoder 权限位、Cursor 并发20 | profile 加 maxConcurrent=10 + maxDepth=3，前端嵌套树展示 |
 
 ### 阶段三：生态 + 扩展
@@ -82,10 +82,12 @@
 
 ## 五、当前版本自画像
 
-- **强项**：独立完整体、桌面 GUI、个人数据闭环、验收闸、钩子改写重跑（`on_error` 与 per-entry `timeout` 可配，见 `minicode/hooks.py`）、无头模式 6 态 7 码（含 `--output-schema`）、microcompact、token 日预算、**规划锁（未批不许写）**、**子代理档位可自定义**、**改动前先读过（v0.9.133）**、**「以后都允许」落一条本机规则（v0.9.133）**、**`apply_patch` 一次落一整包且对不上就整包不写（v0.9.134）**、**Job Object 让「终止」成为操作系统保证的终止（v0.9.135）**
-- **弱项**（2026-10-08 逐条读码复核过，四条都还在）：OS 沙箱只走了 S5a（降权 S5b、AppContainer S5c 未做，理由与前置决策见 `docs/plan-P0-安全与正确性收口.md` §三.5 与 `HANDOFF.md` §6 第 52 条）、指令文件只有两级（用户级 → 项目级，`app_setup.instruction_layers`，**没有**子目录就近那一级）、日预算只提醒不成闸（`agent._note_daily_budget` 到点说一句话，不会像 ZCode 那样 `budget_limited` 自行停止）、无头模式没有 `stream-json` 事件流（`pop_output_flags` 里明写「没做：无头模式没有界面」）
-- **下一步**：P0 四条已按批次走完（132 文档纠正 → 133 P0-1/P0-2 → 134 P0-3 → 135 P0-5 的 S5a），本文的 A（子目录嵌套）与 C/F/G/L 排在其后，另加 §6 第 52 条欠的 S5b/S5c 与第 53 条那几处小账
+- **强项**（2026-10-10 v0.9.147 复核；**本轮新增的加粗**）：独立完整体、桌面 GUI、个人数据闭环、验收闸、钩子改写重跑（`on_error` 与 per-entry `timeout` 可配，见 `minicode/hooks.py`）、无头模式 6 态 7 码（含 `--output-schema`）**+ 事件流（`--output-format stream-json`，v0.9.144）**、microcompact、**日预算已是硬闸（v0.9.144，同日补上计划外的 `task_token_budget`）**、**规划锁（未批不许写）**、**子代理档位可自定义**、**改动前先读过（v0.9.133）**、**「以后都允许」落一条本机规则（v0.9.133）**、**`apply_patch` 一次落一整包且对不上就整包不写（v0.9.134）**、**Job Object 让「终止」成为操作系统保证的终止（v0.9.135）**、**本 agent 反过来可作 MCP 服务端（`--mcp-serve`，v0.9.144）**、**`bash_input` 给后台命令喂 stdin（v0.9.146）**、**`diagnostics` 编辑后多语言诊断回灌（v0.9.147）**、**`--version` 零成本本地旗标（v0.9.145）**
+- **弱项**（2026-10-10 逐条读码复核，上一版那四条里**两条已收、只剩两条**）：①**OS 沙箱只走了 S5a**（降权 S5b、AppContainer S5c 未做，理由与前置决策见 `docs/plan-P0-安全与正确性收口.md` §三.5 与 `HANDOFF.md` §6 第 52 条）；②**指令文件只有两级**（用户级 → 项目级，`app_setup.instruction_layers`，**没有**子目录就近那一级）。**已收的两条**：~~日预算只提醒不成闸~~ → v0.9.144 改成硬闸（触顶在两步之间收尾、必须说出口）；~~无头模式没有 `stream-json` 事件流~~ → v0.9.144 补上。
+- **下一步**：`docs/plan-能力补齐-第一批.md` 的五件**已全部交完**（1-1 / 1-3 / 1-4 → v0.9.144，1-5 → v0.9.146，1-2 → v0.9.147）。剩下的按 ROI 排：§6 第 52 条欠的 S5b/S5c、本文的 A（子目录嵌套）与 C/E/H/I/J/K、以及 §6 第 53 条那几处小账。**本文 §四 那张 12 条路线图里，D 与 G 已经是既成事实**（D 的 `plan_lock` v0.9.129 落地、G 的会话级硬闸 `session_token_limit` 早就在循环顶部查），**F 也本来就不成立**（`on_error` 就是可配的失败语义）—— 三条都别再当待办读。
 
 ---
 
-> 自画像（2026-10-08 v0.9.137 复核）：独立完整体、桌面 GUI、个人数据闭环、验收闸、钩子改写（`on_error`/`timeout` 可配）、无头 6 态 7 码（含 `--output-schema`）、microcompact、token 预算、规划锁、子代理自定义档位、改动前先读过、批准可落成本机规则、`apply_patch` 整包原子、Job Object 进程树回收。短板：OS 沙箱只到 S5a（降权与 AppContainer 未做）、指令文件两级而非三级、日预算只提醒不硬停、无头没有事件流。上一版那份短板列了七条，逐条读码复核之后只剩四条成立：`apply_patch`（v0.9.134）、read-before-edit（v0.9.133）、「记住批准不落规则」（v0.9.133）三条已经落地，「无 OS 沙箱」这一条要改口成「只走了 S5a」，而「Hooks 不可配失败语义」本来就不成立（`minicode/hooks.py` 有 `on_error` 与 per-entry `timeout`）。§五 那三行同一时间一起按代码改对。
+> 自画像（2026-10-10 v0.9.147 复核）：独立完整体、桌面 GUI、个人数据闭环、验收闸、钩子改写（`on_error`/`timeout` 可配）、无头 6 态 7 码（含 `--output-schema`）+ **事件流**、microcompact、**日预算硬闸**、规划锁、子代理自定义档位、改动前先读过、批准可落成本机规则、`apply_patch` 整包原子、Job Object 进程树回收、**MCP 服务端模式**、**`bash_input`**、**`diagnostics`**、**`--version`**。短板**只剩两条**：OS 沙箱只到 S5a（降权与 AppContainer 未做）、指令文件两级而非三级。
+>
+> **改口史（留着是为了记方法论，不是为了好看）**：第一版列了七条短板，逐条读码复核后只剩四条；v0.9.132 那次复核又作废了一条（「规划模式没有未批不许写」是**关键词找错**——实现叫 `plan_lock`）；v0.9.145/v0.9.146/v0.9.147 这三轮把剩下四条里的两条真做掉了（日预算硬闸、无头事件流），另两条仍在。**「grep 关键词零命中」证明的是「这个名字没有」，不是「这个能力没有」——下 ✖ 之前先换两个名字再找一遍。** 同一份文档里 §四 那张路线图的 D / F / G 三条也都是这么被误登记的（D 的 `plan_lock` 早在 v0.9.129、F 的 `on_error` 一直都在、G 的会话级硬闸 `session_token_limit` 也在），已在 §五 那行写明。

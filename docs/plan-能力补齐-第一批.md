@@ -5,7 +5,15 @@
 > 对标依据:`coding-agent-capability-matrix.md`(§9 汇总表 / §10D 差距自检)、`docs/ROADMAP_IMPROVEMENTS.md`,以及 2026-10-09 对当前工作树的一次逐条读码复核
 > 取证方式:本计划书里每一处「现状」都带 `文件:行号`,行号取自 `7ec5e37` 这一版工作树。**引用前先 `git log -1`** —— 这份工作树有多个会话并行改,行号会漂。可复核的命令列在 §八。
 > 状态:**计划书本体;未改任何代码,未新增工具。**
-> 进度修订:**尚未开工** —— 开工后每交一件在此追加一行(点版本号 + 交了什么 + 测试加了几个),格式照 `docs/plan-P0-安全与正确性收口.md` 顶部那一段。
+> 进度修订(**2026-10-10,五件全部交完**):
+> - **1-1 MCP server 模式** → **v0.9.144 已交**(`minicode/mcp_server.py` + `--mcp-serve`,只做 stdio 单客户端、白名单显式列举、外部 `tools/call` 走同一道门且 ASK 一律拒;测试 +14)。
+> - **1-3 日预算从「提醒」改成「硬闸」+ 每任务预算** → **v0.9.144 已交**(顺手补了计划外的 `task_token_budget`;触顶在两步之间收尾、必须说出口;测试 +15)。
+> - **1-4 无头加 `--output-format stream-json`** → **v0.9.144 已交**(NDJSON、`seq` 严格递增、最后一行是与 `--json` 同构的 `result`、与 `--json` 互斥、与 `--output-schema` 正交;测试 +22)。
+> - **1-5 `bash_input`** → **v0.9.146 已交**(唯一开关是 `stdin=DEVNULL`→`PIPE`;独立 `stdin_lock` 防死锁、超长拒绝不截断、不做 Ctrl+C/EOF;顺手按领域拆出 `catalog_bg.py` 解掉 400 行墙;测试 +9,另加 `e2e_bg_jobs.py` 第 4 场真进程验证)。
+> - **1-2 `diagnostics`** → **v0.9.147 已交**(新模块 `minicode/diagnostics.py` + `catalog_diag.py`;与语法底线**分权不取代**;「没做检查」绝不被说成「检查过了没问题」;测试 +18)。
+>
+> **一处偏离**:§1-2 的落点清单要在 `hook_packs` 再加一条「改完跑检查器」的配方 —— 1-2 已把这件事做成**原生且自动**的,再加一条钩子就是给同一件事造第二处真相,所以**不做**(理由记在 `HANDOFF.md` §2 v0.9.147 那一行)。
+> **一处修正**:本文 §1-5 的落点清单写「`bash_input` 的 `Tool` 插在 `catalog_files.py` 的 `bash_kill` 之后」,而那份目录当时已经 398 行、闸在上限 400 —— 照原文做会当场撞闸。实际做法是连同后台三只一起拆出 `catalog_bg.py`,再把 `catalog_files.tools()` 拆成 `tools()` + `script_tools()`,好让 `registry.py` 把后台那一族精确插在 `bash` 与 `py_script` 之间(顺序即行为面,不因拆文件而变)。
 
 ---
 
