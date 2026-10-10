@@ -85,8 +85,113 @@ def project_agents_path(workspace) -> Path | None:
     return None
 
 
-def instruction_layers(workspace) -> list[dict]:
-    """这一轮实际读到的指令层(用户级 → 项目级),只报份数、行数与来源,不贴内容。
+# ---------------------------------------------------------------- 第三级(v0.9.149)
+# 子目录就近 AGENTS.md:按**被读/被改的那个文件**往上找,而不是按 cwd。
+# 为什么锚点是文件不是 cwd:学长从不 chdir,cwd 永远只是工作区根 —— 拿它当锚点
+# 等于这一层永远只有一份,与两级没有区别。而"改哪个目录的文件、就按哪个目录的
+# 规矩来"是这一层唯一说得通的语义(与 Codex/Cursor/Claude Code 同一口径)。
+# 取层是**只算这一个目标的那条链**,不递归扫全工作区:几百个目录的仓库不会因为
+# 这一层变慢,也不会把没碰过的目录的规矩塞进上下文。
+
+
+def _rel_dir(workspace: Path, d: Path) -> str:
+    """`d` 相对工作区根的路径(`.` 记成空串),出不去就回空串。"""
+    try:
+        rel = d.resolve().relative_to(Path(workspace).resolve())
+    except (ValueError, OSError):
+        return ""
+    text = rel.as_posix()
+    return "" if text in ("", ".") else text
+
+
+def subdir_agents_layers(workspace, target) -> list[dict]:
+    """从工作区根走到 `target` 所在目录,逐层收那份存在的 `AGENTS.md`。
+
+    顺序 = **根 → 最近**。这个顺序本身就是优先级:越近的排在越后面,模型读到的
+    后一段是更具体的规矩(风格与流程可以这样被覆盖;沙箱边界、敏感路径硬禁、
+    确认门那几类谁也改不动,见 `INSTRUCTION_GUARD`)。
+
+    每条的形状是 `{rel, path, found}`:`rel` 是相对目录(根 = 空串),`found` 就是
+    `_read_instruction` 那份(带 sha,采纳记账按它比)。
+
+    两条边界:**工作区外的不算**(与 `resolve_path`/敏感路径那套围栏同一口径 ——
+    不能因为"这是配置文件"就读到工作区外面去);**读不动的不算**(`_read_instruction`
+    回 exists=False 的那些直接不进这一列,宁可少报一层也不报一层假的)。
+    """
+    ws = Path(workspace).resolve()
+    try:
+        t = Path(target)
+        t = (t if t.is_absolute() else ws / t)
+        t = t.resolve()
+    except (OSError, ValueError):
+        return []
+    if t != ws and ws not in t.parents:
+        return []
+    try:
+        d = t if t.is_dir() else t.parent
+    except OSError:
+        return []
+    chain: list[tuple[str, Path]] = []
+    while True:
+        for name in AGENTS_FILES:
+            p = d / name
+            if p.is_file():
+                chain.append((_rel_dir(ws, d), p))
+                break
+        if d == ws or ws not in d.parents:
+            break
+        d = d.parent
+    chain.reverse()                      # 根 → 最近
+    out = []
+    for rel, p in chain:
+        found = _read_instruction(p)
+        if found["exists"]:
+            out.append({"rel": rel, "path": p, "found": found})
+    return out
+
+
+def layer_adopted(workspace, layer: dict) -> bool:
+    """这一层采纳过没有 —— 按**这一层自己的**内容指纹比,不与别的层共用一次点头。"""
+    return (permspec.agents_adopted_sha(workspace, layer["rel"])
+            == layer["found"]["sha"])
+
+
+def adopt_layer(workspace, layer: dict) -> str:
+    """记下「这一层我核对过、采纳了」,回它的指纹。只动这一层。"""
+    found = layer["found"]
+    permspec.adopt_agents(workspace, found["sha"], found["lines"], rel=layer["rel"])
+    return found["sha"]
+
+
+def layer_prompt_section(workspace, layer: dict) -> str:
+    """一层子目录指令进**工具结果**的那一段。
+
+    为什么进工具结果而不是系统提示词:系统提示词是每一轮都重发的那段固定前缀
+    (KV Cache 那笔账就压在上面),而"这一层"只在某个目录第一次被碰到时才有意义 ——
+    塞进前缀等于让每轮都为没碰过的目录付钱。进工具结果则**只付一次**:它落在
+    对话留档里,后面几轮自然跟着走。
+    """
+    rel = layer["rel"] or "."
+    head = (f"# 目录级指令(`{rel}/` 这一层,用户手写)\n"
+            + INSTRUCTION_GUARD + "\n"
+            f"它只对 `{rel}/` 底下(含更深层)的文件有效;越靠近那个文件的目录级"
+            "指令越具体,与更外层冲突时按更近的那一份来。\n\n")
+    return f"\n{head}{_instruction_body(layer['found'])}\n"
+
+
+def layer_at(workspace, rel: str) -> dict | None:
+    """按相对目录直接取那一层(那份文件在、也读得动才回;否则 None)。"""
+    d = (Path(workspace) / rel) if rel else Path(workspace)
+    for name in AGENTS_FILES:
+        p = d / name
+        if p.is_file():
+            found = _read_instruction(p)
+            return {"rel": rel, "path": p, "found": found} if found["exists"] else None
+    return None
+
+
+def instruction_layers(workspace, extra_rels=()) -> list[dict]:
+    """这一轮实际读到的指令层(用户级 → 项目级 → 各目录级),只报份数、行数与来源,不贴内容。
 
     为什么要有这一屏:「我明明写了规矩它不听」不该变成扯皮。这里能确认的是
     "读到没读到、几行、有没有被截",**不能**报"我之所以这么做是因为你第 N 条"
@@ -94,6 +199,12 @@ def instruction_layers(workspace) -> list[dict]:
 
     项目级那一条另带一个 `adopted`(v0.9.127):在场但没采纳的这份文件**没有**
     进提示词,这一屏要说得出这个差别,否则用户只看见"读到了 37 行"。
+
+    `extra_rels`(v0.9.149)是**这一会话里已经被碰到的**那些子目录层 —— 由调用方
+    (Agent)把自己那份会话状态传进来。为什么不在这里自己扫:第三级是"碰到才算",
+    而 `instruction_layers` 是无状态的纯查询;它自己去递归扫全工作区,既会慢,
+    又会报出一批"根本没被碰过、因此不在这一路上下文里"的层 —— 那一屏的全部意义
+    就是"它到底读了没有",多报一层假的比少报一层坏得多。
     """
     out = []
     user = _read_instruction(app_path(USER_AGENTS_NAME))
@@ -110,24 +221,39 @@ def instruction_layers(workspace) -> list[dict]:
                         "truncated": proj["truncated"],
                         "adopted": (permspec.agents_adopted_sha(workspace)
                                     == proj["sha"])})
+    for rel in dict.fromkeys(extra_rels):        # 去重且保序
+        if not rel:
+            # 根那一层已经作为「项目级」报过了(它走的是系统提示词那条路,不是
+            # 第三级的工具结果那条路)。不去重的话侧栏那一行会把同一份文件报两遍,
+            # 而"报两遍"看起来就像"有两份规矩"。
+            continue
+        layer = layer_at(workspace, rel)
+        if layer is None:
+            continue
+        out.append({"scope": "目录级", "rel": rel, "name": layer["path"].name,
+                    "lines": layer["found"]["lines"], "chars": layer["found"]["chars"],
+                    "truncated": layer["found"]["truncated"],
+                    "adopted": layer_adopted(workspace, layer)})
     return out
 
 
-def instructions_line(workspace) -> str:
+def instructions_line(workspace, extra_rels=()) -> str:
     """一屏话:「内置 + 用户级(12 行)+ 项目级(5 行)」;一份都没有就空串。
 
     项目级还没点过头采纳时,后面缀一句「(未采纳)」—— 侧栏那一行不能让人以为
     它已经在起作用。
     """
-    layers = instruction_layers(workspace)
+    layers = instruction_layers(workspace) if not extra_rels else \
+        instruction_layers(workspace, extra_rels)
     if not layers:
         return ""
     bits = []
     for it in layers:
         tail = "、已截断" if it["truncated"] else ""
-        if it["scope"] == "项目级" and not it.get("adopted", True):
+        if it["scope"] in ("项目级", "目录级") and not it.get("adopted", True):
             tail += "、未采纳"
-        bits.append(f"{it['scope']}({it['lines']} 行{tail})")
+        label = f"目录级 {it['rel']}/" if it["scope"] == "目录级" else it["scope"]
+        bits.append(f"{label}({it['lines']} 行{tail})")
     return "内置 + " + " + ".join(bits)
 
 

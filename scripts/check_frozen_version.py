@@ -339,6 +339,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
         # 这份项目文件采没采纳(那一段就静默不注入,而侧栏照旧报"项目级 37 行");
         # 漏 `adopt_agents` = 点了头也没处记,每一问都重弹一张卡。
         "agents_adoption", "adopt_agents",
+        # v0.9.149 指令文件第三级(子目录就近 AGENTS.md)。漏 `subdir_agents_layers` =
+        # 装好的包里那一层永远取不到(表现是"我在子目录写了规矩,它跟没看见一样",
+        # 而源码态一切正常);漏 `layer_prompt_section` = 取到了也没人拼那一段;
+        # 漏 `adopt_layer`/`layer_adopted` = 子目录那一层点不了头,而"每层各自采纳"
+        # 正是这一层在安全上唯一的严格之处 —— 它静默失效等于把那次点头省掉了。
+        "subdir_agents_layers", "layer_at", "layer_prompt_section",
+        "adopt_layer", "layer_adopted", "_rel_dir",
         "INSTRUCTION_GUARD", "USER_AGENTS_NAME", "AGENTS_CHAR_LIMIT", "AGENTS_FILES",
         "apply_retention"),
     "minicode.paths": ("_is_writable", "_local_state_dir", "diagnostics",
@@ -1126,6 +1133,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           # 漏 `adopt_agents` = 点头没处落;漏 `agents_adopted_sha` =
                           # 落下了也没人读得回来 —— 两条都是"每问重弹一张卡"那种坏法。
                           "adopt_agents", "agents_adopted_sha", "_row", "_put_row",
+                          # v0.9.149 第三级的按层记账。漏 `agents_adopted_layers` =
+                          # 侧栏那一行报不出"这一层采纳了没有";漏新那个键名 =
+                          # 子目录层的点头写进去又读不回来(与上面同一种坏法)。
+                          "agents_adopted_layers", "AGENTS_LAYERS_KEY",
                           # v0.9.133 P0-2「以后都允许」。漏 `remember` = 那颗按钮点下去
                           # 什么都不写(界面上说"已记住"而盘上一条都没有);漏
                           # `granted_rule` = 按钮出现的条件与真写下去的判断分成两套,

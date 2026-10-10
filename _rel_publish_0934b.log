@@ -1,0 +1,25 @@
+[11:56:35] GitHub token 已取回(长度 40,内容不落盘不打印)
+[11:56:35] yinlu-xuezhang-0.9.34-setup.exe 本地核对通过(616140947 B)
+[11:56:36] yinlu-xuezhang-0.9.34-win64.zip 本地核对通过(777861455 B)
+[11:56:36] [link] 链路通(第 1 次探测)
+[11:56:37] Release 已存在,复用: https://github.com/MOKO-TB/yinlu-xuezhang/releases/tag/v0.9.34
+[11:56:38]   yinlu-xuezhang-0.9.34-setup.exe 已在(字节一致),跳过
+[12:06:33]     range 0-1048575 第 1/4 次失败: IncompleteRead IncompleteRead(687424 bytes read, 361152 more expected)
+[12:06:52]   yinlu-xuezhang-0.9.34-setup.exe head 1048576 B vs 1048576 B -> 一致
+[12:06:57]   yinlu-xuezhang-0.9.34-setup.exe tail 1048576 B vs 1048576 B -> 一致
+[12:06:57]   yinlu-xuezhang-0.9.34-setup.exe size=616140947 期望 616140947 -> 一致
+[12:06:57]   本地 SHA256=aad681b1877ae43acb8d372cdc61d455453f385ea31a65cc4099aceb09976411
+[12:06:58]   [yinlu-xuezhang-0.9.34-win64.zip] 第 1/4 次上传(777.9 MB)...
+[12:26:58]   [yinlu-xuezhang-0.9.34-win64.zip] 完成 1200s state=uploaded size=777861455
+[12:30:52]   yinlu-xuezhang-0.9.34-win64.zip head 1048576 B vs 1048576 B -> 一致
+[12:31:42]     range 776812879-777861454 第 1/4 次失败: RemoteDisconnected Remote end closed connection without response
+[12:37:58]     range 776812879-777861454 第 2/4 次失败: IncompleteRead IncompleteRead(934889 bytes read, 113687 more expected)
+[12:44:48]     range 776812879-777861454 第 3/4 次失败: IncompleteRead IncompleteRead(884186 bytes read, 164390 more expected)
+[12:45:22]   yinlu-xuezhang-0.9.34-win64.zip tail 1048576 B vs 1048576 B -> 一致
+[12:45:22]   yinlu-xuezhang-0.9.34-win64.zip size=777861455 期望 777861455 -> 一致
+[12:45:22]   本地 SHA256=bc047a0d6ff304af39a9ead528de901e5c3fab73126288f97759bf389f811e19
+[12:45:23] === 最终附件 ===
+[12:45:23]   yinlu-xuezhang-0.9.34-setup.exe              616.1 MB uploaded  https://github.com/MOKO-TB/yinlu-xuezhang/releases/download/v0.9.34/yinlu-xuezhang-0.9.34-setup.exe
+[12:45:23]   yinlu-xuezhang-0.9.34-win64.zip              777.9 MB uploaded  https://github.com/MOKO-TB/yinlu-xuezhang/releases/download/v0.9.34/yinlu-xuezhang-0.9.34-win64.zip
+[12:45:23] RELEASE: https://github.com/MOKO-TB/yinlu-xuezhang/releases/tag/v0.9.34
+[12:45:23] 全部资产字节核对通过

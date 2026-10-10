@@ -272,21 +272,59 @@ def trust(workspace: Path, sha: str, rules_n: int = 0) -> None:
     _put_row(workspace, row)
 
 
-def agents_adopted_sha(workspace) -> str:
-    """本机为这个项目采纳过的那份指令文件的内容指纹(没采纳过 = 空串)。"""
-    return str(_row(workspace).get("agents_sha256") or "")
+AGENTS_LAYERS_KEY = "agents_layers"   # 子目录那一层一层的采纳记录(v0.9.149)
 
 
-def adopt_agents(workspace, sha: str, lines: int = 0) -> None:
+def agents_adopted_sha(workspace, rel: str = "") -> str:
+    """本机为这个项目采纳过的那份指令文件的内容指纹(没采纳过 = 空串)。
+
+    `rel` 空串 = **工作区根**那一份,记录照旧住在 `agents_sha256` 那几个键上
+    (v0.9.127 起就在那儿,不动它 —— 老留档里已经点过头的项目不该因为这一版
+    又被问一遍)。`rel` 非空 = 某个子目录那一层,住在 `agents_layers` 这张表里,
+    **一层一条**。
+
+    为什么根那一层不一起搬进新表:搬了就要写迁移代码去读老键,而读老键那条路
+    一旦漏一处,表现是"我明明采纳过,它又问我一遍"——那是最招人烦的坏法。
+    两个家、各一处真相,比一个家加一段迁移代码干净。
+    """
+    row = _row(workspace)
+    if not rel:
+        return str(row.get("agents_sha256") or "")
+    layers = row.get(AGENTS_LAYERS_KEY)
+    one = (layers or {}).get(str(rel)) if isinstance(layers, dict) else None
+    return str((one or {}).get("sha") or "")
+
+
+def adopt_agents(workspace, sha: str, lines: int = 0, rel: str = "") -> None:
     """记一次「这份项目指令我核对过、采纳」—— 同样只认内容指纹。
 
     文件改一个字,指纹就变,于是又回到"没采纳"的状态(与上面 `trust` 那条
     "改了要重新批"是同一条道理,不是两条规则)。
+
+    **`rel` 非空时只动那一层**,别的层一个字都不碰 —— 一层一次点头,这是
+    指令文件第三级在安全上唯一比两级更严的地方(别人 clone 一个仓库就等于把它
+    自带的每一份 AGENTS.md 都递到你面前,不能拿一次点头全收了)。
     """
     row = _row(workspace)
-    row.update({"agents_sha256": sha, "agents_lines": int(lines or 0),
-                "agents_at": _now()})
+    if not rel:
+        row.update({"agents_sha256": sha, "agents_lines": int(lines or 0),
+                    "agents_at": _now()})
+    else:
+        layers = row.get(AGENTS_LAYERS_KEY)
+        layers = dict(layers) if isinstance(layers, dict) else {}
+        layers[str(rel)] = {"sha": sha, "lines": int(lines or 0), "at": _now()}
+        row.update({AGENTS_LAYERS_KEY: layers})
     _put_row(workspace, row)
+
+
+def agents_adopted_layers(workspace) -> dict:
+    """这张表当下的原始形状(键 = 相对目录,值 = {sha, lines, at})。
+
+    `instruction_layers` 要按它判"这一层采纳了没有";回的是**拷贝**,
+    调用方改它不该改到磁盘上那份。
+    """
+    layers = _row(workspace).get(AGENTS_LAYERS_KEY)
+    return dict(layers) if isinstance(layers, dict) else {}
 
 
 def granted_raw(workspace) -> list:

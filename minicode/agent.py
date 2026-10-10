@@ -38,6 +38,11 @@ PATCH_TOOL = PATCH_TOOL_NAME
 # 「这一份我看过了」那本账要记哪几只工具(v0.9.133 P0-1):读成功的,加上写成功的两类
 # —— 自己刚写出去的内容当然算"知道",不然「学长写完再改」这条最常见的链会被误伤。
 READ_NOTED_TOOLS = ("read_file",) + SNAPSHOT_TOOLS
+# v0.9.149 指令文件第三级:这几只工具的参数里带着"碰了哪个文件",而那就是取层的锚点。
+# **直接复用上面那一份**,不另写一遍 —— 两份名单迟早会漂,而漂的表现是"某个目录的
+# 规矩有时生效有时不生效",那种 bug 最难查。`apply_patch` 另走 `patch.patch_paths`
+# (它一次碰好几个文件,参数里没有单个 `path`),见 `Agent._layer_anchors`。
+LAYER_ANCHOR_TOOLS = READ_NOTED_TOOLS
 # v0.9.147:`SYNTAX_CHECK_TOOLS` / `SYNTAX_SCAN_LIMIT` 两个常量的**定义**搬到了
 # `minicode/diagnostics.py` —— 语法底线(`_py_syntax_feedback`)与诊断回灌
 # (`_diagnostics_feedback`)共用同一份边界,两处各写一份迟早会漂,而漂的表现是
@@ -218,8 +223,15 @@ class Agent:
         self._prompt_sig = None
         # 项目指令文件的采纳点头:`_ask_project_agents` 用它保证"同一份内容这一会话
         # 只问一次"(被拒过也不追着问),以及"说过一次没采纳就别每回合刷屏"。
-        self._agents_asked = ""
+        self._agents_asked = set()      # 这一会话问过头的那些内容指纹(v0.9.149 起可多个)
         self._agents_refused_noted = False
+        # 指令文件第三级(v0.9.149)的会话状态,三样各管一件事:
+        # `_agents_layers` = 已经**注入过**的子目录层(只注入一次,见 `_layer_feedback`);
+        # `_agents_pending` = 碰到过但**还没采纳**的层(下一问开头那张卡问它们);
+        # `_agents_noted` = 已经就"这一层没采纳"说过一句的(说一次,不每步刷屏)。
+        self._agents_layers: set[str] = set()
+        self._agents_pending: dict[str, dict] = {}
+        self._agents_noted: set[str] = set()
         self.mcp = None            # app_setup 注入:McpManager,退出时关停
         # 超长输出转存:图形版/CLI 默认开;**对外模式由 web_profile 关掉**
         # (每个访客一个 Bridge,但工作区目录是共用的,落文件等于跨访客可见)。
@@ -516,7 +528,7 @@ class Agent:
                 self.ui.info("指令文件或技能清单有变化,已重新载入")
 
     def _ask_project_agents(self) -> str:
-        """项目自带的那份 AGENTS.md 是别人写的规矩:第一次照它干活之前要人点一次头。
+        """项目自带的 AGENTS.md 是别人写的规矩:第一次照它干活之前要人点一次头。
 
         `docs/roadmap-分层指令文件.md` §四.2⑧ + §七.2 那三条口径,现在住在这里:
         - **没答不算同意**:这个形态没有提问通道(无头、网页版)、点了「不采纳」、
@@ -526,50 +538,85 @@ class Agent:
         - **子代理不问**:它拿到的是任务文本,而提示词那一段本来就以"本机采纳过"
           为条件 —— 在这里弹框等于把主会话的一次决定重问 N 遍。
 
+        **v0.9.149 起一次只问一层**:根那一层(走系统提示词)优先,其次才是这一会话里
+        碰到过的某个目录层(`_agents_pending`,由 `_layer_feedback` 攒)。为什么不是
+        一张卡里列 N 层:那要用户逐条对齐"哪个选项对哪一层",而对齐错了的代价是
+        **替他点了头** —— 那正是这一层最不能出的错。一层一张卡,点错了也只错一层,
+        剩下的下一问接着问。
+
         返回要强制重建提示词时该说的话(空串 = 什么都不动)。
         """
         if self._is_sub:
             return ""
         from minicode import asking
-        from minicode.app_setup import adopt_agents, agents_adoption
+        from minicode.app_setup import (adopt_agents, adopt_layer, agents_adoption,
+                                        layer_adopted)
 
         info = agents_adoption(self.ctx.workspace)
-        if not info["present"] or info["adopted"]:
-            return ""
-        if info["sha"] == self._agents_asked:
+        target = None
+        if info["present"] and not info["adopted"]:
+            target = {
+                "kind": "root", "sha": info["sha"], "name": info["name"],
+                "lines": info["lines"],
+                "q": f"这个项目自带一份指令文件({info['name']},{info['lines']} 行),"
+                     "要我照它干活吗?",
+                "where": "它可能是别人放进这个目录的。采纳后它会进这一路对话的系统提示词;",
+            }
+        else:
+            for rel in sorted(self._agents_pending):
+                layer = self._agents_pending[rel]
+                if rel in self._agents_layers:
+                    continue
+                if layer_adopted(self.ctx.workspace, layer):
+                    continue
+                target = {
+                    "kind": "layer", "rel": rel, "layer": layer,
+                    "sha": layer["found"]["sha"], "name": layer["path"].name,
+                    "lines": layer["found"]["lines"],
+                    "q": f"`{rel}/` 这个目录自带一份指令文件"
+                         f"({layer['path'].name},{layer['found']['lines']} 行),"
+                         "要我照它干活吗?",
+                    "where": f"它是这个项目里别人写的一份。采纳后,`{rel}/` 底下"
+                             "(含更深层)的文件会按它来;",
+                }
+                break
+        if target is None or target["sha"] in self._agents_asked:
             return ""                    # 这一会话已经为这份内容问过一回
-        self._agents_asked = info["sha"]
+        self._agents_asked.add(target["sha"])
         ask = getattr(self.ui, "ask_user", None)
         if not callable(ask):
             return self._agents_refused(
-                info, "这个界面点不了头")     # 无头/网页版:说一次,别每回合刷屏
+                target, "这个界面点不了头")   # 无头/网页版:说一次,别每回合刷屏
         qs, err = asking.normalize([{
-            "q": f"这个项目自带一份指令文件({info['name']},{info['lines']} 行),"
-                 "要我照它干活吗?",
-            "why": "它可能是别人放进这个目录的。采纳后它会进这一路对话的系统提示词;"
-                   "沙箱边界、敏感路径硬禁与确认门它一样都改不动。"
-                   "只有点到「采纳」那一项才算 —— 没答、按推荐都不算替你点头。",
-            "header": "项目指令",
+            "q": target["q"],
+            "why": target["where"]
+                   + "沙箱边界、敏感路径硬禁与确认门它一样都改不动。"
+                     "只有点到「采纳」那一项才算 —— 没答、按推荐都不算替你点头。",
+            "header": "目录指令" if target["kind"] == "layer" else "项目指令",
             "options": [
                 {"label": "采纳,以后这一份不再问",
                  "note": "记的是内容指纹:文件改一个字会再问一次"},
                 {"label": "不采纳",
-                 "note": "这一段不进提示词,这一会话里也不再问"},
+                 "note": "这一段不进上下文,这一会话里也不再问"},
             ]}])
         if err:
-            return self._agents_refused(info, f"这张卡没弹成:{err}")
-        mode, picks = self._ask_pick(ask(qs, note=info["name"]))
+            return self._agents_refused(target, f"这张卡没弹成:{err}")
+        mode, picks = self._ask_pick(ask(qs, note=target["name"]))
         if mode != asking.MODE_ANSWER or not picks:
             # 三种"没点头"分开说:说错了等于替用户讲了他没做的事
             why = ({asking.MODE_UNANSWERED: "没等到回答",
                     asking.MODE_RECOMMEND: "你点的是「按推荐」"}.get(
                         mode, "你没点到任何一项"))
-            return self._agents_refused(info, f"{why},这不算点头")
+            return self._agents_refused(target, f"{why},这不算点头")
         if picks[0] != qs[0]["options"][0]["label"]:
-            return self._agents_refused(info, f"你选了「{picks[0]}」")
-        adopt_agents(self.ctx.workspace)
-        return (f"已采纳这个项目的 {info['name']}({info['lines']} 行)—— "
-                "它现在在这一路的系统提示词里")
+            return self._agents_refused(target, f"你选了「{picks[0]}」")
+        if target["kind"] == "root":
+            adopt_agents(self.ctx.workspace)
+            return (f"已采纳这个项目的 {target['name']}({target['lines']} 行)—— "
+                    "它现在在这一路的系统提示词里")
+        adopt_layer(self.ctx.workspace, target["layer"])
+        return (f"已采纳 `{target['rel']}/` 那一层的 {target['name']}"
+                f"({target['lines']} 行)—— 下一次碰到那个目录下的文件时它会进上下文")
 
     def _agents_refused(self, info: dict, why: str) -> str:
         """没采纳时说得出口的一句,并保证同一会话里不重复说(返回值仍为空串)。"""
@@ -1493,6 +1540,11 @@ class Agent:
         # 理由:绕过截断等于给一条外部命令开了无上限的出口。
         result = self._diagnostics_feedback(tool, args, result)
         result = self._truncate(result)
+        # v0.9.149:指令文件第三级(子目录就近 AGENTS.md)。放在 `_truncate` **之后** ——
+        # 与上面诊断那条**相反**,因为这一段的长度由 `_instruction_body` 自己封顶
+        # (每层 ≤ `AGENTS_CHAR_LIMIT`),而它是**规矩**不是工具输出:被工具输出挤掉,
+        # 表现就是"我明明写了规矩它不听"。
+        result = self._layer_feedback(tool, args, result)
         result = self._mark_repeat_empty(tool, args, result)
         result = self._py_syntax_feedback(tool, args, result)
         # 外部内容围栏:在 _truncate **之后**包壳,否则长内容会把结束标记裁掉。
@@ -2144,6 +2196,79 @@ class Agent:
             return cut          # 存不下来就照旧:宁可按原样截断,也不指一条读不到的路
         return (cut[:-1] + f" —— 其余 {len(text) - limit} 字已存进 {rel},"
                 f"接着看就 read_file 这个路径,不必重跑这一步{clipped})")
+
+    def _layer_anchors(self, tool: Tool, args: dict) -> list[str]:
+        """这一次工具调用**碰了哪些文件** —— 第三级取层的锚点。
+
+        锚点是**文件**不是 cwd(见 `app_setup.subdir_agents_layers` 那段为什么)。
+        两类取法:`read_file`/`write_file`/`edit_file` 直接读 `path`;`apply_patch`
+        一次可能碰好几个文件,所以走 `patch.patch_paths` 把补丁里每一份都取出来 ——
+        **漏了它**,用补丁改的那几个目录的规矩就永远不生效,而那正好是
+        "我明明写了规矩它不听"的形状。
+        """
+        name = getattr(tool, "name", "")
+        if name in LAYER_ANCHOR_TOOLS:
+            p = str(args.get("path") or "").strip()
+            return [p] if p else []
+        if name == "apply_patch":
+            text = str(args.get("patch_text") or "")
+            if not text:
+                return []
+            try:
+                from minicode.patch import patch_paths
+                return [str(x) for x in patch_paths(text)]
+            except Exception:
+                # 补丁自己解析不出来时那条路会由 `apply_patch` 报错,不在这里抢着说;
+                # 这里静默退回"没碰到文件"就够 —— 多报一次错只会把真因埋掉。
+                return []
+        return []
+
+    def _layer_feedback(self, tool: Tool, args: dict, result: str) -> str:
+        """第三级:某个目录第一次被碰到时,把那一层的 `AGENTS.md` 附在这一次工具结果后面。
+
+        **只附一次**(`_agents_layers` 记着附过哪些层):它落进留档之后就跟着这一路
+        对话走,后面每一步都重贴既是白花 token,也会让模型以为"这条规矩刚刚又强调
+        了一次"。会话结束自然归零。
+
+        **没采纳的层不注入**,但会说一次"这里有一层、你还没采纳"——不说是不行的:
+        用户会以为"我写了它没读",而那正是这一整层要消灭的那种扯皮。
+        """
+        anchors = self._layer_anchors(tool, args)
+        if not anchors:
+            return result
+        from minicode.app_setup import (layer_adopted, layer_prompt_section,
+                                        subdir_agents_layers)
+        add = ""
+        for anchor in anchors:
+            try:
+                layers = subdir_agents_layers(self.ctx.workspace, anchor)
+            except Exception:
+                continue
+            for layer in layers:
+                rel = layer["rel"]
+                # 根那一层不进这条路:它走系统提示词(见 `agents_prompt_section`)。
+                # 两边都注入等于同一份规矩在上下文里出现两遍。
+                if not rel or rel in self._agents_layers:
+                    continue
+                try:
+                    adopted = layer_adopted(self.ctx.workspace, layer)
+                except Exception:
+                    continue
+                if adopted:
+                    self._agents_layers.add(rel)
+                    add += layer_prompt_section(self.ctx.workspace, layer)
+                    continue
+                self._agents_pending[rel] = layer
+                if self._is_sub or rel in self._agents_noted:
+                    # 子代理不点头(见 `_ask_project_agents`),所以那句"下一问请你点头"
+                    # 对它没有意义;而对主会话,同一层只说一次。
+                    continue
+                self._agents_noted.add(rel)
+                add += (f"\n(注意:`{rel}/` 这个目录自带一份指令文件"
+                        f"(`{layer['path'].name}`,{layer['found']['lines']} 行),"
+                        "你**还没采纳**它,所以这一路没生效 —— 下一问会请你点头。"
+                        "在那之前,这个目录下的写法按你自己的判断来。)\n")
+        return result + add
 
     def _diagnostics_feedback(self, tool: Tool, args: dict, result: str) -> str:
         """多语言诊断回灌(v0.9.147):落盘后按扩展名跑一次检查器,把问题原文附上。
