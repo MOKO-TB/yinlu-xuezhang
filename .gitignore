@@ -17,8 +17,17 @@ screen*.png
 # 本地临时校验目录与抓取原始缓存
 _pwtest/
 _pwtest_empty/
-_tmp_*/
+# `_tmp_*/` 只盖**目录** —— 而工作树里真实存在的是 `_tmp_build_127.log`、
+# `_tmp_job_check.py` 这种**文件**(v0.9.149 那一笔 `git add -A` 就把它们扫进去了,
+# 13 个垃圾文件混进一个功能提交)。去掉尾斜杠,两种形状一起盖。
+_tmp_*
+# 同一类:临时发布日志与探针留下的文件
+_rel_publish_*.log
+_probe_*
 crawled/
+
+# 工具输出转存目录(`minicode/agent.py` 的 `OUTPUT_SPILL_DIR`,运行时生成)
+tool-outputs/
 
 # 本地密钥注入文件(不随仓库分发)
 config.local.json
