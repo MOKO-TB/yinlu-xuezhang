@@ -7,7 +7,7 @@ def test_registry_contents():
     assert names == ["read_file", "write_file", "edit_file",
                      "apply_patch",          # v0.9.134:整包统一 diff,紧跟 edit_file
                      "bash",
-                     "bash_status", "bash_kill", "py_script",
+                     "bash_status", "bash_kill", "bash_input", "py_script",
                      "glob", "grep", "repo_outline",
                      "permissions", "permissions_trust",
                      "hooks", "hooks_apply", "worktree",
@@ -44,6 +44,10 @@ def test_read_only_flags():
         "bash": False,
         "bash_status": True,           # 只读:查后台任务的进度与输出尾部,不该弹确认框
         "bash_kill": False,            # 终止进程是动手面,必须用户点头
+        # v0.9.146:喂输入是**动手面**,与 bash_kill 同档 —— 它能让一条正在跑的命令
+        # 往下走(喂进去的可能就是 y、是密码)。它写的是 `text` 而不是 `command`,
+        # 所以**不经过命令文本那道判定**,确认框必须说清这一点。
+        "bash_input": False,
         "permissions": True,           # 只是看一眼这个项目批了什么
         "permissions_trust": False,    # 批准 = 从此免确认放行,必须用户点过头
         "hooks": True,               # 看一眼挂着什么/预览配方,不改任何东西

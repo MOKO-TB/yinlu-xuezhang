@@ -1,4 +1,5 @@
 import re
+import sys
 import time
 
 import pytest
@@ -467,3 +468,143 @@ def test_background_verify_unblocks_the_plan_gate(ctx, tmp_path):
     assert "已标记第 2 步为 done" in ok, ok
     note = planning.plan_state(tmp_path)["steps"][1]["note"]
     assert note.startswith("verify ✓") or "verify ✓" in note, note
+
+
+# ------------------------------------------------- bash_input(v0.9.146)
+# 为什么这些用例必须住在这个文件:后台那一族在这里,而且这个文件有 autouse fixture
+# 把真桌面通知换成记账 —— 写到别处,跑完那一刻会**真弹窗**。
+
+_ECHO_LINE_SCRIPT = (
+    "import sys\n"
+    "for line in sys.stdin:\n"
+    "    print('echo:' + line.rstrip(), flush=True)\n"
+)
+
+
+def _read_n_script(n: int) -> str:
+    """按**字节**读满 n 个再回显 repr —— 用来钉 `newline=False` 真的没补行尾。"""
+    return ("import sys\n"
+            f"data = sys.stdin.buffer.read({n})\n"
+            "print('raw:' + repr(data), flush=True)\n")
+
+
+def _bg_py(ctx, tmp_path, name: str, source: str) -> str:
+    """在工作区落一个脚本文件再放后台跑 —— **不用 `python -c`**。
+
+    `resolve_shell_argv` 在 auto 下可能给 Git Bash、也可能落回 cmd,同一个带引号的
+    `-c` 字符串在两条路上不通用,那会把"验证失败"变成"引号写错了"(计划书 §1-5 的
+    人工验证那一段记的正是这条)。脚本用**相对名**,所以两条路上都不必处理绝对路径。
+    """
+    (tmp_path / name).write_text(source, encoding="utf-8")
+    out = shell.bash(ctx, f'"{sys.executable}" -u "{name}"', background=True)
+    return _job_id_of(out)
+
+
+def _tail_until(job_id: str, needle: str, seconds: float = 10.0) -> str:
+    """轮询等某句话出现在输出尾部 —— **不拿 sleep 定值当判据**。"""
+    deadline = time.monotonic() + seconds
+    tail = ""
+    while time.monotonic() < deadline:
+        tail = shell._bg_jobs[job_id].tail(4000)
+        if needle in tail:
+            return tail
+        time.sleep(0.05)
+    return tail
+
+
+def test_bash_input_writes_a_line_the_command_actually_reads(ctx, tmp_path):
+    job_id = _bg_py(ctx, tmp_path, "echo_line.py", _ECHO_LINE_SCRIPT)
+    try:
+        out = shell.bash_input(ctx, id=job_id, text="hello")
+        assert "输入已写入" in out, out
+        tail = _tail_until(job_id, "echo:hello")
+        assert "echo:hello" in tail, f"子进程没读到那一行:{tail!r}"
+    finally:
+        shell.bash_kill(ctx, id=job_id)
+
+
+def test_bash_input_newline_false_does_not_append_one(ctx, tmp_path):
+    """按字节读:默认是 `b'y\\n'`,`newline=False` 是 `b'y'`。"""
+    with_nl = _bg_py(ctx, tmp_path, "raw2.py", _read_n_script(2))
+    try:
+        shell.bash_input(ctx, id=with_nl, text="y")
+        tail = _tail_until(with_nl, "raw:")
+        assert "raw:b'y\\n'" in tail, tail
+    finally:
+        shell.bash_kill(ctx, id=with_nl)
+
+    without = _bg_py(ctx, tmp_path, "raw1.py", _read_n_script(1))
+    try:
+        shell.bash_input(ctx, id=without, text="y", newline=False)
+        tail = _tail_until(without, "raw:")
+        assert "raw:b'y'" in tail, tail
+    finally:
+        shell.bash_kill(ctx, id=without)
+
+
+def test_bash_input_round_trips_chinese(ctx, tmp_path):
+    """钉住 UTF-8 口径:写进去与读回来是同一串中文,没有 GBK 开关可拨。"""
+    job_id = _bg_py(ctx, tmp_path, "echo_cn.py", _ECHO_LINE_SCRIPT)
+    try:
+        shell.bash_input(ctx, id=job_id, text="继续")
+        tail = _tail_until(job_id, "echo:继续")
+        assert "echo:继续" in tail, tail
+    finally:
+        shell.bash_kill(ctx, id=job_id)
+
+
+def test_bash_input_on_a_command_that_never_reads_still_answers_and_does_not_kill(ctx):
+    """对方不读 stdin 时:照实回话、任务**仍在跑**、没被杀、也没重试。"""
+    out = shell.bash(ctx, "sleep 30", background=True)
+    job_id = _job_id_of(out)
+    try:
+        t0 = time.monotonic()
+        got = shell.bash_input(ctx, id=job_id, text="anyone there?", wait_ms=300)
+        spent = time.monotonic() - t0
+        assert spent < 10, f"写一次不该吊住这么久:{spent:.1f}s"
+        assert "输入已写入" in got, got
+        assert shell._bg_jobs[job_id].running, "它不该被杀"
+    finally:
+        shell.bash_kill(ctx, id=job_id)
+
+
+def test_bash_input_on_a_finished_job_says_so_instead_of_raising(ctx):
+    out = shell.bash(ctx, "echo done-bg", background=True)
+    job_id = _job_id_of(out)
+    assert _wait_done(job_id), "后台命令没在 8 秒内跑完"
+    got = shell.bash_input(ctx, id=job_id, text="too late")
+    assert "已经结束" in got and "退出码" in got, got
+
+
+def test_bash_input_unknown_id_names_the_ones_that_exist(ctx):
+    got = shell.bash_input(ctx, id="j999", text="x")
+    assert got.startswith("错误:") and "j999" in got, got
+
+
+def test_bash_input_refuses_over_long_text_instead_of_truncating(ctx, tmp_path):
+    """喂进去半句话是最难查的坏法 —— 超限必须**拒绝**,而且一个字都不写进去。"""
+    job_id = _bg_py(ctx, tmp_path, "echo_line2.py", _ECHO_LINE_SCRIPT)
+    try:
+        got = shell.bash_input(ctx, id=job_id, text="x" * shell.BG_INPUT_MAX_CHARS)
+        assert "拒绝" in got and "超过上限" in got, got
+        assert "xxxx" not in shell._bg_jobs[job_id].tail(4000), "拒绝之后不该真写进去"
+    finally:
+        shell.bash_kill(ctx, id=job_id)
+
+
+def test_bash_input_is_gated_and_its_parameters_are_exactly_these(ctx):
+    """它**不标只读**(与 bash_kill 同档),参数集合恰好是这五个。"""
+    from minicode.tools.registry import build_default_registry
+    tool = next(t for t in build_default_registry() if t.name == "bash_input")
+    assert tool.read_only is False
+    assert set(tool.parameters["properties"]) == {
+        "id", "text", "newline", "wait_ms", "reason"}
+    assert set(tool.parameters.get("required", [])) == {"id", "text"}
+
+
+def test_bash_input_risk_note_says_the_text_skips_the_command_gate():
+    """确认框必须说清它**与 bash 不同**的那一面,而不是只重复"会执行命令"。"""
+    from minicode import explain
+    notes = explain.risk_notes("bash_input", {"id": "j1", "text": "y"})
+    joined = " ".join(notes)
+    assert "不经过命令文本那道判定" in joined, notes

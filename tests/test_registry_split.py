@@ -33,6 +33,9 @@ ORDER = [
     "bash",
     # v0.9.84:后台命令的两只眼睛与一只手 —— 挨着 bash,模型先派活、再看进度、才终止
     "bash_status", "bash_kill",
+    # v0.9.146:后台命令的"嘴"。插在 bash_kill 之后、py_script 之前 ——
+    # 后台那一族(派活/看进度/终止/喂输入)必须连在一起,而 py_script 是另一族。
+    "bash_input",
     "py_script", "glob", "grep",
     "repo_outline",
     # v0.9.87:项目级权限白名单(看 = 只读,批准 = 要确认),紧挨着文件/命令那组
@@ -108,7 +111,7 @@ def test_order_pin_is_not_stale():
     v0.9.96 加 `ask_user` 时它的位置就钉在 `plan` 后面 —— 模型每轮拿到的 tools 数组
     是这个顺序,挪位置等于改行为面,所以新工具插在谁后面都要在这里写明。
     """
-    assert len(ORDER) == len(set(ORDER)) == 59      # v0.9.134:58 + apply_patch
+    assert len(ORDER) == len(set(ORDER)) == 60      # v0.9.146:59 + bash_input
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 
@@ -143,7 +146,9 @@ def test_registry_is_assembly_only():
     assert len(src.splitlines()) <= 60, \
         f"registry.py 又长到 {len(src.splitlines())} 行,它只该管装配顺序"
     # v0.9.98:catalog_remind 从 catalog_campus 拆出来,6 份 → 7 份
-    assert len(CATALOGS) == 7, f"目录模块不是 7 份:{[p.name for p in CATALOGS]}"
+    # v0.9.146:catalog_bg 从 catalog_files 拆出来(它撞上了下面那道 400 行的闸),
+    # 7 份 → 8 份
+    assert len(CATALOGS) == 8, f"目录模块不是 8 份:{[p.name for p in CATALOGS]}"
 
 
 def test_no_catalog_is_a_new_hotspot():

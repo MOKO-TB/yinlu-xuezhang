@@ -291,6 +291,12 @@ BG_KEEP_FINISHED = 5           # 已结束且已播报过的任务最多留几�
 BG_BUFFER_CHARS = 200_000      # 每个任务只在内存里留尾部这么多字符
 BG_TAIL_DEFAULT = 4000         # bash_status 一次回看的默认长度
 BG_TAIL_MAX = 30_000
+# `bash_input`(v0.9.146)给后台命令写 stdin 的三条尺子。**只对后台**:前台是同步等
+# 结果的调用,根本没有"写进去"的时机,它的 stdin 仍是 DEVNULL(`:142`)。
+BG_INPUT_MAX_CHARS = 4000      # 一次能写进去多少字;超了**拒绝不截断**
+BG_INPUT_WAIT_MS = 1500        # 写完最多再等这么久,让尾巴更可能带上对方的回应
+BG_INPUT_WAIT_MAX = 5000       # 那个等待的上限:它只是"更可能",不是保证
+BG_INPUT_JOIN_S = 2.0          # 写线程的 join 上限。见 bash_input 里那段死锁说明
 # 桌面通知的类别。**必须同时进 `tray.NOTIFY_KINDS`** —— 表外的 kind 用户关不掉,
 # 而一条关不掉的打扰,最后结局是整个通知通道被关掉(test_tray 那根"描述与表逐类
 # 相等"的闸会把漏改当场钉红)。
@@ -336,6 +342,9 @@ class _BgJob:
         self.announced = False      # 结束状态有没有已经告知过模型(只播一次)
         self.notified = False       # 结束回执有没有弹过给用户(也只弹一次)
         self.lock = threading.Lock()
+        # `bash_input` 专用的一把**独立**锁,刻意不与上面那把共用 —— 理由写在
+        # `bash_input` 的 docstring 里(共用会把"管道写满"变成真死锁)。
+        self.stdin_lock = threading.Lock()
 
     # -------------------------------------------------------------- 读输出
     def _pump(self) -> None:
@@ -359,6 +368,12 @@ class _BgJob:
             self.proc.wait()              # 这条线程是守护线程,等多久都不挡退出
         except Exception:
             return                        # 等不到就交给"被看见"那三个落点补弹
+        # v0.9.146:命令退了就把 stdin 关上。不关的话 `bash_input` 还能往一条已经没人
+        # 读的管道里写 —— 那时 `write` 不报错、内容掉进虚空,而回话说的是"已写入"。
+        # 关掉之后写会抛 ValueError,`bash_input` 照实报"写不进去",这才是真话。
+        with contextlib.suppress(Exception):
+            if self.proc.stdin is not None:
+                self.proc.stdin.close()
         # 跑完了也要关句柄:不关就是每条后台命令泄漏一个 kernel object,而进程树里
         # 那个"命令退了、它起的子进程还在跑"的情况也永远收不掉(关 job 就是回收)。
         if self.job is not None:
@@ -427,7 +442,11 @@ def _bg_start(ctx: ToolContext, command: str, argv: list[str] | None,
             ([*argv, command] if argv is not None else command),
             shell=(argv is None), cwd=str(ctx.workspace),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL, env=env, creationflags=creationflags)
+            # v0.9.146:`DEVNULL` → `PIPE` 是 `bash_input` 唯一真正的开关。
+            # `proc` 本来就留着,所以拿到写入口不需要新字段 —— 今天 `proc.stdin is None`
+            # 只是因为 DEVNULL 不建管道。**前台那一处(`:142`)与 `py_script`(`:809`)
+            # 刻意不动**:它们都是同步等结果的调用,没有"写进去"的时机。
+            stdin=subprocess.PIPE, env=env, creationflags=creationflags)
     except Exception as e:
         return f"错误: 后台启动失败({type(e).__name__}: {e})"
     job = _BgJob(job_id, proc, command, env_note, job=_new_job(proc))
@@ -605,6 +624,92 @@ def bash_kill(ctx: ToolContext, id: str) -> str:
         return f"{job.id} 已经结束(退出码 {job.exit_code}),不用杀。"
     ok, note = _bg_kill_tree(job)
     return (f"{job.id} 已终止。{note}" if ok else f"错误: {job.id} {note}")
+
+
+def bash_input(ctx: ToolContext, id: str, text: str, newline: bool = True,
+               wait_ms: int = BG_INPUT_WAIT_MS, reason: str = "") -> str:
+    """`bash_input` 工具:给一条**后台**命令的标准输入写一行(或一段,`newline=False`)。
+
+    **它补的是哪一格**:后台任务从前只有"起 / 读输出 / 杀"三件事,stdin 是 `DEVNULL`,
+    于是"下一步做什么取决于上一步的输出"这类流程无解 —— 预写文件加重定向对它们无效
+    (`npm init`、REPL、要敲 y 的脚手架都是这一类)。
+
+    五条边界,它们决定这个函数为什么长这样:
+
+    1. **只对后台**。前台是同步等结果的调用,根本没有"写进去"的时机,它的 stdin 仍是
+       `DEVNULL`;`py_script` 同理。那两处不动是决定,不是漏做。
+    2. **超长拒绝而不是截断**。喂进去半句话是最难查的坏法:命令拿半句当完整输入执行,
+       而回话看起来一切正常。
+    3. **不做中断、不做 EOF**。往管道写 `0x03` **不会**产生 Ctrl+C(那是控制台事件,
+       不是 stdin 字符),要停就是 `bash_kill`;关掉 stdin 之后这条任务再也写不进东西,
+       而它可能还要跑很久 —— 真需要 EOF 的命令今天就该走重定向文件。
+    4. **写绝不持有 `job.lock`**。那把锁被读侧(`_append`/`tail`)与播报用着;管道写满
+       (对方不读)会阻塞在 `write` 上,若此时持着 `job.lock` → 读线程拿不到锁 →
+       子进程写 stdout 也可能堵 → **真死锁**。所以另起一把 `stdin_lock` + 短命写线程
+       + `join` 超时;超时后如实说"此刻没在读输入"并**保持它运行**(不杀、不重试 ——
+       杀一条可能正在干活的命令,比写不进去严重得多)。
+    5. **`wait_ms` 只是"更可能",不是保证**。输出要经 `_pump` 按行读到才会出现在
+       `tail()` 里;这一步只等到"有新的输出出现"为止,不假装已经拿到回应。
+    """
+    job, err = _bg_job_or_error(id)
+    if job is None:
+        return err
+    body = str(text if text is not None else "")
+    if newline:
+        body += "\n"
+    if len(body) > BG_INPUT_MAX_CHARS:
+        return (f"错误: 要写进去的内容 {len(body)} 字,超过上限 {BG_INPUT_MAX_CHARS} —— "
+                "**拒绝而不是截断**(喂进去半句话,命令会拿它当完整输入去执行,而回话"
+                "看起来一切正常)。请拆成多次写。")
+    if not job.running:
+        return f"{job.id} 已经结束(退出码 {job.exit_code}),写不进输入了。"
+
+    # 写成 UTF-8 字节:与读侧 `_decode` 先试 utf-8 一致,也与子进程的
+    # `PYTHONIOENCODING=utf-8` 一致。**不做 GBK 开关** —— 两个编码同时在路上的话,
+    # "谁把中文读错了"就再也归不了因。行尾默认只写 `\n` 一个字节。
+    data = body.encode("utf-8")
+    outcome: dict = {}
+    done = threading.Event()
+
+    def _writer() -> None:
+        try:
+            with job.stdin_lock:
+                stream = job.proc.stdin
+                if stream is None:
+                    outcome["err"] = "这条命令没有可写的标准输入"
+                    return
+                stream.write(data)
+                stream.flush()      # 默认带缓冲,不 flush 就永远卡在缓冲区里
+            outcome["ok"] = True
+        except Exception as e:      # 命令已经退了 / 管道断了
+            outcome["err"] = f"{type(e).__name__}: {e}"
+        finally:
+            done.set()
+
+    threading.Thread(target=_writer, daemon=True,
+                     name=f"bg-in-{job.id}").start()
+    if not done.wait(timeout=BG_INPUT_JOIN_S):
+        return (f"{job.id} 此刻没在读输入 —— 写进去的动作还挂着(它可能在忙别的,"
+                "也可能管道满了)。**这条命令没有被杀、也不会被重试**:等它忙完再用 "
+                "`bash_status` 看输出,或者 `bash_kill` 收掉它。")
+
+    wrote = bool(outcome.get("ok"))
+    limit = max(0, min(int(wait_ms or 0), BG_INPUT_WAIT_MAX)) / 1000
+    if wrote and limit:
+        with job.lock:
+            before = job.kept
+        deadline = time.monotonic() + limit
+        while time.monotonic() < deadline:
+            with job.lock:
+                if job.kept != before:
+                    break
+            time.sleep(0.05)
+
+    head = ("输入已写入。" if wrote
+            else f"错误: 输入没写进去({outcome.get('err', '未知原因')})。")
+    n = BG_TAIL_DEFAULT
+    return (f"{job.line()}\n{head}\n"
+            f"--- 输出尾部(最后 {n} 字)---\n{job.tail(n)}{job.env_note}")
 
 
 def _bg_list_snapshot() -> list[str]:

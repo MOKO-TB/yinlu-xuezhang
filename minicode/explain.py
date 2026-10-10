@@ -97,6 +97,12 @@ def risk_notes(tool_name: str, args: dict) -> list[str]:
     elif name == "bash_kill":
         notes.append("会终止一个后台命令(连它的子进程一起);"
                      "它已经写出去的文件不会回滚")
+    elif name == "bash_input":
+        # v0.9.146:后台命令的"嘴"。它与 bash 同档(不标 read_only),而这里要说清的
+        # 是它**与 bash 不同**的那一面 —— 见 sandbox.KNOWN_LIMITS["bash_input"]。
+        notes.append("会让那条后台命令在原地继续往下走(喂进去的可能是 y、是密码、"
+                     "是它下一步要的输入),后果与那条命令本身同级")
+        notes.append(KNOWN_LIMITS["bash_input"])
     elif name == "permissions_trust":
         action = str(args.get("action", "trust") or "trust")
         if action == "revoke":

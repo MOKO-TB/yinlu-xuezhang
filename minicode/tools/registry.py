@@ -11,19 +11,11 @@ v0.9.39 #84 之前这里是 987 行、40 个 `Tool(...)` 挤在一个函数里 �
 """
 from __future__ import annotations
 
-from minicode.tools import (
-    catalog_files,
-    catalog_web,
-    catalog_knowledge,
-    catalog_media,
-    catalog_campus,
-    catalog_remind,
-    catalog_places,
-)
+from minicode.tools import (catalog_files, catalog_bg, catalog_web,
+                            catalog_knowledge, catalog_media, catalog_campus,
+                            catalog_remind, catalog_places)
 from minicode.tools import concurrency
 from minicode.tools.base import Tool
-
-
 
 
 def build_default_registry() -> list[Tool]:
@@ -35,6 +27,11 @@ def build_default_registry() -> list[Tool]:
     """
     tools = [
         *catalog_files.tools(),
+        # v0.9.146:后台命令三只(bash_status / bash_kill / bash_input)拆到独立目录,
+        # 但**必须插在这里** —— 它们要挨着 `bash`(派活),而 `py_script` 是另一族。
+        # 顺序即行为面,见文件 docstring。
+        *catalog_bg.tools(),
+        *catalog_files.script_tools(),
         *catalog_files.perms_tools(),
         # v0.9.116 L3:钩子配方两只,挨着权限那组(都是"用户点头才改配置"的一族)
         *catalog_files.hooks_tools(),

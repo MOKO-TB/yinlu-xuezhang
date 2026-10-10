@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """后台命令(v0.9.84/85)的端到端验证:验的是**真机器上进程有没有死透**。
 
-单元测试证明的是逻辑对;这支脚本证明的是三件单元测试够不着的事:
+单元测试证明的是逻辑对;这支脚本证明的是四件单元测试够不着的事:
 
 1. **`bash_kill` 杀的是整棵树,不只是那个 shell**。后台命令的形状是
    `bash.exe -c "python tick_bg.py"` —— 只杀直接子进程(bash)会留下
@@ -13,6 +13,11 @@
 3. **状态注入真的走到了模型那一侧**:用真 `Agent` + 记录收到的 messages 的假 LLM,
    验"有后台任务时请求末尾多那一行、而 `session.messages` 一个字都不许多"。
    前缀不动是 KV Cache 的账,这条在单测里是断言,在这里是**真发出去的那份 payload**。
+4. **喂进去的输入真的到了子进程手里(v0.9.146)**。`bash_input` 的单元测试用替身也能
+   过,但"这条管道到底通没通"只有真进程能证明:DEVNULL 忘了换成 PIPE、`flush()` 漏了、
+   编码写错 —— 三样都表现成"回话说已写入、子进程什么也没收到",而那正是这个功能
+   最坏的一种坏法(静默无效)。这里让真脚本读一行回显一行,断言那句回显真出现在
+   输出尾部。
 
 跑法(项目根目录,需要 PYTHONIOENCODING=utf-8 否则中文断言在 GBK 控制台炸):
     PYTHONIOENCODING=utf-8 .venv\\Scripts\\python.exe scripts\\e2e_bg_jobs.py
@@ -196,6 +201,46 @@ class _QuietUI:
         return lambda *a, **k: None
 
 
+STDIN_ECHO_SRC = (
+    "import sys\n"
+    "for line in sys.stdin:\n"
+    "    print('echo:' + line.rstrip(), flush=True)\n"
+)
+
+
+def case_input_reaches_the_child() -> None:
+    """v0.9.146:写进管道的那一行,子进程**真读得到**。
+
+    单元测试用假替身也能过,但"管道到底通没通"只有真进程能证明 —— 中间任何一层
+    (DEVNULL 没换成 PIPE、flush 漏了、编码写错)都会表现成"回话说已写入、子进程却
+    什么也没收到",而那正是这个功能最坏的一种坏法。
+    """
+    print("\n[4] bash_input 写进去的那一行,子进程真读得到")
+    from minicode.tools import shell
+    workspace = Path(tempfile.mkdtemp(prefix="e2e_bg_input_"))
+    script = workspace / "echo_stdin.py"
+    script.write_text(STDIN_ECHO_SRC, encoding="utf-8")
+    res = shell.bash(_ctx(workspace), f'"{sys.executable}" -u "{script}"',
+                     background=True)
+    check("已放进后台:" in res, "后台起得来", res[:90])
+    if "已放进后台:" not in res:
+        return
+    job_id = shell._bg_list_snapshot()[-1]
+    ctx = _ctx(workspace)
+    got = shell.bash_input(ctx, id=job_id, text="hello-from-e2e")
+    check("输入已写入" in got, "写这一行没有报错", got[:90])
+    # 轮询而不是 sleep 定值:输出要经 `_pump` 按行读到才会出现在 tail 里
+    deadline = time.monotonic() + 10
+    tail = ""
+    while time.monotonic() < deadline:
+        tail = shell.bash_status(ctx, id=job_id)
+        if "echo:hello-from-e2e" in tail:
+            break
+        time.sleep(0.1)
+    check("echo:hello-from-e2e" in tail, "子进程读到了那一行并回显", tail[-160:])
+    shell.bash_kill(ctx, id=job_id)
+
+
 def main() -> int:
     # 逐条打印 ✓/✗:GBK 控制台上 print 会当场 UnicodeEncodeError,
     # 而"脚本自己崩在半路"比"验不过"更坏 —— 你会以为是被测功能坏了。
@@ -211,11 +256,13 @@ def main() -> int:
     case_kill_kills_the_tree()
     case_exit_reaps_orphans()
     case_brief_reaches_the_model()
+    case_input_reaches_the_child()
     print()
     if fails:
         print(f"FAIL: {len(fails)} 项没过 → {fails}")
         return 1
-    print("PASS: 后台命令杀得透树、学长退出收得掉、状态行只搭请求不进留档")
+    print("PASS: 后台命令杀得透树、学长退出收得掉、状态行只搭请求不进留档、"
+          "喂进去的输入子进程真读得到")
     return 0
 
 

@@ -535,6 +535,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 长任务照样 300 秒被砍,而工具描述还在教模型用后台)
     "bash_status", "bash_kill", "_BgJob", "_bg_start", "_bg_kill_tree",
     "_bg_shutdown", "MAX_BG_JOBS",
+    # v0.9.146:给后台命令喂输入(漏收 `bash_input` = 装好的包里那只工具没了,
+    # 而工具描述还在教模型"只有后台任务能用 bash_input 往里写";
+    # 漏 `stdin_lock` 更坏:它唯一的用途是把"管道写满"挡在 `job.lock` 之外 ——
+    # 少了它写线程会与读线程抢同一把锁,表现是**偶发死锁**,不是一条报错)
+    "bash_input", "stdin_lock", "BG_INPUT_MAX_CHARS", "BG_INPUT_WAIT_MS",
+    "BG_INPUT_WAIT_MAX", "BG_INPUT_JOIN_S",
     # v0.9.85:状态注入(漏收 = 模型只能自己想起来轮询,后台跑完了也没人告诉它,
     # 于是它会替用户宣布一个还没发生的结果)
     "bg_brief_for_model", "BG_KEEP_FINISHED", "_bg_prune_locked",

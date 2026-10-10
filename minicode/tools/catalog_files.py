@@ -1,7 +1,9 @@
 """文件与命令类工具(v0.9.39 #84 从 registry.py 搬出来)。
 
-读写文件、按模式找文件、按正则搜内容,以及三条会动手的执行入口(bash / py_script
-/ bash_kill),外加一条只读的 bash_status。
+读写文件、按模式找文件、按正则搜内容,以及两条会动手的执行入口(bash / py_script)。
+后台命令那一族(bash_status / bash_kill / bash_input)于 v0.9.146 搬到
+`catalog_bg.py` —— 这里只留 bash 本体,因为它是「执行一条命令」的通用入口,
+后台只是它的一个参数。
 
 搬的是**原文**:每个 `Tool(...)` 的字段与描述一字未改,只是换了文件。
 注册表里这些工具的**先后顺序**由 `registry.build_default_registry()` 决定,
@@ -105,7 +107,8 @@ def tools() -> list[Tool]:
                 "学长退出或重启就没了,要留档请自己重定向到工作区文件。"
                 "**命令不会等你输入**:它的标准输入是空的 —— 任何「按任意键继续」、"
                 "密码提示、交互提问都会立刻拿到 EOF(然后要么直接结束要么报错)。"
-                "需要喂输入就把内容写成工作区文件,再用重定向交给命令。"
+                "需要喂输入就把内容写成工作区文件,再用重定向交给命令;"
+                "**只有后台任务**能用 bash_input 往里写(前台没有「写进去」的时机)。"
                 "只要还有后台任务,学长会把它们的真实状态(poll 到的,不是猜的)附在"
                 "下一次请求末尾的一行里 —— 不必每一步都轮询 bash_status;但那行只说"
                 "「进程结束了、退出码是几」,活儿对不对仍要看 bash_status 的输出,"
@@ -125,46 +128,18 @@ def tools() -> list[Tool]:
             },
             handler=shell.bash,
         ),
-        Tool(
-            name="bash_status",
-            description=(
-                "看后台命令跑到哪了:不带 id 列出本次运行起过的所有后台任务"
-                "(在不在跑、跑了多久、输出了多少字),带 id 则回看那一个的状态"
-                "与输出尾部。只读 —— 不会启动、也不会终止任何东西。"
-                "两个已知边界:①输出只在内存里留尾部(超出缓冲的部分被丢掉并如实报数),"
-                "学长退出就没了;②这里看不到后台任务往磁盘上写了什么,产物请用 "
-                "read_file/glob 或「任务监控」的产出行确认。"
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string",
-                           "description": "job 编号(如 j3);不传就列全部"},
-                    "tail": {"type": "integer",
-                             "description": "回看输出的字符数,默认 4000,上限 30000"},
-                },
-            },
-            handler=shell.bash_status,
-            read_only=True,
-        ),
-        Tool(
-            name="bash_kill",
-            description=(
-                "终止一个后台命令。Windows 上走 taskkill /T 连子进程一起杀"
-                "(Git Bash 那条命令真正干活的是它下面的 python/pytest,只杀 bash "
-                "会留孤儿);这台机器没有 taskkill 时只能杀直接子进程,"
-                "**会照实告诉你子进程可能还活着**,不假装杀干净。已经结束的不用杀,"
-                "回一句退出码就完事。"
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string", "description": "要终止的 job 编号(如 j3)"},
-                },
-                "required": ["id"],
-            },
-            handler=shell.bash_kill,
-        ),
+    ]
+    return tools
+
+
+def script_tools() -> list[Tool]:
+    """文件/命令家族里「看代码」与「跑脚本」那几只:`py_script` 与检索三件。
+
+    v0.9.146 与后台那一族一起拆出来:`tools()` 原本把 12 只挤在一个函数里;
+    后台三只搬去 `catalog_bg.py` 之后,这里剩下的正好是「文件/命令」与
+    「看代码」两段 —— 分开之后各自的 return 列表短到一眼看得完。
+    """
+    return [
         Tool(
             name="py_script",
             description=(
