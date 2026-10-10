@@ -9,6 +9,7 @@ def test_registry_contents():
                      "bash",
                      "bash_status", "bash_kill", "bash_input", "py_script",
                      "glob", "grep", "repo_outline",
+                     "diagnostics",
                      "permissions", "permissions_trust",
                      "hooks", "hooks_apply", "worktree",
                      "web_crawl", "web_search",
@@ -63,6 +64,9 @@ def test_read_only_flags():
         "glob": True,
         "grep": True,
         "repo_outline": True,        # 只读大纲:不写任何东西
+        # v0.9.147:诊断**不标只读** —— 它会执行工作区里的检查器(`cargo check` 会跑
+        # `build.rs`),与 `hooks`(只读列清单)正好形成对照:列清单只读,真跑要点头。
+        "diagnostics": False,
         "web_crawl": False,
         "web_search": False,         # 联网访问搜索引擎:与 web_crawl 同级要确认
         # 浏览器会带用户的登录态、browser_eval 能在页面里执行 JS:要确认,

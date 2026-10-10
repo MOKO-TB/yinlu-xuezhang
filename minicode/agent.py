@@ -23,6 +23,8 @@ from minicode.llm import LLMClient, ToolCall, is_context_overflow
 from minicode.model_catalog import window_for
 from minicode.permission import ASK, REJECT, PATCH_TOOL_NAME, PermissionGate
 from minicode import toolsum
+from minicode import diagnostics
+from minicode.diagnostics import SYNTAX_CHECK_TOOLS, SYNTAX_SCAN_LIMIT
 from minicode.session import Session, outbound as session_outbound, repair_tool_pairs
 from minicode.tools.base import (
     PathBlocked, PathOutsideWorkspace, Tool, ToolContext, resolve_path,
@@ -36,8 +38,10 @@ PATCH_TOOL = PATCH_TOOL_NAME
 # 「这一份我看过了」那本账要记哪几只工具(v0.9.133 P0-1):读成功的,加上写成功的两类
 # —— 自己刚写出去的内容当然算"知道",不然「学长写完再改」这条最常见的链会被误伤。
 READ_NOTED_TOOLS = ("read_file",) + SNAPSHOT_TOOLS
-SYNTAX_CHECK_TOOLS = ("write_file", "edit_file")   # 落盘 .py 的两种来源(借鉴 aider 的 lint-after-edit)
-SYNTAX_SCAN_LIMIT = 512 * 1024                     # 只自检 512 KB 以内:再大不是"手写代码"的场景
+# v0.9.147:`SYNTAX_CHECK_TOOLS` / `SYNTAX_SCAN_LIMIT` 两个常量的**定义**搬到了
+# `minicode/diagnostics.py` —— 语法底线(`_py_syntax_feedback`)与诊断回灌
+# (`_diagnostics_feedback`)共用同一份边界,两处各写一份迟早会漂,而漂的表现是
+# "同一个文件两套话"。这里只从上面 import 进来,语义一个字没改。
 
 # 撞步数上限后那一次收尾调用要说的话。它**只活在这次请求里**(不进会话留档),
 # 因为没有别的地方需要读它;不给这句,模型不知道自己被"断了工具",收尾常常写成
@@ -169,6 +173,12 @@ class Agent:
         # 钩子健康计数(按 kind):连着几次"没跑成"就说一次话。不跨会话累计 ——
         # 它是"这轮你一直在叫一条坏命令"的提醒,不是故障台账。
         self._hook_bad: dict[str, int] = {}
+        # v0.9.147:诊断回灌的两本小账。都挂在 agent 实例上(与 `_hook_bad` 同一口径,
+        # 不跨会话累计):`_diag_cache` 认"同一批问题还没修好",`_diag_missing` 让
+        # "这台机器没有某个检查器"每个进程只说一次 —— 每次编辑 .py 都附一句
+        # "ruff 不可用"是噪声,而一次不说就等于静默没检查。
+        self._diag_cache = diagnostics.DiagnosisCache()
+        self._diag_missing: set[str] = set()
         # 「这一处改动是在第几问之后做的」——编辑重发要按这个回退文件(R3)。
         # `_epoch` 管的是另一件事:压过一次历史后前面的提问被折进摘要,序号整体前移,
         # 老记录上那个号就不再对得上任何东西 —— 纪元不同的记录一律不许按号回退。
@@ -1479,6 +1489,9 @@ class Agent:
             if body:
                 result = result + f"\n〔post_tool 钩子回灌〕\n{body}"
             post_ctx = str(post.get("context") or "")
+        # v0.9.147:诊断回灌。放在 `_truncate` **之前** —— 与上面 post 钩子正文同一条
+        # 理由:绕过截断等于给一条外部命令开了无上限的出口。
+        result = self._diagnostics_feedback(tool, args, result)
         result = self._truncate(result)
         result = self._mark_repeat_empty(tool, args, result)
         result = self._py_syntax_feedback(tool, args, result)
@@ -2131,6 +2144,55 @@ class Agent:
             return cut          # 存不下来就照旧:宁可按原样截断,也不指一条读不到的路
         return (cut[:-1] + f" —— 其余 {len(text) - limit} 字已存进 {rel},"
                 f"接着看就 read_file 这个路径,不必重跑这一步{clipped})")
+
+    def _diagnostics_feedback(self, tool: Tool, args: dict, result: str) -> str:
+        """多语言诊断回灌(v0.9.147):落盘后按扩展名跑一次检查器,把问题原文附上。
+
+        与 `_py_syntax_feedback` **分权**:语法结论只有一处(那里用 `ast.parse`),
+        这条路只跑外部检查器(ruff / tsc / node / go / cargo),`ast` 不在这里 ——
+        两套真相的具体危害是"同一个文件两句不同的话"。
+
+        三条刻意的口径:
+        1. **未知扩展名静默**(自动路径)。否则每次编辑 `.md` 都附一句废话,而噪声会
+           把真正的那句挤没。模型显式调 `diagnostics(action=check)` 时**必须**回答
+           "没有这个类型的检查器" —— 两条路说法不同是有意的。
+        2. **检查器缺失每个进程只说一次**:一次不说等于静默没检查,每次都说是噪声。
+        3. **它绝不能变成第二个故障源**:任何异常都吞掉、原样返回结果(自检是反馈,
+           不是新的失败面)。
+        """
+        if tool.name.rsplit("·", 1)[-1] not in SYNTAX_CHECK_TOOLS:
+            return result
+        from minicode.toolsum import is_failure
+        if is_failure(result):
+            return result
+        raw = str(args.get("path") or "")
+        checker = diagnostics.checker_for(raw)
+        if checker is None:
+            return result
+        try:
+            p = resolve_path(self.ctx, raw, for_write=True)
+            if not p.is_file() or p.stat().st_size > SYNTAX_SCAN_LIMIT:
+                return result
+            rel = p.relative_to(self.ctx.workspace).as_posix()
+        except (PathOutsideWorkspace, PathBlocked, OSError, ValueError):
+            return result
+        try:
+            outcome = diagnostics.run_checker(self.ctx.workspace, rel, checker)
+        except Exception:
+            return result
+        if not outcome["ran"]:
+            # 检查器不在(打包版没有 ruff / 工作区没装 tsc)或超时:每个进程说一次。
+            if checker.id in self._diag_missing:
+                return result
+            self._diag_missing.add(checker.id)
+        elif outcome["ok"]:
+            # **成功就静默** —— 与 `_py_syntax_feedback` 那条"写好的不噪声"同一个口径。
+            # 每次编辑都附一句"没有报出问题",会把真正有问题的那一次挤进噪声里。
+            # 显式调 `diagnostics(action=check)` 时当然会回答"没有报出问题",
+            # 两条路说法不同是有意的。
+            return result
+        return result + diagnostics.feedback(
+            self.ctx.workspace, rel, checker, outcome, self._diag_cache)
 
     def _py_syntax_feedback(self, tool: Tool, args: dict, result: str) -> str:
         """Python 写后自检(借鉴 aider 的 lint-after-edit):write_file/edit_file

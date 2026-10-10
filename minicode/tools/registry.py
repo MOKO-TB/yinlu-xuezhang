@@ -11,7 +11,7 @@ v0.9.39 #84 之前这里是 987 行、40 个 `Tool(...)` 挤在一个函数里 �
 """
 from __future__ import annotations
 
-from minicode.tools import (catalog_files, catalog_bg, catalog_web,
+from minicode.tools import (catalog_files, catalog_bg, catalog_diag, catalog_web,
                             catalog_knowledge, catalog_media, catalog_campus,
                             catalog_remind, catalog_places)
 from minicode.tools import concurrency
@@ -32,6 +32,9 @@ def build_default_registry() -> list[Tool]:
         # 顺序即行为面,见文件 docstring。
         *catalog_bg.tools(),
         *catalog_files.script_tools(),
+        # v0.9.147:诊断(按扩展名跑检查器),挨着 `repo_outline` —— 同属"看代码"一族,
+        # 而且模型改完一处代码后紧接着想问的正是"这下对不对"。
+        *catalog_diag.tools(),
         *catalog_files.perms_tools(),
         # v0.9.116 L3:钩子配方两只,挨着权限那组(都是"用户点头才改配置"的一族)
         *catalog_files.hooks_tools(),

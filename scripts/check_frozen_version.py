@@ -550,6 +550,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "PROGRESS_EVERY", "_Progress", "_drain", "_report_progress",
                             # v0.9.112「终端」面板:后台命令 + 输出末尾(漏收 = 面板永远空)。
                             "terminal_facts"),
+    # ---- v0.9.147:编辑后诊断回灌 ----
+    # 漏收 `diagnostics` = 装好的包里"改完知道对不对"退回只有 Python 语法底线,
+    # 而工具描述已经在教模型它认得六种扩展名;漏 `CHECKERS` 更坏:那一格变成
+    # "没有这个类型的检查器",而回话看着像个正常结论 —— 「没做检查」被读成
+    # 「检查过了没问题」正是这一路最贵的坏法。
+    "minicode.diagnostics": ("diagnostics", "checker_for", "run_checker",
+                             "fingerprint", "DiagnosisCache", "CHECKERS",
+                             "CHECK_TIMEOUT", "SYNTAX_CHECK_TOOLS",
+                             "SYNTAX_SCAN_LIMIT"),
     # ---- v0.9.39 #84:注册表按领域拆成 6 份目录(registry.py 只管装配顺序)----
     # 漏收一份 = 装好的包里**那个领域的工具整组消失**,而 build_default_registry()
     # 不报错(它只是拼不出那一段),模型侧表现是"这个能力没有了"。
