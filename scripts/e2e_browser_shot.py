@@ -141,17 +141,32 @@ def main() -> int:
                 failures.append(f"卡片标题/地址没显示:{cap}")
             page.screenshot(path=str(OUT_DIR / "shot-card.png"))
 
-            # 点图放大 / 再点还原
+            # 点图 → **灯箱**(不是行内 `.zoom`)。
+            # 这一格从前测的是 v0.9.05 的行内放大:点一下给图加 `.zoom`、再点一下撤掉。
+            # 后来 `#chat` 上加了事件委托(任何 `.msg img` 点开灯箱),而 `.shotcard img`
+            # 上那条直连的 `.zoom` 切换**没跟着撤** —— 于是同一张图被两个行为同时接住:
+            # 点一下既开灯箱、又在底下切一个看不见的 `.zoom`,而灯箱是全屏遮罩,
+            # **第二次点击根本到不了图**,Playwright 在那里无限重试到超时
+            # (实测报「`<div class="il-stage">` intercepts pointer events」)。
+            # 那是个真缺陷,已在 `frontend/index.html` 里把行内那一条撤掉;
+            # 这里改成钉**当前的有意行为**:点图开灯箱、点遮罩关灯箱。
             page.click(".shotcard img")
-            zoomed = page.evaluate(
-                "() => document.querySelector('.shotcard img').classList.contains('zoom')")
-            page.click(".shotcard img")
-            restored = page.evaluate(
-                "() => document.querySelector('.shotcard img').classList.contains('zoom')")
-            if not zoomed:
-                failures.append("点图没放大(缺 zoom class)")
-            if restored:
-                failures.append("再点没还原")
+            page.wait_for_selector("#imgLightbox.show")
+            if page.evaluate(
+                    "() => document.querySelector('.shotcard img')"
+                    ".classList.contains('zoom')"):
+                failures.append("点图不该再切行内 .zoom —— 它已被灯箱取代")
+            # 关灯箱用那颗显式的 ✕(`#ilClose`,title 写着「关闭(或按 Esc)」)。
+            # **不点遮罩本身**:`page.click("#imgLightbox")` 点的是元素**中心**,而中心
+            # 是 `.il-stage`(图所在那一层),而前端的关灯箱判据是
+            # `e.target === imgLightbox` —— 只有点在**边缘**空白处才算。用中心点去测
+            # "点遮罩关灯箱"会红一条假的,而那条假的看起来像界面坏了。
+            page.click("#ilClose")
+            page.wait_for_timeout(250)
+            if page.evaluate(
+                    "() => document.getElementById('imgLightbox')"
+                    ".classList.contains('show')"):
+                failures.append("点 ✕ 后灯箱没关")
 
             ev(type="finish_stream")
             ev(type="busy", value=False)

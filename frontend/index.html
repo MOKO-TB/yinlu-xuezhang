@@ -910,7 +910,8 @@ try {
                   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .shotcard img{ display:block; max-width:100%; max-height:360px; border-radius:8px;
                  border:1px solid var(--line-soft); cursor:zoom-in; background:#fff; }
-  .shotcard img.zoom{ max-height:none; cursor:zoom-out; }
+  /* `.shotcard img.zoom` 这条规则随行内放大一起撤了(v0.9.147 之后):
+     现在点对话里任何一张图都由 `#chat` 那条委托开灯箱,没有谁再切 `.zoom`。 */
 
   /* ---------------- 输入区 ---------------- */
   .composer{ border-top:1px solid var(--line-soft); background:var(--glass);
@@ -4381,7 +4382,13 @@ window.__gcodeEvent = function (e) {
           "🖼️ " + (e.title || "页面截图") + (e.url ? "  ·  " + e.url : "");
         const img = card.querySelector("img");
         img.setAttribute("src", e.path);
-        img.addEventListener("click", () => img.classList.toggle("zoom"));
+        // **这里从前还挂着一句 `img.classList.toggle("zoom")`(v0.9.05 的行内放大)。**
+        // 后来 `#chat` 上加了事件委托(见下面「对话区任何 img 点开灯箱」那一段),于是
+        // 同一张截图被**两个互相打架的行为**同时接住:点一下既开灯箱、又在底下切一个
+        // 看不见的 `.zoom`;而灯箱是全屏遮罩,第二次点击根本到不了图 —— 表现是
+        // `scripts/e2e_browser_shot.py` 在那里**无限重试到超时**(实测 Playwright 报
+        // 「`<div class="il-stage">` intercepts pointer events」)。
+        // 灯箱本来就是"对话区任何 img"的意图,所以行内那一条撤掉,由委托统一管。
         c.wrap.insertBefore(card, c.wrap.querySelector(".acts"));
         fixImages(card);
         toBottom();
