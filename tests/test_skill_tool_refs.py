@@ -34,6 +34,11 @@ PIN = {
     "plan",
     # v0.9.102:repo-wiki 的生成流程以 repo_outline 起步(工具真实存在,确认过加进清单)
     "repo_outline",
+    # v0.9.144:scientific-figure-making 收编进仓库时补入。它引这两只都是**刻意**的:
+    # 正文第 17 行把 render_chart 写成「只是随手看个趋势就别上这套」的对照,第 32 行用
+    # glob 找 figure_kit.py 的真实路径(技能可能装在应用目录,不能假设相对路径)。
+    # 两个工具都真实存在,确认过加进清单。
+    "glob", "render_chart",
 }
 
 _SNAKE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
