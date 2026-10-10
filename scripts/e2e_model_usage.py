@@ -113,6 +113,31 @@ window.pywebview = {{
 """
 
 
+def _obsolete_reason(page) -> str:
+    """这支脚本验的那套交互还在不在;回空串 = 在,可以往下跑。
+
+    v0.9.03 的「模型管理」是**一张表单**:填名字 / 接口 / Key / 模型名,点保存。
+    现在(`frontend/index.html`)是**供应商清单 + 详情面板**:`#provList` 里一行一个
+    `.prov-item`,模型在详情里逐个管。实测的差别:
+
+    | 旧脚本要的 | 现状 |
+    |---|---|
+    | `.prov-row`(每行) | **0 命中** —— 现在的行类是 `.prov-item` |
+    | `.buitag`(内置标) | **0 命中** —— 现在写在 `.pi-n` 的文字里 |
+    | `#pvModel`(模型名输入框) | **0 命中** —— 模型不再从这张表单加 |
+
+    所以它不是"选择器改名",是**它验的那套流程整个不在了**。返回一句人话,让调用方
+    用**与"跑挂了"不同的退出码**说出去 —— 这正是 `HANDOFF.md` §6 那条老账
+    (「'测试没跑'和'跑挂了'必须在输出里长得不一样」)要求的样子:
+    从前它表现成**一次 30 秒的 `wait_for_selector` 超时**,看的人只会以为界面坏了。
+    """
+    if page.eval_on_selector_all(".prov-row", "els => els.length") == 0 and \
+       page.eval_on_selector_all(".prov-item", "els => els.length") > 0:
+        return ("「模型管理」已从「一张表单」改成「供应商清单 + 详情面板」,"
+                "`.prov-row` / `.buitag` / `#pvModel` 都不在了")
+    return ""
+
+
 def main() -> int:
     from playwright.sync_api import sync_playwright
 
@@ -137,7 +162,18 @@ def main() -> int:
             # --- 1. 模型管理弹窗:内置行不可删、无 key 输入 ---
             page.click("#modelPill")
             page.wait_for_selector("#provOverlay.show")
-            page.wait_for_selector(".prov-row")
+            # 先问一句"我验的那套交互还在不在" —— 不在就**以 2 退出**,不是 1。
+            # 1 = 跑挂了(界面坏了),2 = 已过时(这支脚本该退休了),两者必须在输出里
+            # 长得不一样(HANDOFF §6 那条老账)。从前它在这里干等 30 秒然后超时。
+            reason = _obsolete_reason(page)
+            if reason:
+                print(f"\n跳过(已过时):{reason}")
+                print("当前模型配置界面的覆盖在 scripts/shot_model_dialog.py"
+                      "(真点 #provList .prov-item)与 scripts/e2e_ui_v09142.py(智能配置)。")
+                print("**请决定:删掉这支,还是按现在的流程重写。** 在此之前它不会"
+                      "再以'超时'的样子出现 —— 那是这一条最坏的形态:看着像界面坏了。")
+                return 2
+            page.wait_for_selector(".prov-item")
             rows = page.eval_on_selector_all(".prov-row", "els => els.length")
             del_btns = page.eval_on_selector_all(
                 ".prov-row .del", "els => els.length")

@@ -51,20 +51,36 @@ class UI:
 
 
 class Session:
+    """只留一个消息列表的最小替身(**不落盘** —— 真 `Session` 会写 `sessions/*.jsonl`)。
+
+    **每个方法都收 `**kw`,而且这不是随手写的宽容。** 这个替身漂过一次,代价是
+    整条验证链暗掉:真 `Session.add_tool_result` 后来多了 `elapsed_ms` / `hook_ms`
+    两个可选参数,而这里没跟上 —— 于是 `agent._account` 抛 `TypeError`,整支脚本
+    崩在 `run_turn` 里,**注入防御那条端到端验证连着好几轮根本没跑过**,而人只看到
+    "脚本红了"。
+
+    同族的第二例:`scripts/e2e_bg_jobs.py` 的 `RecordingLLM` 少收 `fallback_provider_id`
+    与 `on_fallback`,同样被 `run_turn` 的 `except Exception` 吞成"模型报错"。
+    两例记在 `HANDOFF.md` §6 第 57 条。
+
+    所以这里的规矩是:**替身只保证"消息进得去、读得出",协议长参数是它不该关心的事**
+    —— 真类新增可选参数时,`**kw` 让它当场继续跑,而不是把一条安全验证链静默关掉。
+    """
+
     def __init__(self):
         self.messages = [{"role": "system", "content": "s"}]
 
-    def add_user(self, text, content=None):
+    def add_user(self, text, content=None, **kw):
         self.messages.append({"role": "user", "content": text})
 
-    def add_assistant(self, turn):
+    def add_assistant(self, turn, **kw):
         self.messages.append({"role": "assistant", "content": turn.text or ""})
 
-    def add_tool_result(self, cid, name, result):
+    def add_tool_result(self, cid, name, result, **kw):
         self.messages.append({"role": "tool", "tool_call_id": cid,
                               "name": name, "content": result})
 
-    def replace_messages(self, msgs):
+    def replace_messages(self, msgs, **kw):
         self.messages = msgs
 
 

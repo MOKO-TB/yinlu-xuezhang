@@ -5,11 +5,20 @@
 然后按后端真实事件顺序推事件:
 
     1. map {op:'focus', items:[真楼]}  → 地图应弹开并画出标注框
-    2. cleared {session:'s2'}         → 地图应清零并收起(B12 的修复点)
+    2. cleared {session:'s2'}         → **标注框**应清零、面板收起、搜索与副标题复位
 
-判据用 DOM 事实,不看截图:`.cm-box` 数量、面板 open class、搜索框内容。
+⚠ **图钉不在这条"该清零"的清单里,而且这是有意的**(v0.9.44 起):图钉是用户亲手钉的
+长期标记(集合点/约见位置),落 localStorage,关窗/换会话/第二天再来都还在;标注框才是
+"这一轮对话的临时高亮"。两份账刻意分开 —— `frontend/map.js:37-42` 那段说明写着
+「reset() 只清标注框,不动图钉」。
 
-跑法(项目根目录):
+**这一条曾经是这支脚本最大的坑**:它从前断言"切会话后图钉也该清零"(B12 时代的口径),
+v0.9.44 改了设计而这里没跟着改,于是**从那以后一直是红的**;而它要真浏览器、没人顺手跑,
+红了好几轮没人知道。现在钉的是**当前的有意设计**:切会话后图钉数量与切换前**一模一样**。
+
+判据用 DOM 事实,不看截图:`.cm-box` / `.cm-pin` 数量、面板 open class、搜索框内容。
+
+跑法(项目根目录,需要真 Chromium):
     .venv\\Scripts\\python.exe scripts\\e2e_map_reset.py
 
 退出码 0 = 通过;1 = 有断言失败(会打印明细)。
@@ -151,8 +160,14 @@ def main() -> int:
 
             if after["boxes"]:
                 failures.append(f"B12 未修复:切会话后仍留着 {after['boxes']} 个标注框")
-            if after["pins"]:
-                failures.append(f"B12 未修复:切会话后仍留着 {after['pins']} 个图钉")
+            # 图钉**有意不清**(v0.9.44 起):它是用户亲手钉的长期标记,落 localStorage,
+            # 关窗/换会话/第二天再来都还在;标注框才是"这一轮对话的临时高亮"。
+            # 两份账刻意分开 —— 见 `frontend/map.js:37-42`。所以这里钉的是"**没被动过**",
+            # 而不是"被清掉了":数量必须与切换前一模一样(多一枚少一枚都是回归)。
+            if after["pins"] != pins_before:
+                failures.append(
+                    f"图钉不该被会话切换动过:切前 {pins_before} 枚、切后 {after['pins']} 枚"
+                    "(v0.9.44 起图钉是用户的长期标记,`map.js` 的 reset() 只清标注框)")
             if after["panel"]:
                 failures.append("B12 未修复:切会话后地图面板仍处于打开状态")
             if after["search"]:
