@@ -77,6 +77,45 @@ def is_wrapped(text: str) -> bool:
 
 INJECTION_LOG_CAP_LINES = 500   # v0.9.66:留排查现场,但别无限长
 
+# --------------------------------------------------------------- 门名全集(M6)
+# 这份日志里 `gate` 那一列的**取值域**。它来自两处完全不同的地方:
+#
+# ① `PermissionGate._ask(kind)` 报出来的门名(11 个):`script` / `outside_command` /
+#    `outside_path` / `credential` / `git` / `net` / `sandbox_command` / `external` /
+#    `project_rule` / `unread` / `mode` —— 经下面 `SECURITY_LOG_GATES` 映射后落进来;
+# ② 直接调 `log_escalation("…")` 的那几处:`remember_grant` / `project_allow` /
+#    `project_deny` / `hook_rewrite` / `hook_answer`,外加 `--mcp-serve` 那条路
+#    拒掉外部客户端时的 `reject`。
+#
+# **为什么要有这一份**:在 v0.9.150 之前,想知道"日志里 `gate` 都可能是什么",
+# 只能把全仓 grep 一遍 —— 而这份日志的读者恰恰是**事后排查的人**(分发出去的程序
+# 没有遥测,这是唯一的事后线索),他手上通常没有源码可 grep。
+#
+# **这份名单不会静默过期**:`tests/test_provenance_kinds.py` 从源码里正则取出每一处
+# `_ask("X")` 与 `log_escalation("X"` 的字面量,逐个对账。新增一个门名却忘了登记,
+# 红的是那支针,而不是"日志里多了一个没人认识的词"。
+GATE_KINDS = frozenset({
+    "script", "outside_command", "outside_path", "credential", "git", "net",
+    "sandbox_command", "external", "project_rule", "unread", "mode",
+    "remember_grant", "project_allow", "project_deny", "hook_rewrite",
+    "hook_answer", "reject",
+    # `escalation` 只作为**取值**出现,不作为门名被调用 —— 它是 `external` 在日志里
+    # 的别名(见下),所以上面那两处都取不到它。
+    "escalation",
+})
+
+# 门名 → 日志里那一列的名字(`Agent._log_security_ask` 用,v0.9.123 起)。
+#
+# **只有一条真映射**(`external` → `escalation`),其余是恒等。它是历史:外部内容
+# 升格门最早就叫 `escalation`,日志里已经有一批老行是那个词,改名会让新旧线索对不上。
+# `credential` 那条恒等是**刻意留着的** —— 它属于"必须问人、不许钩子代答"那三类
+# (`Agent.NON_DELEGABLE_ASKS`)之一,写出来是为了让这张表自己说清"哪几个是稳定的旧词"。
+#
+# **它住在这一侧而不是 `agent.py`**:这张表描述的是"日志里会出现哪些词",
+# 与 `GATE_KINDS` 是同一件事的两半,分住两个文件就会漂 —— 而漂的表现是
+# "日志里出现一个全集里没有的词",正是这份清单要防的那种静默失效。
+SECURITY_LOG_GATES = {"credential": "credential", "external": "escalation"}
+
 
 def log_escalation(gate_name: str, tool_name: str, args: dict, note: str,
                    choice: str, client: str = "") -> None:

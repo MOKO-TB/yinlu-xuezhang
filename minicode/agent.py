@@ -79,12 +79,9 @@ HARD_REJECT_NOTE = (
 # 拆掉另一只手刚装的门。
 NON_DELEGABLE_ASKS = ("credential", "git", "external", "project_rule")
 
-# 安全日志(M6)里「是哪条门过的问」这一列。**由 ask_kind 派生,不从文案猜**:
-# `_ask` 的 docstring 早就写着为什么 —— 靠匹配文案,改一个字判定就悄悄失效,
-# 而且没有任何一条测试会红(H3 之前正因为如此,三类红线门只能靠"密钥"二字猜)。
-# 旧的两个词留着不动(已经有人按它们读这份事后线索):`credential` 与 `escalation`;
-# 其余门不再挤进一个笼统的 escalation —— 它们各自叫什么,`permission.py` 里已经说了。
-SECURITY_LOG_GATES = {"credential": "credential", "external": "escalation"}
+# 安全日志(M6)里「是哪条门过的问」那一列的名字,现在住在 `provenance.py`
+# (`SECURITY_LOG_GATES` + `GATE_KINDS`,v0.9.150 搬过去):那张表描述的是"日志里
+# 会出现哪些词",与日志本体是一件事,分住两个文件迟早会漂。
 
 # 超长工具输出的转存(对标 Claude 的 MCP 落盘 / ZCode 的 artifactPath)。
 # 目录开在**工作区里**是刻意的:模型要用 `read_file` 把尾巴读回来,而越界的那条路
@@ -1687,7 +1684,7 @@ class Agent:
         """
         try:
             from minicode import provenance
-            gate = SECURITY_LOG_GATES.get(kind) or kind or "escalation"
+            gate = provenance.SECURITY_LOG_GATES.get(kind) or kind or "escalation"
             provenance.log_escalation(gate, tool.name, args, note, choice)
         except Exception:
             pass

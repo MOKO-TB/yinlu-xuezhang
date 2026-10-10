@@ -678,7 +678,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.scores_import": ("ScoresFlow", "_read_scores"),
     # ---- v0.9.18:注入防御(provenance 是函数内 import,必须核它真进包了) ----
     "minicode.provenance": ("wrap", "strip_marks", "is_external",
-                            "contains_external", "log_escalation"),
+                            "contains_external", "log_escalation",
+                            # v0.9.150 门名全集与那张映射搬到了这一侧(见 §2 那一行)。
+                            # 漏 `SECURITY_LOG_GATES` = 包内又退回"从文案里猜密钥二字",
+                            # git / project_rule 全被记成 escalation —— 事后线索把答案
+                            # 扔了,而没有任何一处会红;漏 `GATE_KINDS` = 那份"日志里
+                            # 可能出现哪些词"的全集在装好的包里不存在,而这一列的读者
+                            # 恰恰是**手上没有源码**的事后排查人。
+                            "SECURITY_LOG_GATES", "GATE_KINDS"),
     "minicode.sandbox": ("SECRET", "is_credential_filename",
                          "command_hits_credential", "command_hits_network",
                          # v0.9.129 命令层「两层都扫不到」那一类(漏 `command_hits_stealth`
@@ -875,10 +882,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        "_matched_config_hook", "_apply_hook_input", "_hook_blocked_text",
                        "_log_hook_rewrite", "_note_hook_health",
                        "_ask_via_permission_hook", "NON_DELEGABLE_ASKS",
-                       # v0.9.123 安全日志里"是哪道门问的"那一列(漏 SECURITY_LOG_GATES
-                       # = 包内又退回"从文案里猜密钥二字",git / project_rule 全被记成
-                       # escalation —— 事后线索把答案扔了,而没有任何一处会红)
-                       "SECURITY_LOG_GATES", "_log_security_ask",
+                       # v0.9.123 安全日志里"是哪道门问的"那一列 —— **v0.9.150 起
+                       # 那张表与门名全集搬到了 `minicode.provenance`**(见那一组),
+                       # 这里只留"谁来用"这半截:`_log_security_ask`。
+                       "_log_security_ask",
                        # v0.9.133 P0-1 那支笔(漏 `_note_read_path` = 判定与账都在门里,
                        # 却没有任何地方往里记 → 读过的文件照样被问,而这枚钉看起来是装的;
                        # 漏 READ_NOTED_TOOLS = 名单漂了没人知道,写成功不再算读过)
