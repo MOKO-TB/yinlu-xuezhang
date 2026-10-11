@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from minicode.tools import (catalog_files, catalog_bg, catalog_diag, catalog_web,
                             catalog_knowledge, catalog_media, catalog_campus,
-                            catalog_remind, catalog_places)
+                            catalog_remind, catalog_places, catalog_sub)
 from minicode.tools import concurrency
 from minicode.tools.base import Tool
 
@@ -53,6 +53,8 @@ def build_default_registry() -> list[Tool]:
         *catalog_knowledge.memory_tool(),
         *catalog_remind.remind_tools(),
         *catalog_places.map_tools(),
+        # v0.9.154 I:子代理 → 主会话留话(只读;只有子代理那边有对象可转达)
+        *catalog_sub.tools(),
     ]
     concurrency.mark_concurrent(tools)   # 资格表在 tools/concurrency.py
     return tools

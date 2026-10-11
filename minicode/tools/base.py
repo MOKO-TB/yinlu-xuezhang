@@ -30,6 +30,13 @@ class ToolContext:
     # 子代理的 ctx 由 dc_replace 派生、字段原样保留 —— 但 export_trace 已从子代理
     # 工具集摘掉(轨迹归主对话,子代理导出父会话是张冠李戴)。
     session: Any | None = None
+    # 往主会话留一句话的入口(I,v0.9.154,`notify_parent` 那只工具用)。
+    # **只有子代理的 ctx 上才不为 None** —— 由 `run_subagents.run_subagent` 在
+    # `dc_replace` 那里**显式**写上去(父 ctx 上它是空的:主会话自己调那只工具
+    # 会变成自言自语,所以那条路要在 handler 里如实说"你就是主会话")。
+    # 值是主代理 `Agent.queue_note` 这个可调用对象,不是字符串 —— 收不收得下、
+    # 带不带锁由主代理那一边说了算,这里只负责递。
+    notify_parent: Any | None = None
 
 
 Handler = Callable[..., str]  # 签名: handler(ctx, **kwargs) -> str

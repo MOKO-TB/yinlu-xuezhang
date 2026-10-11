@@ -456,7 +456,8 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
                  llm, ui, config: Config, registry: list[Tool],
                  undo_stack: list | None = None,
                  file_locks: "_BatchFileLocks | None" = None,
-                 route_label: str = "") -> str:
+                 route_label: str = "",
+                 notify: dict | None = None) -> str:
     """跑一个子代理,返回它的最终文字报告(不含前缀)。异常收敛成报告文本。
 
     `undo_stack` 是**主代理的回滚栈**(v0.9.53):implement 子代理写坏文件时,
@@ -466,6 +467,12 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
     `file_locks` 是**批次级文件占用表**(v0.9.98,并行写的程序闸):并行批次
     给所有路传同一个实例,每路带上自己的路标签;单发与串行不传(None) ——
     没有并行就没有竞争,不白挂一层。
+
+    `notify` 是**主代理那个信箱入口的容器**(I,v0.9.154):里面那个 `enqueue`
+    就是主代理的 `Agent.queue_note`。为什么是容器而不是函数本身 —— 与
+    `undo_stack` 同一个理由:`task` 工具是**装配时**造的,那时主 Agent 还没建,
+    所以只能先递容器、等 Agent 建好再往里放。容器还空着(或没传)时子代理的
+    `notify_parent` 会如实回一句"这里没有可以转达的对象"。
     """
     from minicode.app_setup import build_system_prompt  # 延迟导入避免循环
     # 子代理不参与跨天重建:`_refresh_clock` 只在 `run_turn` 开头查一次,而子代理
@@ -483,6 +490,14 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
         # 连确认框都不会弹。副作用是良性的:子代理 new_turn 会清掉主代理
         # "本回合批准过的工作区外路径"(会话级批准保留),主代理下次访问
         # 重新确认一次,方向安全。
+        # 子代理能不能给主会话留话(I,v0.9.154):入口从 `build_task_tool` 持有的
+        # 那个**容器**现取 —— 装配时主 Agent 还没建,所以递不进来一个可调用对象,
+        # 只能递容器(与上面 `undo_stack` 同一个理由、同一条先例)。
+        # **显式写、不吃继承**:父 ctx 上那个字段必须是空的(主会话自己调那只工具
+        # 要得到"你就是主会话"那句如实回话),继承过来就会变成"自己也给自己发"。
+        enqueue = (notify or {}).get("enqueue")
+        sub_ctx = dc_replace(ctx, ui=ui,
+                             notify_parent=enqueue if callable(enqueue) else None)
         sub_agent = Agent(
             llm=llm,
             registry=(
@@ -500,7 +515,7 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
             # 并行批次里几路子代理的 bash 进度就会**盖到父会话「此刻」那一行**上
             # (那一行写的是父会话最深一层在跑的东西)—— 串味的进度等于假进度。
             # 静默那一路(`_QuietUI`)本来就吞掉 tool_start/tool_done,现在进度走同一条闸。
-            ctx=dc_replace(ctx, ui=ui),
+            ctx=sub_ctx,
             max_steps=spec.steps or MAX_SUB_STEPS,
             # H4:子代理不叫 session_start/user_prompt_submit —— 它拿到的是任务文本,
             # 不是一次用户开的会话;叫了会让"每次开一句话说一句"的钩子每路各冒一次。
@@ -695,11 +710,16 @@ def _merge_reports(pairs: list[tuple[SubAgentSpec, str, str]],
 
 def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                     registry: list[Tool],
-                    parent_undo: list | None = None) -> Tool:
+                    parent_undo: list | None = None,
+                    parent_inbox: dict | None = None) -> Tool:
     """构造 task 工具,闭包持有主 Agent 的 LLM/UI/配置。
 
     `parent_undo` 是主代理回滚栈的**引用**(同一个列表对象,v0.9.53):
     implement 子代理的写快照进这个栈,主代理 /undo 才撤得掉子代理的改动。
+
+    `parent_inbox` 是**主代理信箱入口的容器**(I,v0.9.154):装配时主 Agent 还没建,
+    所以先递容器、等 Agent 建好由 `app_setup` 往里放 `queue_note`(与 `parent_undo`
+    同一条先例)。容器空着时子代理的 `notify_parent` 会如实说"这里没有可以转达的对象"。
     """
     # 按档位分模型(v0.9.95):一个模型名一份客户端,同一个档位反复派活不该每次
     # 都新建一条 httpx 连接。客户端的构造规则在 `LLMClient.scoped` 一处。
@@ -788,7 +808,7 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             sub_llm, used_model, mnote = route_llm(spec.type)
             report = _await([lambda: run_subagent(
                 ctx, spec, text, sub_llm, ui, config, registry,
-                undo_stack=parent_undo)], limit)[0]
+                undo_stack=parent_undo, notify=parent_inbox)], limit)[0]
             timed_out = report is None
             if timed_out:
                 report = _timeout_note(limit)
@@ -844,6 +864,7 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                 config, registry,
                 undo_stack=parent_undo,
                 file_locks=file_locks,
+                notify=parent_inbox,
                 route_label=f"第{i + 1}路[{s.type}]"))
             for idx, (spec, text, _note) in enumerate(specs)], limit)
         pairs = [(spec, text, rep if rep is not None else _timeout_note(limit))

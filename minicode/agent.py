@@ -96,6 +96,10 @@ TOOL_PARALLEL_MAX = 4
 # 信箱上限是兜底不是判据:正常情况一两步就清空,攒到顶说明这一轮里有一步跑了很久,
 # 那时再多收只会把用户的话压进他看不见的地方 —— 界面据此回一句"排队满了"。
 INBOX_MAX = 8
+# 子代理留话的上限(I,v0.9.154)。与 `INBOX_MAX` **分开两个常量**,因为它们是两种东西:
+# 那一边是"用户补的话"(收不下由界面回一句"排队满了",用户看得见);
+# 这一边是"子代理的提醒"(收不下必须写进**它自己的工具结果**,它才不至于以为提醒过了)。
+NOTE_MAX = 8
 
 FAIL_STREAK_NOTE = ("同一个工具调用已经连续失败 3 次,结果都一样,继续原样重试没有意义。"
                     "这一次不许再调用工具。请向用户如实说明:卡在哪一步、每次失败的具体原因"
@@ -238,6 +242,11 @@ class Agent:
         # 不要求"回合已经开过",直接调它就该成功,否则表现是 AttributeError。
         self._inbox: list[str] = []
         self._inbox_lock = threading.Lock()
+        # 子代理留给主会话的话(I,v0.9.154)。**与上面那条信箱不是一条路** ——
+        # 理由写在 `queue_note` 的 docstring 里(那条路落进留档时是 `role: user`)。
+        # 同样带锁:子代理跑在**另一个线程**上,而 `_pending_prior` 是个裸字符串。
+        self._notes: list[str] = []
+        self._notes_lock = threading.Lock()
 
     # 「最近一次默认那一路」的读取位:界面替身、测试与 add_tool_result 都从这里取
     # (读的是 `_last_timing` 这一份,不是散着的两个字段)。写也走这里 —— 那等于
@@ -282,6 +291,47 @@ class Agent:
                 return False
             self._inbox.append(clean)
         return True
+
+    def queue_note(self, text: str) -> bool:
+        """收一句**子代理留给主会话的话**(I,v0.9.154),回它有没有进信箱。
+
+        **它与上面那条插话信箱不是一条路,而这正是这一条存在的全部理由。**
+        `queue_interjection` 落进会话时做的是 `session.add_user(...)`(见 `_take_inbox`)
+        —— 那是给**用户自己**补的话写的,所以他本来就是 `user`。子代理的提醒走那条路,
+        在留档里会变成"用户说过的话",而模型会把它当"用户刚提的要求"。
+        这正是这个仓库反复清退的坏法(与"`--output-schema` 那句绝不并进用户原话"
+        同一条根:**机器加的东西不许冒充人话**)。
+
+        所以它走 `_pending_prior` 那条**系统侧、只活一次请求**的通道 ——
+        与 `session_start` / `user_prompt_submit` / `stop` 三个事件钩子附话
+        **走的是同一条**(`_collect_event_hook` 也往那里追加)。
+
+        **为什么带锁**:子代理跑在另一个线程上,而 `_pending_prior` 是个裸字符串 ——
+        直接往那儿写就是数据竞争。
+
+        收不下(空 / 超 `NOTE_MAX`)时回 `False`,**调用方必须把这件事说进子代理的
+        工具结果**:子代理看不见用户那一侧,不说的话它会以为自己提醒过了。
+        """
+        clean = " ".join(str(text or "").split())
+        if not clean:
+            return False
+        with self._notes_lock:
+            if len(self._notes) >= NOTE_MAX:
+                return False
+            self._notes.append(clean)
+        return True
+
+    def _take_notes(self) -> str:
+        """把子代理留的话取空并拼成一段(没话回空串)。
+
+        **每条都带「子代理留话」这个前缀**:模型要分得出这句话是谁说的 ——
+        一条没有出处的注记,它只能猜。
+        """
+        with self._notes_lock:
+            if not self._notes:
+                return ""
+            items, self._notes = self._notes, []
+        return "\n".join(f"〔子代理留话〕{t}" for t in items)
 
     def _take_inbox(self) -> int:
         """把信箱里的话按先后并进会话,回并进去几条(0 = 本来就空)。
@@ -698,6 +748,13 @@ class Agent:
         if brief:
             out.append({"role": "user", "content": brief})
         prior = self._pending_prior
+        # 子代理留的话(I,v0.9.154)走**同一个出口**:它也是"系统侧、只活一次请求"的
+        # 注记,而**不能**走插话那条(那条到留档里是 `role: user`,见 `queue_note`)。
+        # **先取空再拼**:不管下面走不走注入,那几句都已经消费掉了,不会攒着在
+        # 以后某一轮突然冒出来 —— 攒着的话,"什么时候看到的"就说不清了。
+        notes = self._take_notes()
+        if notes:
+            prior = f"{prior}\n{notes}".strip() if prior else notes
         # 回合级的输出要求(`--output-schema` 附的那句)与 `_pending_prior` **走同一个
         # 注入点但活得更久**:先验只在这次请求里(用完即清,否则同一条会在每一步重复
         # 出现),而"只输出一个合 schema 的 JSON"必须每一步都说 —— 模型往往先调几轮

@@ -72,6 +72,9 @@ ORDER = [
     "export_ics",
     "map_find_place", "map_show_list", "map_highlight_building", "map_drop_pin",
     "map_clear",
+    # v0.9.154 I:子代理 → 主会话留话。排在**最后**:只有子代理那边有对象可转达,
+    # 主会话调它得到的是"你就是主会话"那句如实回话 —— 它不是常用路,不该占前面。
+    "notify_parent",
 ]
 
 CATALOGS = sorted(TOOLS_DIR.glob("catalog_*.py"))
@@ -114,7 +117,7 @@ def test_order_pin_is_not_stale():
     v0.9.96 加 `ask_user` 时它的位置就钉在 `plan` 后面 —— 模型每轮拿到的 tools 数组
     是这个顺序,挪位置等于改行为面,所以新工具插在谁后面都要在这里写明。
     """
-    assert len(ORDER) == len(set(ORDER)) == 61      # v0.9.147:60 + diagnostics
+    assert len(ORDER) == len(set(ORDER)) == 62      # v0.9.154:61 + notify_parent
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 
@@ -150,8 +153,11 @@ def test_registry_is_assembly_only():
         f"registry.py 又长到 {len(src.splitlines())} 行,它只该管装配顺序"
     # v0.9.98:catalog_remind 从 catalog_campus 拆出来,6 份 → 7 份
     # v0.9.146:catalog_bg 从 catalog_files 拆出来(它撞上了下面那道 400 行的闸),
-    # 7 份 → 8 份;v0.9.147:catalog_diag(诊断)是主动新开的一份,8 份 → 9 份
-    assert len(CATALOGS) == 9, f"目录模块不是 9 份:{[p.name for p in CATALOGS]}"
+    # 7 份 → 8 份;v0.9.147:catalog_diag(诊断)是主动新开的一份,8 份 → 9 份;
+    # v0.9.154:catalog_sub(子代理 → 主会话留话)同样是主动新开的,9 份 → 10 份
+    # —— 它不属于现有任何一族(不是文件/网络/校园/知识库),塞进哪一份都是在改
+    # 那一份的语义。
+    assert len(CATALOGS) == 10, f"目录模块不是 10 份:{[p.name for p in CATALOGS]}"
 
 
 def test_no_catalog_is_a_new_hotspot():

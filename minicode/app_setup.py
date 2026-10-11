@@ -536,8 +536,12 @@ def build_runner_agent(config: Config, workspace: Path, ui, llm,
     # 把自己的栈替换成同一个对象 —— implement 子代理的写快照,主代理 /undo
     # 弹到的就是它,子代理改坏文件救得回来。
     undo_ref: list = []
+    # 主代理的信箱入口同样先建容器(I,v0.9.154,与 `undo_ref` 同一条先例):
+    # `task` 工具在**装配时**就要拿到它,而主 Agent 要到下面才建出来 ——
+    # 建好之后再把 `queue_note` 放进去。子代理的 `notify_parent` 就是从这里取的。
+    inbox_ref: dict = {}
     registry.append(build_task_tool(ctx, llm, ui, config, registry,
-                                    parent_undo=undo_ref))
+                                    parent_undo=undo_ref, parent_inbox=inbox_ref))
     session = Session(system_prompt=build_system_prompt(
         workspace, reply_style=getattr(config, "reply_style", "normal")),
                       log_dir=sessions_dir or SESSIONS_DIR,
@@ -556,6 +560,9 @@ def build_runner_agent(config: Config, workspace: Path, ui, llm,
         ctx=ctx,
     )
     agent._undo_stack = undo_ref
+    # 子代理 → 主会话那条路现在通了(I,v0.9.154):放进容器的是**方法本身**,
+    # 收不收得下、怎么加锁由 Agent 那一边说了算(这里只递,不判断)。
+    inbox_ref["enqueue"] = agent.queue_note
     return agent, session
 
 

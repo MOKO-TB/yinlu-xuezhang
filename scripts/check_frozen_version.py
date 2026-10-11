@@ -577,10 +577,17 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # ---- v0.9.39 #84:注册表按领域拆成 6 份目录(registry.py 只管装配顺序)----
     # 漏收一份 = 装好的包里**那个领域的工具整组消失**,而 build_default_registry()
     # 不报错(它只是拼不出那一段),模型侧表现是"这个能力没有了"。
-    "minicode.tools.registry": ("build_default_registry",),
+    "minicode.tools.registry": ("build_default_registry",
+                                # v0.9.154:漏 = 注册表不装配那一份目录,工具静默少一只
+                                "catalog_sub"),
     # v0.9.110:工具 schema 的并集类型收平在**唯一出口**上 —— 这条针漏了,
     # 包里就还是那份会把 LiteLLM 类网关打成 400 的旧 schema。
-    "minicode.tools.base": ("_flatten_schema_types", "_pick_type", "PathOutsideWorkspace"),
+    "minicode.tools.base": ("_flatten_schema_types", "_pick_type", "PathOutsideWorkspace",
+                            # v0.9.154 I:这个字段就是"子代理有没有人可转达"的开关。
+                            # 漏收 = 工具侧 `getattr(ctx, "notify_parent", None)` 永远是
+                            # None,主会话自己调会拿到"你就是主会话"那句**本意正确、
+                            # 此处错**的回话 —— 而子代理那边同样一句。
+                            "notify_parent"),
     "minicode.tools.catalog_files": ("tools", "perms_tools",
                          # v0.9.98:worktree 只读工具(漏收 = 模型看不到,
                          # "再开一份工作"只剩嘴上说)
@@ -629,6 +636,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.tools.catalog_campus": ("calendar_gpa",),
     "minicode.tools.catalog_remind": ("remind_tools",),
     "minicode.tools.catalog_places": ("library_tools", "map_tools"),
+    # v0.9.154 I:子代理 → 主会话留话那一只。漏收 = 装好的包里整只工具不在
+    # (源码态一切正常,而用户那边"子代理提醒不到我"这件事没有任何声音)。
+    "minicode.tools.catalog_sub": ("tools", "notify_parent", "NOTE_MAX_CHARS"),
     # v0.9.106:面板与 /history 共用的那份明细住在 compaction(见那处的针);
     # 这一只模块负责"一次读数拿到数与来源"(漏收 = 又开始各量一遍)
     "minicode.model_catalog": ("context_reading", "vision_forced",
@@ -867,6 +877,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.39:一轮总时限是真的在拦东西(漏收 = 配置文件里的数字没人读)
     "minicode.agent": ("run_turn", "turn_time_limited", "TASK_BUDGET_NOTE",
                        "DAILY_BUDGET_NOTE",
+                       # v0.9.154 I 子代理 → 主会话留话:漏 `queue_note`/`_take_notes`
+                       # = 装好的包里那条通道整个没有,而工具那一侧还在 —— 子代理调用
+                       # 会走到"找不到入口"的分支、回一句"这里没有可以转达的对象",
+                       # 看起来像"主会话那边满着",其实是包里少了一段。
+                       "queue_note", "_take_notes", "NOTE_MAX",
                        # v0.9.105 /rewind 点头前那一屏:预览与动手共用一份筛选
                        # (漏 rollback_preview = 命令行只能盲退;漏 _rollback_scope =
                        # 两处各筛一遍,总有一天预览说 2 处而实际退 1 处)
@@ -959,6 +974,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
         # v0.9.98:并行写的文件占用闸(漏收 = 装好的包里两路同写一个文件
         # 退回"后写覆盖先写",用户还看不见任何报错)
         "_BatchFileLocks", "_guard_write_tools", "_lock_key",
+        # v0.9.154 I:装配那一头的容器(漏 = 子代理的 `ctx.notify_parent` 永远是 None,
+        # 而工具和通道都好好的 —— 表现成"主会话收不到子代理的提醒"且没有任何报错)
+        "parent_inbox",
         "type_spec", "_await", "_timeout_note", "TYPE_KEYS",
                            "DOMAIN_KEYS",
                            # v0.9.60:批量放开写类型的两根支柱(漏收 = 混合批次
