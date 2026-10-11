@@ -49,6 +49,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from minicode import mcp_oauth
 from minicode.tools.base import Tool
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -97,6 +98,16 @@ class McpServerConfig:
     # 匹配意外的规则比没有规则更糟。
     allow_tools: list[str] = field(default_factory=list)
     deny_tools: list[str] = field(default_factory=list)
+    # OAuth 动态授权(C,v0.9.156):见 `minicode/mcp_oauth.py`。这里是**规范化之后**
+    # 的那份(键有 `type`/`token_url`/`client_id`/…),不合法时带一个 `problem`
+    # —— 带着 problem 的服务器**连不上并说清为什么**,而不是"没带头请求、报一个
+    # 看不懂的 401"。空字典 = 没配 oauth(走 `headers` 里的静态令牌那条老路)。
+    oauth: dict = field(default_factory=dict)
+    # **原文那一份** oauth(C,v0.9.156)。为什么两份都要留:`oauth` 里那个
+    # `client_secret` 是**展开过** `${ENV}` 的,而 `servers_to_raw` 会把配置回写 ——
+    # 拿展开后的那份回写等于**把密钥落进 config.json**(而它本来只活在环境变量里)。
+    # 所以回写用这一份、连接用上面那一份,各取所需。
+    oauth_raw: dict = field(default_factory=dict)
 
     @property
     def label(self) -> str:
@@ -163,6 +174,13 @@ def parse_servers(raw) -> list[McpServerConfig]:
         hdr_raw = item.get("headers")
         headers = ({str(k): str(v) for k, v in hdr_raw.items()}
                    if isinstance(hdr_raw, dict) else {})
+        oauth = mcp_oauth.parse_oauth(item.get("oauth"))
+        if oauth and transport == "stdio":
+            # stdio 服务器没有可注入的请求头 —— 令牌只能走子进程的环境变量。
+            # 与其"配了 oauth 却什么都不发生",不如说清该走哪条路。
+            oauth = {"problem": ("stdio 服务器没有可注入的请求头。令牌请用 `env` 里的 "
+                                 "`${ENV}` 静态带(`\"env\": {\"MCP_TOKEN\": \"${MY_TOKEN}\"}`);"
+                                 "`oauth` 这一块只对 http / sse 生效。")}
         out.append(McpServerConfig(
             sid=sid,
             command=command,
@@ -179,6 +197,9 @@ def parse_servers(raw) -> list[McpServerConfig]:
             headers=headers,
             allow_tools=_as_str_list(item.get("allow_tools")),
             deny_tools=_as_str_list(item.get("deny_tools")),
+            oauth=oauth,
+            oauth_raw=(dict(item.get("oauth"))
+                       if isinstance(item.get("oauth"), dict) else {}),
         ))
     return out
 
@@ -212,6 +233,10 @@ def servers_to_raw(servers: list[McpServerConfig]) -> list[dict]:
             item["allow_tools"] = list(s.allow_tools)
         if s.deny_tools:
             item["deny_tools"] = list(s.deny_tools)
+        # 回写**原文那一份**(`${ENV}` 还是 `${ENV}`)—— 见 `oauth_raw` 的注释:
+        # 拿展开过的那份回写就是把密钥落进 config.json。
+        if s.oauth_raw:
+            item["oauth"] = dict(s.oauth_raw)
         out.append(item)
     return out
 
@@ -253,6 +278,39 @@ class Transport:
     def tail(self) -> str:
         """最近一条排错线索(stderr / 网络错误原文);**不含密钥**。"""
         return ""
+
+    def _auth_headers(self) -> dict:
+        """oauth 那一层注进来的头(C,v0.9.156)。
+
+        **显式配置的 `Authorization` 优先**:用户在 `headers` 里自己写了一条,就按他的
+        来 —— `oauth` 是替他省事的那条路,不是覆盖他手写配置的那条路。
+
+        **这里不联网**:令牌在 `open()` 里就取好了(`_oauth_ready`),这里只读缓存。
+        在每一次请求里发一次取令牌的请求,等于**每一步都可能多花 20 秒**,而失败也只能
+        变成一条看不懂的传输错误。
+        """
+        if not self.cfg.oauth or self.cfg.oauth.get("problem"):
+            return {}
+        if any(str(k).lower() == "authorization" for k in self.cfg.headers):
+            return {}
+        token = mcp_oauth.cached(self.cfg.sid)
+        return {"Authorization": f"Bearer {token}"} if token else {}
+
+    def _oauth_ready(self) -> None:
+        """连接之前把令牌拿到手;拿不到就抛(`McpClient.start` 会收成 `self.error`)。
+
+        口径③:**拿不到令牌不许静默退化** —— 那台服务器就当连不上并说清是哪一步失败。
+        """
+        if not self.cfg.oauth:
+            return
+        problem = self.cfg.oauth.get("problem")
+        if problem:
+            raise McpError(f"「{self.cfg.sid}」的 oauth 配置有问题:{problem}")
+        try:
+            mcp_oauth.bearer(self.cfg.oauth, self.cfg.sid)
+        except mcp_oauth.OAuthError as e:
+            raise McpError(
+                f"「{self.cfg.sid}」取不到访问令牌,这台服务器连不上:{e}") from e
 
     def _warn(self, text: str) -> None:
         if callable(self._log):
@@ -477,7 +535,9 @@ class HttpTransport(Transport):
         return self._last
 
     def open(self) -> None:
-        pass                                  # HTTP 没有"连接"这一步:第一条请求就是探测
+        # HTTP 没有"连接"这一步:第一条请求就是探测。**但令牌要先拿到手**(C):
+        # 失败在这里报的是"这台服务器因为取不到令牌所以连不上",而不是一条 401。
+        self._oauth_ready()
 
     def request(self, msg: dict, timeout: float) -> dict:
         return self._post(msg, timeout, want_id=msg.get("id"))
@@ -503,11 +563,31 @@ class HttpTransport(Transport):
             h["Content-Type"] = "application/json"
         for k, v in self.cfg.headers.items():
             h[str(k)] = os.path.expandvars(str(v))
+        h.update(self._auth_headers())
         if self._session:
             h["Mcp-Session-Id"] = self._session
         return h
 
     def _post(self, msg: dict, timeout: float, want_id):
+        """发一次 POST;**oauth 那一层有一次自愈**(C,v0.9.156)。
+
+        401 时重取令牌再试**一次**:令牌可能在服务器那边提前作废了(时钟偏差、服务端
+        主动吊销),而重取一次就够了 —— 与 llm 那边"400 摘字段重发"同一个形状。
+        **不无限重试**:一个真的无权的服务器会被打两遍,而不是打到天荒地老。
+        """
+        try:
+            return self._post_once(msg, timeout, want_id)
+        except McpError as e:
+            if not self.cfg.oauth or "HTTP 401" not in str(e):
+                raise
+            mcp_oauth.forget(self.cfg.sid)
+            try:
+                mcp_oauth.bearer(self.cfg.oauth, self.cfg.sid, force=True)
+            except mcp_oauth.OAuthError as oe:
+                raise McpError(f"令牌过期后重取失败:{oe}") from None
+            return self._post_once(msg, timeout, want_id)
+
+    def _post_once(self, msg: dict, timeout: float, want_id):
         payload = json.dumps(msg, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(self.cfg.url, data=payload,
                                      headers=self._headers(), method="POST")
@@ -575,6 +655,7 @@ class SseTransport(_StreamedTransport):
         return self._last
 
     def open(self) -> None:
+        self._oauth_ready()                   # C:令牌先拿到手,连不上就报这一句
         self._thread = threading.Thread(target=self._listen, daemon=True,
                                         name=f"mcp-sse-{self.cfg.sid}")
         self._thread.start()
@@ -606,6 +687,7 @@ class SseTransport(_StreamedTransport):
         h = {"Accept": "text/event-stream"}
         for k, v in self.cfg.headers.items():
             h[str(k)] = os.path.expandvars(str(v))
+        h.update(self._auth_headers())
         return h
 
     def _listen(self) -> None:

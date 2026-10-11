@@ -66,6 +66,21 @@
       "enabled": false,
       "read_only": true,
       "description": "示例:只有网址的 MCP 服务器。transport 可写 http(新式 Streamable HTTP)或 sse(老式 HTTP+SSE),留空则是 command 启动的 stdio 服务器。密钥写成 ${环境变量名},发请求时才展开,不会以明文落进 config.json"
+    },
+    {
+      "id": "oauth-demo",
+      "transport": "http",
+      "url": "https://example.com/mcp",
+      "oauth": {
+        "type": "client_credentials",
+        "token_url": "https://auth.example.com/token",
+        "client_id": "${MY_MCP_CLIENT_ID}",
+        "client_secret": "${MY_MCP_CLIENT_SECRET}",
+        "scope": "mcp.read"
+      },
+      "enabled": false,
+      "read_only": true,
+      "description": "示例:令牌会过期、要动态换的 MCP 服务器(v0.9.156)。连接前自动换一个 access_token 注进 Authorization,按 expires_in 提前 60 秒作废、过期自动再换;服务器回 401 时重取一次再试一次(只一次)。**只支持 client_credentials**:authorization_code 要在你机器上开回调端口、拉起浏览器把重定向接回来,本项目没做 —— 写了它会明确告诉你没实现,不会静默忽略。client_id / client_secret 同样写 ${环境变量名};headers 里自己写的 Authorization 优先于这一块。stdio 服务器用不了它(没有可注入的请求头),令牌请走 env。"
     }
   ],
   "session_keep_last": 0,

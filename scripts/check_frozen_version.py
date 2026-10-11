@@ -461,6 +461,17 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 半条记忆当完整句子用,而且整块丢掉项目级那批新的)
     # v0.9.126 并发资格表(漏收 = 包内没人知道哪几只工具能同跑,或更糟:默认全放)
     "minicode.tools.concurrency": ("CONCURRENT_SAFE", "mark_concurrent"),
+    # v0.9.156 C:MCP 的 OAuth 动态授权那一个模块。
+    # ⚠ **必须单开一组**:第一版我把这些名字挂在 `minicode.mcp` 那一组下面,而
+    # `mcp.py` 只是**引用**它们(`mcp_oauth.parse_oauth(...)`)—— 引用也会把名字
+    # 带进 `co_names`,于是那几根针**看着命中、其实什么都没钉**(`mcp.py` 里删掉整个
+    # 模块的调用它们照样绿)。**针要钉的是"定义在哪儿",不是"谁提过这个名字"。**
+    # 漏 `parse_oauth` = 配置里那段 `oauth` 一份都不认(而且不会报错:连 problem
+    # 都没人写);漏 `bearer`/`cached`/`forget` = 令牌取不到也换不了;
+    # 漏 `auth_header` = 头拼不出来;漏 `SUPPORTED_TYPES`/`RESERVED_TYPES` =
+    # "拒绝 authorization_code" 这件事整个不见了(它会退化成静默忽略)。
+    "minicode.mcp_oauth": ("parse_oauth", "bearer", "cached", "forget", "auth_header",
+                           "OAuthError", "SUPPORTED_TYPES", "RESERVED_TYPES", "_fetch"),
     "minicode.memory": ("prompt_section", "_fit_levels", "inject_line",
                         "MEMORY_CHAR_LIMIT"),
     "minicode.skills": ("SKILL_CHANNELS", "describe_channels", "create_skill",
@@ -1139,6 +1150,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.mcp": ("Transport", "StdioTransport", "HttpTransport", "SseTransport",
                      "make_transport", "_iter_sse", "_safe_url", "_usable_url",
                      "_norm_transport",
+                     # v0.9.156 C:OAuth 那一层接进来的三处。漏 `_oauth_ready` =
+                     # 包里连接时**不取令牌**(每一步请求都带不上 Authorization,
+                     # 表现是一串看不懂的 401);漏 `_auth_headers` = 取到了也不注进去;
+                     # 漏 `oauth_raw` = 回写配置时拿**展开过**的那份,
+                     # **把密钥落进 config.json**。
+                     "_oauth_ready", "_auth_headers", "oauth_raw",
                      # v0.9.61:断线重连与自助管理(漏收 = 服务器重启后工具全哑
                      # 到重启应用;「对话里加个 MCP 服务器」在包里做不到)
                      "McpTransportError", "restart", "probe_server",
