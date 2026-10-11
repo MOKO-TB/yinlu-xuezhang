@@ -337,6 +337,7 @@ class PublicApi:
         """「终端」面板:后台命令的状态与输出末尾(只读,不在这里下命令)。"""
         return self._b.get_terminal()
 
+
     def set_job_enabled(self, job_id: str, on: bool) -> dict:
         """开/关一个定时任务(关掉的不再自动到期跑,记账与这一屏仍列得出来)。"""
         return self._b.set_job_enabled(job_id, on)
@@ -1380,6 +1381,8 @@ class Bridge:
         from minicode.tools import shell
         return {"ok": True, **shell.terminal_facts()}
 
+
+
     def get_automation(self) -> dict:
         """「自动化」那一屏:本机登记了哪几个定时任务、下一次什么时候跑、上次跑出什么。
 
@@ -2016,7 +2019,11 @@ class Bridge:
                 "known": bool(got.get("known")),
                 "detected": bool(got.get("detected")),
                 "window": int(got.get("context_window") or 0),
-                "vision": bool(got.get("supports_vision")),
+                # v0.9.158:未知模型的视觉能力回 None(界面写"未探测"),不再借
+                # bool 的 False 冒充"不支持" —— 目录里没有的模型,谁也没问过,
+                # 把"没问过"说成"不支持"就是拿一句假话堵用户的嘴。
+                "vision": (bool(got.get("supports_vision"))
+                           if got.get("known") else None),
                 # 输出上限没有可解析的来源:智能配置下就是"不带 max_tokens,
                 # 交给服务端默认"。界面上写这句话,不写一个凭空数的数。
                 "max_out": 0,

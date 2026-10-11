@@ -1485,6 +1485,14 @@ try {
   .mcf-dialog.auto input, .mcf-dialog.auto select,
   .mcf-dialog.auto textarea, .mcf-dialog.auto .mcf-add{
     opacity:.45; pointer-events:none; }
+  /* v0.9.158:「探测一次」。它住在备注行里,且**必须保持可点** —— 上面那组
+     pointer-events:none 只列了 input/select/textarea/.mcf-add,不覆盖它:
+     灰掉的表单里唯一活着的按钮,就是目录外模型落数的路。 */
+  .mcf-probe{ flex:none; border:1px solid var(--line-soft); background:transparent;
+    border-radius:var(--r-full); color:var(--text-1); cursor:pointer;
+    padding:3px 11px; font-size:11.5px; }
+  .mcf-probe:hover{ background:var(--glass-lite); }
+  .mcf-probe:disabled{ opacity:.5; cursor:default; }
   .mm-note{ font-size:11px; color:var(--text-2); line-height:1.6; min-height:16px; }
   .mm-note.bad{ color:var(--danger); }
   .mm-note.good{ color:var(--ok,#2f9e6e); }
@@ -5134,6 +5142,10 @@ function renderModelRows(p) {
    留空的项一个字都不覆盖(探测与内置目录照旧),所以"打开看过但没改"
    不会把任何模型的行为改掉。 */
 let mcfTarget = null;
+/* v0.9.158:用户自己填的那一份。开着智能配置时表单上灰着的是**预览**(学长按探测/目录
+   回填的真实值),不是用户的话 —— 他填的数原样收在这里,保存带走的是这一份,
+   关掉开关就逐字放回表单。清空它等于替用户做一次不可逆的"我忘了我填过什么"。 */
+let mcfUserVals = null;
 
 function mcfRenderLevels(levels) {
   const box = $("mcfLevels");
@@ -5155,11 +5167,29 @@ function mcfOpen(p, m) {
   mcfRenderLevels(cfg.reasoning_levels || []);
   $("mcfParam").value = cfg.reasoning_param || "";
   $("mcfAuto").checked = cfg.auto_config === true;
+  mcfUserVals = mcfGrabVals();          // 先把"他自己填的"收好,再让预览盖上来
   $("mmCfgOverlay").classList.add("show");
   mcfApplyAuto();
 }
 
-/* 智能配置那一格:灰掉下面的输入框,并把"开了之后按什么走"摊开写。
+function mcfGrabVals() {
+  return { w: $("mcfWindow").value, o: $("mcfMaxOut").value,
+           v: $("mcfVision").value, p: $("mcfParam").value,
+           l: Array.from($("mcfLevels").children).map(i => i.value) };
+}
+
+function mcfSetVals(v) {
+  $("mcfWindow").value = v.w; $("mcfMaxOut").value = v.o;
+  $("mcfVision").value = v.v; $("mcfParam").value = v.p;
+  mcfRenderLevels(v.l || []);
+}
+
+/* 智能配置那一格(v0.9.158 重做):开了之后**把运行时真会用的那份数直接回填进
+   表单**(灰着的预览态),不再是只给一行小字 —— 之前那一版被用户点名"装饰板":
+   目录里没有的模型开了开关,表单一个数都不动,等于什么都没发生。现在:
+   - 目录/探测里**有** → 窗口、图片输入、推理档位当场落进表单,来源写在备注里;
+   - **没有** → 备注里给一颗「探测一次」,当场真发一条请求问这个模型,结论
+     (test_model 会 remember 落盘)回填表单,面板与运行时同刻生效。
    灰掉却不解释 = 界面上多了个看不懂的东西,那不如不做。 */
 function mcfApplyAuto() {
   const on = $("mcfAuto").checked;
@@ -5167,6 +5197,7 @@ function mcfApplyAuto() {
   if (box) box.classList.toggle("auto", on);
   const note = $("mcfAutoNote");
   if (!on) {
+    if (mcfUserVals) mcfSetVals(mcfUserVals);   // 把用户自己的那份放回表单
     note.className = "mcf-auto-note";
     note.textContent = "关着:下面填了什么就按什么走(留空的项才走探测/目录)。";
     return;
@@ -5181,20 +5212,68 @@ function mcfApplyAuto() {
       note.textContent = "开着,但这一屏没取到数 —— 保险起见先关掉自己填。";
       return;
     }
+    if (!r.known) { mcfShowUnknown(name); return; }
+    // 已知:回填真实值。max_out 与参数映射没有可解析的来源,留空 = 交给服务端默认,
+    // 与备注里那句"最大输出不限制"说的是同一件事,不写一个凭空的数。
+    mcfSetVals({ w: r.window ? String(r.window) : "", o: "",
+                 v: r.vision === null || r.vision === undefined ? "" : (r.vision ? "1" : "0"),
+                 p: "", l: r.levels || [] });
     const win = r.window ? ("窗口 " + r.window.toLocaleString()) : "窗口未知";
-    const vis = r.vision ? "图片输入:支持" : "图片输入:不支持";
+    const vis = (r.vision === null || r.vision === undefined)
+      ? "图片输入:未探测" : (r.vision ? "图片输入:支持" : "图片输入:不支持");
     const lev = (r.levels && r.levels.length)
       ? ("推理档位:" + r.levels.join("/")) : "推理档位:不给(交给服务端默认)";
-    note.className = "mcf-auto-note" + (r.known ? " on" : " warn");
+    note.className = "mcf-auto-note" + (r.detected ? " on" : "");
     note.textContent = "开着 → " + win + " · " + vis + " · " + lev
-      + " · 最大输出不限制。"
-      + (r.known ? (r.detected ? "(窗口来自这台机器实测的探测结果)" : "(来自内置目录)")
-                 : " —— 这个模型目录里没有、也没探测过,开着会退回配置里的默认窗口。"
-                   + "建议先点一次「测试」让它探一探,或关掉自己填。");
+      + " · 最大输出不限制。下面灰掉的是预览(运行时就按这份走),"
+      + "你自己填的那份原样收着,关掉开关就回来。"
+      + (r.detected ? "(窗口来自这台机器实测的探测结果)" : "(来自内置目录)");
   }).catch(() => {
     note.className = "mcf-auto-note warn";
     note.textContent = "开着,但问不到(桥没应答)—— 保险起见先关掉自己填。";
   });
+}
+
+/* 目录里没有也没探测过的模型:给一颗能真正落数的按钮,而不是只留一句"建议去点测试"
+   —— 那句话要用户自己出弹窗、找模型行、点完再回来,等于把事推回给用户(v0.9.158)。 */
+function mcfShowUnknown(name) {
+  const note = $("mcfAutoNote");
+  note.className = "mcf-auto-note warn";
+  note.textContent = "开着,但这个模型目录里没有、也没探测过 —— 现在按配置默认走。";
+  const btn = document.createElement("button");
+  btn.className = "mcf-probe"; btn.type = "button";
+  btn.textContent = "探测一次";
+  btn.title = "真发一条请求问这个模型:窗口多大、能不能收图。结论会记下来,运行时与面板都会用上";
+  btn.addEventListener("click", () => {
+    if (!mcfTarget) return;
+    const p = mcfTarget.p || {};
+    btn.disabled = true;
+    note.textContent = "正在探测 " + name + " …(会发一条真实请求,可能要几秒)";
+    pywebview.api.test_model(p.id || "", name, p.base_url || "", p.api_key || "").then(r => {
+      if (!$("mcfAuto").checked) return;
+      if (r && r.ok) {
+        const m = mcfTarget.m;
+        if (r.context_window) { m.context_window = r.context_window; m.known = true; }
+        if (typeof r.supports_vision === "boolean") {
+          m.supports_vision = r.supports_vision; m.known = true;
+        }
+        mcfApplyAuto();               // 再问一遍:这回有数了,直接落进表单
+      } else {
+        mcfShowUnknown(name);
+        const n2 = $("mcfAutoNote");
+        n2.textContent = "探测没成:" + ((r && r.msg) || "桥没应答")
+          + " —— 查一下接口地址与密钥再试,或关掉自己填。";
+        const b2 = n2.querySelector(".mcf-probe");
+        if (b2) b2.disabled = false;
+      }
+    }).catch(() => {
+      if (!$("mcfAuto").checked) return;
+      mcfShowUnknown(name);
+      $("mcfAutoNote").textContent = "探测没成(桥没应答)—— 再试一次,或关掉自己填。";
+    });
+  });
+  note.appendChild(document.createTextNode(" "));
+  note.appendChild(btn);
 }
 $("mcfAuto").addEventListener("change", mcfApplyAuto);
 
@@ -5202,19 +5281,20 @@ function mcfClose() { $("mmCfgOverlay").classList.remove("show"); mcfTarget = nu
 
 function mcfCollect() {
   const cfg = {};
-  // 灰掉的输入框**照原样带着走**:那些数只是暂时不参与运行时,关掉开关就回到
-  // 用户自己填的那一份。清空它们等于替用户做一次不可逆的"我忘了我填过什么"。
-  if ($("mcfAuto").checked) cfg.auto_config = true;
-  const w = parseInt($("mcfWindow").value, 10);
+  // v0.9.158:开着智能配置时,表单上灰着的是**预览**(学长回填的真实值)。
+  // 保存带走的是用户自己的那份(mcfUserVals)—— 那些数只是暂时不参与运行时,
+  // 关掉开关就逐字回来。拿预览当用户的话存下去,等于替他改了配置。
+  const auto = $("mcfAuto").checked;
+  const src = auto ? (mcfUserVals || mcfGrabVals()) : mcfGrabVals();
+  if (auto) cfg.auto_config = true;
+  const w = parseInt(src.w, 10);
   if (w > 0) cfg.context_window = w;
-  const o = parseInt($("mcfMaxOut").value, 10);
+  const o = parseInt(src.o, 10);
   if (o > 0) cfg.max_output_tokens = o;
-  const v = $("mcfVision").value;
-  if (v !== "") cfg.vision = v === "1";
-  const levels = Array.from($("mcfLevels").children)
-    .map(i => String(i.value || "").trim()).filter(Boolean);
+  if (src.v !== "") cfg.vision = src.v === "1";
+  const levels = (src.l || []).map(i => String(i || "").trim()).filter(Boolean);
   if (levels.length) cfg.reasoning_levels = levels;
-  const tpl = String($("mcfParam").value || "").trim();
+  const tpl = String(src.p || "").trim();
   if (tpl) cfg.reasoning_param = tpl;
   return cfg;
 }
@@ -5250,7 +5330,9 @@ $("mcfLevelAdd").addEventListener("click", () => {
 $("mcfReset").addEventListener("click", () => {
   $("mcfWindow").value = ""; $("mcfMaxOut").value = "";
   $("mcfVision").value = ""; $("mcfParam").value = ""; mcfRenderLevels([]);
-  $("mcfAuto").checked = false; mcfApplyAuto();
+  $("mcfAuto").checked = false;
+  mcfUserVals = mcfGrabVals();          // 重置 = 用户的话也清空,别让旧数再回来
+  mcfApplyAuto();
 });
 $("mcfCancel").addEventListener("click", mcfClose);
 $("mcfSave").addEventListener("click", mcfSave);

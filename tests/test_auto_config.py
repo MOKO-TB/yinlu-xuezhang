@@ -141,6 +141,51 @@ def test_bridge_reports_what_it_actually_knows(tmp_path):
     assert unknown["known"] is False and unknown["window"] == 0
 
 
+def test_unknown_model_admits_nobody_asked_about_vision(tmp_path):
+    """v0.9.158:未知模型的 `vision` 回 None,不借 bool 的 False 冒充"不支持"。
+
+    目录里没有的模型,谁也没问过它收不收图 —— 把"没问过"说成"不支持",
+    界面上就是拿一句假话堵用户的嘴。已知模型才允许给 bool。
+    """
+    from minicode.gui_bridge import Bridge
+    from minicode.ui import TerminalUI
+    cfg = _config({"auto_config": True})
+    bridge = Bridge(cfg, tmp_path, TerminalUI(cfg, tmp_path))
+    unknown = bridge.model_auto_info("not-a-real-model-xyz")
+    assert unknown["vision"] is None
+    known = bridge.model_auto_info("kimi-k3")
+    assert isinstance(known["vision"], bool)
+
+
+def test_a_probe_makes_the_unknown_known(tmp_path, monkeypatch):
+    """v0.9.158:弹窗里那颗「探测一次」走的就是 `test_model` → `remember`。
+
+    探过的模型,`model_auto_info` 必须从「不知道」变成给真数 —— 这是那颗
+    开关从装饰板变成真闸的那一环:前端探测完再问一遍这一屏,表单里落的
+    就是运行时真会用的那份。
+    """
+    from minicode import model_probe
+    from minicode.gui_bridge import Bridge
+    from minicode.ui import TerminalUI
+    monkeypatch.setattr(model_probe, "_cache_path",
+                        lambda: tmp_path / "probe-cache.json")
+    cfg = _config({"auto_config": True})
+    bridge = Bridge(cfg, tmp_path, TerminalUI(cfg, tmp_path))
+    name = "probe-me-now"
+    try:
+        assert bridge.model_auto_info(name)["known"] is False
+        model_probe.remember(name, {"context_window": 123456,
+                                    "supports_vision": True,
+                                    "endpoint": model_probe.endpoint_fingerprint("x"),
+                                    "checked_at": 1.0})
+        got = bridge.model_auto_info(name)
+        assert got["known"] and got["detected"]
+        assert got["window"] == 123456
+        assert got["vision"] is True
+    finally:
+        model_catalog.clear_detected()   # publish 落的是全局表,别带给隔壁测试
+
+
 def test_the_facade_exposes_it():
     """前端只经门面拿方法:漏了这一条,那一屏永远停在「正在问这台机器知道些什么…」。"""
     from minicode.gui_bridge import PublicApi
