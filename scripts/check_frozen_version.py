@@ -1305,6 +1305,9 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.161 拖宽(漏 --sp-w = 列宽与地图让位分家;漏 sp-resizer = 把手不在,
     # 宽度就回不去可调的形状)
     "--sp-w", "sp-resizer",
+    # v0.9.162 ZCode 同款双开关与底部终端坞(漏 termDock/toggleTermDock =
+    # 顶栏那颗「切换终端」按下去没人应;漏 btnPanelToggle = 「切换面板」是死钮)
+    "termDock", "toggleTermDock", "btnPanelToggle", "btnTermToggle",
     # v0.9.94 p3/p5:权限档位改成界面自己画的浮层菜单(原生 select 的白字在深色
     # 模式下看不见)。漏 permPill = 顶栏那个按钮整个没了;漏 permMenu = 点了没菜单
     "permPill", "permMenu", "PERM_META",

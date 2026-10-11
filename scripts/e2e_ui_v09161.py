@@ -123,14 +123,14 @@ def main() -> int:
               and page.evaluate("() => typeof window.termSetOpen") == "undefined",
               "旧 JS 块(termLoad/termSetOpen)不残留")
         page.click("#btnTerminal")
-        page.wait_for_selector(".app.act-open")
         page.wait_for_function(
-            "() => document.querySelectorAll('.sp-page[data-sp=\"terminal\"] .tp-row')"
-            ".length === 1")
-        check(page.locator('.sp-page[data-sp="terminal"] #tpCmd').count() == 1,
-              "终端页(同一本后台账)照常活着,输入行在场")
+            "() => document.querySelectorAll('.term-dock .tp-row').length === 1")
+        check(page.locator('.term-dock #tpCmd').count() == 1,
+              "终端坞(同一本后台账)照常活着,输入行在场")
 
-        # ② 拖宽:按住把手往左拖 → 第 4 列变宽
+        # ② 拖宽:顶栏「切换面板」开底座(v0.9.162 新钮,顺手验),再按住把手往左拖
+        page.click("#btnPanelToggle")
+        page.wait_for_selector(".app.act-open")
         res = page.locator(".sp-resizer")
         check(res.count() == 1, "拖宽把手在场")
         box = res.bounding_box()

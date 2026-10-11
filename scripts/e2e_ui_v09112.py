@@ -257,25 +257,24 @@ def main() -> int:
             page.click("#btnSideToggle")         # 展开回来,后面的用例要看得到聊天区
             page.wait_for_timeout(200)
 
-            # ---- 3. 终端(v0.9.159 起住进侧边栏底座;v0.9.161 旧只读弹窗拆除) ----
+            # ---- 3. 终端(v0.9.162 起住进底部终端坞;旧只读弹窗已拆除) ----
             page.click("#btnTerminal")
-            page.wait_for_selector(".app.act-open")
-            page.wait_for_function("() => document.querySelectorAll('.sp-page[data-sp=\"terminal\"] .tp-row')"
+            page.wait_for_function("() => document.querySelectorAll('.term-dock .tp-row')"
                                    ".length === 2")
             rows = page.eval_on_selector_all(
-                ".sp-page[data-sp=\"terminal\"] .tp-row .tp-cmd",
+                ".term-dock .tp-row .tp-cmd",
                 "els => els.map(e => e.textContent)")
             check(rows == ["pytest -q tests", "python scripts/build_exe.py"],
                   f"两条后台命令都在,在跑的排前面({rows})")
-            page.locator(".sp-page[data-sp=\"terminal\"] [data-tail]").first.click()
-            page.wait_for_selector(".sp-page[data-sp=\"terminal\"] .tp-out")
-            check("42%" in page.locator(".sp-page[data-sp=\"terminal\"] .tp-out")
+            page.locator(".term-dock [data-tail]").first.click()
+            page.wait_for_selector(".term-dock .tp-out")
+            check("42%" in page.locator(".term-dock .tp-out")
                   .first.inner_text(),
                   "点「看输出」摊出的是那条命令的输出末尾")
             # v0.9.159 起这一页**有**输入行:每条命令过沙箱硬闸,confirm 档每条先问 ——
             # 旧断言"面板里没有输入框"随只读弹窗一起退役
-            check(page.locator(".sp-page[data-sp=\"terminal\"] #tpCmd").count() == 1,
-                  "终端页有输入行(terminal_run,沙箱照拦)")
+            check(page.locator(".term-dock #tpCmd").count() == 1,
+                  "终端坞有输入行(terminal_run,沙箱照拦)")
             check(page.evaluate("() => document.getElementById('termOverlay')") is None,
                   "旧「后台命令」只读弹窗已拆除(v0.9.161)")
 

@@ -38,11 +38,11 @@ if str(ROOT) not in sys.path:
 #   它搬进顶栏,留在这里会把「顶栏不再有面板入口」那条检查自己撞红。
 RAIL_IDS = ["btnMap", "btnSchedule", "btnMood", "btnPlan", "btnActivity",
             "btnSkills", "btnMemory", "btnUsage",
-            "btnTerminal",
-            "btnSpGit", "btnSpFiles", "btnSpSubs",   # v0.9.159:侧边栏底座三入口
-            "btnAutomate",                       # v0.9.112:自动化
+            "btnTerminal", "btnAutomate",        # v0.9.112:终端(162 起指向底部终端坞)
             "btnMyData", "btnSandbox",
             "btnExport", "btnUndo", "btnCompact", "btnTheme"]
+# v0.9.162:底座四入口(Git/文件/帮手/侧聊)从入口栏撤下,入口栏回原样 ——
+# 页面入口收进顶栏「切换面板」(btnPanelToggle)与底座自己的标签条。
 
 STUB_JS = """
 window.__CALLS__ = [];
@@ -96,6 +96,12 @@ const base = {
   undo: () => { window.__CALLS__.push(["undo"]); return Promise.resolve({ok: true}); },
   compact_now: () => { window.__CALLS__.push(["compact_now"]);
     return Promise.resolve({ok: true, msg: "已压缩"}); },
+  /* v0.9.162:终端坞要真行 —— 兜底 {ok:true} 没有 jobs,坞里永远只有空态那句。 */
+  get_terminal: () => { window.__CALLS__.push(["get_terminal"]);
+    return Promise.resolve({ok: true, jobs: [
+      {id: "j1", command: "pytest -q tests", running: true, exit_code: null,
+       killed: false, chars: 12, dropped: 0, elapsed: 5, tail: "testing..."}],
+      buffer_chars: 4000, note: ""}); },
   set_chrome: (dark) => { window.__CALLS__.push(["set_chrome", dark]);
     return Promise.resolve({ok: true, applied: ["immersive-dark-mode"], failed: [], msg: ""}); },
   /* ---- 开机那一路要问的,给到不报错的最简真相 ---- */
@@ -357,55 +363,21 @@ def main() -> int:
         check(cap("btnTheme") == ("浅色" if dark_after else "深色"),
               f"格子上写的仍是'下一步能切去的那一档':{cap('btnTheme')!r}")
 
-        # ---- 13.5 🖥 终端 / 🌿🌿📄🤖 底座三键 / ⏱ 自动化 / ◀ 收起侧栏 ----
-        # v0.9.159 起 btnTerminal 改道侧边栏的终端页(与后台命令同一本账 + 输入行),
-        # 「后台命令」只读弹窗保留但不再是这一颗的目的地。
+        # ---- 13.5 🖥 终端 / ⏱ 自动化 / ◀ 收起侧栏 ----
+        # v0.9.162:btnTerminal 指向**底部终端坞**(ZCode p4 同款,占内容区整行);
+        # 底座四入口已从入口栏撤下,页面的家在右侧「切换面板」(顶栏 btnPanelToggle)
+        # 与底座自己的标签条 —— 那两块的深度回归由 v09159/v09160/v09161 三场管。
         page.click("#btnTerminal")
-        page.wait_for_timeout(250)
-        check(page.evaluate("() => document.querySelector('.app')"
-                            ".classList.contains('act-open')"),
-              "🖥 那一点拉开侧边栏底座(v0.9.159 起终端住进这里)")
-        check(page.evaluate("() => document.querySelector('.sp-page[data-sp=\"terminal\"]')"
-                            " && !document.querySelector('.sp-page[data-sp=\"terminal\"]')"
-                            ".hidden"),
-              "🖥 落在终端页上")
+        page.wait_for_function(
+            "() => document.querySelector('.term-dock .tp-row') !== null")
+        check(page.evaluate("() => !document.getElementById('termDock').hidden"),
+              "🖥 那一点拉开底部终端坞(v0.9.162)")
         check(len(calls("get_terminal")) == 1,
-              "终端页的账是问本机要的,不是前端自己攒一份")
-        # 收合用 rail 的监控键(开合是它的事;btnActClose 活在活动页里,
-        # 现在激活的是终端页,它看不见)
-        page.click("#btnActivity")
+              "终端坞的账是问本机要的,不是前端自己攒一份")
+        page.click("#tdClose")
         page.wait_for_timeout(150)
-        page.click("#btnSpGit")
-        page.wait_for_timeout(250)
-        check(page.evaluate("() => document.querySelector('.sp-page[data-sp=\"git\"]')"
-                            " && !document.querySelector('.sp-page[data-sp=\"git\"]')"
-                            ".hidden"),
-              "🌿 那一点落在 Git 页(注册表同一条 open 路)")
-        page.click("#btnActivity")
-        page.wait_for_timeout(150)
-        page.click("#btnSpFiles")
-        page.wait_for_timeout(250)
-        check(page.evaluate("() => document.querySelector('.sp-page[data-sp=\"files\"]')"
-                            " && !document.querySelector('.sp-page[data-sp=\"files\"]')"
-                            ".hidden"),
-              "📄 那一点落在文件页")
-        page.click("#btnActivity")
-        page.wait_for_timeout(150)
-        page.click("#btnSpSubs")
-        page.wait_for_timeout(250)
-        check(page.evaluate("() => document.querySelector('.sp-page[data-sp=\"subagents\"]')"
-                            " && !document.querySelector('.sp-page[data-sp=\"subagents\"]')"
-                            ".hidden"),
-              "🤖 那一点落在子代理页")
-        page.click("#btnActivity")
-        page.wait_for_timeout(150)
-        page.click("#btnSpChat")
-        page.wait_for_timeout(250)
-        check(page.evaluate("() => document.querySelector('.sp-page[data-sp=\"sidechat\"]')"
-                            " && !document.querySelector('.sp-page[data-sp=\"sidechat\"]')"
-                            ".hidden"),
-              "💬 那一点落在侧聊页(v0.9.160)")
-        page.click("#btnActivity")
+        check(page.evaluate("() => document.getElementById('termDock').hidden"),
+              "✕ 收得回坞")
         page.click("#btnAutomate")
         page.wait_for_timeout(250)
         check(page.evaluate("() => document.getElementById('autoOverlay')"

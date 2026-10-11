@@ -36,15 +36,17 @@ E2E = (ROOT / "scripts" / "e2e_ui_v0939_p3.py").read_text(encoding="utf-8")
 # 清单 —— 这个测试就是为了让漏改当场红。
 RAIL_IDS = ["btnMap", "btnSchedule", "btnMood", "btnPlan", "btnActivity",
             "btnSkills", "btnMemory", "btnUsage",
-            "btnTerminal",
-            "btnSpGit", "btnSpFiles", "btnSpSubs", "btnSpChat",
-            # v0.9.159/160:侧边栏底座四入口
-            "btnAutomate",                       # v0.9.112:自动化
+            "btnTerminal", "btnAutomate",       # v0.9.112:终端(162 起指向底部终端坞)/ 自动化
             "btnMyData", "btnSandbox",
             "btnExport", "btnUndo", "btnCompact", "btnTheme"]
+# v0.9.162:底座四入口(Git/文件/帮手/侧聊)从入口栏撤下 —— 入口栏回到
+# v0.9.158 之前的原样,页面的入口收进顶栏「切换面板」与底座自己的标签条。
 
 # 顶栏左上角那一颗(它不是面板入口,是"这一列要不要在"的开关,所以归顶栏)
-TOPBAR_ICON_IDS = ["btnSideToggle"]
+TOPBAR_ICON_IDS = ["btnSideToggle",
+                   # v0.9.162:ZCode 同款的两颗面板开关 —— 与收起栏同类
+                   # (管"那块面板在不在",不是面板入口),紧挨窗口钮。
+                   "btnPanelToggle", "btnTermToggle"]
 # 无边框窗口的自绘三颗:只在 win_state 说"这窗真没系统标题栏"时才出现
 WIN_CTRL_IDS = ["winMin", "winMax", "winClose"]
 
@@ -67,7 +69,7 @@ HANDLES = {
     "btnTheme": "applyTheme",
     # v0.9.112 三颗新的:弹层类写弹层 id,收侧栏那颗写它翻的那个类名。
     # v0.9.161:btnTerminal 改道侧边栏终端页,「后台命令」只读弹窗已拆除。
-    "btnTerminal": 'SidePages.open("terminal")',
+    "btnTerminal": 'toggleTermDock',
     "btnAutomate": "autoOverlay",
     "btnSideToggle": "side-closed",
 }
@@ -134,12 +136,13 @@ def test_topbar_keeps_only_status_and_no_navigation(topbar: str, rail: str):
     for sid in TOPBAR_STATUS_IDS:
         assert f'id="{sid}"' in topbar, f"顶栏少了状态件 {sid}(这轮不动它)"
     # v0.9.113:顶栏多了「收起左侧栏」那一颗 + 无边框的三颗窗口控件。
-    # 这两组都不是**面板入口**(一个管这一列在不在,三个管这个窗本身),
-    # 所以入口仍然一颗不许进顶栏 —— 上限从 6 抬到 10,再多就是往顶栏塞导航。
+    # v0.9.162:再加「切换面板 / 切换终端」两颗开关(ZCode 同款,管那两块
+    # 停靠面板在不在)。这几颗都不是**面板入口**(开关 ≠ 入口),所以入口
+    # 仍然一颗不许进顶栏 —— 上限 6→10→12,再多才是往顶栏塞导航。
     for bid in TOPBAR_ICON_IDS + WIN_CTRL_IDS:
         assert f'id="{bid}"' in topbar, f"顶栏少了 {bid}"
         assert f'id="{bid}"' not in rail, f"{bid} 搬完还留在入口栏(两处都会翻状态)"
-    assert len(re.findall(r'id="([A-Za-z0-9_]+)"', topbar)) <= 10, \
+    assert len(re.findall(r'id="([A-Za-z0-9_]+)"', topbar)) <= 12, \
         "顶栏控件数又涨回去了 —— 这轮要解决的正是「上面的工具堆太多」"
 
 
@@ -191,7 +194,7 @@ def test_overlay_entries_target_their_own_dialog():
 def test_every_entry_has_one_cap_line(rail: str):
     """"图标 + 字"两行结构:每颗按钮都得留一个 `.cap` 给真状态写。"""
     buttons = re.findall(r"<button\b[^>]*>(.*?)</button>", rail, flags=re.S)
-    assert len(buttons) == len(RAIL_IDS) == 20, "入口栏的格子数与这份清单不一致"
+    assert len(buttons) == len(RAIL_IDS) == 16, "入口栏的格子数与这份清单不一致"
     for bid, body in zip(RAIL_IDS, buttons):
         assert body.count('class="cap"') == 1, f"{bid} 的标签行不是一份,状态没地方写"
 
@@ -285,7 +288,7 @@ def test_user_manual_documents_the_rail(rail: str):
     assert "入口栏" in src, "《使用说明》里没写这条竖栏"
     caps = [c.strip() for c in re.findall(
         r'<span class="cap"[^>]*>([^<]+)</span>', rail)]
-    assert len(caps) == 20, f"从界面取到的标签数不是 20:{caps}"
+    assert len(caps) == 16, f"从界面取到的标签数不是 16:{caps}"
     for label in re.findall(r"顶栏「([^」]*)」", src):
         hit = [c for c in caps if c in label]
         assert not hit, f"《使用说明》还把「{label}」指到顶栏,它已经在入口栏里了"

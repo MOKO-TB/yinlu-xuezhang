@@ -167,7 +167,7 @@ def main() -> int:
 
         # ① tab 是注册表画的:五个内置页,一页一格
         tabs = page.locator("#spTabs .sp-tab")
-        check(tabs.count() == 5, f"内置页 5 格(实际 {tabs.count()})")
+        check(tabs.count() == 5, f"内置页 5 格(v0.9.162 起终端搬进底部坞,实际 {tabs.count()})")
         check(page.locator('.sp-page[data-sp="activity"]').count() == 1,
               "活动监控成为底座第一页(容器在 sp-pages 里)")
 
@@ -196,8 +196,8 @@ def main() -> int:
         check(["git_stage", '["src/a.py"]'] in calls,
               f"暂存按钮把路径逐字过桥(实际 {calls[-1] if calls else '无'})")
 
-        # ④ 终端页:accept_all 档直接跑,输入逐字过桥;后台账同一份
-        page.locator('#spTabs .sp-tab[title="终端"]').click()
+        # ④ 终端坞(v0.9.162 起在底部,不在底座):accept_all 档直接跑,输入逐字过桥
+        page.click("#btnTermToggle")
         page.wait_for_timeout(300)
         check(page.locator('#tpBody .tp-row[data-job="j2"]').count() == 1,
               "后台账里的命令在(与「后台命令」面板同一本)")

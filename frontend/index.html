@@ -119,7 +119,8 @@ try {
   ::-webkit-scrollbar-thumb:hover{ background:var(--primary); }
   ::-webkit-scrollbar-track{ background:transparent; }
 
-  .app{ display:grid; grid-template-columns:56px 260px 1fr; grid-template-rows:minmax(0,1fr);
+  .app{ display:grid; grid-template-columns:56px 260px 1fr;
+        grid-template-rows:minmax(0,1fr) auto;
         height:100vh; position:relative; z-index:1; }
 
   /* ---------------- 最左入口栏(p3:面板入口从顶栏搬过来) ----------------
@@ -1804,6 +1805,26 @@ try {
   .sp-tab:hover{ background:var(--glass-lite); color:var(--text-1); }
   .sp-tab.on{ background:var(--glass-lite); color:var(--text-1); }
   .sp-spring{ flex:1; }
+  /* 底部终端坞(v0.9.162,ZCode p4 同款):占第 2 行、从入口栏右侧铺到窗右缘;
+     高度走 --dock-h(顶部边条拖动),hidden 显隐 —— 显式写回 display,
+     不让更具体的规则把它盖掉(「flex 盖 hidden」那笔教训)。 */
+  .term-dock{ grid-column:2/-1; grid-row:2; display:none; flex-direction:column;
+              min-height:0; min-width:0; height:var(--dock-h, 280px);
+              border-top:1px solid var(--line-soft); background:var(--glass);
+              backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
+  .term-dock.open{ display:flex; }
+  .td-head{ display:flex; align-items:center; gap:7px; flex:none;
+            padding:5px 10px; border-bottom:1px solid var(--line-soft); }
+  .td-head b{ font-size:12.5px; }
+  .td-note{ flex:1; min-width:0; font-size:11px; color:var(--text-3);
+            overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .td-body{ flex:1; min-height:0; overflow-y:auto; padding:8px 10px; }
+  .td-resizer{ position:absolute; left:0; right:0; top:-2px; height:5px;
+               cursor:row-resize; z-index:6; }
+  .td-resizer:hover{ background:linear-gradient(180deg, var(--glass-lite),
+                     transparent); }
+  .term-dock{ position:relative; }
+  .topToggles{ display:flex; align-items:center; gap:2px; }
   /* 拖宽把手(v0.9.161):贴在面板左缘的一条,压住 6px 的热区;
      宽度落在 --sp-w 上,网格列、地图让位全走同一个变量。 */
   .sp-resizer{ position:absolute; left:-3px; top:0; bottom:0; width:6px;
@@ -2492,11 +2513,7 @@ try {
     <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐<span class="cap">技能</span></button>
     <button id="btnMemory" title="整理长期记忆">🧠<span class="cap">记忆</span></button>
     <button id="btnUsage" title="查看每日 token 消耗">📊<span class="cap">用量</span></button>
-    <button id="btnTerminal" title="终端:学长丢到后台的命令都在这里(状态/耗时/输出),也可以自己输入一条跑 —— 沙箱照拦,该确认的照问">🖥<span class="cap">终端</span></button>
-    <button id="btnSpGit" title="Git 工作台:改了什么、暂存/提交、历史与影子快照(绝不 push/pull)">🌿<span class="cap">Git</span></button>
-    <button id="btnSpFiles" title="文件:工作区里的文件看内容、改内容、存回去(围栏内)">📄<span class="cap">文件</span></button>
-    <button id="btnSpSubs" title="子代理:这一程派出去的帮手,谁在跑、报告说了什么">🤖<span class="cap">帮手</span></button>
-    <button id="btnSpChat" title="侧聊:不打断主任务的小会话,问点别的照常回话">💬<span class="cap">侧聊</span></button>
+    <button id="btnTerminal" title="终端:学长丢到后台的命令与你自己跑的命令都在底部终端里(Ctrl+`)">🖥<span class="cap">终端</span></button>
     <button id="btnAutomate" title="自动化:本机登记了哪几个定时任务、下一次什么时候跑、上次跑出什么,以及关掉/开回来">⏱<span class="cap">自动化</span></button>
     <button id="btnMyData" title="我的数据:都存在哪台目录、都有哪些文件,以及导出/导入迁移包(密钥与教务登录态永不外发)">💾<span class="cap">数据</span></button>
     <button id="btnSandbox" style="display:none" title="沙箱状态">🛡<span class="cap">沙箱</span></button>
@@ -2547,6 +2564,27 @@ try {
             title="按住这里可以挪动窗口"></span>
       <span class="modelpill" id="modelPill"></span>
       <button class="perm-pill" id="permPill" title="权限模式(点开选择)">变更前确认</button>
+      <!-- v0.9.162:ZCode 同款的两颗面板开关 —— 切换右侧底座(Ctrl+Alt+B)、
+           切换底部终端坞(Ctrl+`),摆在窗口钮左边同一簇,常驻(不随 winBtns 的
+           无边框判定隐藏:非无边框机器上快捷键之外也得有地方点)。 -->
+      <span class="topToggles" id="topToggles">
+        <button class="tb-ico" id="btnPanelToggle" title="切换面板(Ctrl+Alt+B)"
+                aria-label="切换面板">
+          <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
+            <rect x="1.6" y="3" width="14.8" height="12" rx="2.4"
+                  fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <path class="pane" d="M11.4 3.4h2.5a2.2 2.2 0 0 1 2.2 2.2v6.8a2.2 2.2 0 0 1-2.2 2.2h-2.5Z"
+                  fill="currentColor" opacity=".72"/>
+          </svg></button>
+        <button class="tb-ico" id="btnTermToggle" title="切换终端(Ctrl+`)"
+                aria-label="切换终端">
+          <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
+            <rect x="1.6" y="3" width="14.8" height="12" rx="2.4"
+                  fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M4.6 6.6 7 9l-2.4 2.4M8.8 11.6h4.6" fill="none"
+                  stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg></button>
+      </span>
       <!-- 三颗一律画 SVG(不用 −□✕ 三个字符):字符各自的基线与字宽不同,
            摆在同一行就是"没居中",用户图 p1 点的正是这个。 -->
       <span class="winbtns" id="winBtns" hidden>
@@ -2627,6 +2665,24 @@ try {
         <div class="task-menu ctx-panel" id="ctxPanel"></div>
       </div>
       <div class="hint" id="hint"></div>
+    </div>
+  </section>
+
+  <!-- 底部终端坞(v0.9.162,ZCode p4 同款):占内容区整行,顶部可拖高,
+       Ctrl+` 或顶栏「切换终端」呼出。账与「后台命令」同一本(get_terminal),
+       输入行走 terminal_run —— 沙箱硬闸照拦。 -->
+  <section class="term-dock" id="termDock" hidden>
+    <div class="td-head">
+      <b>🖥 终端</b>
+      <span class="td-note" id="tdNote"></span>
+      <button class="act-ib" id="tpRefresh" title="重新读一遍">↻</button>
+      <button class="act-ib" id="tdClose" title="收起(Ctrl+`)">✕</button>
+    </div>
+    <div class="td-resizer" id="tdGrip" title="拖动调高度(200~560px)· 双击回 280"></div>
+    <div class="td-body" id="tpBody"></div>
+    <div class="tp-input">
+      <input id="tpCmd" placeholder="跑一条命令,如:git status(回车执行)" spellcheck="false">
+      <button class="b-yes" id="tpRun">跑</button>
     </div>
   </section>
 
@@ -3797,6 +3853,19 @@ document.addEventListener("keydown", ev => {
       && String(ev.key || "").toLowerCase() === "m") {
     ev.preventDefault();
     setActivityOpen(!actOpen);
+    return;
+  }
+  // Ctrl+Alt+B(v0.9.162,ZCode 同款):切换右侧底座面板;Ctrl+` 切换底部终端坞。
+  // 两个键都常驻(输入框里打字也一样):按的就是"把那块面板叫出来/收起来"。
+  if (ev.ctrlKey && ev.altKey && !ev.shiftKey
+      && String(ev.key || "").toLowerCase() === "b") {
+    ev.preventDefault();
+    setActivityOpen(!actOpen);
+    return;
+  }
+  if (ev.ctrlKey && !ev.altKey && !ev.shiftKey && ev.key === "`") {
+    ev.preventDefault();
+    toggleTermDock();
     return;
   }
   if (ev.key !== "Escape") return;
@@ -8346,6 +8415,9 @@ function setActivityOpen(on) {
   if (appEl) appEl.classList.toggle("act-open", actOpen);
   document.body.classList.toggle("act-open", actOpen);
   $("btnActivity").setAttribute("aria-expanded", actOpen ? "true" : "false");
+  // 顶栏「切换面板」那颗跟着亮(v0.9.162):两个入口同一步开合,两颗按钮同一种状态。
+  const pt = $("btnPanelToggle");
+  if (pt) pt.classList.toggle("on", actOpen);
   // 开关先记账再走下面的分支:收起那条路原来提前 return,于是"上次是收起的"
   // 永远存不下来 —— 记住开、忘记关,等于没记住(e2e 第 11 项钉的就是这个)。
   const api = activityApi();
@@ -11103,28 +11175,27 @@ async function gitLoadSnaps() {
    这一页存在的意义就是这个;但硬闸永远在。
    (v0.9.161:「后台命令」只读弹窗拆除,这里是终端唯一的家;tpShow 记着
    哪几条的输出摊开了 —— 旧名 termShow 随旧面板一起退役。) */
+/* ---------------- 终端坞(v0.9.162,ZCode p4 同款) ----------------
+   终端从侧边栏的一页改成**底部停靠坞**:占内容区整行、顶部边条拖高、
+   Ctrl+` 或顶栏「切换终端」呼出 —— 与右侧底座(切换面板 Ctrl+Alt+B)各管各的,
+   同 ZCode 的双面板布局。账还是那一本(get_terminal / terminal_facts),
+   输入行走 terminal_run —— 沙箱硬闸在后端照拦(REJECT 级不认人),
+   要确认的(权限档位 confirm/accept_edits)前端先弹一次确认:用户本人就是
+   确认人,这一坞存在的意义就是这个;但硬闸永远在。 */
 let tpTimer = 0, tpShow = "";
-SidePages.register({
-  id: "terminal", title: "终端", icon: "🖥",
-  setup(el) {
-    el.innerHTML = `
-      <div class="sp-head"><b>🖥 终端</b>
-        <span class="gp-sync" id="tpNote"></span>
-        <button class="act-ib" id="tpRefresh" title="重新读一遍">↻</button></div>
-      <div class="sp-body" id="tpBody"></div>
-      <div class="tp-input">
-        <input id="tpCmd" placeholder="跑一条命令,如:git status(回车执行)" spellcheck="false">
-        <button class="b-yes" id="tpRun">跑</button>
-      </div>`;
-    $("tpRefresh").addEventListener("click", () => tpLoad(false));
-    $("tpRun").addEventListener("click", tpSubmit);
-    $("tpCmd").addEventListener("keydown", (e) => { if (e.key === "Enter") tpSubmit(); });
-  },
-  onShow() { tpLoad(false); },
-  onHide() { if (tpTimer) { clearTimeout(tpTimer); tpTimer = 0; } },
-});
 
-function gpIsPage(id) { return SidePages._active === id && actOpen; }
+function termDockOpen() { return !$("termDock").hidden; }
+
+function toggleTermDock(force) {
+  const dock = $("termDock");
+  const on = typeof force === "boolean" ? force : dock.hidden;
+  dock.hidden = !on;
+  dock.classList.toggle("open", on);
+  $("btnTermToggle").classList.toggle("on", on);
+  try { localStorage.setItem("dock.open", on ? "1" : "0"); } catch (e) {}
+  if (on) tpLoad(false);
+  else if (tpTimer) { clearTimeout(tpTimer); tpTimer = 0; }
+}
 
 function tpTick(ms) {
   if (tpTimer) clearTimeout(tpTimer);
@@ -11152,12 +11223,12 @@ function tpSubmit() {
 async function tpLoad(quiet) {
   const api = window.pywebview && pywebview.api;
   const body = $("tpBody");
-  if (!body || !api || !gpIsPage("terminal")) return;
-  if (!api.get_terminal) { body.innerHTML = '<div class="tp-note">桌面版里才有这一页。</div>'; return; }
+  if (!body || !api || !termDockOpen()) return;
+  if (!api.get_terminal) { body.innerHTML = '<div class="tp-note">桌面版里才有这一坞。</div>'; return; }
   let r = null;
   try { r = await api.get_terminal(); } catch (e) { if (!quiet) toast("读后台命令失败", true); return; }
-  if (!r || !r.ok) { $("tpNote").textContent = (r && r.msg) || ""; return; }
-  $("tpNote").textContent = r.note ? "只留每条的输出尾部" : "";
+  if (!r || !r.ok) { $("tdNote").textContent = (r && r.msg) || ""; return; }
+  $("tdNote").textContent = r.note ? "只留每条的输出尾部" : "";
   const jobs = r.jobs || [];
   if (!jobs.length) {
     body.innerHTML = '<div class="tp-note">这一程还没有后台命令。在上面输入一条,或让学长把长命令丢到后台 —— 它们都会出现在这里。</div>';
@@ -11189,6 +11260,53 @@ async function tpLoad(quiet) {
   }));
   tpTick(jobs.some(j => j.running) ? 1600 : 4000);
 }
+
+function gpIsPage(id) { return SidePages._active === id && actOpen; }
+
+/* 坞的接线与拖高:控制件是静态 HTML,启动绑一次;高度走 --dock-h,
+   松手记账(与面板宽度同一条路),双击回 280。 */
+(function termDockWiring() {
+  $("tpRefresh").addEventListener("click", () => tpLoad(false));
+  $("tpRun").addEventListener("click", tpSubmit);
+  $("tpCmd").addEventListener("keydown", (e) => { if (e.key === "Enter") tpSubmit(); });
+  $("tdClose").addEventListener("click", () => toggleTermDock(false));
+  $("btnTermToggle").addEventListener("click", () => toggleTermDock());
+  $("btnPanelToggle").addEventListener("click", () => setActivityOpen(!actOpen));
+  try {
+    if (localStorage.getItem("dock.open") === "1") toggleTermDock(true);
+    const h = parseInt(localStorage.getItem("dock.h") || "", 10);
+    if (h >= 200 && h <= 560) {
+      document.documentElement.style.setProperty("--dock-h", h + "px");
+    }
+  } catch (e) {}
+  const grip = $("tdGrip");
+  let dragging = false;
+  grip.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    try { grip.setPointerCapture(e.pointerId); } catch (err) {}
+    e.preventDefault();
+  });
+  grip.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const h = Math.min(560, Math.max(200, Math.round(window.innerHeight - e.clientY)));
+    document.documentElement.style.setProperty("--dock-h", h + "px");
+  });
+  const stop = () => {
+    if (!dragging) return;
+    dragging = false;
+    const h = parseInt(getComputedStyle(document.documentElement)
+      .getPropertyValue("--dock-h"), 10) || 280;
+    const clamped = Math.min(560, Math.max(200, h));
+    document.documentElement.style.setProperty("--dock-h", clamped + "px");
+    try { localStorage.setItem("dock.h", String(clamped)); } catch (e) {}
+  };
+  grip.addEventListener("pointerup", stop);
+  grip.addEventListener("pointercancel", stop);
+  grip.addEventListener("dblclick", () => {
+    document.documentElement.style.setProperty("--dock-h", "280px");
+    try { localStorage.setItem("dock.h", "280"); } catch (e) {}
+  });
+})();
 
 /* ---------------- 子代理页 ----------------
    数据与「任务监控」同源(actData,后端 activity.session_activity() 一份真源),
@@ -11386,13 +11504,10 @@ function fpNewFile() {
   ta.focus();
 }
 
-/* rail 上的入口:与 tab 同一个 open(),不另立开关。 */
-$("btnSpGit").addEventListener("click", () => SidePages.open("git"));
-$("btnSpFiles").addEventListener("click", () => SidePages.open("files"));
-$("btnSpSubs").addEventListener("click", () => SidePages.open("subagents"));
-$("btnSpChat").addEventListener("click", () => SidePages.open("sidechat"));
-/* 终端入口(v0.9.159 起):旧弹窗拆除后这颗的目的地只有一个 —— 底座里的终端页。 */
-$("btnTerminal").addEventListener("click", () => SidePages.open("terminal"));
+/* rail 上的入口(v0.9.162 收敛):底座五页的入口收进顶栏「切换面板」与
+   ZCode 式的标签条,不再往入口栏里塞 —— 入口栏回到 v0.9.158 之前的原样,
+   只留日常那几颗;终端一颗指向底部停靠的终端坞。 */
+$("btnTerminal").addEventListener("click", () => toggleTermDock());
 
 /* ---------------- 面板拖宽(v0.9.161) ----------------
    右列不再钉死 300px:左缘一条把手,按住拖,宽度落在 --sp-w 一个变量上
