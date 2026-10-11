@@ -229,9 +229,21 @@ def test_the_loader_is_actually_called(monkeypatch):
     """钉"调用点存在",不是"函数存在"。
 
     这仓库栽过一次:函数、配置、文档、测试全写了,唯独没人调用,于是真机上永远不生效。
+
+    **v0.9.151 起这一格要扫两个函数**:`run_turn` 被拆成了"外壳 + `_run_turn_body`"
+    —— 外壳里那个 `finally` 是 `stop` 钩子的落点(见那一对函数的 docstring),于是
+    这一轮的主体搬进了 `_run_turn_body`。**意图一个字没变**:钉的还是"这一步真被
+    调用了";变的只是"它写在哪个函数里"。所以这里跟着扫两个 —— **而不是把断言搬走**:
+    哪天真有人把 `_load_checkpoints()` 从主体里删掉,这一支照样红;而"只扫 `run_turn`"
+    那种改法会让它永远绿着,那正是这一支要防的形状。
     """
     src = Path("minicode/agent.py").read_text(encoding="utf-8")
-    body = src[src.index("    def run_turn("):src.index("    def ", src.index("    def run_turn(") + 10)]
+
+    def _slice(name: str) -> str:
+        start = src.index(f"    def {name}(")
+        return src[start:src.index("    def ", start + 10)]
+
+    body = _slice("run_turn") + _slice("_run_turn_body")
     assert "self._load_checkpoints()" in body
 
 
