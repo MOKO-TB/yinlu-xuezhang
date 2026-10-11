@@ -66,7 +66,8 @@ HANDLES = {
     "btnCompact": "compact_now",
     "btnTheme": "applyTheme",
     # v0.9.112 三颗新的:弹层类写弹层 id,收侧栏那颗写它翻的那个类名。
-    "btnTerminal": "termOverlay",
+    # v0.9.161:btnTerminal 改道侧边栏终端页,「后台命令」只读弹窗已拆除。
+    "btnTerminal": 'SidePages.open("terminal")',
     "btnAutomate": "autoOverlay",
     "btnSideToggle": "side-closed",
 }
@@ -245,10 +246,16 @@ def test_opening_the_monitor_column_still_adds_exactly_one_track():
     """右侧那栏占的是网格最后一列;p3 加的是最左一列,所以「多一列」这件事不能变。"""
     base = re.search(r"\.app\{[^}]*grid-template-columns:([^;]+);", HTML).group(1)
     opened = re.search(r"\.app\.act-open\{[^}]*grid-template-columns:([^;]+);", HTML).group(1)
-    n_base = len(base.split())
-    assert len(opened.split()) == n_base + 1, f"关 {n_base} 列 → 开应 {n_base + 1} 列"
+    # 按逗号数轨道,不按空格:v0.9.161 起右列是 var(--sp-w, 300px),里面带空格
+    n_base = len(base.split(","))
+    assert len(opened.split(",")) == n_base + 1, f"关 {n_base} 列 → 开应 {n_base + 1} 列"
     # 而且新那一列排在最后(入口栏在最左不能被它挤掉)
-    assert opened.split()[-1] != base.split()[0], "act-open 改的是首列?入口栏会被挤窄"
+    assert opened.split(",")[-1].strip() != base.split(",")[0].strip(), \
+        "act-open 改的是首列?入口栏会被挤窄"
+    # v0.9.161:右列的宽走同一个变量,地图让位也吃它 —— 三处不同步就是错位
+    assert "--sp-w" in opened, "act-open 的右列没走 --sp-w"
+    assert "right:var(--sp-w" in HTML.replace(" ", ""), \
+        "地图让位(right)没吃 --sp-w,列宽拖动时地图会错位"
 
 
 def test_sandbox_entry_is_hidden_until_the_bridge_reports_it():

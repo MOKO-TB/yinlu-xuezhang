@@ -1729,16 +1729,17 @@ try {
      为什么不用浮层:用户要的是"右边一直能看到这轮在做什么",浮层每次要点开。
      代价是地图那类 fixed 浮层要让位 —— 见下面 body.act-open .map-panel。 */
   .activity{ display:none; flex-direction:column; min-height:0; min-width:0;
+             position:relative;
              border-left:1px solid var(--line-soft); background:var(--glass);
              backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur); }
   .app.act-open .activity{ display:flex; }
-  .app.act-open{ grid-template-columns:56px 260px 1fr 300px; }   /* 最左 56px 是 p3 入口栏;300px 与 map 让位的值同 */
+  .app.act-open{ grid-template-columns:56px 260px 1fr var(--sp-w, 300px); }   /* 最左 56px 是 p3 入口栏;右列宽走 --sp-w(v0.9.161 起可拖),300px 是默认与双击复位值 */
   /* 收起侧栏(Qoder 那颗 Ctrl+B):收的是中间这一列,最左 56px 入口栏留着 ——
      不用先点开什么才收得回去。改的是**网格列宽**而不是 display:none:侧栏里有一堆
      带状态的节点(计划角标、会话清单、展开到一半的项目树),藏宽度保节点,再展开时
      不用重画、也不会把用户滚到的位置弄丢。 */
   .app.side-closed{ grid-template-columns:56px 0 minmax(0,1fr); }
-  .app.side-closed.act-open{ grid-template-columns:56px 0 minmax(0,1fr) 300px; }
+  .app.side-closed.act-open{ grid-template-columns:56px 0 minmax(0,1fr) var(--sp-w, 300px); }
   .app.side-closed .sidebar{ overflow:hidden; border-right:none; }
   /* 终端(后台命令)与自动化(定时任务)两个面板共用的几行;
      弹层本身走现成的 .overlay + .dialog,不再抄一套遮罩。 */
@@ -1792,7 +1793,7 @@ try {
   .jb-tag{ font-size:10px; font-weight:800; color:var(--primary-text);
            background:var(--primary-light); border-radius:var(--r-full);
            padding:1px 7px; flex:none; }
-  body.act-open .map-panel{ right:300px; }        /* 两栏并排时地图不压住活动面板 */
+  body.act-open .map-panel{ right:var(--sp-w, 300px); }        /* 两栏并排时地图不压住侧边栏 */
   /* ---- 侧边栏底座(v0.9.159):tab 条 + 页面容器。.sp-page 显隐用 hidden 属性
      并显式写回 display(「flex 盖 hidden」那笔教训:hidden 会被更具体的 display
      盖掉,所以这里把 [hidden] 的 display:none 写成同权重的一条)。 ---- */
@@ -1803,6 +1804,12 @@ try {
   .sp-tab:hover{ background:var(--glass-lite); color:var(--text-1); }
   .sp-tab.on{ background:var(--glass-lite); color:var(--text-1); }
   .sp-spring{ flex:1; }
+  /* 拖宽把手(v0.9.161):贴在面板左缘的一条,压住 6px 的热区;
+     宽度落在 --sp-w 上,网格列、地图让位全走同一个变量。 */
+  .sp-resizer{ position:absolute; left:-3px; top:0; bottom:0; width:6px;
+               cursor:col-resize; z-index:6; }
+  .sp-resizer:hover{ background:linear-gradient(90deg, transparent,
+                     var(--glass-lite) 50%, transparent); }
   .sp-pages{ flex:1; min-height:0; min-width:0; display:flex; }
   .sp-page{ flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
   .sp-page[hidden]{ display:none; }
@@ -2791,20 +2798,10 @@ try {
     </div>
   </div>
 </div>
-<!-- 后台命令(用户看图 p5 点名要的「终端面板」)。它**只读**:命令是学长在对话里
-     经权限确认之后跑起来的,这里放一个输入框等于绕过那道确认 —— 那不是"少一个功能",
-     是"多一个后门"。要看输出点行,要跑命令直接在对话里说。 -->
-<div class="overlay" id="termOverlay">
-  <div class="dialog" style="width:640px">
-    <h3>🖥 后台命令</h3>
-    <p class="tp-note" id="termNote"></p>
-    <div id="termBody"></div>
-    <div class="btns">
-      <button class="b-no" id="termClose">关闭</button>
-      <button class="b-yes" id="termRefresh" title="重问一次本机那张后台账">刷新</button>
-    </div>
-  </div>
-</div>
+<!-- 「后台命令」只读弹窗(v0.9.112,用户看图 p5 点名)已于 v0.9.161 拆除:
+     v0.9.159 起终端住进侧边栏底座(同一本后台账 + 沙箱硬闸下的输入行),
+     那条"只读面板"的历史使命连同一句旧立场("放输入框=绕过确认")一起退役 ——
+     输入行的确来了,但每条命令照过沙箱硬闸,confirm 档每条先问。 -->
 <!-- 自动化(定时任务)。这份清单的每一个数都读自两处现成事实:
      proactive.JOB_SPECS(登记了什么)与 jobs-state.json(跑过什么),
      开关的效力只有一处 —— 关掉之后 due_jobs 不再把它算作到期。 -->
@@ -10846,79 +10843,6 @@ function rzBind(dollar) {
   window.addEventListener("mouseup", () => { edge = ""; if (queued) flush(); });
 }
 
-/* ---------------- 后台命令面板(用户看图 p5 点名要的「终端面板」) ----------------
-   它**只读**。命令是学长在对话里经权限确认之后跑起来的;在这个面板里放一个输入框
-   等于开一条绕过那道确认的路 —— 那不是"多一个功能",是"多一个后门"。
-   要跑命令:点「让学长跑一条命令」把话填回输入框,走正常那条有确认框的路。 */
-let termOpen = false, termTimer = 0, termShow = "";   // termShow = 哪几条的输出摊开了
-function termTick(ms) {
-  if (termTimer) clearTimeout(termTimer);
-  if (!termOpen) return;
-  termTimer = setTimeout(() => { termLoad(true); }, ms);
-}
-async function termLoad(quiet) {
-  const api = window.pywebview && pywebview.api;
-  if (!api || !api.get_terminal) {
-    $("termNote").textContent = quiet ? "" : "这一屏要问本机的后台账;网页版不开放。";
-    $("termBody").innerHTML = '<div class="tp-note">桌面版里才有后台命令这一程的账。</div>';
-    return;
-  }
-  let r = null;
-  try { r = await api.get_terminal(); } catch (e) {
-    if (!quiet) toast("读后台命令失败:" + String(e).slice(0, 60), true);
-    return;
-  }
-  if (!r || !r.ok) {
-    $("termNote").textContent = (r && r.msg) || "读不出后台命令";
-    $("termBody").innerHTML = "";
-    return;
-  }
-  const jobs = r.jobs || [];
-  $("termNote").textContent = r.note || "";
-  if (!jobs.length) {
-    $("termBody").innerHTML = '<div class="tp-note">这一程还没有丢到后台的命令。'
-      + "学长把长命令放后台跑之后,它们会自己出现在这里(状态、耗时、输出末尾)。</div>";
-    termTick(2000);
-    return;
-  }
-  $("termBody").innerHTML = jobs.map(j => {
-    const state = j.running ? "🟢 在跑" : (j.killed ? "⛔ 已终止" : (j.exit_code
-      ? "🔴 退出码 " + j.exit_code : "✅ 跑完"));
-    const open = termShow.indexOf(j.id) >= 0;
-    return `<div class="tp-row" data-job="${esc(j.id)}">
-      <span class="tp-n">${state}</span>
-      <span class="tp-cmd" title="${esc(j.command)}">${esc(j.command)}</span>
-      <span class="tp-n">${j.elapsed}s · ${j.chars} 字</span>
-      <button class="act-ib" data-tail="${esc(j.id)}">${open ? "收起输出" : "看输出"}</button>
-    </div>${open ? `<pre class="tp-out">${esc(j.tail || "(还没有输出)")}</pre>` : ""}`;
-  }).join("") + `<div class="tp-note" style="margin-top:10px">
-      <button class="act-ib" id="termAsk">让学长跑一条命令</button>
-      <span style="margin-left:6px">命令只在对话里跑 —— 那一步有权限确认框,这个面板不绕。</span></div>`;
-  $("termBody").querySelectorAll("[data-tail]").forEach(el => el.addEventListener("click", () => {
-    const id = el.dataset.tail;
-    termShow = termShow.split(",").filter(x => x && x !== id).concat([id]).join(",");
-    termLoad(true);
-  }));
-  const ask = $("termAsk");
-  if (ask) ask.addEventListener("click", () => {
-    $("input").value = "帮我把这条命令丢到后台跑,跑完了告诉我:\n";
-    $("input").focus();
-    termSetOpen(false);
-  });
-  termTick(jobs.some(j => j.running) ? 1600 : 4000);   // 有在跑的才勤快点
-}
-function termSetOpen(on) {
-  termOpen = !!on;
-  $("termOverlay").classList.toggle("show", termOpen);
-  if (!on && termTimer) { clearTimeout(termTimer); termTimer = 0; }
-  if (on) termLoad(false);
-}
-$("btnTerminal").addEventListener("click", () => SidePages.open("terminal"));
-$("termClose").addEventListener("click", () => termSetOpen(false));
-$("termRefresh").addEventListener("click", () => termLoad(false));
-$("termOverlay").addEventListener("click", (e) => {
-  if (e.target.id === "termOverlay") termSetOpen(false);
-});
 
 /* ================= 侧边栏底座(v0.9.159) =================
    右列 tab 化的**页面注册表**:内置五页(监控/Git/终端/子代理/文件)与
@@ -11173,11 +11097,13 @@ async function gitLoadSnaps() {
 }
 
 /* ---------------- 终端页 ----------------
-   与「后台命令」面板同一本账(terminal_facts),多出来的是**输入行**:
+   同一本后台账(get_terminal / terminal_facts),多出来的是**输入行**:
    用户亲手跑的命令走 terminal_run —— 沙箱硬闸在后端照拦(REJECT 级不认人),
    要确认的(权限档位 confirm/accept_edits)前端先弹一次确认:用户本人就是确认人,
-   这一页存在的意义就是这个;但硬闸永远在。 */
-let tpTimer = 0;
+   这一页存在的意义就是这个;但硬闸永远在。
+   (v0.9.161:「后台命令」只读弹窗拆除,这里是终端唯一的家;tpShow 记着
+   哪几条的输出摊开了 —— 旧名 termShow 随旧面板一起退役。) */
+let tpTimer = 0, tpShow = "";
 SidePages.register({
   id: "terminal", title: "终端", icon: "🖥",
   setup(el) {
@@ -11241,7 +11167,7 @@ async function tpLoad(quiet) {
   body.innerHTML = jobs.map(j => {
     const state = j.running ? "🟢 在跑" : (j.killed ? "⛔ 已终止" : (j.exit_code
       ? "🔴 退出码 " + j.exit_code : "✅ 跑完"));
-    const open = termShow.indexOf(j.id) >= 0;
+    const open = tpShow.indexOf(j.id) >= 0;
     const kill = j.running ? `<button class="tp-kill" data-kill="${esc(j.id)}">停</button>` : "";
     return `<div class="tp-row" data-job="${esc(j.id)}">
       <span class="tp-n">${state}</span>
@@ -11252,7 +11178,7 @@ async function tpLoad(quiet) {
   }).join("");
   body.querySelectorAll("[data-tail]").forEach(el => el.addEventListener("click", () => {
     const id = el.dataset.tail;
-    termShow = termShow.split(",").filter(x => x && x !== id).concat([id]).join(",");
+    tpShow = tpShow.split(",").filter(x => x && x !== id).concat([id]).join(",");
     tpLoad(true);
   }));
   body.querySelectorAll("[data-kill]").forEach(el => el.addEventListener("click", () => {
@@ -11465,6 +11391,52 @@ $("btnSpGit").addEventListener("click", () => SidePages.open("git"));
 $("btnSpFiles").addEventListener("click", () => SidePages.open("files"));
 $("btnSpSubs").addEventListener("click", () => SidePages.open("subagents"));
 $("btnSpChat").addEventListener("click", () => SidePages.open("sidechat"));
+/* 终端入口(v0.9.159 起):旧弹窗拆除后这颗的目的地只有一个 —— 底座里的终端页。 */
+$("btnTerminal").addEventListener("click", () => SidePages.open("terminal"));
+
+/* ---------------- 面板拖宽(v0.9.161) ----------------
+   右列不再钉死 300px:左缘一条把手,按住拖,宽度落在 --sp-w 一个变量上
+   (网格列与地图让位吃同一份,不会出现"列宽了地图还让 300"的错位)。
+   记进 localStorage(与上次停在那一页同一条路);双击回到 300。
+   范围 260~560:再窄放不下 tab 条,再宽就不是"侧"栏了。 */
+(function spResizer() {
+  const MIN = 260, MAX = 560, DEFAULT = 300;
+  const clamp = (n) => Math.min(MAX, Math.max(MIN, Math.round(n)));
+  function apply(w, save) {
+    document.documentElement.style.setProperty("--sp-w", w + "px");
+    if (save) { try { localStorage.setItem("sp.width", String(w)); } catch (e) {} }
+  }
+  try {
+    const saved = parseInt(localStorage.getItem("sp.width") || "", 10);
+    if (saved >= MIN && saved <= MAX) apply(saved, false);
+  } catch (e) {}
+  const host = $("activity");
+  if (!host) return;
+  const res = document.createElement("div");
+  res.className = "sp-resizer";
+  res.title = "拖动调宽度(" + MIN + "~" + MAX + "px)· 双击回到 " + DEFAULT + "px";
+  host.appendChild(res);
+  let dragging = false;
+  res.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    try { res.setPointerCapture(e.pointerId); } catch (err) {}
+    e.preventDefault();
+  });
+  res.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    apply(clamp(window.innerWidth - e.clientX), false);
+  });
+  const stop = () => {
+    if (!dragging) return;
+    dragging = false;
+    const cur = parseInt(getComputedStyle(document.documentElement)
+      .getPropertyValue("--sp-w"), 10) || DEFAULT;
+    apply(clamp(cur), true);            // 松手才算一笔账,拖的过程不写盘
+  };
+  res.addEventListener("pointerup", stop);
+  res.addEventListener("pointercancel", stop);
+  res.addEventListener("dblclick", () => apply(DEFAULT, true));
+})();
 
 /* ---------------- 侧聊页(v0.9.160,内置第五页) ----------------
    每条线程 = 一个 origin=sidechat 的后台会话:不抢当前视角、不进侧栏/托盘,

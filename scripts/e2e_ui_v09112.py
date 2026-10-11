@@ -230,8 +230,13 @@ def main() -> int:
                                     ".gridTemplateColumns")
             check(w_before != w_after and w_after.split(" ")[1].startswith("0"),
                   f"点一下中间那一列真的收掉了({w_before} → {w_after})")
-            check(page.evaluate("() => document.getElementById('sideCap').textContent")
-                  == "展开栏", "按钮的字跟着翻(收起来之后不能再写着「收起栏」)")
+            # v0.9.113 起收起栏是纯图标(title/aria 承担解释),sideCap 那行字退役 ——
+            # 状态翻没翻,看 title 与 aria-expanded。
+            check(page.evaluate("() => document.getElementById('btnSideToggle').title")
+                  == "展开左侧栏(Ctrl+B)", "按钮的提示跟着翻(收起来之后不能再写着「收起」)")
+            check(page.evaluate("() => document.getElementById('btnSideToggle')"
+                                ".getAttribute('aria-expanded')") == "false",
+                  "aria-expanded 说的是真状态(收起 = false)")
             page.keyboard.press("Control+b")
             page.wait_for_timeout(150)
             check(page.evaluate("() => !document.querySelector('.app')"
@@ -245,33 +250,34 @@ def main() -> int:
             page2.goto(url, wait_until="load")
             page2.wait_for_function("() => document.querySelector('.app')"
                                     ".classList.contains('side-closed')")
-            check(page2.evaluate("() => document.getElementById('sideCap').textContent")
-                  == "展开栏", "重开窗口还是收着的,按钮字也对")
+            check(page2.evaluate("() => document.getElementById('btnSideToggle').title")
+                  == "展开左侧栏(Ctrl+B)", "重开窗口还是收着的,提示也对")
             page2.close()
             page.evaluate("() => localStorage.removeItem('gcode-side')")
             page.click("#btnSideToggle")         # 展开回来,后面的用例要看得到聊天区
             page.wait_for_timeout(200)
 
-            # ---- 3. 终端面板(只读) ----
+            # ---- 3. 终端(v0.9.159 起住进侧边栏底座;v0.9.161 旧只读弹窗拆除) ----
             page.click("#btnTerminal")
-            page.wait_for_function("() => document.querySelectorAll('#termBody .tp-row')"
+            page.wait_for_selector(".app.act-open")
+            page.wait_for_function("() => document.querySelectorAll('.sp-page[data-sp=\"terminal\"] .tp-row')"
                                    ".length === 2")
-            rows = page.eval_on_selector_all("#termBody .tp-row .tp-cmd",
-                                             "els => els.map(e => e.textContent)")
+            rows = page.eval_on_selector_all(
+                ".sp-page[data-sp=\"terminal\"] .tp-row .tp-cmd",
+                "els => els.map(e => e.textContent)")
             check(rows == ["pytest -q tests", "python scripts/build_exe.py"],
                   f"两条后台命令都在,在跑的排前面({rows})")
-            check("临时账" in page.locator("#termNote").inner_text(),
-                  "「重启就没了」那条边界由后端说、写在屏上")
-            page.locator("#termBody [data-tail]").first.click()
-            page.wait_for_selector("#termBody .tp-out")
-            check("42%" in page.locator("#termBody .tp-out").first.inner_text(),
+            page.locator(".sp-page[data-sp=\"terminal\"] [data-tail]").first.click()
+            page.wait_for_selector(".sp-page[data-sp=\"terminal\"] .tp-out")
+            check("42%" in page.locator(".sp-page[data-sp=\"terminal\"] .tp-out")
+                  .first.inner_text(),
                   "点「看输出」摊出的是那条命令的输出末尾")
-            check(page.locator("#termBody textarea").count() == 0
-                  and page.locator("#termBody input").count() == 0,
-                  "面板里没有输入框 —— 在这里下命令等于绕过权限确认框")
-            page.click("#termClose")
-            check(not page.evaluate("() => document.getElementById('termOverlay')"
-                                    ".classList.contains('show')"), "点关闭收起来")
+            # v0.9.159 起这一页**有**输入行:每条命令过沙箱硬闸,confirm 档每条先问 ——
+            # 旧断言"面板里没有输入框"随只读弹窗一起退役
+            check(page.locator(".sp-page[data-sp=\"terminal\"] #tpCmd").count() == 1,
+                  "终端页有输入行(terminal_run,沙箱照拦)")
+            check(page.evaluate("() => document.getElementById('termOverlay')") is None,
+                  "旧「后台命令」只读弹窗已拆除(v0.9.161)")
 
             # ---- 4. 自动化面板 ----
             page.click("#btnAutomate")
@@ -298,7 +304,15 @@ def main() -> int:
                                    ".classList.contains('show')")
 
             # ---- 5. 子智能体单独成节(p9/p10) ----
-            page.click("#btnActivity")
+            # v0.9.159 起终端按钮开的是侧边栏面板 —— 走到这里面板可能已经开着,
+            # 监控键是开关不是"确保开":先判再开,别把上一段留下的开态点关了。
+            if not page.evaluate("() => document.querySelector('.app')"
+                                 ".classList.contains('act-open')"):
+                page.click("#btnActivity")
+            # v0.9.159 起面板里有多页:上一段可能停在终端页 —— 活动页不切过来,
+            # #actBody 是隐藏的,下面的点击会因为"不可见"等到天荒地老。
+            # (SidePages 是 const 不挂 window,走 openPanel 这条公开的路。)
+            page.evaluate('() => openPanel("side:activity")')
             page.wait_for_function("() => document.querySelectorAll('#actBody .act-sect')"
                                    ".length >= 4")
             heads = page.eval_on_selector_all("#actBody .act-cap b",

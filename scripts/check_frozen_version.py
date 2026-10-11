@@ -1302,6 +1302,9 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.160 侧聊页(漏 SideChatFeed = 事件路由的钩子不在,侧聊的回复
     # 永远画不进页面;漏 scThread = 线程清单没有着落)
     "SideChatFeed", "scThread", "sidechat_send",
+    # v0.9.161 拖宽(漏 --sp-w = 列宽与地图让位分家;漏 sp-resizer = 把手不在,
+    # 宽度就回不去可调的形状)
+    "--sp-w", "sp-resizer",
     # v0.9.94 p3/p5:权限档位改成界面自己画的浮层菜单(原生 select 的白字在深色
     # 模式下看不见)。漏 permPill = 顶栏那个按钮整个没了;漏 permMenu = 点了没菜单
     "permPill", "permMenu", "PERM_META",
@@ -1382,9 +1385,13 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.112 p2/p5:轮次那一叠小卡、收起侧栏、终端与自动化两个面板
     # (漏 turnPopToggle = 刻度点了没反应,还是"一长条看不到头";
     #  漏 toggleSide = Ctrl+B 与那颗按钮都是死的;
-    #  漏 termLoad/autoLoad = 两个弹层有了壳,里面永远没数据)
-    "turnPopToggle", "toggleSide", "applySide", "termLoad", "autoLoad",
+    #  漏 autoLoad = 弹层有了壳,里面永远没数据。
+    #  termLoad 已随「后台命令」只读弹窗退役(v0.9.161):终端的账改由
+    #  侧边栏终端页的 tpLoad 管,针跟着搬家 —— 见 FRONTEND_TARGETS 前段。)
+    "turnPopToggle", "toggleSide", "applySide", "autoLoad",
     "buildSubagents", "subagentRows", "actGroupFold",
+    # v0.9.159/161:侧边栏终端页接手了旧弹窗的账(tpLoad 是它的取数函数)
+    "tpLoad",
     # p7/p8:地图舞台的下限与 git 降级那两行 —— 样式与字段名都在前端这一侧
     "min-height:min(42vh, 300px)", "e.git_note", "e.chrome",
     # v0.9.114 观测线(W1/W2/W4/W7/W8/W9):监控栏翻车段 + 失败卡 + 定位现场
