@@ -334,7 +334,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
         # 漏 instruction_layers/instructions_line = 侧栏那一行永远空着,"读没读到"又变回扯皮。
         "build_system_prompt", "agents_prompt_section", "user_agents_prompt_section",
         "instructions_prompt_section", "instruction_layers", "instructions_line",
-        "project_agents_path", "_read_instruction", "_instruction_body",
+        # v0.9.153 J:根那一层从"一份文件"变成"一组来源"(`AGENTS.md` + `.cursorrules`
+        # + `.clinerules` + `.cursor/rules/*.mdc`),取层与合并搬进了这两支 —— 漏它们 =
+        # 装好的包里那些名字**一份都不认**(用户从 Cursor / Cline 带来的规矩静默消失,
+        # 而源码态一切正常)。`project_agents_path` 随之**删掉**:它原先唯一的调用点是
+        # `/instructions` 报路径,现在一个调用点都没有了 —— 而针只该钉"丢了会坏的东西",
+        # 钉一个没人调用的函数是假闸。
+        "_root_sources", "_combined_root_found",
+        "COMPAT_RULE_FILES", "CURSOR_RULE_DIR", "CURSOR_RULE_SUFFIXES",
+        "_read_instruction", "_instruction_body",
         # v0.9.127 §四.2「首次采纳点头」:漏 `agents_adoption` = 装好的包里没人知道
         # 这份项目文件采没采纳(那一段就静默不注入,而侧栏照旧报"项目级 37 行");
         # 漏 `adopt_agents` = 点了头也没处记,每一问都重弹一张卡。

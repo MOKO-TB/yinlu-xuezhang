@@ -177,7 +177,7 @@ def _instructions_text(workspace) -> str:
     """
     from minicode.app_setup import (AGENTS_CHAR_LIMIT, INSTRUCTION_GUARD,
                                     USER_AGENTS_NAME, app_path,
-                                    instruction_layers, project_agents_path)
+                                    instruction_layers)
     layers = instruction_layers(workspace)
     lines = ["这一轮提示词里的指令层:内置那一份 + 下面这些"]
     if not layers:
@@ -185,13 +185,26 @@ def _instructions_text(workspace) -> str:
         lines.append(f"  想给自己定规矩:在 {app_path(USER_AGENTS_NAME)} 写一份(跨项目生效),"
                      f"或在工作区根放 {USER_AGENTS_NAME}(只对这个项目;也能用 /init 起草)")
     for it in layers:
-        where = (app_path(USER_AGENTS_NAME) if it["scope"] == "用户级"
-                 else project_agents_path(workspace))
+        if it["scope"] == "未读":
+            # 看到了但没读的(j,v0.9.153):**这一行不能省** —— 它正是
+            # "我明明在 .cursor/rules/ 里写了这一条,它怎么不听"的答案。
+            lines.append(f"  • 没读 {it['name']} —— {it['why']}")
+            lines.append("    (本项目不做规则引擎:带条件的一条不假装生效;"
+                         "想让它对所有文件生效,就把它并进上面那一份)")
+            continue
+        if it["scope"] == "用户级":
+            where = app_path(USER_AGENTS_NAME)
+        elif it["scope"] == "目录级":
+            where = f"{workspace}\\({it['rel']})"
+        else:
+            # 项目级现在可能是**一组**来源(`AGENTS.md` + `.cursorrules` +
+            # `.cursor/rules/*.mdc`),所以路径报的是工作区根,而不是某一份文件。
+            where = f"{workspace}\\({'、'.join(it.get('sources') or [it['name']])})"
         cut = (f"(超过 {AGENTS_CHAR_LIMIT} 字,只注入了前面那一截,后面没进提示词)"
                if it["truncated"] else "")
         # 项目级那一行要说得出"在场但没采纳"(v0.9.127 §四.2):这一屏的全部意义
         # 就是让用户不必猜"它到底读了没有"。
-        pending = (it["scope"] == "项目级" and not it.get("adopted", True))
+        pending = (it["scope"] in ("项目级", "目录级") and not it.get("adopted", True))
         lines.append(f"  • {it['scope']} {it['name']}:"
                      f"{it['lines']} 行 / {it['chars']} 字{cut}"
                      + ("  ← 还没点过头,**没进提示词**" if pending else ""))

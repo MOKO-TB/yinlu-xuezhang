@@ -26,6 +26,7 @@ from minicode import permspec
 from minicode.sandbox import SandboxState, policy_from_raw
 from minicode.session import Session
 from minicode.skills import load_skills, skill_dirs, skills_prompt_section
+from minicode.skills import _parse_frontmatter
 from minicode.subagents import build_task_tool
 from minicode.tools.base import ToolContext
 from minicode.tools.registry import build_default_registry
@@ -34,6 +35,20 @@ from minicode.tools.registry import build_default_registry
 AGENTS_CHAR_LIMIT = 4000   # 一份指令文件的注入截断(与 memory 4000 同量级)
 AGENTS_FILES = ("AGENTS.md", ".agents.md")   # Codex/ZCode/Claude Code 同款约定
 USER_AGENTS_NAME = "AGENTS.md"   # 用户级与项目级**同名不同位**:一个词,两个位置
+
+# ---- 别的工具的规则文件(J,v0.9.153)---------------------------------------------
+# 它们是同一件事的另一个名字:"仓库根上那份给 agent 的指令"。所以它们进的是**同一层**
+# (项目级)、共用**一次**采纳点头 —— 而"共用一次"是有意的:`AGENTS.md` 与 `.cursorrules`
+# 都是"这个仓库自带的规矩",拆成两次点头只会让人把同一件事点两遍。
+COMPAT_RULE_FILES = (".cursorrules", ".clinerules")
+
+# Cursor 现在把规则拆成一个目录好几个文件(`.cursor/rules/*.mdc`,frontmatter 里用
+# `globs:` 说"只对哪些文件生效")。**只读没有条件的那几条**,带 `globs` 的一律不读:
+# 这个项目刻意不做规则引擎(见 `docs/roadmap-分层指令文件.md` §五.2)。假装按 glob
+# 生效,就会做出"我明明只在 .py 上要这条,它却对所有文件都说" —— 那比不读更坏。
+# 不读的那些**会在报表里点名**(带理由),因为"我写了它没读"必须说得出口。
+CURSOR_RULE_DIR = ".cursor/rules"
+CURSOR_RULE_SUFFIXES = (".mdc", ".md")
 
 # 两份指令文件都带这句话。它不是客套,是把"就近优先"的边界写死在提示词里:
 # 风格与流程可以按用户的习惯改,沙箱边界、敏感路径硬禁、确认门、"没答当没同意"
@@ -76,22 +91,85 @@ def _instruction_body(found: dict) -> str:
               "剩下的没进提示词,请把它拆薄或删掉)")
 
 
-def project_agents_path(workspace) -> Path | None:
-    """工作区里那份指令文件的真位置;两份名字都没有就回 None。"""
+def _root_sources(workspace) -> tuple[list[dict], list[dict]]:
+    """根那一层的**全部**指令来源,回 `(读了的, 看到但没读的)`。
+
+    每条是 `{name, path, found}`(读了的)或 `{name, path, why}`(没读的)。
+    `name` 是相对工作区的路径形式 —— 一份文件叫得出来是哪一份,用户才认得出读的是哪个。
+    """
+    ws = Path(workspace)
+    used: list[dict] = []
+    skipped: list[dict] = []
+    # ① 本项目自己的名字:同族的**只取第一个**(它们互为别名,两份都读会把同一条规矩
+    #    读进去两遍),顺序照 `AGENTS_FILES`。
     for name in AGENTS_FILES:
-        p = Path(workspace) / name
+        p = ws / name
         if p.is_file():
-            return p
-    return None
+            found = _read_instruction(p)
+            if found["exists"]:
+                used.append({"name": name, "path": p, "found": found})
+            break
+    # ② 别的工具的规则文件:各自的**都读** —— 它们不是互为别名,是不同工具各写了一份。
+    for name in COMPAT_RULE_FILES:
+        p = ws / name
+        if not p.is_file():
+            continue
+        found = _read_instruction(p)
+        if found["exists"]:
+            used.append({"name": name, "path": p, "found": found})
+    # ③ Cursor 的规则目录:只读**没有条件**的那几条;带 `globs` 的进 `skipped` 并写明理由。
+    d = ws / CURSOR_RULE_DIR
+    if d.is_dir():
+        try:
+            entries = sorted(d.iterdir())
+        except OSError:
+            entries = []
+        for p in entries:
+            if not p.is_file() or p.suffix.lower() not in CURSOR_RULE_SUFFIXES:
+                continue
+            found = _read_instruction(p)
+            if not found["exists"]:
+                continue
+            rel = f"{CURSOR_RULE_DIR}/{p.name}"
+            meta, body = _parse_frontmatter(found["text"])
+            if str(meta.get("globs") or "").strip():
+                skipped.append({"name": rel, "path": p,
+                                "why": "带 globs,是按文件类型条件生效的"})
+                continue
+            # 正文之外的 frontmatter **不进正文**:那是给别的工具看的元数据,
+            # 塞进提示词等于让 `description:` / `alwaysApply:` 这些键冒充规矩。
+            text = body.strip() or found["text"]
+            used.append({"name": rel, "path": p,
+                         "found": dict(found, text=text, chars=len(text),
+                                       lines=len(text.splitlines()),
+                                       truncated=len(text) > AGENTS_CHAR_LIMIT,
+                                       sha=hashlib.sha256(
+                                           text.encode("utf-8")).hexdigest())})
+    return used, skipped
 
 
-# ---------------------------------------------------------------- 第三级(v0.9.149)
-# 子目录就近 AGENTS.md:按**被读/被改的那个文件**往上找,而不是按 cwd。
-# 为什么锚点是文件不是 cwd:学长从不 chdir,cwd 永远只是工作区根 —— 拿它当锚点
-# 等于这一层永远只有一份,与两级没有区别。而"改哪个目录的文件、就按哪个目录的
-# 规矩来"是这一层唯一说得通的语义(与 Codex/Cursor/Claude Code 同一口径)。
-# 取层是**只算这一个目标的那条链**,不递归扫全工作区:几百个目录的仓库不会因为
-# 这一层变慢,也不会把没碰过的目录的规矩塞进上下文。
+def _combined_root_found(workspace) -> tuple[dict | None, list[dict]]:
+    """把根那一层的多个来源拼成一份 `found`(形状与 `_read_instruction` 一致)。
+
+    **`sha` 覆盖拼起来的那一整段正文 —— 这是这一手最要紧的地方。** 采纳记的是"这一组
+    内容"的指纹,所以改 `.cursorrules` 里一个字也会让它回到"没采纳",而不是因为
+    `AGENTS.md` 没动就静默算数(那会是一条看不见的缝:别人的文件改了,点头照旧有效)。
+    """
+    used, skipped = _root_sources(workspace)
+    if not used:
+        return None, skipped
+    if len(used) == 1:
+        text = used[0]["found"]["text"]
+    else:
+        # 多份时各自带一行来源头:模型要分得出"这条规矩是谁写的" ——
+        # 用户自己的 `AGENTS.md` 与从别处带进来的 `.cursorrules` 不是一回事。
+        text = "\n\n".join("## 来自 %s\n%s" % (it["name"], it["found"]["text"])
+                           for it in used)
+    return {"exists": True, "path": used[0]["path"], "text": text,
+            "lines": len(text.splitlines()), "chars": len(text),
+            "truncated": len(text) > AGENTS_CHAR_LIMIT,
+            "sha": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "sources": [it["name"] for it in used]}, skipped
 
 
 def _rel_dir(workspace: Path, d: Path) -> str:
@@ -212,15 +290,18 @@ def instruction_layers(workspace, extra_rels=()) -> list[dict]:
         out.append({"scope": "用户级", "name": USER_AGENTS_NAME,
                     "lines": user["lines"], "chars": user["chars"],
                     "truncated": user["truncated"]})
-    p = project_agents_path(workspace)
-    if p is not None:
-        proj = _read_instruction(p)
-        if proj["exists"]:
-            out.append({"scope": "项目级", "name": p.name,
-                        "lines": proj["lines"], "chars": proj["chars"],
-                        "truncated": proj["truncated"],
-                        "adopted": (permspec.agents_adopted_sha(workspace)
-                                    == proj["sha"])})
+    found, skipped = _combined_root_found(workspace)
+    if found is not None:
+        out.append({"scope": "项目级", "name": " + ".join(found["sources"]),
+                    "sources": found["sources"],
+                    "lines": found["lines"], "chars": found["chars"],
+                    "truncated": found["truncated"],
+                    "adopted": (permspec.agents_adopted_sha(workspace)
+                                == found["sha"])})
+    for item in skipped:
+        # **看到了但没读的也要报。** 这一屏的全部意义是"它到底读了没有";把它们吞掉,
+        # 用户就会以为"我明明在 `.cursor/rules/` 里写了这一条,它怎么不听"。
+        out.append({"scope": "未读", "name": item["name"], "why": item["why"]})
     for rel in dict.fromkeys(extra_rels):        # 去重且保序
         if not rel:
             # 根那一层已经作为「项目级」报过了(它走的是系统提示词那条路,不是
@@ -242,19 +323,32 @@ def instructions_line(workspace, extra_rels=()) -> str:
 
     项目级还没点过头采纳时,后面缀一句「(未采纳)」—— 侧栏那一行不能让人以为
     它已经在起作用。
+
+    **「未读」那些(j,v0.9.153)不占一个「(N 行)」格子**:它们没被读,报行数没有意义;
+    压成一句尾注(名字 + 理由 + 条数),因为它们正是"我明明写了它怎么不听"的答案。
     """
     layers = instruction_layers(workspace) if not extra_rels else \
         instruction_layers(workspace, extra_rels)
     if not layers:
         return ""
     bits = []
+    skipped = []
     for it in layers:
+        if it["scope"] == "未读":
+            skipped.append(it)
+            continue
         tail = "、已截断" if it["truncated"] else ""
         if it["scope"] in ("项目级", "目录级") and not it.get("adopted", True):
             tail += "、未采纳"
         label = f"目录级 {it['rel']}/" if it["scope"] == "目录级" else it["scope"]
         bits.append(f"{label}({it['lines']} 行{tail})")
-    return "内置 + " + " + ".join(bits)
+    line = ("内置 + " + " + ".join(bits)) if bits else ""
+    if skipped:
+        names = "、".join(it["name"] for it in skipped[:3])
+        more = f" 等 {len(skipped)} 份" if len(skipped) > 3 else ""
+        note = f"(另有没读的:{names}{more} —— {skipped[0]['why']})"
+        line = f"{line} {note}".strip()
+    return line
 
 
 def user_agents_prompt_section() -> str:
@@ -280,17 +374,15 @@ def agents_adoption(workspace) -> dict:
     而 `agents_prompt_section` 只认后者。
     """
     empty = {"present": False, "adopted": False, "sha": "", "name": "",
-             "lines": 0, "chars": 0, "found": None}
-    p = project_agents_path(workspace)
-    if p is None:
-        return empty
-    found = _read_instruction(p)
-    if not found["exists"]:
+             "lines": 0, "chars": 0, "found": None, "sources": []}
+    found, _skipped = _combined_root_found(workspace)
+    if found is None:
         return empty
     return {"present": True,
             "adopted": permspec.agents_adopted_sha(workspace) == found["sha"],
-            "sha": found["sha"], "name": p.name,
-            "lines": found["lines"], "chars": found["chars"], "found": found}
+            "sha": found["sha"], "name": " + ".join(found["sources"]),
+            "lines": found["lines"], "chars": found["chars"], "found": found,
+            "sources": found["sources"]}
 
 
 def adopt_agents(workspace) -> str:
@@ -336,15 +428,19 @@ def instruction_signature(workspace) -> str:
     """
     import hashlib
     h = hashlib.sha1()
-    paths = [app_path(USER_AGENTS_NAME)]
-    pj = project_agents_path(workspace)
-    if pj is not None:
-        paths.append(pj)
-    for f in paths:
-        try:
-            h.update(f.read_bytes())
-        except OSError:
-            h.update(b"<missing>")
+    try:
+        h.update(app_path(USER_AGENTS_NAME).read_bytes())
+    except OSError:
+        h.update(b"<missing>")
+    # **折的是合并后的正文**,不是"第一份文件的字节":根上现在可能有好几份来源
+    # (`AGENTS.md` + `.cursorrules` + `.cursor/rules/*.mdc`),只折第一份的话,
+    # 改 `.cursorrules` 不会触发重建 —— 表现是"我改了规矩它还是老样子"。
+    combo, skipped = _combined_root_found(workspace)
+    h.update((combo["sha"] if combo else "<none>").encode("ascii"))
+    # 没读的那些也折进来:多出一条带 globs 的规则,报表那一屏要跟着变
+    # (它报的是"看到了但没读",而"看到"这件事本身变了就该重建)。
+    for item in skipped:
+        h.update(("|skip:" + item["name"]).encode("utf-8"))
     h.update(b"|adopted" if agents_adoption(workspace)["adopted"] else b"|pending")
     try:
         names = "|".join(sorted(x.name for x in load_skills(skill_dirs(workspace))))

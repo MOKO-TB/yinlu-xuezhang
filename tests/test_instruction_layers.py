@@ -350,3 +350,118 @@ def test_the_ui_line_lists_the_touched_layers(config, ctx, tmp_path, monkeypatch
     agent.run_turn("看一眼")
     line = app_setup.instructions_line(tmp_path, sorted(agent._agents_layers))
     assert "目录级 sub/" in line
+
+
+# ------------------------------ J:别的工具的规则文件进的是**同一层**(v0.9.153)
+# 这一族的形状变化只有一个:**根那一层从"一份文件"变成了"一组来源"**。所以针钉三件
+# 事:那些名字真被读到、**采纳指纹覆盖这一整组**、以及"看到了但没读"的报得出来。
+def test_compat_rule_files_join_the_root_layer(tmp_path, monkeypatch):
+    """`.cursorrules` / `.clinerules` 与 `AGENTS.md` 进**同一层**,共用一次点头。"""
+    _agents_ws(tmp_path, monkeypatch, text="ROOT-MARKER")
+    (tmp_path / ".cursorrules").write_text("CURSOR-MARKER\n", encoding="utf-8")
+    (tmp_path / ".clinerules").write_text("CLINE-MARKER\n", encoding="utf-8")
+    info = app_setup.agents_adoption(tmp_path)
+    assert info["sources"] == ["AGENTS.md", ".cursorrules", ".clinerules"]
+    text = info["found"]["text"]
+    assert "ROOT-MARKER" in text and "CURSOR-MARKER" in text and "CLINE-MARKER" in text
+    assert "## 来自 .cursorrules" in text, "多份时各自要有来源头(模型要分得出谁写的)"
+
+
+def test_changing_a_compat_file_goes_back_to_unadopted(tmp_path, monkeypatch):
+    """**这一层最要紧的一支。**
+
+    采纳记的是**这一组合并内容**的指纹 —— 改 `.cursorrules` 一个字也必须回到
+    "没采纳",不能因为 `AGENTS.md` 没动就静默算数。那是这一层唯一一条看不见的缝:
+    别人的文件改了,而点头照旧有效。
+    """
+    _agents_ws(tmp_path, monkeypatch, text="ROOT-MARKER")
+    (tmp_path / ".cursorrules").write_text("CURSOR-MARKER\n", encoding="utf-8")
+    assert app_setup.adopt_agents(tmp_path)
+    assert app_setup.agents_adoption(tmp_path)["adopted"] is True
+    (tmp_path / ".cursorrules").write_text("CURSOR-MARKER 改了\n", encoding="utf-8")
+    assert app_setup.agents_adoption(tmp_path)["adopted"] is False
+    # 反过来:再**多出**一份也一样要重新点头
+    assert app_setup.adopt_agents(tmp_path)
+    (tmp_path / ".clinerules").write_text("新来的一份\n", encoding="utf-8")
+    assert app_setup.agents_adoption(tmp_path)["adopted"] is False
+
+
+def test_only_the_first_project_alias_is_read(tmp_path, monkeypatch):
+    """`AGENTS.md` 与 `.agents.md` 互为别名:**只读第一个**。
+
+    两份都读会把同一条规矩读进去两遍,而"读两遍"在提示词里看起来就像项目里本来
+    就写了两遍 —— 那种重复没人会去查,只会让 token 白花。
+    """
+    _agents_ws(tmp_path, monkeypatch, text="FIRST")
+    (tmp_path / ".agents.md").write_text("SECOND\n", encoding="utf-8")
+    info = app_setup.agents_adoption(tmp_path)
+    assert info["sources"] == ["AGENTS.md"]
+    assert "SECOND" not in info["found"]["text"]
+
+
+def test_unconditional_cursor_rules_are_read_and_conditional_ones_are_not(
+        tmp_path, monkeypatch):
+    """`.cursor/rules/*.mdc`:没有条件的那几条读,**带 `globs` 的不读但要点名**。
+
+    这个项目刻意不做规则引擎 —— 假装按 glob 生效,就会做出"我明明只在 .py 上要这条,
+    它却对所有文件都说"。而"不读"必须说得出口,那是"我写了它怎么不听"的答案。
+    """
+    _agents_ws(tmp_path, monkeypatch, text="ROOT")
+    d = tmp_path / ".cursor" / "rules"
+    d.mkdir(parents=True)
+    (d / "always.mdc").write_text(
+        "---\ndescription: 无条件\nalwaysApply: true\n---\nALWAYS-MARKER\n",
+        encoding="utf-8")
+    (d / "onlypy.mdc").write_text(
+        "---\nglobs: \"*.py\"\n---\nONLYPY-MARKER\n", encoding="utf-8")
+    info = app_setup.agents_adoption(tmp_path)
+    assert ".cursor/rules/always.mdc" in info["sources"]
+    assert "ALWAYS-MARKER" in info["found"]["text"]
+    assert "ONLYPY-MARKER" not in info["found"]["text"], "带 globs 的不许假装生效"
+    line = app_setup.instructions_line(tmp_path)
+    assert "onlypy.mdc" in line and "globs" in line, line
+
+
+def test_the_frontmatter_does_not_pose_as_rules(tmp_path, monkeypatch):
+    """`.mdc` 的 frontmatter 是**给别的工具看的元数据**,不进正文。
+
+    塞进去等于让 `description:` / `alwaysApply:` 这些键冒充"用户写的规矩" ——
+    模型会把一行元数据当成一条要求去执行。
+    """
+    _agents_ws(tmp_path, monkeypatch, text="ROOT")
+    d = tmp_path / ".cursor" / "rules"
+    d.mkdir(parents=True)
+    (d / "a.mdc").write_text(
+        "---\ndescription: 这是元数据\nalwaysApply: true\n---\n正文那一句\n",
+        encoding="utf-8")
+    text = app_setup.agents_adoption(tmp_path)["found"]["text"]
+    assert "正文那一句" in text
+    assert "这是元数据" not in text and "alwaysApply" not in text
+
+
+def test_the_unread_ones_do_not_break_either_report(tmp_path, monkeypatch):
+    """「未读」那类**没有 `lines`/`chars`** —— 两条报表路都不许因此炸。
+
+    这是这次形状变化最容易漏的一处:侧栏那一行与 `/instructions` 都按"每条都有行数
+    字数"写的,而这一类报的是"没读 + 为什么"。
+    """
+    from main import _instructions_text
+    _agents_ws(tmp_path, monkeypatch, text="ROOT")
+    d = tmp_path / ".cursor" / "rules"
+    d.mkdir(parents=True)
+    (d / "onlypy.mdc").write_text("---\nglobs: \"*.py\"\n---\nX\n", encoding="utf-8")
+    layers = app_setup.instruction_layers(tmp_path)
+    assert any(x["scope"] == "未读" for x in layers)
+    line = app_setup.instructions_line(tmp_path)
+    assert "没读的" in line and "onlypy.mdc" in line
+    text = _instructions_text(tmp_path)
+    assert "没读" in text and "onlypy.mdc" in text and "规则引擎" in text
+
+
+def test_no_compat_files_changes_nothing(tmp_path, monkeypatch):
+    """一个兼容名字都没有时,根那一层与 v0.9.152 之前**逐字一样**。"""
+    _agents_ws(tmp_path, monkeypatch, text="ONLY-ROOT")
+    info = app_setup.agents_adoption(tmp_path)
+    assert info["sources"] == ["AGENTS.md"]
+    assert info["found"]["text"] == "ONLY-ROOT"
+    assert "## 来自" not in info["found"]["text"], "只有一份时不该多出来源头"
