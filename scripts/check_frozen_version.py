@@ -60,6 +60,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # 界面说明写「关掉就回到以前的行为」而实际关不掉 —— 一句假话
                         "read_before_edit"),
     "minicode.gui_bridge": ("test_model", "fetch_models",
+                            # v0.9.159 侧边栏底座的桥面(漏收 = tab 摆出来了,
+                            # 点一下就是 TypeError —— 界面比后端诚实不了)
+                            "get_extensions", "git_overview", "git_status",
+                            "git_diff", "git_log", "git_stage", "git_unstage",
+                            "git_commit", "git_restore", "git_restore_snapshot",
+                            "file_read", "file_write",
+                            "terminal_run", "terminal_kill",
                             # v0.9.142「智能配置」那一屏的数据源(漏收 = 前端那只开关
                             # 永远停在「正在问这台机器知道些什么…」,而界面看着正常)
                             "model_auto_info",
@@ -413,6 +420,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.activate": ("KIND_PANELS", "panel_uri", "parse_uri",
                           "register_protocol", "handoff", "start_listener",
                           "pending_uri_arg", "take_pending_panel"),
+    # v0.9.159:侧边栏底座的后端三件(漏收 = 界面上 tab 摆出来了、桥一敲就是 TypeError)
+    "minicode.gitpanel": ("status", "diff", "log", "stage", "unstage",
+                          "commit", "restore", "snapshot_list",
+                          "snapshot_restore", "_safe_rel", "available"),
+    "minicode.filepanel": ("read", "write"),
+    "minicode.extensions": ("extension_root", "discover", "_validate"),
     "minicode.reasoning": ("reasoning_snapshot", "get_capability",
                            "apply_reasoning_choice",
                            # v0.9.130:声明优先于内置表那两层(漏收 = 🧠 按钮又开始只认模型名)
@@ -568,6 +581,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                              "_bg_notify_done", "BG_NOTIFY_KIND",
                              "notified",
                              "py_script", "_py_runtime_command",
+                             # v0.9.159:终端页那条路(漏收 = 输入行按下去没反应,
+                             # 「后台命令」面板也看不见用户自己跑的那条)
+                             "user_run", "user_kill", "terminal_facts",
     # v0.9.84:后台命令(漏收 = `bash background=true` 在装好的包里静默变回同步等,
     # 长任务照样 300 秒被砍,而工具描述还在教模型用后台)
     "bash_status", "bash_kill", "_BgJob", "_bg_start", "_bg_kill_tree",
@@ -1272,6 +1288,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
 # 包里少了这一屏」只能靠这条补上。漏收的表现全是不报错的那种:控件不在,点了没反应,
 # 或者干脆还是旧的那副样子。
 FRONTEND_TARGETS: tuple[str, ...] = (
+    # v0.9.159 侧边栏底座(漏一条 = 装好的包里 tab 条不出现或页面对不上账:
+    # spTabs/spPages 是容器,SidePages/MiniCodePages 拼写写死在前端源码里,
+    # git_overview/terminal_run/file_read 是页面上每一个数的来源)
+    'id="spTabs"', 'id="spPages"', 'data-sp="activity"', "SidePages",
+    "MiniCodePages", "git_overview", "terminal_run", "file_read",
+    "spSubBody", "fpList", "gpBody",
     # v0.9.94 p3/p5:权限档位改成界面自己画的浮层菜单(原生 select 的白字在深色
     # 模式下看不见)。漏 permPill = 顶栏那个按钮整个没了;漏 permMenu = 点了没菜单
     "permPill", "permMenu", "PERM_META",

@@ -15,9 +15,11 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
-from minicode.sandbox import scrub_env
+from minicode.sandbox import check_command, scrub_env
+from minicode.sandbox import REJECT as sandbox_REJECT
 from minicode.tools.base import ToolContext
 
 DEFAULT_TIMEOUT = 60
@@ -947,3 +949,57 @@ def py_script(ctx: ToolContext, path: str, timeout: int = 120) -> str:
     if proc.returncode != 0 and not out and not err:
         text += "\n(无输出。脚本可能抛了异常却没打印,检查代码或让脚本 print 关键步骤。)"
     return text + env_note
+
+
+# ---------------------------------------------------- 终端页那条路(v0.9.159)
+
+USER_CMD_MAX_CHARS = 4000
+
+
+def user_run(config, sandbox_state, workspace, command: str) -> dict:
+    """侧边栏终端页:用户亲手跑一条命令,进**同一本**后台账(`_bg_jobs`,
+    「后台命令」面板与 `terminal_facts()` 看见的就是它 —— 不另立一本账,
+    不然"我跑的那条"在只读面板里看不见,两本账迟早对不上)。
+
+    沙箱硬闸在这里拦:`check_command` 的 REJECT 级(禁配规则/断网时的联网
+    命令)谁来了都不放 —— **硬闸不认人**;ASK 级(隐匿执行等)由前端在
+    提交前先问过用户:用户本人就是确认人,这一页存在的意义就是这个。
+    """
+    text = str(command or "").strip()
+    if not text:
+        return {"ok": False, "msg": "命令是空的"}
+    if len(text) > USER_CMD_MAX_CHARS:
+        return {"ok": False, "msg": f"命令太长(>{USER_CMD_MAX_CHARS} 字符),先拆一拆"}
+    policy = getattr(sandbox_state, "policy", None)
+    if policy is None:
+        from minicode.sandbox import SandboxPolicy
+        policy = SandboxPolicy()
+    verdict, why = check_command(policy, text)
+    if verdict == sandbox_REJECT:
+        return {"ok": False, "msg": f"沙箱拦下了这条命令:{why}"}
+    argv = resolve_shell_argv(getattr(config, "shell", ""))
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    shim = types.SimpleNamespace(config=config, sandbox=sandbox_state,
+                                 workspace=workspace)
+    env, dropped = _child_env(shim)
+    env_note = _env_note(dropped)
+    with _bg_lock:
+        before = set(_bg_jobs)
+    msg = _bg_start(shim, text, argv, env, creationflags, env_note)
+    with _bg_lock:
+        new = [j for k, j in _bg_jobs.items() if k not in before]
+    if not new:
+        return {"ok": False, "msg": msg}
+    job = new[0]
+    return {"ok": True, "id": job.id, "msg": msg}
+
+
+def user_kill(job_id: str) -> dict:
+    """终端页的「停」:杀树,与 `bash_kill` 同一套(只杀 bash.exe 会留孤儿)。"""
+    key = str(job_id or "").strip()
+    with _bg_lock:
+        job = _bg_jobs.get(key)
+    if job is None:
+        return {"ok": False, "msg": f"没有这个后台任务:{key or '(空)'}"}
+    ok, note = _bg_kill_tree(job)
+    return {"ok": ok, "msg": note or (f"{key} 已停下" if ok else f"{key} 没能停下")}

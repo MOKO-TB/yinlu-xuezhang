@@ -106,6 +106,8 @@ TABLE: tuple[Entry, ...] = (
     Entry("shadow-git", "影子 git 库(整树检查点)", PERSONAL, False, kind="family",
           pattern="*",
           note="H 的检查点:能盖住 bash/py_script 间接改过的文件 —— 里面是工作区每一份文件的原文,绝不外发、永不进迁移包"),
+    Entry("extensions", "侧边栏三方扩展", PERSONAL, True, kind="family", pattern="*",
+          note="v0.9.159:每个目录是一份别人写的侧边栏页面(manifest + page.js);放进这里 = 你亲手装的,迁移包带得走,密钥类东西别塞"),
     Entry("sessions", "聊天记录", PERSONAL, True, kind="family", pattern="*.jsonl",
           note="每一次对话的留档;包太大可以在导出时不勾它"),
     Entry("memory/MEMORY.md", "长期记忆(跨项目)", PERSONAL, True, root="home",

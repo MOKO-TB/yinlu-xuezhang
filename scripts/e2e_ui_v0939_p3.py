@@ -31,13 +31,18 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # 界面上从上到下那一串(与 tests/test_rail_entries.py 那份清单同源):
-# v0.9.39 搬进来 14 颗,v0.9.89 加了第 15 颗「体检」—— 两份清单必须一起改。
+# v0.9.39 搬进来 14 颗,v0.9.89 加「体检」(后来下了架,清单跟着摘),
+# v0.9.112 加「自动化」;v0.9.159 加底座三键。
+# ⚠ 「◀ 收起左侧栏」**不在**这份清单里:它不是面板入口,是开关,归顶栏
+#   (tests/test_rail_entries.py 的 TOPBAR_ICON_IDS 同一口径)—— v0.9.112 起
+#   它搬进顶栏,留在这里会把「顶栏不再有面板入口」那条检查自己撞红。
 RAIL_IDS = ["btnMap", "btnSchedule", "btnMood", "btnPlan", "btnActivity",
             "btnSkills", "btnMemory", "btnUsage",
-            "btnTerminal", "btnAutomate",       # v0.9.112:终端 / 自动化
-            "btnMyData", "btnHealth", "btnSandbox",
-            "btnExport", "btnUndo", "btnCompact", "btnTheme",
-            "btnSideToggle"]                     # v0.9.112:收起左侧栏
+            "btnTerminal",
+            "btnSpGit", "btnSpFiles", "btnSpSubs",   # v0.9.159:侧边栏底座三入口
+            "btnAutomate",                       # v0.9.112:自动化
+            "btnMyData", "btnSandbox",
+            "btnExport", "btnUndo", "btnCompact", "btnTheme"]
 
 STUB_JS = """
 window.__CALLS__ = [];
@@ -101,6 +106,14 @@ const base = {
   get_session_metrics: () => Promise.resolve({ok: false}),
   refresh_sessions: () => Promise.resolve({ok: true}),
   read_clipboard: () => Promise.resolve({text: "", image: false, source: "empty"}),
+  /* v0.9.117 两栏仪表盘的数据契约:summary 至少是空对象(renderUsage 直接读
+     sum.cost_usd,undefined 会炸进 catch),heatmap 缺席走"暂无记录"那句。
+     已登记的方法不走兜底记录器,账要自己记。 */
+  get_usage_dashboard: () => {
+    window.__CALLS__.push(["get_usage_dashboard"]);
+    return Promise.resolve({ok: true, summary: {}, tiles: {},
+                            meta: {}, models: [], heatmap: null});
+  },
 };
 /* 没列出来的方法:记一笔账再回 {ok: true}。断言查的是"该出现的那个名字出现了",
    所以名字打错/换掉照样红 —— 兜底不会把错的方法名蒙过去。 */
@@ -270,21 +283,33 @@ def main() -> int:
               "技能弹层里是 get_skills 给的空态那句话")
         close_overlays()
 
-        # ---- 8. 🧠 记忆整理(动作类:要看见桥被叫到) ----
+        # ---- 8. 🧠 记忆整理(动作类:要看见桥被叫到)----
+        # v0.9.97 起这颗按钮打开的是「记一条 / 整理」卡片,**整理要点卡片里那颗
+        # 「整理记忆」** —— 按钮本身不再自动整理(旧断言在这里空转过一场)。
         before = len(calls("consolidate_memory"))
         page.click("#btnMemory")
+        page.wait_for_selector("#memoryOverlay.show")
+        page.click("#memDream")
         page.wait_for_timeout(400)
         got = calls("consolidate_memory")
         check(len(got) == before + 1 and got[-1][1] == "all",
               f"记忆那一格仍然叫 consolidate_memory('all'):{got[-1:] }")
         check(cap("btnMemory") == "记忆 7",
               f"整理完按后端回的新条数改口:{cap('btnMemory')!r}")
+        page.click("#memClose")
+        page.wait_for_timeout(150)
 
         # ---- 9. 📊 用量 ----
+        # v0.9.117 两栏仪表盘改版后,旧断言里的 `.usage-sum` 四格已不在 DOM 上
+        # (CSS 还留着,渲染早换成 tiles/热力图)—— 现在钉的是:弹层打开、
+        # 数据真敲了 get_usage_dashboard、空账说"暂无记录"而不是画零。
         page.click("#btnUsage")
         page.wait_for_selector("#usageOverlay.show")
-        check(page.locator("#usageBody .usage-sum .cell").count() == 4,
-              "用量弹层画出后端 summary 的那四格")
+        page.wait_for_timeout(250)
+        check(len(calls("get_usage_dashboard")) == 1,
+              "用量弹层的数据是问本机要的(get_usage_dashboard)")
+        check("暂无记录" in page.inner_text("#usageBody"),
+              "空账明说暂无记录,不拿零充数")
         close_overlays()
 
         # ---- 10. 💾 我的数据 ----
@@ -294,41 +319,8 @@ def main() -> int:
               "我的数据弹层里是真的数据目录路径(mydata_inventory 给的)")
         close_overlays()
 
-        # ---- 10b. 🩺 体检(v0.9.89):字全是后端给的,空组不渲染,修的那句只填不发 ----
-        payload = _stub_health()
-        before_h = len(calls("get_health"))
-        page.click("#btnHealth")
-        page.wait_for_selector("#healthOverlay.show")
-        got_h = calls("get_health")
-        check(len(got_h) == before_h + 1 and got_h[-1][1] is False,
-              f"开面板只跑本机那一档(deep=False),没擅自去问网络:{got_h[-1:]}")
-        body = page.inner_text("#hdBody")
-        check(payload["verdict"] in body,
-              f"结论那一句就是后端 verdict 的原文,界面没有自己判一遍:{body[:60]!r}")
-        check("有问题" in body and "要注意" in body and "正常" in body,
-              "三枚徽章写的都是后端 BADGE 里的那两个字")
-        for absent in ("联网与外部进程", "源码仓库闸"):
-            check(absent not in body, f"rows 为空的那一组整组不渲染:「{absent}」不该出现")
-        check("统计于 10:00:00" in page.inner_text("#hdTotals"),
-              "顶上那行时间是本轮算的时刻(后端 checked_at),不是页面加载时刻")
-        # 「问学长怎么修」:话进输入框,一个字都不发 —— 面板不许成为第二条批准通道
-        page.locator("#hdBody .hd-act").nth(1).click()
-        page.wait_for_timeout(200)
-        check(page.input_value("#input").startswith("请把这个项目根下的"),
-              f"那句修话只填进了输入框:{page.input_value('#input')[:24]!r}")
-        check(not calls("send_task"), "点那颗按钮没有替用户按回车(send_task 一次都没被叫)")
-        check("#healthOverlay" not in page.evaluate(
-            "() => [...document.querySelectorAll('.overlay.show')].map(e => '#' + e.id)"),
-            "填完就把面板收掉,输入框才是接下来要点的地方")
-        # 「去配置模型」:打开的是本来就有的那个对话框,不是面板里另起一张表
-        page.click("#btnHealth")
-        page.wait_for_selector("#healthOverlay.show")
-        page.locator("#hdBody .hd-act").first.click()
-        page.wait_for_selector("#provOverlay.show")
-        check("provOverlay" in page.evaluate(
-            "() => [...document.querySelectorAll('.overlay.show')].map(e => e.id)"),
-            "那颗按钮真的打开了模型管理对话框")
-        close_overlays()
+        # ---- 10b. 🩺 体检( v0.9.89 加,v0.9.112 下了架):这一段随之退役 ——
+        # 面板、按钮、get_health 三样在前端里一个都不剩,留着只会在这里超时。
 
         # ---- 11. 🛡 沙箱:点下去送的是"翻转后"的值,格子上跟着改口 ----
         before = len(calls("set_sandbox"))
@@ -365,15 +357,47 @@ def main() -> int:
         check(cap("btnTheme") == ("浅色" if dark_after else "深色"),
               f"格子上写的仍是'下一步能切去的那一档':{cap('btnTheme')!r}")
 
-        # ---- 13.5 🖥 终端 / ⏱ 自动化 / ◀ 收起侧栏(v0.9.112 新三颗)----
+        # ---- 13.5 🖥 终端 / 🌿🌿📄🤖 底座三键 / ⏱ 自动化 / ◀ 收起侧栏 ----
+        # v0.9.159 起 btnTerminal 改道侧边栏的终端页(与后台命令同一本账 + 输入行),
+        # 「后台命令」只读弹窗保留但不再是这一颗的目的地。
         page.click("#btnTerminal")
         page.wait_for_timeout(250)
-        check(page.evaluate("() => document.getElementById('termOverlay')"
-                            ".classList.contains('show')"),
-              "🖥 那一点真的打开后台命令面板")
+        check(page.evaluate("() => document.querySelector('.app')"
+                            ".classList.contains('act-open')"),
+              "🖥 那一点拉开侧边栏底座(v0.9.159 起终端住进这里)")
+        check(page.evaluate("() => document.querySelector('.sp-page[data-sp=\"terminal\"]')"
+                            " && !document.querySelector('.sp-page[data-sp=\"terminal\"]')"
+                            ".hidden"),
+              "🖥 落在终端页上")
         check(len(calls("get_terminal")) == 1,
-              "面板里的数据是问本机要的,不是前端自己攒一份")
-        page.click("#termClose")
+              "终端页的账是问本机要的,不是前端自己攒一份")
+        # 收合用 rail 的监控键(开合是它的事;btnActClose 活在活动页里,
+        # 现在激活的是终端页,它看不见)
+        page.click("#btnActivity")
+        page.wait_for_timeout(150)
+        page.click("#btnSpGit")
+        page.wait_for_timeout(250)
+        check(page.evaluate("() => document.querySelector('.sp-page[data-sp=\"git\"]')"
+                            " && !document.querySelector('.sp-page[data-sp=\"git\"]')"
+                            ".hidden"),
+              "🌿 那一点落在 Git 页(注册表同一条 open 路)")
+        page.click("#btnActivity")
+        page.wait_for_timeout(150)
+        page.click("#btnSpFiles")
+        page.wait_for_timeout(250)
+        check(page.evaluate("() => document.querySelector('.sp-page[data-sp=\"files\"]')"
+                            " && !document.querySelector('.sp-page[data-sp=\"files\"]')"
+                            ".hidden"),
+              "📄 那一点落在文件页")
+        page.click("#btnActivity")
+        page.wait_for_timeout(150)
+        page.click("#btnSpSubs")
+        page.wait_for_timeout(250)
+        check(page.evaluate("() => document.querySelector('.sp-page[data-sp=\"subagents\"]')"
+                            " && !document.querySelector('.sp-page[data-sp=\"subagents\"]')"
+                            ".hidden"),
+              "🤖 那一点落在子代理页")
+        page.click("#btnActivity")
         page.click("#btnAutomate")
         page.wait_for_timeout(250)
         check(page.evaluate("() => document.getElementById('autoOverlay')"

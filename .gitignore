@@ -5,6 +5,7 @@ config.json
 sessions/
 checkpoints/
 shadow-git/
+extensions/
 web-sessions/
 web-usage.log
 /web-daily.json

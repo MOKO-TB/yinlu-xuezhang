@@ -1793,6 +1793,88 @@ try {
            background:var(--primary-light); border-radius:var(--r-full);
            padding:1px 7px; flex:none; }
   body.act-open .map-panel{ right:300px; }        /* 两栏并排时地图不压住活动面板 */
+  /* ---- 侧边栏底座(v0.9.159):tab 条 + 页面容器。.sp-page 显隐用 hidden 属性
+     并显式写回 display(「flex 盖 hidden」那笔教训:hidden 会被更具体的 display
+     盖掉,所以这里把 [hidden] 的 display:none 写成同权重的一条)。 ---- */
+  .sp-tabs{ display:flex; align-items:center; gap:2px; flex:none;
+            padding:4px 7px; border-bottom:1px solid var(--line-soft); }
+  .sp-tab{ border:none; background:transparent; color:var(--text-2); cursor:pointer;
+           font-size:15px; padding:5px 7px; border-radius:var(--r-s); line-height:1; }
+  .sp-tab:hover{ background:var(--glass-lite); color:var(--text-1); }
+  .sp-tab.on{ background:var(--glass-lite); color:var(--text-1); }
+  .sp-spring{ flex:1; }
+  .sp-pages{ flex:1; min-height:0; min-width:0; display:flex; }
+  .sp-page{ flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
+  .sp-page[hidden]{ display:none; }
+  .sp-head{ display:flex; align-items:center; gap:7px; flex:none;
+            padding:8px 10px; border-bottom:1px solid var(--line-soft); }
+  .sp-head b{ font-size:12.5px; flex:1; min-width:0; overflow:hidden;
+              text-overflow:ellipsis; white-space:nowrap; }
+  .sp-body{ flex:1; min-height:0; overflow-y:auto; padding:8px 10px; }
+  .sp-empty{ color:var(--text-3); font-size:12px; line-height:1.8; padding:10px 2px; }
+  /* Git 页(gp-) */
+  .gp-branch{ font-family:Consolas,monospace; font-size:12px; color:var(--text-1); }
+  .gp-sync{ font-size:11px; color:var(--text-3); }
+  .gp-sect{ font-size:11px; color:var(--text-3); margin:10px 0 4px; }
+  .gp-row{ display:flex; align-items:center; gap:6px; padding:4px 6px;
+           border-radius:var(--r-s); cursor:pointer; }
+  .gp-row:hover{ background:var(--glass-lite); }
+  .gp-row.on{ background:var(--glass-lite); }
+  .gp-w{ flex:none; font-size:10.5px; color:var(--text-3); width:64px;
+         overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .gp-p{ flex:1; min-width:0; font-family:Consolas,monospace; font-size:11.5px;
+         color:var(--text-1); overflow:hidden; text-overflow:ellipsis;
+         white-space:nowrap; direction:rtl; text-align:left; }
+  .gp-ops{ flex:none; display:flex; gap:3px; }
+  .gp-diff{ flex:none; max-height:42%; overflow:auto; border-top:1px solid var(--line-soft);
+            background:var(--glass-soft); }
+  .gp-diff pre{ margin:0; padding:8px 10px; font-family:Consolas,monospace;
+                font-size:11px; line-height:1.5; white-space:pre-wrap;
+                word-break:break-all; color:var(--text-2); }
+  .gp-diff .dl-add{ color:var(--ok,#2f9e6e); }
+  .gp-diff .dl-del{ color:var(--danger,#c0392b); }
+  .gp-msg{ width:100%; min-height:52px; resize:vertical; background:var(--glass-lite);
+           border:1px solid var(--line-soft); border-radius:var(--r-s);
+           color:var(--text-1); padding:6px 8px; font-size:12px; font-family:inherit; }
+  .gp-bar{ display:flex; align-items:center; gap:8px; margin-top:5px; }
+  .gp-bar .st{ flex:1; font-size:11px; color:var(--text-3); }
+  .gp-commit{ flex:none; padding:8px 10px; border-top:1px solid var(--line-soft); }
+  /* 终端页:输入行(.tp-row/.tp-out/.tp-note 沿用后台命令面板那套) */
+  .tp-input{ flex:none; display:flex; gap:5px; padding:7px 10px;
+             border-top:1px solid var(--line-soft); }
+  .tp-input input{ flex:1; min-width:0; background:var(--glass-lite);
+    border:1px solid var(--line-soft); border-radius:var(--r-s);
+    color:var(--text-1); padding:6px 8px; font-size:12px;
+    font-family:Consolas,monospace; }
+  .tp-kill{ border:1px solid var(--line-soft); background:transparent;
+            color:var(--danger,#c0392b); border-radius:var(--r-s);
+            cursor:pointer; font-size:11px; padding:2px 7px; }
+  /* 文件页(fp-) */
+  .fp-crumb{ display:flex; align-items:center; gap:4px; flex-wrap:wrap;
+             font-size:11.5px; color:var(--text-2); }
+  .fp-crumb button{ border:none; background:transparent; color:var(--text-2);
+                    cursor:pointer; font-size:11.5px; padding:1px 3px; }
+  .fp-crumb button:hover{ color:var(--text-1); text-decoration:underline; }
+  .fp-row{ display:flex; align-items:center; gap:6px; padding:3px 6px;
+           border-radius:var(--r-s); cursor:pointer; font-size:12px; }
+  .fp-row:hover{ background:var(--glass-lite); }
+  .fp-row .n{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
+              white-space:nowrap; color:var(--text-1); }
+  .fp-row .s{ flex:none; font-size:10.5px; color:var(--text-3); }
+  .fp-view{ flex:1; min-height:0; overflow:auto; border-top:1px solid var(--line-soft);
+            padding:8px 10px; font-size:12px; line-height:1.6; color:var(--text-1); }
+  .fp-view pre{ white-space:pre-wrap; word-break:break-all;
+                font-family:Consolas,monospace; font-size:11.5px; margin:0; }
+  .fp-view textarea{ width:100%; min-height:220px; box-sizing:border-box;
+    background:var(--glass-lite); border:1px solid var(--line-soft);
+    border-radius:var(--r-s); color:var(--text-1); padding:8px;
+    font-family:Consolas,monospace; font-size:11.5px; line-height:1.5;
+    resize:vertical; white-space:pre; overflow-wrap:normal; overflow-x:auto; }
+  .fp-bar{ flex:none; display:flex; align-items:center; gap:6px;
+           padding:6px 10px; border-top:1px solid var(--line-soft); }
+  .fp-bar .path{ flex:1; min-width:0; font-family:Consolas,monospace; font-size:10.5px;
+                 color:var(--text-3); overflow:hidden; text-overflow:ellipsis;
+                 white-space:nowrap; direction:rtl; text-align:left; }
   .act-head{ display:flex; align-items:center; gap:6px; padding:12px 12px 6px; }
   .act-head b{ font-size:13px; color:var(--text-1); white-space:nowrap; }
   .act-sum{ margin-left:auto; font-size:11px; color:var(--text-3); min-width:0;
@@ -2387,7 +2469,10 @@ try {
     <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐<span class="cap">技能</span></button>
     <button id="btnMemory" title="整理长期记忆">🧠<span class="cap">记忆</span></button>
     <button id="btnUsage" title="查看每日 token 消耗">📊<span class="cap">用量</span></button>
-    <button id="btnTerminal" title="后台命令:学长用 bash 丢到后台跑的命令都在这里——状态、耗时、输出末尾。只读,不在这里输入命令">🖥<span class="cap">终端</span></button>
+    <button id="btnTerminal" title="终端:学长丢到后台的命令都在这里(状态/耗时/输出),也可以自己输入一条跑 —— 沙箱照拦,该确认的照问">🖥<span class="cap">终端</span></button>
+    <button id="btnSpGit" title="Git 工作台:改了什么、暂存/提交、历史与影子快照(绝不 push/pull)">🌿<span class="cap">Git</span></button>
+    <button id="btnSpFiles" title="文件:工作区里的文件看内容、改内容、存回去(围栏内)">📄<span class="cap">文件</span></button>
+    <button id="btnSpSubs" title="子代理:这一程派出去的帮手,谁在跑、报告说了什么">🤖<span class="cap">帮手</span></button>
     <button id="btnAutomate" title="自动化:本机登记了哪几个定时任务、下一次什么时候跑、上次跑出什么,以及关掉/开回来">⏱<span class="cap">自动化</span></button>
     <button id="btnMyData" title="我的数据:都存在哪台目录、都有哪些文件,以及导出/导入迁移包(密钥与教务登录态永不外发)">💾<span class="cap">数据</span></button>
     <button id="btnSandbox" style="display:none" title="沙箱状态">🛡<span class="cap">沙箱</span></button>
@@ -2521,21 +2606,27 @@ try {
     </div>
   </section>
 
-  <!-- 右侧「任务监控」栏(v0.9.34 起, v0.9.37 改版):第三列,只在 .app.act-open 时占位。
-       四段全部来自后端:现在/时间线/五类来自 get_activity() 扫当前会话消息,
-       计划来自 get_plan() 读 plans/plan.md。前端一行都不自己数、也不猜时间。 -->
+  <!-- 右侧「侧边栏底座」(v0.9.159):tab 化的页面容器 —— 内置五页与三方扩展页
+       走同一张注册表(SidePages),谁也不 special。「任务监控」(v0.9.34 起)是
+       第一个页,由后端数据撑着:现在/时间线/五类来自 get_activity() 扫当前会话
+       消息,计划来自 get_plan() 读 plans/plan.md。前端一行都不自己数、也不猜时间。 -->
   <aside class="activity" id="activity">
-    <div class="act-head">
-      <b>🛰 任务监控</b>
-      <span class="act-sum" id="actSum"></span>
-      <button class="act-ib" id="btnActRefresh" title="重新统计一遍">↻</button>
-      <button class="act-ib" id="btnActClose" title="收起这一栏(Ctrl+Shift+M 再展开)">✕</button>
+    <div class="sp-tabs" id="spTabs" aria-label="侧边栏页面"></div>
+    <div class="sp-pages" id="spPages">
+      <div class="sp-page" data-sp="activity">
+        <div class="act-head">
+          <b>🛰 任务监控</b>
+          <span class="act-sum" id="actSum"></span>
+          <button class="act-ib" id="btnActRefresh" title="重新统计一遍">↻</button>
+          <button class="act-ib" id="btnActClose" title="收起这一栏(Ctrl+Shift+M 再展开)">✕</button>
+        </div>
+        <div class="act-body" id="actBody"></div>
+        <div class="act-foot" id="actFoot">「现在」只在这轮真有工具在跑时出现;「时间线」按先后排,
+          时刻来自本机实时表 —— 没记到的行宁可不显示时间,也不拿刷新那一刻凑。
+          点一行才做事:定位文件 / 打开链接 / 看这一步的原文 / 把追问填回输入框。
+          <button class="tip-x" data-hint="act-foot">知道了</button></div>
+      </div>
     </div>
-    <div class="act-body" id="actBody"></div>
-    <div class="act-foot" id="actFoot">「现在」只在这轮真有工具在跑时出现;「时间线」按先后排,
-      时刻来自本机实时表 —— 没记到的行宁可不显示时间,也不拿刷新那一刻凑。
-      点一行才做事:定位文件 / 打开链接 / 看这一步的原文 / 把追问填回输入框。
-      <button class="tip-x" data-hint="act-foot">知道了</button></div>
   </aside>
 </div>
 
@@ -8290,6 +8381,8 @@ async function activityRefresh() {
     return;
   }
   renderActivity(data);
+  // 子代理页与活动页同吃这份数据:活动刷新了,开着的子代理页原地重画(不敲桥)
+  if (SidePages._active === "subagents") spRenderSubs();
 }
 
 function actRowEl(item) {
@@ -9067,7 +9160,9 @@ function actRun(item, row) {
   }
 }
 
-$("actBody").addEventListener("click", (ev) => {
+// 点击委托抽成具名函数:活动页与子代理页共用同一套(同一份 actRows 注册表,
+// 行的 key 全局唯一,两处绑定互不串线)
+function actPanelClick(ev) {
   // 段标题:折叠/展开这一段,状态记进 monitor-pref.json(明天开机还是这个样子)
   const cap = ev.target.closest(".act-cap.fold");
   if (cap) {
@@ -9094,7 +9189,8 @@ $("actBody").addEventListener("click", (ev) => {
   if (!row) return;
   const item = actRows[row.dataset.k || ""];
   if (item) actRun(item, row);
-});
+}
+$("actBody").addEventListener("click", actPanelClick);
 $("btnActivity").addEventListener("click", () => setActivityOpen(!actOpen));
 $("btnActClose").addEventListener("click", () => setActivityOpen(false));
 $("btnActRefresh").addEventListener("click", () => { actTurnFold = {}; activityRefresh(); });
@@ -10488,6 +10584,11 @@ $("btnWsPick").addEventListener("click", () => {
 function openPanel(name) {
   if (name === "schedule") { openScheduleDlg(); return; }
   if (name === "mood") { openMood(); return; }
+  // 侧边栏页面(v0.9.159):`side:<页id>` 直达底座里的某一页 —— 后端 parse_uri
+  // 放行 side: 前缀,不认识的页 id 由 SidePages.open 安静回来。
+  if (typeof name === "string" && name.indexOf("side:") === 0) {
+    SidePages.open(name.slice(5)); return;
+  }
   // 托盘那三颗新菜单走的是同一个出口(v0.9.114,图 p8/p9):托盘不碰桥,
   // 它只会推 open_panel —— 两处决定"什么算新任务"迟早对不上。
   if (name === "new_task") { newTaskInProject(); return; }
@@ -10792,12 +10893,581 @@ function termSetOpen(on) {
   if (!on && termTimer) { clearTimeout(termTimer); termTimer = 0; }
   if (on) termLoad(false);
 }
-$("btnTerminal").addEventListener("click", () => termSetOpen(!termOpen));
+$("btnTerminal").addEventListener("click", () => SidePages.open("terminal"));
 $("termClose").addEventListener("click", () => termSetOpen(false));
 $("termRefresh").addEventListener("click", () => termLoad(false));
 $("termOverlay").addEventListener("click", (e) => {
   if (e.target.id === "termOverlay") termSetOpen(false);
 });
+
+/* ================= 侧边栏底座(v0.9.159) =================
+   右列 tab 化的**页面注册表**:内置五页(监控/Git/终端/子代理/文件)与
+   三方扩展页走同一个 register() —— 内置页吃自己的狗粮,能力与外部完全对齐
+   (DSH-better-sidebar 那套「注册表服务」的原生 JS 版,按本项目价值观收窄:
+   注册没有插件运行时,扩展 = 数据目录里用户亲手放的一份 manifest + page.js,
+   信任面与"装了一个软件"同级,工作区带来的扩展一个字都不读)。
+
+   descriptor:{ id, title, icon, setup(el), onShow(), onHide() }
+   - setup 在注册时跑一次,把页面骨架搭进自己的容器;
+   - onShow/onHide 在切页时跑(轮询、刷新都挂在这里,别在 setup 里挂定时器);
+   - register 返回注销函数(disposer),与 DSH 的 disposer 语义一致。 */
+const SidePages = {
+  _defs: new Map(), _els: new Map(), _tabs: new Map(), _active: "",
+  register(desc) {
+    const d = desc || {};
+    const id = String(d.id || "").trim();
+    const title = String(d.title || "").trim();
+    if (!id || !title) {
+      console.error("MiniCodePages.register:缺 id/title,注册被拒", d);
+      return () => {};
+    }
+    if (this._defs.has(id)) {
+      console.error("侧边栏页面 id 重复:" + id + "(先到的赢,后来的被拒)");
+      return () => {};
+    }
+    this._defs.set(id, d);
+    /* 活动页的骨架长在 HTML 里(带 id 的元素一抓一把),注册时用 descriptor.el
+       绑到已有容器,不再造一个空壳 —— 两份 data-sp 同名,显隐就分不清了。 */
+    const page = d.el || (() => {
+      const p = document.createElement("div");
+      p.className = "sp-page"; p.dataset.sp = id; p.hidden = true;
+      $("spPages").appendChild(p);
+      return p;
+    })();
+    if (d.el) { d.el.classList.add("sp-page"); }
+    const tab = document.createElement("button");
+    tab.className = "sp-tab"; tab.type = "button";
+    tab.textContent = d.icon || "▫"; tab.title = title;
+    tab.setAttribute("aria-label", title);
+    tab.addEventListener("click", () => SidePages.open(id));
+    $("spTabs").appendChild(tab);
+    this._els.set(id, page); this._tabs.set(id, tab);
+    if (typeof d.setup === "function") {
+      try { d.setup(page); } catch (e) { console.error("页面 setup 失败:" + id, e); }
+    }
+    return () => this.unregister(id);
+  },
+  unregister(id) {
+    this._defs.delete(id);
+    const p = this._els.get(id); if (p) p.remove();
+    const t = this._tabs.get(id); if (t) t.remove();
+    this._els.delete(id); this._tabs.delete(id);
+    if (this._active === id) { this._active = ""; if (this._defs.size) this.open("activity"); }
+  },
+  open(id) {
+    if (!this._defs.has(id)) return;         // 不认识的名字:安静回来(白名单在后端也一样)
+    if (!actOpen) setActivityOpen(true);
+    if (this._active === id) { this._fire(id); return; }
+    if (this._active) {
+      const pe = this._els.get(this._active); if (pe) pe.hidden = true;
+      const pt = this._tabs.get(this._active); if (pt) pt.classList.remove("on");
+      this._fireHide(this._active);
+    }
+    this._active = id;
+    const el = this._els.get(id); if (el) el.hidden = false;
+    const tb = this._tabs.get(id); if (tb) tb.classList.add("on");
+    try { localStorage.setItem("sp.active", id); } catch (e) {}
+    this._fire(id);
+  },
+  restore(id) {
+    /* 开机还原上次的页:**不**顺手把整栏拉开 —— 收着就让它收着,
+       只是 tab 记在那一页上(setActivityOpen 是用户自己的开关)。 */
+    if (!this._defs.has(id) || this._active) return;
+    this._active = id;
+    const el = this._els.get(id); if (el) el.hidden = false;
+    const tb = this._tabs.get(id); if (tb) tb.classList.add("on");
+  },
+  _fire(id) { const d = this._defs.get(id); if (d && typeof d.onShow === "function") { try { d.onShow(); } catch (e) {} } },
+  _fireHide(id) { const d = this._defs.get(id); if (d && typeof d.onHide === "function") { try { d.onHide(); } catch (e) {} } },
+};
+window.MiniCodePages = { register: (d) => SidePages.register(d) };   // 三方扩展的唯一入口
+
+/* 活动页(迁入的第一页):骨架在 HTML 里,绑已有容器,这里只登记 tab 与首刷。 */
+SidePages.register({ id: "activity", title: "任务监控", icon: "🛰",
+  el: document.querySelector('.sp-page[data-sp="activity"]'),
+  onShow() { if (!actData) activityRefresh(); } });
+
+/* ---------------- Git 页 ---------------- */
+let gpDiffFor = "";
+SidePages.register({
+  id: "git", title: "Git", icon: "🌿",
+  setup(el) {
+    el.innerHTML = `
+      <div class="sp-head"><b>🌿 Git</b>
+        <span class="gp-branch" id="gpBranch"></span>
+        <span class="gp-sync" id="gpSync"></span>
+        <button class="act-ib" id="gpRefresh" title="重新读一遍状态">↻</button></div>
+      <div class="sp-body" id="gpBody"></div>
+      <div class="gp-commit" id="gpCommitBox" hidden>
+        <textarea class="gp-msg" id="gpMsg" placeholder="提交说明(只提交上面已暂存的那些)…"></textarea>
+        <div class="gp-bar"><span class="st" id="gpStaged"></span>
+          <button class="b-yes" id="gpDoCommit">提交</button></div>
+      </div>
+      <div class="gp-diff" id="gpDiff" hidden><pre id="gpDiffText"></pre></div>`;
+    $("gpRefresh").addEventListener("click", () => gitLoad());
+    $("gpDoCommit").addEventListener("click", () => {
+      const msg = $("gpMsg").value.trim();
+      if (!msg) { toast("先写提交说明", true); return; }
+      pywebview.api.git_commit(msg).then(r => {
+        if (!r || !r.ok) { toast((r && r.msg) || "提交失败", true); return; }
+        $("gpMsg").value = ""; toast("已提交");
+        gitLoad();
+      }).catch(e => toast("提交失败:" + String(e).slice(0, 60), true));
+    });
+  },
+  onShow() { gitLoad(); },
+});
+
+function gpDiffLine(s) {
+  const e = esc(s);
+  if (s.startsWith("+") && !s.startsWith("+++")) return `<span class="dl-add">${e}</span>`;
+  if (s.startsWith("-") && !s.startsWith("---")) return `<span class="dl-del">${e}</span>`;
+  return e;
+}
+
+async function gitLoad() {
+  const api = window.pywebview && pywebview.api;
+  const body = $("gpBody");
+  if (!body || !api || SidePages._active !== "git") return;
+  if (!api.git_overview) { body.innerHTML = '<div class="sp-empty">这一页只在桌面版有。</div>'; return; }
+  let r = null;
+  try { r = await api.git_overview(); } catch (e) { return; }
+  if (!r || !r.ok) { body.innerHTML = `<div class="sp-empty">${esc((r && r.msg) || "读不出 git 状态")}</div>`; return; }
+  if (!r.available) {
+    body.innerHTML = `<div class="sp-empty">${esc(r.msg || "这台机器没找到 git")}。装好 git 再回来,这一页会自己亮起来。</div>`;
+    $("gpCommitBox").hidden = true; $("gpBranch").textContent = ""; $("gpSync").textContent = "";
+    return;
+  }
+  const st = r.status || {};
+  $("gpBranch").textContent = st.branch || "";
+  $("gpSync").textContent = st.upstream ? `↑${st.ahead || 0} ↓${st.behind || 0}` : "";
+  const rows = st.rows || [];
+  const staged = rows.filter(x => x.staged);
+  const work = rows.filter(x => !x.staged);
+  body.innerHTML = `
+    <div class="gp-sect">已暂存(${staged.length})</div>
+    ${staged.map(x => gpRowHtml(x, true)).join("") || '<div class="sp-empty">暂存区是空的 —— 在下面的改动上点「暂存」,再写说明提交。</div>'}
+    <div class="gp-sect">未暂存的改动(${work.length})</div>
+    ${work.map(x => gpRowHtml(x, false)).join("") || '<div class="sp-empty">工作区干净,没有未暂存的改动。</div>'}
+    <div class="gp-sect">历史</div><div id="gpLogBox"><div class="sp-empty">读取中…</div></div>
+    <div class="gp-sect">影子快照(v0.9.157 的整树检查点)</div><div id="gpSnapBox"><div class="sp-empty">读取中…</div></div>`;
+  body.querySelectorAll(".gp-row[data-path]").forEach(el => el.addEventListener("click", (ev) => {
+    if (ev.target.closest("[data-op]")) return;      // 按钮自己有事做
+    gpShowDiff(el.dataset.path, el.dataset.staged === "1");
+  }));
+  body.querySelectorAll("[data-op]").forEach(el => el.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    gpOp(el.dataset.op, el.dataset.path);
+  }));
+  $("gpCommitBox").hidden = staged.length === 0;
+  $("gpStaged").textContent = staged.length ? `将提交 ${staged.length} 个文件` : "";
+  gitLoadLog(); gitLoadSnaps();
+}
+
+function gpRowHtml(x, isStaged) {
+  const ops = isStaged
+    ? `<button class="act-ib" data-op="unstage" data-path="${esc(x.path)}">取消暂存</button>`
+    : `<button class="act-ib" data-op="stage" data-path="${esc(x.path)}">暂存</button>`
+      + (x.x === "?" ? ""
+        : `<button class="act-ib" data-op="restore" data-path="${esc(x.path)}" title="把工作区的改动退回(丢掉这一次改动)">退回</button>`);
+  return `<div class="gp-row" data-path="${esc(x.path)}" data-staged="${isStaged ? 1 : 0}">
+    <span class="gp-w">${esc(x.word || "")}</span>
+    <span class="gp-p" title="${esc(x.path)}">${esc(x.path)}</span>
+    <span class="gp-ops">${ops}</span></div>`;
+}
+
+async function gpShowDiff(path, staged) {
+  const box = $("gpDiff"), pre = $("gpDiffText");
+  if (!box || !path) return;
+  const key = path + (staged ? "#s" : "#w");
+  if (gpDiffFor === key && !box.hidden) { box.hidden = true; gpDiffFor = ""; return; }
+  let r = null;
+  try { r = await pywebview.api.git_diff(path, !!staged); } catch (e) { return; }
+  gpDiffFor = key;
+  box.hidden = false;
+  if (!r || !r.ok) { pre.textContent = (r && r.msg) || "读不出差异"; return; }
+  pre.innerHTML = (r.text || "").split("\n").map(gpDiffLine).join("\n")
+    + (r.note ? `\n\n${esc(r.note)}` : "");
+  box.scrollTop = 0;
+}
+
+function gpOp(op, path) {
+  const api = pywebview.api;
+  const doIt = {
+    stage: () => api.git_stage(JSON.stringify([path])),
+    unstage: () => api.git_unstage(JSON.stringify([path])),
+    restore: () => api.git_restore(path),
+  }[op];
+  if (!doIt) return;
+  const run = () => doIt().then(r => {
+    if (!r || !r.ok) { toast((r && r.msg) || "没做成", true); return; }
+    if (gpDiffFor.startsWith(path)) { $("gpDiff").hidden = true; gpDiffFor = ""; }
+    gitLoad();
+  }).catch(e => toast(String(e).slice(0, 60), true));
+  if (op === "restore") {
+    appConfirm(`把「${path}」工作区的改动退回?\n\n退回之后这一次的改动就没了(未提交的内容找不回来)。`, run, "退回改动");
+    return;
+  }
+  run();
+}
+
+async function gitLoadLog() {
+  const box = $("gpLogBox");
+  if (!box) return;
+  let r = null;
+  try { r = await pywebview.api.git_log(20); } catch (e) { return; }
+  if (!r || !r.ok) { box.innerHTML = `<div class="sp-empty">${esc((r && r.msg) || "读不出历史")}</div>`; return; }
+  box.innerHTML = (r.rows || []).map(x =>
+    `<div class="gp-row" style="cursor:default">
+      <span class="gp-w">${esc(x.date || "")}</span>
+      <span class="gp-p" title="${esc(x.subject || "")}">${esc(x.subject || "")}</span>
+      <span class="gp-ops"><span class="gp-sync">${esc(x.sha || "")}${x.head ? " ·⃓" : ""}</span></span>
+    </div>`).join("")
+    || '<div class="sp-empty">还没有任何提交。</div>';
+}
+
+async function gitLoadSnaps() {
+  const box = $("gpSnapBox");
+  if (!box) return;
+  let r = null;
+  try { r = await pywebview.api.git_overview(); } catch (e) { return; }
+  const snaps = (r && r.snapshots) || [];
+  box.innerHTML = snaps.map(s =>
+    `<div class="gp-row" style="cursor:default">
+      <span class="gp-w">${esc(String(s.time || s.date || "").slice(0, 16))}</span>
+      <span class="gp-p" title="${esc(s.label || s.sha || "")}">${esc(s.label || s.sha || "")}</span>
+      <span class="gp-ops"><button class="act-ib" data-sha="${esc(s.sha || "")}">还原</button></span>
+    </div>`).join("")
+    || '<div class="sp-empty">还没有影子快照(改动发生时自动记,config.shadow_git 置 false 就关)。</div>';
+  box.querySelectorAll("[data-sha]").forEach(el => el.addEventListener("click", () => {
+    const sha = el.dataset.sha;
+    if (!sha) return;
+    appConfirm("还原这份影子快照?\n\n只还原快照里有的文件、绝不删快照之后新建的东西(v0.9.157 定下的语义)。", () => {
+      pywebview.api.git_restore_snapshot(sha).then(x => {
+        if (!x || !x.ok) { toast((x && x.msg) || "还原失败", true); return; }
+        toast(x.msg || "已还原");
+        gitLoad();
+      }).catch(e => toast(String(e).slice(0, 60), true));
+    }, "还原快照");
+  }));
+}
+
+/* ---------------- 终端页 ----------------
+   与「后台命令」面板同一本账(terminal_facts),多出来的是**输入行**:
+   用户亲手跑的命令走 terminal_run —— 沙箱硬闸在后端照拦(REJECT 级不认人),
+   要确认的(权限档位 confirm/accept_edits)前端先弹一次确认:用户本人就是确认人,
+   这一页存在的意义就是这个;但硬闸永远在。 */
+let tpTimer = 0;
+SidePages.register({
+  id: "terminal", title: "终端", icon: "🖥",
+  setup(el) {
+    el.innerHTML = `
+      <div class="sp-head"><b>🖥 终端</b>
+        <span class="gp-sync" id="tpNote"></span>
+        <button class="act-ib" id="tpRefresh" title="重新读一遍">↻</button></div>
+      <div class="sp-body" id="tpBody"></div>
+      <div class="tp-input">
+        <input id="tpCmd" placeholder="跑一条命令,如:git status(回车执行)" spellcheck="false">
+        <button class="b-yes" id="tpRun">跑</button>
+      </div>`;
+    $("tpRefresh").addEventListener("click", () => tpLoad(false));
+    $("tpRun").addEventListener("click", tpSubmit);
+    $("tpCmd").addEventListener("keydown", (e) => { if (e.key === "Enter") tpSubmit(); });
+  },
+  onShow() { tpLoad(false); },
+  onHide() { if (tpTimer) { clearTimeout(tpTimer); tpTimer = 0; } },
+});
+
+function gpIsPage(id) { return SidePages._active === id && actOpen; }
+
+function tpTick(ms) {
+  if (tpTimer) clearTimeout(tpTimer);
+  tpTimer = setTimeout(() => { tpTimer = 0; tpLoad(true); }, ms);
+}
+
+function tpSubmit() {
+  const api = window.pywebview && pywebview.api;
+  const inp = $("tpCmd");
+  const cmd = (inp.value || "").trim();
+  if (!cmd) return;
+  if (!api || !api.terminal_run) { toast("这一页只在桌面版有", true); return; }
+  const go = () => api.terminal_run(cmd).then(r => {
+    if (!r || !r.ok) { toast((r && r.msg) || "没跑起来", true); return; }
+    inp.value = "";
+    tpLoad(false);
+  }).catch(e => toast("执行失败:" + String(e).slice(0, 60), true));
+  if (permCurrent === "confirm" || permCurrent === "accept_edits") {
+    appConfirm(`在终端里跑这条命令?\n\n${cmd}`, go, "终端");
+    return;
+  }
+  go();
+}
+
+async function tpLoad(quiet) {
+  const api = window.pywebview && pywebview.api;
+  const body = $("tpBody");
+  if (!body || !api || !gpIsPage("terminal")) return;
+  if (!api.get_terminal) { body.innerHTML = '<div class="tp-note">桌面版里才有这一页。</div>'; return; }
+  let r = null;
+  try { r = await api.get_terminal(); } catch (e) { if (!quiet) toast("读后台命令失败", true); return; }
+  if (!r || !r.ok) { $("tpNote").textContent = (r && r.msg) || ""; return; }
+  $("tpNote").textContent = r.note ? "只留每条的输出尾部" : "";
+  const jobs = r.jobs || [];
+  if (!jobs.length) {
+    body.innerHTML = '<div class="tp-note">这一程还没有后台命令。在上面输入一条,或让学长把长命令丢到后台 —— 它们都会出现在这里。</div>';
+    tpTick(4000);
+    return;
+  }
+  body.innerHTML = jobs.map(j => {
+    const state = j.running ? "🟢 在跑" : (j.killed ? "⛔ 已终止" : (j.exit_code
+      ? "🔴 退出码 " + j.exit_code : "✅ 跑完"));
+    const open = termShow.indexOf(j.id) >= 0;
+    const kill = j.running ? `<button class="tp-kill" data-kill="${esc(j.id)}">停</button>` : "";
+    return `<div class="tp-row" data-job="${esc(j.id)}">
+      <span class="tp-n">${state}</span>
+      <span class="tp-cmd" title="${esc(j.command)}">${esc(j.command)}</span>
+      <span class="tp-n">${j.elapsed}s · ${j.chars} 字</span>
+      <button class="act-ib" data-tail="${esc(j.id)}">${open ? "收起" : "看输出"}</button>
+      ${kill}</div>${open ? `<pre class="tp-out">${esc(j.tail || "(还没有输出)")}</pre>` : ""}`;
+  }).join("");
+  body.querySelectorAll("[data-tail]").forEach(el => el.addEventListener("click", () => {
+    const id = el.dataset.tail;
+    termShow = termShow.split(",").filter(x => x && x !== id).concat([id]).join(",");
+    tpLoad(true);
+  }));
+  body.querySelectorAll("[data-kill]").forEach(el => el.addEventListener("click", () => {
+    pywebview.api.terminal_kill(el.dataset.kill).then(x => {
+      if (!x || !x.ok) toast((x && x.msg) || "没停下来", true);
+      tpLoad(true);
+    }).catch(() => {});
+  }));
+  tpTick(jobs.some(j => j.running) ? 1600 : 4000);
+}
+
+/* ---------------- 子代理页 ----------------
+   数据与「任务监控」同源(actData,后端 activity.session_activity() 一份真源),
+   渲染复用 actRowEl / buildSubagents:多出来的只有整列显示与一键看报告 ——
+   不另造一套口径。点击委托与活动页共用同一个 actPanelClick。 */
+SidePages.register({
+  id: "subagents", title: "子代理", icon: "🤖",
+  setup(el) {
+    el.innerHTML = `
+      <div class="sp-head"><b>🤖 子代理</b>
+        <span class="gp-sync" id="spSubSum"></span>
+        <button class="act-ib" id="spSubRefresh" title="重新统计">↻</button></div>
+      <div class="sp-body act-body" id="spSubBody"></div>`;
+    $("spSubRefresh").addEventListener("click", () => activityRefresh());
+    $("spSubBody").addEventListener("click", actPanelClick);
+  },
+  onShow() { spRenderSubs(); },
+});
+
+function spRenderSubs() {
+  const body = $("spSubBody");
+  if (!body) return;
+  const sa = actData ? subagentRows(actData) : null;
+  $("spSubSum").textContent = sa ? `${sa.count} 个` : "";
+  body.textContent = "";
+  if (!sa || !sa.items || !sa.items.length) {
+    body.appendChild(actEl("act-empty",
+      "这一程还没有派过子代理。学长派帮手(探索/审查/写作…)之后,谁在跑、每一步做了什么、"
+      + "报告写了什么,都会整列出现在这里。"));
+    return;
+  }
+  body.appendChild(actSect("subagents", "🤖 子智能体", `${sa.count} 个`
+    + (sa.items.some(x => x.status === "running") ? " · 有在跑" : ""),
+    b => buildSubagents(b, sa)));
+}
+
+/* ---------------- 文件页 ----------------
+   树来自 list_project_files(只读、防穿越、敏感目录拒 —— 与项目面板同一套),
+   读与写走 file_read / file_write:围栏内、二进制不装懂、保存前对底账
+   (磁盘被别的来源改过就拒,提示重新载入,绝不静默覆盖)。 */
+let fpDir = "", fpOpenPath = "", fpSha = "", fpOriginal = "";
+SidePages.register({
+  id: "files", title: "文件", icon: "📄",
+  setup(el) {
+    el.innerHTML = `
+      <div class="sp-head"><b>📄 文件</b>
+        <button class="act-ib" id="fpNew" title="新建一个文本文件">＋</button>
+        <button class="act-ib" id="fpRefresh" title="刷新目录">↻</button></div>
+      <div class="sp-body" id="fpTree"></div>
+      <div class="fp-bar" id="fpBar" hidden>
+        <span class="path" id="fpPath"></span>
+        <button class="act-ib" id="fpEdit" title="编辑这个文件">✎</button>
+        <button class="act-ib" id="fpClose" title="关掉这一份">✕</button>
+      </div>
+      <div class="fp-view" id="fpView" hidden></div>
+      <div class="fp-bar" id="fpEditBar" hidden>
+        <span class="path">编辑中(没保存的改动关掉就丢)</span>
+        <button class="b-yes" id="fpSave">保存</button>
+      </div>`;
+    $("fpRefresh").addEventListener("click", () => fpLoad());
+    $("fpNew").addEventListener("click", fpNewFile);
+    $("fpEdit").addEventListener("click", fpStartEdit);
+    $("fpClose").addEventListener("click", () => fpHideView());
+    $("fpSave").addEventListener("click", fpSave);
+  },
+  onShow() { fpLoad(); },
+});
+
+function fpCrumb(rel) {
+  const box = $("fpTree");
+  const parts = rel ? rel.split("/") : [];
+  let html = `<div class="fp-crumb"><button data-rel="">🏠 根目录</button>`;
+  let acc = "";
+  for (const p of parts) {
+    acc += (acc ? "/" : "") + p;
+    html += `<span>›</span><button data-rel="${esc(acc)}">${esc(p)}</button>`;
+  }
+  html += `</div><div id="fpList"></div>`;
+  box.innerHTML = html;
+  box.querySelectorAll("[data-rel]").forEach(el => el.addEventListener("click", () => {
+    fpDir = el.dataset.rel; fpHideView(); fpLoad();
+  }));
+}
+
+async function fpLoad() {
+  const box = $("fpTree");
+  if (!box) return;
+  const api = window.pywebview && pywebview.api;
+  if (!api || !api.list_project_files) { box.innerHTML = '<div class="sp-empty">桌面版里才有这一页。</div>'; return; }
+  if (!wsInfo.path) { box.innerHTML = '<div class="sp-empty">先选一个工作区。</div>'; return; }
+  fpCrumb(fpDir);
+  const list = $("fpList");
+  let r = null;
+  try { r = await api.list_project_files(wsInfo.path, fpDir); } catch (e) { return; }
+  if (!r || !r.ok) { list.innerHTML = `<div class="sp-empty">${esc((r && r.msg) || "读不出目录")}</div>`; return; }
+  const items = r.items || [];
+  list.innerHTML = items.map(x => `<div class="fp-row" data-name="${esc(x.name)}" data-dir="${x.is_dir ? 1 : 0}">
+      <span>${x.is_dir ? "📁" : "📄"}</span>
+      <span class="n">${esc(x.name)}</span>
+      <span class="s">${x.is_dir ? "" : (x.size >= 1024 ? Math.round(x.size / 1024) + "K" : x.size + "B")}</span>
+    </div>`).join("")
+    || '<div class="sp-empty">这个目录是空的。</div>';
+  list.querySelectorAll(".fp-row").forEach(el => el.addEventListener("click", () => {
+    const name = el.dataset.name;
+    if (el.dataset.dir === "1") {
+      fpDir = (fpDir ? fpDir + "/" : "") + name;
+      fpHideView(); fpLoad();
+    } else {
+      fpOpenFile((fpDir ? fpDir + "/" : "") + name);
+    }
+  }));
+}
+
+function fpHideView() {
+  fpOpenPath = ""; fpSha = "";
+  $("fpView").hidden = true; $("fpBar").hidden = true; $("fpEditBar").hidden = true;
+}
+
+async function fpOpenFile(rel) {
+  let r = null;
+  try { r = await pywebview.api.file_read(rel); } catch (e) { toast("读文件失败", true); return; }
+  const view = $("fpView");
+  if (!r || !r.ok) {
+    fpOpenPath = "";
+    view.hidden = false; $("fpBar").hidden = true; $("fpEditBar").hidden = true;
+    view.innerHTML = `<div class="sp-empty">${esc((r && r.msg) || "读不出来")}</div>`;
+    return;
+  }
+  fpOpenPath = rel; fpSha = r.sha1 || ""; fpOriginal = r.text || "";
+  $("fpBar").hidden = false; $("fpEditBar").hidden = true;
+  $("fpPath").textContent = rel; $("fpPath").title = rel;
+  $("fpEdit").style.display = "";
+  view.hidden = false;
+  const isMd = /\.(md|markdown)$/i.test(rel);
+  if (isMd && window.marked && marked.parse) {
+    view.innerHTML = `<div class="fp-md">${marked.parse(r.text || "")}</div>`
+      + `<div class="gp-sect">—— 原文 ——</div><pre>${esc(r.text || "")}</pre>`;
+  } else {
+    view.innerHTML = `<pre>${esc(r.text || "")}</pre>`;
+  }
+  view.scrollTop = 0;
+}
+
+function fpStartEdit() {
+  if (!fpOpenPath) return;
+  const view = $("fpView");
+  view.hidden = false;
+  view.innerHTML = "";
+  const ta = document.createElement("textarea");
+  ta.id = "fpTa"; ta.value = fpOriginal; ta.spellcheck = false;
+  view.appendChild(ta);
+  $("fpEditBar").hidden = false;
+  $("fpEdit").style.display = "none";
+  ta.focus();
+}
+
+function fpSave() {
+  const ta = $("fpTa");
+  if (!ta || !fpOpenPath) return;
+  const content = ta.value;
+  const wasNew = !fpSha;
+  pywebview.api.file_write(fpOpenPath, content, fpSha).then(r => {
+    if (!r || !r.ok) {
+      if (r && r.conflict) {
+        appConfirm(`${r.msg}\n\n现在重新载入磁盘上的最新内容吗?(没保存的编辑会丢)`,
+          () => fpOpenFile(fpOpenPath), "内容冲突");
+        return;
+      }
+      toast((r && r.msg) || "没保存上", true);
+      return;
+    }
+    fpSha = r.sha1 || ""; fpOriginal = content;
+    toast(r.created ? "已创建" : "已保存");
+    fpOpenFile(fpOpenPath);
+    if (wasNew) fpLoad();               // 新建的文件要出现在树里
+  }).catch(e => toast("保存失败:" + String(e).slice(0, 60), true));
+}
+
+function fpNewFile() {
+  const name = prompt("新文件名(相对当前目录,如 notes.md):");
+  if (name === null) return;
+  const clean = String(name || "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!clean || clean.split("/").some(p => p === ".." || p === "." || p.endsWith(":"))) {
+    toast("名字不合法", true); return;
+  }
+  fpOpenPath = (fpDir ? fpDir + "/" : "") + clean; fpSha = ""; fpOriginal = "";
+  const view = $("fpView");
+  view.hidden = false; $("fpBar").hidden = false; $("fpEditBar").hidden = false;
+  $("fpPath").textContent = fpOpenPath + "(新建)";
+  $("fpEdit").style.display = "none";
+  view.innerHTML = "";
+  const ta = document.createElement("textarea");
+  ta.id = "fpTa"; ta.value = ""; ta.spellcheck = false;
+  view.appendChild(ta);
+  ta.focus();
+}
+
+/* rail 上的三个新入口:与 tab 同一个 open(),不另立开关。 */
+$("btnSpGit").addEventListener("click", () => SidePages.open("git"));
+$("btnSpFiles").addEventListener("click", () => SidePages.open("files"));
+$("btnSpSubs").addEventListener("click", () => SidePages.open("subagents"));
+
+/* 开机:恢复上次停在哪一页(不替用户拉开整栏)。 */
+function sidePanelRestore() {
+  try { SidePages.restore(localStorage.getItem("sp.active") || ""); } catch (e) {}
+  if (!SidePages._active) SidePages.restore("activity");
+}
+
+/* 三方扩展装填:数据目录 extensions/<名字>/ 由后端验过清单,这里把 entry.js
+   作为 <script> 装进来 —— 装进来的代码与内置页同一上下文(它因此是**信任装填**:
+   只认用户亲手放进数据目录的那一份;信任模型写在 extensions.py 与 SECURITY.md)。 */
+function loadExtensions() {
+  const api = window.pywebview && pywebview.api;
+  if (!api || !api.get_extensions) return;      // 网页版没有这一条:访客不装代码
+  api.get_extensions().then(r => {
+    if (!r || !r.ok) return;
+    (r.skipped || []).forEach(s => console.warn("扩展没装上:" + s.dir + " —— " + s.msg));
+    (r.items || []).forEach(ext => {
+      const s = document.createElement("script");
+      s.src = "file:///" + String(ext.entry_path || "").replace(/\\/g, "/").replace(/^\/+/, "");
+      s.onerror = () => console.error("扩展加载失败:" + ext.id);
+      document.head.appendChild(s);
+    });
+  }).catch(() => {});
+}
 
 /* ---------------- 自动化(定时任务)面板 ----------------
    清单上的每一个数都读自两处现成事实:proactive.JOB_SPECS(登记了什么)与
@@ -10987,6 +11657,8 @@ window.addEventListener("DOMContentLoaded", () => {
       renderInstrLine(info.instructions);  // 侧栏指令层那一行(v0.9.101 L3)
       if (info.activate_panel) openPanel(info.activate_panel);   // 点通知直达(首屏落点)
       actPrefPull();       // 任务监控栏:上次收起还是展开、哪几段折着(v0.9.37)
+      sidePanelRestore();  // 侧边栏底座:上次停在哪一页(v0.9.159)
+      loadExtensions();    // 三方扩展装填(数据目录 extensions/,v0.9.159)
     }).catch(e => {
       $("hint").textContent = "界面初始化失败:" + String(e).slice(0, 80);
     });

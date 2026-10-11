@@ -50,10 +50,12 @@ def panel_uri(kind: str) -> str:
 
 
 def parse_uri(uri: str) -> dict:
-    """解析激活 URI:{"panel": "schedule"|"None"};不是本应用的 scheme 给 {}。
+    """解析激活 URI:{"panel": "schedule"|"mood"|"side:<页id>"|None}。
 
-    落点白名单在这里收口 —— 面板名集合只存在于 KIND_PANELS 的值里,
-    前端拿到的永远是它认识的。
+    落点白名单在这里收口 —— 内置面板名集合只存在于 KIND_PANELS 的值里;
+    v0.9.159 起 `side:` 前缀放行(侧边栏底座的页 id,前端 SidePages.open
+    对不认识的名字安静回来),其余不认识的照旧降级成 focus —— 前端收到的
+    永远是它认识或能安静处理的名字。
     """
     text = str(uri or "").strip()
     if not text.lower().startswith(SCHEME + ":"):
@@ -66,7 +68,8 @@ def parse_uri(uri: str) -> dict:
     if not params:
         return {"panel": None}
     panel = params.get("panel")
-    if panel not in PANELS:
+    if panel not in PANELS and not (panel and panel.startswith("side:")
+                                    and len(panel) > len("side:")):
         panel = None
     return {"panel": panel}
 

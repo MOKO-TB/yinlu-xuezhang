@@ -337,6 +337,52 @@ class PublicApi:
         """「终端」面板:后台命令的状态与输出末尾(只读,不在这里下命令)。"""
         return self._b.get_terminal()
 
+    # ---------------------------------------------- 侧边栏底座转发(v0.9.159)
+
+    def get_extensions(self) -> dict:
+        """数据目录 extensions/ 里的三方扩展清单(只发现,不执行)。"""
+        return self._b.get_extensions()
+
+    def git_overview(self) -> dict:
+        """Git 页一屏:git 可用性 + 状态 + 影子快照。"""
+        return self._b.git_overview()
+
+    def git_status(self) -> dict:
+        return self._b.git_status()
+
+    def git_diff(self, path: str, staged=False) -> dict:
+        return self._b.git_diff(path, staged)
+
+    def git_log(self, limit=30) -> dict:
+        return self._b.git_log(limit)
+
+    def git_stage(self, paths_json: str) -> dict:
+        return self._b.git_stage(paths_json)
+
+    def git_unstage(self, paths_json: str) -> dict:
+        return self._b.git_unstage(paths_json)
+
+    def git_commit(self, message: str) -> dict:
+        return self._b.git_commit(message)
+
+    def git_restore(self, path: str) -> dict:
+        return self._b.git_restore(path)
+
+    def git_restore_snapshot(self, sha: str) -> dict:
+        return self._b.git_restore_snapshot(sha)
+
+    def file_read(self, path: str) -> dict:
+        return self._b.file_read(path)
+
+    def file_write(self, path: str, content: str, base_sha: str = "") -> dict:
+        return self._b.file_write(path, content, base_sha)
+
+    def terminal_run(self, command: str) -> dict:
+        return self._b.terminal_run(command)
+
+    def terminal_kill(self, job_id: str) -> dict:
+        return self._b.terminal_kill(job_id)
+
 
     def set_job_enabled(self, job_id: str, on: bool) -> dict:
         """开/关一个定时任务(关掉的不再自动到期跑,记账与这一屏仍列得出来)。"""
@@ -1381,7 +1427,94 @@ class Bridge:
         from minicode.tools import shell
         return {"ok": True, **shell.terminal_facts()}
 
+    # ---------------------------------------------------- 侧边栏底座(v0.9.159)
 
+    def get_extensions(self) -> dict:
+        """数据目录 extensions/ 里的三方扩展清单(只发现,不执行;加载在前端)。"""
+        from minicode import extensions
+        return extensions.discover()
+
+    def git_overview(self) -> dict:
+        """Git 页一屏数据:git 在不在 + 状态 + 影子快照。当前工作区的账。"""
+        from minicode import gitpanel
+        ws = Path(self.workspace)
+        if not gitpanel.available():
+            return {"ok": True, "available": False, "msg": "这台机器没找到 git"}
+        st = gitpanel.status(ws)
+        return {"ok": True, "available": True, "status": st,
+                "snapshots": gitpanel.snapshot_list(ws), "workspace": str(ws)}
+
+    def git_status(self) -> dict:
+        from minicode import gitpanel
+        return gitpanel.status(Path(self.workspace))
+
+    def git_diff(self, path: str, staged=False) -> dict:
+        from minicode import gitpanel
+        return gitpanel.diff(Path(self.workspace), str(path or ""), bool(staged))
+
+    def git_log(self, limit=30) -> dict:
+        from minicode import gitpanel
+        return gitpanel.log(Path(self.workspace), limit)
+
+    def git_stage(self, paths_json: str) -> dict:
+        from minicode import gitpanel
+        try:
+            paths = json.loads(paths_json or "[]")
+        except json.JSONDecodeError:
+            return {"ok": False, "msg": "参数不是合法的 JSON 清单"}
+        return gitpanel.stage(Path(self.workspace), paths if isinstance(paths, list) else [])
+
+    def git_unstage(self, paths_json: str) -> dict:
+        from minicode import gitpanel
+        try:
+            paths = json.loads(paths_json or "[]")
+        except json.JSONDecodeError:
+            return {"ok": False, "msg": "参数不是合法的 JSON 清单"}
+        return gitpanel.unstage(Path(self.workspace), paths if isinstance(paths, list) else [])
+
+    def git_commit(self, message: str) -> dict:
+        from minicode import gitpanel
+        got = gitpanel.commit(Path(self.workspace), str(message or ""))
+        if got.get("ok"):
+            self.invalidate_env_info()      # 提交过 = 环境段那行 ±行数该变了
+            self.ui.push("info", text="已提交:" + str(message or "").strip().splitlines()[0][:60])
+        return got
+
+    def git_restore(self, path: str) -> dict:
+        from minicode import gitpanel
+        got = gitpanel.restore(Path(self.workspace), str(path or ""))
+        if got.get("ok"):
+            self.invalidate_env_info()
+        return got
+
+    def git_restore_snapshot(self, sha: str) -> dict:
+        from minicode import gitpanel
+        got = gitpanel.snapshot_restore(Path(self.workspace), str(sha or ""))
+        if got.get("ok"):
+            self.invalidate_env_info()
+            self.ui.push("info", text=got.get("msg") or "影子快照已还原")
+        return got
+
+    def file_read(self, path: str) -> dict:
+        """文件页:读工作区内的一个文本文件(围栏/凭据/二进制各有各的实话)。"""
+        from minicode import filepanel
+        return filepanel.read(Path(self.workspace), str(path or ""))
+
+    def file_write(self, path: str, content: str, base_sha: str = "") -> dict:
+        """文件页:写回工作区内的一个文本文件(磁盘底账对不上就拒,绝不静默覆盖)。"""
+        from minicode import filepanel
+        return filepanel.write(Path(self.workspace), str(path or ""), str(content or ""),
+                               str(base_sha or ""))
+
+    def terminal_run(self, command: str) -> dict:
+        """终端页:用户亲手跑一条命令 —— 沙箱硬闸照拦,进的还是同一本后台账。"""
+        from minicode.tools import shell
+        return shell.user_run(self.config, self._sandbox, Path(self.workspace),
+                              str(command or ""))
+
+    def terminal_kill(self, job_id: str) -> dict:
+        from minicode.tools import shell
+        return shell.user_kill(str(job_id or ""))
 
     def get_automation(self) -> dict:
         """「自动化」那一屏:本机登记了哪几个定时任务、下一次什么时候跑、上次跑出什么。

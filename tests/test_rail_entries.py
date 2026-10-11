@@ -36,7 +36,9 @@ E2E = (ROOT / "scripts" / "e2e_ui_v0939_p3.py").read_text(encoding="utf-8")
 # 清单 —— 这个测试就是为了让漏改当场红。
 RAIL_IDS = ["btnMap", "btnSchedule", "btnMood", "btnPlan", "btnActivity",
             "btnSkills", "btnMemory", "btnUsage",
-            "btnTerminal", "btnAutomate",       # v0.9.112:终端 / 自动化
+            "btnTerminal",
+            "btnSpGit", "btnSpFiles", "btnSpSubs",   # v0.9.159:侧边栏底座三入口
+            "btnAutomate",                       # v0.9.112:自动化
             "btnMyData", "btnSandbox",
             "btnExport", "btnUndo", "btnCompact", "btnTheme"]
 
@@ -187,7 +189,7 @@ def test_overlay_entries_target_their_own_dialog():
 def test_every_entry_has_one_cap_line(rail: str):
     """"图标 + 字"两行结构:每颗按钮都得留一个 `.cap` 给真状态写。"""
     buttons = re.findall(r"<button\b[^>]*>(.*?)</button>", rail, flags=re.S)
-    assert len(buttons) == len(RAIL_IDS) == 16, "入口栏的格子数与这份清单不一致"
+    assert len(buttons) == len(RAIL_IDS) == 19, "入口栏的格子数与这份清单不一致"
     for bid, body in zip(RAIL_IDS, buttons):
         assert body.count('class="cap"') == 1, f"{bid} 的标签行不是一份,状态没地方写"
 
@@ -275,7 +277,7 @@ def test_user_manual_documents_the_rail(rail: str):
     assert "入口栏" in src, "《使用说明》里没写这条竖栏"
     caps = [c.strip() for c in re.findall(
         r'<span class="cap"[^>]*>([^<]+)</span>', rail)]
-    assert len(caps) == 16, f"从界面取到的标签数不是 16:{caps}"
+    assert len(caps) == 19, f"从界面取到的标签数不是 19:{caps}"
     for label in re.findall(r"顶栏「([^」]*)」", src):
         hit = [c for c in caps if c in label]
         assert not hit, f"《使用说明》还把「{label}」指到顶栏,它已经在入口栏里了"
