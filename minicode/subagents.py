@@ -64,6 +64,14 @@ if TYPE_CHECKING:  # 避免循环导入,运行时才用到这些类型
 MAX_SUB_STEPS = 20        # 子代理步数上限(比主 Agent 小)
 REPORT_LIMIT = 6000       # 单个子代理报告回填给主对话的截断长度
 MAX_PARALLEL_TASKS = 6    # 一次 task 最多并发的子代理数(v0.9.60 起含写类型)
+# ---- v0.9.155 L:嵌套与"全局在飞"上限 ------------------------------------------
+# **为什么还要有全局那一道**:批次上限只在 `task` 那一层拦(`len(types) > ...`),
+# 而 `_await` 是"每个 callable 起一个守护线程"、本身不设上限。今天咬不到人,是因为
+# 子代理没有 `task`;一旦允许嵌套,"每批各 6"就变成 6+36+216(见 HANDOFF §6 63)。
+# 另外它今天就有一件真事要管:**后台会话运行器各建各的 Agent**,在那之前全机同时在飞
+# 的子代理数没有任何一处看得见。
+GLOBAL_SUBAGENT_CEILING = 24   # 全进程同时在飞的子代理数(跨层、跨会话一起算)
+MAX_SUB_DEPTH = 3              # 嵌套深度上限(1 = 子代理;2 = 孙辈;3 = 曾孙辈)
 BATCH_REPORT_LIMIT = 16000  # 批量报告合并后的总截断长度
 
 # 子代理报告尾部的固定提醒:子代理读的网页/检索结果在它自己的会话里被围栏
@@ -397,20 +405,31 @@ def _guard_write_tools(tools: list[Tool], locks: "_BatchFileLocks",
     return out
 
 
-def sub_tool_registry(registry: list[Tool], spec: SubAgentSpec) -> list[Tool]:
-    """按类型裁剪并重命名子代理工具集(排除 task 防递归;只读类型只留只读工具)。
+def sub_tool_registry(registry: list[Tool], spec: SubAgentSpec,
+                      allow_task: bool = False) -> list[Tool]:
+    """按类型裁剪并重命名子代理工具集(只读类型只留只读工具)。
+
+    `task`(递归派活)**默认摘掉**,只有 L(v0.9.155)那个开关开着、且这一层还没到
+    `MAX_SUB_DEPTH` 时才留下 —— 由 `run_subagent` 算好了传进来。**默认值是 `False`**:
+    "忘了传"的后果是**维持今天的形状**(子代理不能派活),而不是悄悄打开递归。
 
     `ask_user` 也一并摘掉(v0.9.96,与 `task` 同一条理由的形状):**子代理没有可以
     问的人**。它跑在 `_QuietUI` 里,聊天区一个字都不写;真给它一张卡,几路并行就会
     同时弹好几张,而用户看不到"这是哪一路在问什么"(确认框能贴标签是因为确认框
     本来就写着要做什么动作,提问卡要的是用户思考)。方向:要问由主代理问,
-    子代理把"这里有个分叉没定"写进报告带回来。
+    子代理把"这里有个分叉没定"写进报告带回来(v0.9.154 起它也能用
+    `notify_parent` 半路留一句,那是"提醒"不是"提问",同样问不到回答)。
 
     `export_trace` 同一批摘掉(v0.9.98):轨迹是**主对话**的会话记录,子代理的
     ctx 由父 ctx 派生、带着父会话 —— 让它导出,文件里就是父会话,张冠李戴。
     """
+    # `task` 留不留由 `allow_task` 决定;**这一处是"子代理能不能再派活"的唯一开关**
+    # (`agent_profiles.NEVER_CHILD_TOOLS` 那份名单管的是"定义文件写了也不给",
+    # 与这里同一件事的两面 —— 改这一处时要连它一起想)。
+    banned = ("ask_user", "export_trace") if allow_task else \
+        ("task", "ask_user", "export_trace")
     tools = [t for t in registry
-             if t.name not in ("task", "ask_user", "export_trace")
+             if t.name not in banned
              and (not spec.read_only or t.read_only)]
     # 本地档位定义的 `tools:` 在这里落地 —— 只有这一层知道注册表里真有什么,
     # 所以"只能收窄"这条红线是在**真工具集**上核的,不是对着配置文件里的名单猜。
@@ -456,6 +475,7 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
                  llm, ui, config: Config, registry: list[Tool],
                  undo_stack: list | None = None,
                  file_locks: "_BatchFileLocks | None" = None,
+                 batch_locks: "_BatchFileLocks | None" = None,
                  route_label: str = "",
                  notify: dict | None = None) -> str:
     """跑一个子代理,返回它的最终文字报告(不含前缀)。异常收敛成报告文本。
@@ -496,15 +516,27 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
         # **显式写、不吃继承**:父 ctx 上那个字段必须是空的(主会话自己调那只工具
         # 要得到"你就是主会话"那句如实回话),继承过来就会变成"自己也给自己发"。
         enqueue = (notify or {}).get("enqueue")
-        sub_ctx = dc_replace(ctx, ui=ui,
+        # 深度 +1 并随 ctx 继承(L,v0.9.155):`task` 那只工具读的就是它。主会话是 0,
+        # 所以子代理是 1、孙辈是 2 —— 它同时也是"到顶了没有"的唯一依据。
+        depth = int(getattr(ctx, "subagent_depth", 0) or 0) + 1
+        # 文件占用表跨层带下去:子代理自己再派一批时,那一批用的是**同一张**表 ——
+        # 不然父批与子批各一张,同一个文件可以跨层同时被写而两边都不报错(§6 63 ①)。
+        sub_ctx = dc_replace(ctx, ui=ui, subagent_depth=depth,
+                             batch_locks=batch_locks,
                              notify_parent=enqueue if callable(enqueue) else None)
+        # 嵌套开关(L,v0.9.155)**默认关**。开着时 `task` 才留给子代理,而且深度到
+        # `MAX_SUB_DEPTH` 为止 —— **到顶的那一层里连工具都不出现**,而不是出现了再回
+        # 一句"不许派":一只永远拒绝的工具只会让模型白试一次(与 `ask_user` 从子代理
+        # 摘掉是同一个理由)。
+        nest = bool(getattr(config, "subagent_nesting", False))
+        sub_registry = sub_tool_registry(registry, spec,
+                                         allow_task=nest and depth < MAX_SUB_DEPTH)
         sub_agent = Agent(
             llm=llm,
             registry=(
-                _guard_write_tools(sub_tool_registry(registry, spec),
-                                   file_locks, route_label or spec.type)
+                _guard_write_tools(sub_registry, file_locks, route_label or spec.type)
                 if file_locks is not None
-                else sub_tool_registry(registry, spec)),
+                else sub_registry),
             session=sub_session,
             gate=PermissionGate(config, sandbox=ctx.sandbox,
                                 workspace=getattr(ctx, "workspace", None),
@@ -634,6 +666,56 @@ def _as_list(value, field: str) -> list[str] | str:
     if not items or any(not i.strip() for i in items):
         return f"错误: {field} 不能为空。"
     return items
+
+
+# "全机在飞"计数(L,v0.9.155)。**它必须跨层、跨会话算同一份**,理由见
+# `GLOBAL_SUBAGENT_CEILING` 那段:批次上限管不到嵌套,也管不到后台会话那一层。
+_INFLIGHT_LOCK = threading.Lock()
+_INFLIGHT = {"n": 0}
+
+
+def _acquire_slot() -> bool:
+    """占一个在飞名额;满了回 `False`。
+
+    **满了不排队**,而是让调用方如实回一句 —— 排队会把"等多久"变成一个没人
+    说得清的数,而用户那边只看见一个不动的界面。
+    """
+    with _INFLIGHT_LOCK:
+        if _INFLIGHT["n"] >= GLOBAL_SUBAGENT_CEILING:
+            return False
+        _INFLIGHT["n"] += 1
+        return True
+
+
+def _release_slot() -> None:
+    with _INFLIGHT_LOCK:
+        _INFLIGHT["n"] = max(0, _INFLIGHT["n"] - 1)
+
+
+def inflight_count() -> int:
+    """此刻在飞的子代理数(给测试与诊断看;界面不显示它)。"""
+    with _INFLIGHT_LOCK:
+        return _INFLIGHT["n"]
+
+
+def _gated(fn):
+    """先占名额再跑;没占到就**不跑**并如实回一句。
+
+    包在 `run_subagent` 外面而不是里面:那一支的主体很长、有五处出口,塞一层
+    try/finally 进去只是把缩进挪一遍,收益为零而 diff 很大。
+    """
+
+    def inner():
+        if not _acquire_slot():
+            return (f"没拿到执行名额:全机同时在飞的子代理已到上限 "
+                    f"{GLOBAL_SUBAGENT_CEILING}。**这一路完全没有执行** —— "
+                    "文件一个都没动过,也没有产生任何花费。稍后单独再派一次。")
+        try:
+            return fn()
+        finally:
+            _release_slot()
+
+    return inner
 
 
 def _await(runs: list, seconds: int) -> list:
@@ -806,9 +888,10 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
         if len(specs) == 1:
             spec, text, note = specs[0]
             sub_llm, used_model, mnote = route_llm(spec.type)
-            report = _await([lambda: run_subagent(
+            report = _await([_gated(lambda: run_subagent(
                 ctx, spec, text, sub_llm, ui, config, registry,
-                undo_stack=parent_undo, notify=parent_inbox)], limit)[0]
+                undo_stack=parent_undo, notify=parent_inbox,
+                batch_locks=getattr(ctx, "batch_locks", None)))], limit)[0]
             timed_out = report is None
             if timed_out:
                 report = _timeout_note(limit)
@@ -830,7 +913,10 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
         writers = [s.type for s, _, _ in specs if not s.read_only]
         # 并行写的程序闸(v0.9.98):至少两路能写才挂 —— 单写路没有竞争对象,
         # 全只读批次更没有;挂了也是一层白过的水。
-        file_locks = _BatchFileLocks() if len(writers) > 1 else None
+        # **v0.9.155(L)起先接父批那张**:嵌套时父批与子批若各建一张,**同一个文件
+        # 可以跨层同时被写而两边都不报错** —— 这道程序闸就漏了(见 HANDOFF §6 63 ①)。
+        file_locks = getattr(ctx, "batch_locks", None) or (
+            _BatchFileLocks() if len(writers) > 1 else None)
         # 每路一个客户端:派活之前就把模型定下来,开始提示与合并报告说的才是同一件事
         # (先建后用的顺序也保证这里不会中途抛错)。
         routes = [route_llm(s.type) for s, _, _ in specs]
@@ -859,12 +945,13 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                 quiet, f"{route} {text.strip()[:30]}")
 
         reports = _await([
-            (lambda s=spec, x=text, i=idx, sub=routes[idx][0]: run_subagent(
+            _gated(lambda s=spec, x=text, i=idx, sub=routes[idx][0]: run_subagent(
                 ctx, s, x, sub, route_ui(i, s, x),
                 config, registry,
                 undo_stack=parent_undo,
                 file_locks=file_locks,
                 notify=parent_inbox,
+                batch_locks=file_locks,
                 route_label=f"第{i + 1}路[{s.type}]"))
             for idx, (spec, text, _note) in enumerate(specs)], limit)
         pairs = [(spec, text, rep if rep is not None else _timeout_note(limit))

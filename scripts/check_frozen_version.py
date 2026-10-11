@@ -33,6 +33,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "_dedupe_models", "_models_from_raw", "PROVIDER_PRESETS",
                         # v0.9.39:两条时限是真的在拦东西(漏收 = 配置文件里的数字没人读)
                         "turn_time_limit_seconds", "subagent_time_limit_seconds",
+                        # v0.9.155 L:嵌套开关。漏收 = 包里**永远读不到它**,
+                        # 于是用户在 config.json 里打开之后一切照旧、且没有任何声音
+                        # (与"配置读了没人接"同一种坏法)。
+                        "subagent_nesting",
                         # v0.9.95:按档位分模型(漏收 = config.json 里写了 subagent_models 没人读,
                         # 而报告还在说「本档模型 X」—— 那就是当着面编一句没依据的话)
                         "subagent_models",
@@ -587,7 +591,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # 漏收 = 工具侧 `getattr(ctx, "notify_parent", None)` 永远是
                             # None,主会话自己调会拿到"你就是主会话"那句**本意正确、
                             # 此处错**的回话 —— 而子代理那边同样一句。
-                            "notify_parent"),
+                            "notify_parent",
+                            # v0.9.155 L:两个跨层字段。漏 `subagent_depth` = 包里
+                            # "到顶了没有"永远读到 0(嵌套会一直往下派);漏
+                            # `batch_locks` = 文件占用表跨不了层(§6 63 ①)。
+                            "subagent_depth", "batch_locks"),
     "minicode.tools.catalog_files": ("tools", "perms_tools",
                          # v0.9.98:worktree 只读工具(漏收 = 模型看不到,
                          # "再开一份工作"只剩嘴上说)
@@ -974,6 +982,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
         # v0.9.98:并行写的文件占用闸(漏收 = 装好的包里两路同写一个文件
         # 退回"后写覆盖先写",用户还看不见任何报错)
         "_BatchFileLocks", "_guard_write_tools", "_lock_key",
+        # v0.9.155 L:全机在飞那一道名额 + 深度上限。漏 `_acquire_slot`/`_release_slot`
+        # = 包里没有那层闸(嵌套打开时线程数上界回到 6+36+216);漏 `MAX_SUB_DEPTH`
+        # = "到顶了没有"永远判假,递归一路往下;`inflight_count` 是它唯一的读数口。
+        "_acquire_slot", "_release_slot", "_gated", "inflight_count",
+        "GLOBAL_SUBAGENT_CEILING", "MAX_SUB_DEPTH",
         # v0.9.154 I:装配那一头的容器(漏 = 子代理的 `ctx.notify_parent` 永远是 None,
         # 而工具和通道都好好的 —— 表现成"主会话收不到子代理的提醒"且没有任何报错)
         "parent_inbox",

@@ -302,6 +302,12 @@ class Config:
     # 超时是"主代理不再等它",后台线程仍会跑完当前那一步(Python 没有安全的强杀),
     # 结果不再回填 —— 报告里会照这个口径写明是哪一路超时。
     subagent_time_limit_seconds: int = 600
+    # 子代理能不能再派子代理(L,v0.9.155)。**默认 False**:机制先落地,行为不变。
+    # 打开之后:①`task` 会留在子代理的工具集里(深度到 `subagents.MAX_SUB_DEPTH`
+    # 为止);②它们**共用**父批那张文件占用表;③全机在飞的子代理数受
+    # `subagents.GLOBAL_SUBAGENT_CEILING` 管;④**超时不覆盖后代** —— 父级到点不再等,
+    # 而孙辈仍会把当前那一步跑完(见 HANDOFF §6 63 ③)。
+    subagent_nesting: bool = False
     # 按档位分模型(v0.9.95):{"explore": "deepseek-v4-flash", "code": "..."}。
     # **只换模型名,不换供应商** —— 跨供应商要另一份 Key,那一层不在这里做
     # (会话级切供应商已有界面路径,这里要解决的是"侦察用便宜的、实现用硬的")。
@@ -626,6 +632,10 @@ def _config_from_raw(raw: dict) -> Config:
         session_keep_last=max(0, int(raw.get("session_keep_last", 0) or 0)),
         subagent_time_limit_seconds=max(0, int(
             raw.get("subagent_time_limit_seconds", 600) or 0)),
+        # L(v0.9.155):子代理能不能再派子代理。**默认 False = 今天的行为**。
+        # 打开时要连着知道三件事(全在 HANDOFF §6 63):跨层共用同一张文件占用表、
+        # 全局在飞上限、以及超时**不覆盖后代**(把它当"高级开关"而不是"更多并行")。
+        subagent_nesting=bool(raw.get("subagent_nesting", False)),
         # 按档位分模型的原始配置:一律转成"字符串→字符串",空值丢掉。
         # 写成列表/嵌套/数字都不崩(这份要拿去查表),但不认的条目就是不生效 ——
         # 具体能不能用交给 subagents.model_choice 去对着供应商的启用模型核,那才是真相。

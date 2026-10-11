@@ -37,6 +37,14 @@ class ToolContext:
     # 值是主代理 `Agent.queue_note` 这个可调用对象,不是字符串 —— 收不收得下、
     # 带不带锁由主代理那一边说了算,这里只负责递。
     notify_parent: Any | None = None
+    # 子代理的**深度**(L,v0.9.155):主会话是 0,子代理是 1,孙辈是 2。
+    # `run_subagent` 在派生 ctx 时 +1;`task` 那只工具据它决定还要不要往下派。
+    # 开关默认关,所以这个数今天恒为 0 或 1 —— 它先在这里把路铺好。
+    subagent_depth: int = 0
+    # **这一批**的并行写占用表(L,v0.9.155)。父批给了就接着用(**跨层同一张**):
+    # 嵌套时父批与子批若各建一张,同一个文件可以跨层同时被写而两边都不报错 ——
+    # 那道程序闸就漏了(HANDOFF §6 63 ①)。主会话那份是 None,由第一批自己建。
+    batch_locks: Any | None = None
 
 
 Handler = Callable[..., str]  # 签名: handler(ctx, **kwargs) -> str
