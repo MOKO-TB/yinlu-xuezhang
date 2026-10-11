@@ -43,9 +43,15 @@ HOOK_NOTE_CHARS = 1200      # 附注一句话的上限(截了几字要在正文�
 HOOK_OUTPUT_CHARS = 8000    # 要回灌给模型的正文(lint/测试原文)的上限
 HOOK_STDOUT_CHARS = 65536   # 解析用的 stdout 读数上限:再多也只可能是刷屏不是结论
 EXIT_DENY = 2           # 与 Claude/Cline 同一口径:2 = 我(钩子)明确拒绝这一步
-# 非工具类事件(H4,v0.9.115):没有"哪只工具"这个维度,也只能往这一次请求里
-# 附一句话 —— 既不改写参数、不接管结果,更拦不住用户开口说的那句话。
-EVENT_KINDS = ("session_start", "user_prompt_submit")
+# 非工具类事件(H4,v0.9.115;`stop` 是 v0.9.151 补的最后一个):没有"哪只工具"这个
+# 维度,也只能往请求里附一句话 —— 既不改写参数、不接管结果,更拦不住用户开口说的
+# 那句话。
+#
+# `stop` 与另外两个**时机不同**:它在一轮**结束时**跑,而那一轮已经发不出请求了,
+# 所以它附的那句话落在**下一轮的第一条请求**上(见 `Agent._fire_stop_hooks`)。
+# 这不是缺陷,是这一格的边界 —— 钩子改不了已经发生的事,能做的只有"给下一轮留句话"
+# 与"把这一轮记下来"。
+EVENT_KINDS = ("session_start", "user_prompt_submit", "stop")
 
 
 def _as_list(val) -> list:
@@ -133,10 +139,12 @@ def run_hook(kind: str, hooks_cfg: dict | None, tool: str = "",
 
     五类钩子共用这一份形状:`pre_tool`(拦/改写这一步)、`post_tool`(回灌正文)、
     `permission_request`(H3,v0.9.115:替用户在确认框之前答一句 allow/deny)、
-    `session_start` 与 `user_prompt_submit`(H4:只能往**这一次请求**里附一句话)。
+    `session_start` / `user_prompt_submit` / `stop`(H4:只能往请求里附一句话 ——
+    前两个附在**这一次请求**,`stop` 附在**下一轮的第一条请求**,见 `EVENT_KINDS`
+    上面那段)。
     `updated_input` 只在 pre 上成立 —— 门已经对 permission_request 判过 ASK 了,
     这时候再改参数就是"对 A 点头、执行 B";`updated_output` 只在 post 上成立;
-    `context` 五类都能带。
+    `context` 六类都能带。
 
     H1 的形状(旧的两个键名字与语义都保留,配了钩子的人不改配置行为不变):
 
@@ -297,8 +305,8 @@ def _entry(hooks_cfg: dict | None, kind: str) -> "tuple[str, dict] | None":
 def _matches(spec: dict, tool: str, args: dict | None) -> bool:
     """matcher 判定:全部声明的维度都过才跑;一个都没声明 = 对所有工具跑。
 
-    **非工具类事件(`tool` 传空)一律放行**:session_start / user_prompt_submit 没有
-    "哪只工具"这个维度,若照旧走下面的判定,用户在那类钩子上写的 `tools`/`paths`
+    **非工具类事件(`tool` 传空)一律放行**:session_start / user_prompt_submit / stop
+    没有"哪只工具"这个维度,若照旧走下面的判定,用户在那类钩子上写的 `tools`/`paths`
     会把它筛成永不触发 —— 配了却不跑、又没人说话,是这批里最难查的一种坏。
 
     H1 补的两维:

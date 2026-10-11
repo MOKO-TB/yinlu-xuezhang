@@ -308,6 +308,20 @@ class Agent:
         原样带回去、要被 `/history` 念出来,而机器加的输出要求不是用户说的 —— 混进去
         等于让一份 CLI 旗标冒充人话。
         """
+        try:
+            self._run_turn_body(user_input, content, add_user=add_user,
+                                output_directive=output_directive)
+        finally:
+            # `stop` 钩子(H4 的最后一点,v0.9.151)。**只在这里发一次**,不做成
+            # "八个 return 前面各加一句" —— 那八个出口里漏一个,表现是"有时候不发",
+            # 而"有时候不发"比"从不发"难查得多(这一格之前的两点也是同一个理由收在
+            # `_fire_start_hooks` 一处)。`finally` 保证无论怎么结束都发,而且
+            # **发不出去也不许影响这一轮**(见 `_fire_stop_hooks`)。
+            self._fire_stop_hooks(user_input)
+
+    def _run_turn_body(self, user_input: str, content=None, *,
+                       add_user: bool = True, output_directive: str = "") -> None:
+        """`run_turn` 的主体。拆出来只为让上面那个 `finally` 有一个干净的落点。"""
         self._output_directive = output_directive or ""
         # 先问项目指令采不采纳(它可能改提示词内容),再按指纹决定要不要重建 ——
         # 顺序反了就会"跨天/换规矩"这一句抢在一次点头之前说,而说的还是旧的那份。
@@ -1955,7 +1969,9 @@ class Agent:
         """跑一类事件钩子,只收它要附的那句话。它不是闸:坏了、超时、拦不住都照跑这一轮。"""
         from minicode import hooks
         payload = {"event": kind}
-        if kind == "user_prompt_submit":
+        if kind in ("user_prompt_submit", "stop"):
+            # `stop` 也带这一轮的提问:它多半是为了"答完记一笔",而只记"结束了"
+            # 而不记"结束的是哪一问",那份记录对不上任何东西。
             payload["prompt"] = text
         try:
             got = hooks.run_hook(kind, cfg_hooks, "", args=payload)
@@ -1972,6 +1988,37 @@ class Agent:
         # **追加**而不是赋值:`_pending_prior` 另有住户(差评避让那条线在
         # `_note_low_rated_prior` 里写它),谁覆盖谁就有一句会静默消失。
         self._pending_prior = (self._pending_prior + "\n" + line).strip()
+
+    def _fire_stop_hooks(self, user_input: str) -> None:
+        """一轮**结束**时发一次 `stop`(H4 的最后一点,v0.9.151)。
+
+        它能做两件:往**下一轮的第一条请求**里留一句话(走 `_pending_prior`,与
+        `session_start` / `user_prompt_submit` 同一条通道),以及被 `hooks.py` 记进
+        审计。**它拦不住这一轮结束** —— `finally` 里跑的东西没有"否决"这个动作,
+        而这一格的口径就是"不许做出一把用户按了停止、程序自己决定不停的产品"。
+
+        **两处刻意的边界,写清楚免得被当成缺陷**:
+
+        - **`reason` 不在 payload 里**。"这一轮是怎么结束的"(答完 / 撞步数上限 /
+          被停止 / 报错)没有传进来 —— 那要把 `_run_turn_body` 的**八个出口**各带一个
+          标记出来,而 H4 这三点定下的语义只有"加 context + 记审计"。真需要它的那天
+          再改,别现在猜一个值填进去(填错了比没有坏:钩子会按一个假的理由做事)。
+        - **它附的那句话这一轮用不上**:请求都发完了。落到下一轮是这一格唯一说得通的
+          去处,也是它存在的意义(答完记一笔、给下一轮提个醒)。
+        """
+        if self._is_sub:
+            return              # 子代理不跑事件钩子,与 `_fire_start_hooks` 同一条
+        cfg = getattr(getattr(self, "ctx", None), "config", None)
+        cfg_hooks = getattr(cfg, "hooks", None)
+        if not isinstance(cfg_hooks, dict) or not cfg_hooks:
+            return
+        try:
+            self._collect_event_hook("stop", str(user_input or ""), cfg_hooks)
+        except Exception:
+            # 这一句在 `finally` 里跑,**绝不许把异常抛出去**:那会把"这一轮正常结束"
+            # 变成"这一轮以一个没人预期的异常收场",而用户看到的是对话报错 ——
+            # 一个附属的钩子把主流程弄坏,是这个项目列在禁忌里的坏法。
+            pass
 
     def _reject_note(self, tool, args: dict) -> str:
         """被 REJECT 时回给模型的话,并画那张"硬拒"卡。

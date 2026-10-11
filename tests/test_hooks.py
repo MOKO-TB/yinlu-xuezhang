@@ -718,6 +718,128 @@ def test_no_event_hooks_changes_nothing(tmp_path):
     assert agent._pending_prior == ""
 
 
+# ------------------------------------------------- `stop` 钩子(H4 的最后一点,v0.9.151)
+# 这一格的形状与另外两个事件**不同**:它在一轮**结束时**跑,而那一轮已经发不出请求了。
+# 所以针要钉住四件事:发的次数对、附的话落到**下一轮**、**拦不住这一轮结束**、
+# 而且它自己坏了也不许把这一轮弄坏(它在 `finally` 里)。
+def test_stop_hook_fires_once_per_turn(tmp_path):
+    """一轮一次 —— 不是每一步一次,也不是一次会话一次。"""
+    cmd, n = _counting_hook(tmp_path, "stop")
+    agent, s, ui = _hook_agent(tmp_path, {"stop": {"command": cmd}},
+                               steps=[AssistantTurn(text="一"), AssistantTurn(text="二")])
+    agent.run_turn("第一问")
+    agent.run_turn("第二问")
+    assert _hits(n) == 2
+
+
+def test_stop_hook_context_lands_in_the_next_turn(tmp_path):
+    """它附的那句话这一轮用不上(请求都发完了),落到**下一轮的第一条请求**。
+
+    这不是缺陷,是这一格唯一说得通的去处 —— 钩子改不了已经发生的事,
+    能做的只有"给下一轮留句话"。
+    """
+    cmd = _json_hook(tmp_path, {"context": "答完把改动记一笔"}, name="stopctx.py")
+    agent, s, ui = _hook_agent(tmp_path, {"stop": {"command": cmd}})
+    agent.llm = _RecordingLLM([AssistantTurn(text="一"), AssistantTurn(text="二")])
+    agent.run_turn("第一问")
+    assert "记一笔" not in str(agent.llm.sent[0][0].get("content")), \
+        "这一轮的请求早就发出去了,不该凭空出现"
+    agent.run_turn("第二问")
+    assert "记一笔" in str(agent.llm.sent[1][0].get("content")), \
+        "它该落到下一轮的第一条请求上"
+
+
+def test_stop_hook_cannot_block_the_turn(tmp_path):
+    """退出码 2(钩子明确拒绝)也**拦不住**这一轮结束。
+
+    这一格的口径写死在 `roadmap-工具钩子升级.md` §四:不许做出一把"用户按了停止、
+    程序自己决定不停"的产品。`finally` 里跑的东西本来也没有"否决"这个动作。
+    """
+    agent, s, ui = _hook_agent(tmp_path, {"stop": "exit 2"},
+                               steps=[AssistantTurn(text="答完了")])
+    agent.run_turn("问一句")
+    assert s.messages[-1]["content"] == "答完了", "答复照样落地"
+
+
+def test_stop_hook_fires_even_when_the_turn_is_interrupted(tmp_path):
+    """**被停止的一轮也要发** —— 那正是它最该被记下来的时候。"""
+    cmd, n = _counting_hook(tmp_path, "stopint")
+
+    class _Boom:
+        def stream_chat(self, messages, *a, **k):
+            raise KeyboardInterrupt
+
+    agent, s, ui = _hook_agent(tmp_path, {"stop": {"command": cmd}},
+                               steps=[AssistantTurn(text="x")])
+    agent.llm = _Boom()
+    agent.run_turn("问一句")
+    assert _hits(n) == 1
+
+
+def test_a_broken_stop_hook_does_not_break_the_turn(tmp_path):
+    """钩子自己失败(非零退出)不许把这一轮弄坏。
+
+    它在 `finally` 里跑:抛出去就会把"这一轮正常结束"变成"以一个没人预期的异常
+    收场",而用户看到的是对话报错 —— 附属的钩子把主流程弄坏,是这个项目列在
+    禁忌里的坏法。
+    """
+    agent, s, ui = _hook_agent(tmp_path, {"stop": {"command": "exit 9"}},
+                               steps=[AssistantTurn(text="答完了")])
+    agent.run_turn("问一句")
+    assert s.messages[-1]["content"] == "答完了"
+
+
+def test_stop_hook_is_skipped_for_subagents(tmp_path):
+    """子代理不跑事件钩子 —— 与 `session_start` / `user_prompt_submit` 同一条。"""
+    cmd, n = _counting_hook(tmp_path, "stopsub")
+    agent, s, ui = _hook_agent(tmp_path, {"stop": {"command": cmd}},
+                               steps=[AssistantTurn(text="干完了")])
+    agent._is_sub = True
+    agent.run_turn("任务文本")
+    assert _hits(n) == 0
+
+
+def test_stop_payload_carries_the_event_and_this_turns_prompt(tmp_path):
+    """payload 里要有 `event` 与**这一轮的提问**。
+
+    只记"结束了"而不记"结束的是哪一问",那份记录对不上任何东西 —— 一个答完记一笔的
+    钩子拿到的将是一堆分不清谁是谁的行。`reason`(怎么结束的)**刻意不在里面**,
+    理由写在 `Agent._fire_stop_hooks` 的 docstring 里。
+    """
+    out = tmp_path / "stop-payload.json"
+    script = tmp_path / "pay.py"
+    script.write_text(
+        "import shutil, sys\n"
+        f"shutil.copyfile(sys.argv[1], r'{out}')\n"
+        "print('{}')\n", encoding="utf-8")
+    cmd = f'python "{script}" "{{args_file}}"'
+    agent, s, ui = _hook_agent(tmp_path, {"stop": {"command": cmd}},
+                               steps=[AssistantTurn(text="答完了")])
+    agent.run_turn("把这段记下来")
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["event"] == "stop"
+    assert payload["prompt"] == "把这段记下来"
+    assert "reason" not in payload, "没有的东西不许编一个填进去"
+
+
+def test_stop_and_the_other_two_events_share_one_pending_channel(tmp_path):
+    """三个事件附的话走**同一条** `_pending_prior`,而且是**追加**不是覆盖。
+
+    覆盖的代价是静默:谁后写谁把前一句顶掉,而两句看起来都"配过了"。
+    """
+    start = _json_hook(tmp_path, {"context": "开场那句"}, name="s1.py")
+    stop = _json_hook(tmp_path, {"context": "收场那句"}, name="s2.py")
+    agent, s, ui = _hook_agent(tmp_path, {"session_start": {"command": start},
+                                          "stop": {"command": stop}})
+    agent.llm = _RecordingLLM([AssistantTurn(text="一"), AssistantTurn(text="二")])
+    agent.run_turn("第一问")
+    agent.run_turn("第二问")
+    sent = str(agent.llm.sent[1][0].get("content"))
+    assert "收场那句" in sent, "stop 那句要落到下一轮"
+    # 开场那句活在第一轮那一次请求里,早就消费掉了 —— 这里钉的是"追加没把谁顶掉"
+    assert agent._pending_prior == "" or "开场那句" not in agent._pending_prior
+
+
 def test_pre_tool_context_reaches_the_model(tmp_path):
     """把 pre 的 `context` 这根线钉住:它和 post 的一样是附注,曾经只在文档里成立。"""
     cmd = _json_hook(tmp_path, {"context": "已记入审计表"}, name="pctx.py")

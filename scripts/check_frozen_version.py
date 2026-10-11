@@ -915,8 +915,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        "Prepared", "_prepare", "_run_handler", "_finish",
                        "HARD_REJECT_NOTE", "HOOK_BAD_STREAK",
                        # v0.9.115 H4:两个事件钩子(漏 `_collect_event_hook` = 事件照叫、
-                       # 附的那句话永远进不了请求;漏 `_fire_start_hooks` = 整类事件不跑)
-                       "_fire_start_hooks", "_collect_event_hook",
+                       # 附的那句话永远进不了请求;漏 `_fire_start_hooks` = 整类事件不跑)。
+                       # v0.9.151 起第三个事件 `stop`(漏 `_fire_stop_hooks` = 装好的包里
+                       # 那一类**从不触发**,而它正是"答完记一笔"唯一能挂的地方 ——
+                       # 配置里写着、界面上也说过,就是不发,没有任何一处会红)。
+                       "_fire_start_hooks", "_fire_stop_hooks", "_collect_event_hook",
 
                        # v0.9.40 D0/D2:跨天重建 + 撞上限后的收尾调用
                        "_refresh_clock", "_wrap_up",
