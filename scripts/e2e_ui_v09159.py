@@ -199,8 +199,8 @@ def main() -> int:
         # ④ 终端坞(v0.9.162 起在底部,不在底座):accept_all 档直接跑,输入逐字过桥
         page.click("#btnTermToggle")
         page.wait_for_timeout(300)
-        check(page.locator('#tpBody .tp-row[data-job="j2"]').count() == 1,
-              "后台账里的命令在(与「后台命令」面板同一本)")
+        check(page.locator('#tpBody .t-cmd').count() == 2,
+              "后台账里的命令在(与「后台命令」面板同一本,流里按先后排)")
         page.fill("#tpCmd", "git status")
         page.click("#tpRun")
         page.wait_for_timeout(150)

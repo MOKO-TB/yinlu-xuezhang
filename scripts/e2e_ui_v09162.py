@@ -30,7 +30,7 @@ for _p in (str(ROOT), str(ROOT / "scripts")):
 
 from e2e_launch import launch          # noqa: E402
 
-STUB_JS = """
+STUB_JS = r"""
 window.__CALLS__ = [];
 const base = {
   get_info: () => Promise.resolve({
@@ -59,12 +59,17 @@ const base = {
   read_clipboard: () => Promise.resolve({text: "", image: false, source: "empty"}),
   get_activity: () => Promise.resolve({ok: true, empty: true, groups: []}),
   get_env_info: () => Promise.resolve({ok: true}),
-  get_terminal: () => Promise.resolve({ok: true, jobs: [
+  ...(() => { let dockCwd = "D:/demo/campus"; return {
+  get_terminal: () => Promise.resolve({ok: true, cwd: dockCwd, jobs: [
       {id: "j1", command: "echo hi", running: false, exit_code: 0, killed: false,
-       chars: 3, dropped: 0, elapsed: 1, tail: "hi"}],
+       chars: 3, dropped: 0, elapsed: 1, tail: "hi", cwd: "D:/demo/campus"}],
     buffer_chars: 4000, note: "只留尾部"}),
-  terminal_run: (c) => { window.__CALLS__.push(["terminal_run", c]);
-    return Promise.resolve({ok: true, id: "j9", msg: "已放进后台"}); },
+  terminal_run: (c, cwd) => { window.__CALLS__.push(["terminal_run", c, cwd]);
+    if (/^cd\s/i.test(c)) { dockCwd = "D:/demo/campus/sub";
+      return Promise.resolve({ok: true, moved: true, cwd: dockCwd}); }
+    return Promise.resolve({ok: true, id: "j9", msg: "已放进后台",
+      cwd: cwd || dockCwd}); },
+  };})(),
 };
 window.pywebview = {api: new Proxy(base, {
   get: (t, k) => (k in t) ? t[k]
@@ -147,9 +152,14 @@ def main() -> int:
               "开机时终端坞收着")
         page.click("#btnTermToggle")
         page.wait_for_function(
-            "() => document.querySelectorAll('.term-dock .tp-row').length === 1")
+            "() => document.querySelectorAll('.term-dock .t-cmd').length === 1")
         check(page.evaluate("() => !document.getElementById('termDock').hidden"),
               "切换终端打开底部坞")
+        check("Windows PowerShell" in page.locator("#tpBody").inner_text()
+              and "版权所有" in page.locator("#tpBody").inner_text(),
+              "打开就是 PowerShell 的横幅(不是卡片列表)")
+        check(page.locator("#tpPrompt").text_content().startswith("PS "),
+              "输入行的提示符是 PS <目录>>")
         check(page.evaluate("() => document.getElementById('btnTermToggle')"
                             ".classList.contains('on')"),
               "切换终端按钮亮了")
@@ -159,7 +169,7 @@ def main() -> int:
               "Ctrl+` 收回终端坞")
         page.keyboard.press("Control+`")
         page.wait_for_function(
-            "() => document.querySelectorAll('.term-dock .tp-row').length === 1")
+            "() => document.querySelectorAll('.term-dock .t-cmd').length === 1")
 
         # ④ 坞占内容区整行(从入口栏右侧铺到窗右缘,不给 260px 的侧栏留缝)
         geo = page.evaluate("""() => {
@@ -184,13 +194,19 @@ def main() -> int:
         saved = page.evaluate("() => parseInt(localStorage.getItem('dock.h'), 10)")
         check(saved == h1, f"localStorage 记的是松手那一刻({saved} == {h1})")
 
-        # ⑥ 坞里发话:accept_all 档直接过桥
+        # ⑥ 坞里发话:accept_all 档直接过桥(带坞的当前目录);cd 就地生效
         page.fill("#tpCmd", "git status")
         page.click("#tpRun")
         page.wait_for_timeout(150)
         calls = page.evaluate("window.__CALLS__")
-        check(["terminal_run", "git status"] in calls,
-              "坞的输入行逐字过 terminal_run")
+        check(["terminal_run", "git status", "D:/demo/campus"] in calls,
+              "坞的输入行逐字过 terminal_run(带当前目录)")
+        page.fill("#tpCmd", "cd sub")
+        page.click("#tpRun")
+        page.wait_for_timeout(150)
+        check(page.evaluate("() => document.getElementById('tpPrompt')"
+                            ".textContent.includes('sub')"),
+              "cd 就地换提示符(桥记的当前目录落地)")
 
         check(not errors, f"无页面错误(实际:{errors[:2] or '无'})")
         browser.close()

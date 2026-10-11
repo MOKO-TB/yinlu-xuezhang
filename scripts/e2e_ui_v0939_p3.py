@@ -369,7 +369,7 @@ def main() -> int:
         # 与底座自己的标签条 —— 那两块的深度回归由 v09159/v09160/v09161 三场管。
         page.click("#btnTerminal")
         page.wait_for_function(
-            "() => document.querySelector('.term-dock .tp-row') !== null")
+            "() => document.querySelector('.term-dock .t-cmd') !== null")
         check(page.evaluate("() => !document.getElementById('termDock').hidden"),
               "🖥 那一点拉开底部终端坞(v0.9.162)")
         check(len(calls("get_terminal")) == 1,

@@ -259,18 +259,16 @@ def main() -> int:
 
             # ---- 3. 终端(v0.9.162 起住进底部终端坞;旧只读弹窗已拆除) ----
             page.click("#btnTerminal")
-            page.wait_for_function("() => document.querySelectorAll('.term-dock .tp-row')"
+            page.wait_for_function("() => document.querySelectorAll('.term-dock .t-cmd')"
                                    ".length === 2")
+            # v0.9.162:坞是一屏终端流 —— 命令行 + 输出直接铺开,没有卡片可点
             rows = page.eval_on_selector_all(
-                ".term-dock .tp-row .tp-cmd",
+                ".term-dock .t-cmd",
                 "els => els.map(e => e.textContent)")
             check(rows == ["pytest -q tests", "python scripts/build_exe.py"],
-                  f"两条后台命令都在,在跑的排前面({rows})")
-            page.locator(".term-dock [data-tail]").first.click()
-            page.wait_for_selector(".term-dock .tp-out")
-            check("42%" in page.locator(".term-dock .tp-out")
-                  .first.inner_text(),
-                  "点「看输出」摊出的是那条命令的输出末尾")
+                  f"两条命令按先后排进流里({rows})")
+            check("42%" in page.locator(".term-dock #tpBody").inner_text(),
+                  "输出直接铺在流里,不再要点开才看")
             # v0.9.159 起这一页**有**输入行:每条命令过沙箱硬闸,confirm 档每条先问 ——
             # 旧断言"面板里没有输入框"随只读弹窗一起退役
             check(page.locator(".term-dock #tpCmd").count() == 1,

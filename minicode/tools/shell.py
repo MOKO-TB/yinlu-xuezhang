@@ -956,7 +956,8 @@ def py_script(ctx: ToolContext, path: str, timeout: int = 120) -> str:
 USER_CMD_MAX_CHARS = 4000
 
 
-def user_run(config, sandbox_state, workspace, command: str) -> dict:
+def user_run(config, sandbox_state, workspace, command: str, *,
+             cwd=None, powershell: bool = False) -> dict:
     """侧边栏终端页:用户亲手跑一条命令,进**同一本**后台账(`_bg_jobs`,
     「后台命令」面板与 `terminal_facts()` 看见的就是它 —— 不另立一本账,
     不然"我跑的那条"在只读面板里看不见,两本账迟早对不上)。
@@ -964,6 +965,11 @@ def user_run(config, sandbox_state, workspace, command: str) -> dict:
     沙箱硬闸在这里拦:`check_command` 的 REJECT 级(禁配规则/断网时的联网
     命令)谁来了都不放 —— **硬闸不认人**;ASK 级(隐匿执行等)由前端在
     提交前先问过用户:用户本人就是确认人,这一页存在的意义就是这个。
+
+    v0.9.162 两个坞专用口径:`cwd` 给一条**当前目录**(终端坞的 cd 持续,
+    由桥自己管,不在工作区里的目录这一层不接);`powershell=True` 时命令
+    前缀换 Windows PowerShell(-NoLogo -NoProfile)—— 终端坞要的是
+    `PS D:\\...>` 那种体验,agent 的 bash 那条路一格都不动。
     """
     text = str(command or "").strip()
     if not text:
@@ -977,10 +983,13 @@ def user_run(config, sandbox_state, workspace, command: str) -> dict:
     verdict, why = check_command(policy, text)
     if verdict == sandbox_REJECT:
         return {"ok": False, "msg": f"沙箱拦下了这条命令:{why}"}
-    argv = resolve_shell_argv(getattr(config, "shell", ""))
+    if powershell:
+        argv = ["powershell", "-NoLogo", "-NoProfile", "-Command"]
+    else:
+        argv = resolve_shell_argv(getattr(config, "shell", ""))
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     shim = types.SimpleNamespace(config=config, sandbox=sandbox_state,
-                                 workspace=workspace)
+                                 workspace=str(cwd) if cwd else workspace)
     env, dropped = _child_env(shim)
     env_note = _env_note(dropped)
     with _bg_lock:

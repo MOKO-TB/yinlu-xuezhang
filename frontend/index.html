@@ -134,6 +134,8 @@ try {
      但 `overflow-y:auto` 保留 —— 矮窗口里"入口看不见 = 功能没了",那条
      `test_rail_is_scrollable_when_the_window_is_short` 钉的就是这个,不能一刀删。 */
   .rail{ display:flex; flex-direction:column; align-items:center; gap:1px;
+         grid-row:1 / 3;   /* v0.9.162:终端坞占第 2 行,入口栏跟着跨两行 ——
+                              不跨的话坞开时左下角露出一条背景(用户图 p1 圈的就是它) */
          padding:8px 0 8px; min-height:0; overflow-y:auto;
          scrollbar-width:none; -ms-overflow-style:none;
          background:var(--glass); border-right:1px solid var(--line-soft);
@@ -1818,7 +1820,18 @@ try {
   .td-head b{ font-size:12.5px; }
   .td-note{ flex:1; min-width:0; font-size:11px; color:var(--text-3);
             overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .td-body{ flex:1; min-height:0; overflow-y:auto; padding:8px 10px; }
+  .td-body{ flex:1; min-height:0; overflow-y:auto; padding:8px 10px;
+            /* v0.9.162:终端流 —— 深底等宽,像 PowerShell 不像卡片列表 */
+            background:#141418; color:#d6d6dc;
+            font-family:Consolas,"Cascadia Mono",monospace; font-size:12px;
+            line-height:1.55; white-space:pre-wrap; word-break:break-all; }
+  .td-body .t-cmd{ color:#7ec8a9; }
+  .td-body .t-dim{ color:#6b6b74; }
+  .td-body .t-err{ color:#e08585; }
+  .td-body .t-banner{ color:#9a9aa4; }
+  .td-body .t-prompt{ color:#c8a86b; }
+  .td-body .t-stop{ color:#e08585; cursor:pointer; text-decoration:underline;
+                    background:none; border:none; font:inherit; padding:0; }
   .td-resizer{ position:absolute; left:0; right:0; top:-2px; height:5px;
                cursor:row-resize; z-index:6; }
   .td-resizer:hover{ background:linear-gradient(180deg, var(--glass-lite),
@@ -1869,7 +1882,11 @@ try {
   .gp-commit{ flex:none; padding:8px 10px; border-top:1px solid var(--line-soft); }
   /* 终端页:输入行(.tp-row/.tp-out/.tp-note 沿用后台命令面板那套) */
   .tp-input{ flex:none; display:flex; gap:5px; padding:7px 10px;
-             border-top:1px solid var(--line-soft); }
+             border-top:1px solid var(--line-soft); align-items:center;
+             background:#141418; }
+  .tp-prompt{ flex:none; max-width:46%; overflow:hidden; text-overflow:ellipsis;
+              white-space:nowrap; color:#c8a86b; font-size:11.5px;
+              font-family:Consolas,"Cascadia Mono",monospace; }
   .tp-input input{ flex:1; min-width:0; background:var(--glass-lite);
     border:1px solid var(--line-soft); border-radius:var(--r-s);
     color:var(--text-1); padding:6px 8px; font-size:12px;
@@ -2681,7 +2698,8 @@ try {
     <div class="td-resizer" id="tdGrip" title="拖动调高度(200~560px)· 双击回 280"></div>
     <div class="td-body" id="tpBody"></div>
     <div class="tp-input">
-      <input id="tpCmd" placeholder="跑一条命令,如:git status(回车执行)" spellcheck="false">
+      <span class="tp-prompt" id="tpPrompt">PS …&gt;</span>
+      <input id="tpCmd" placeholder="命令(回车执行;cd 在工作区内挪)" spellcheck="false">
       <button class="b-yes" id="tpRun">跑</button>
     </div>
   </section>
@@ -5413,10 +5431,18 @@ function mcfApplyAuto() {
 
 /* 目录里没有也没探测过的模型:给一颗能真正落数的按钮,而不是只留一句"建议去点测试"
    —— 那句话要用户自己出弹窗、找模型行、点完再回来,等于把事推回给用户(v0.9.158)。 */
+let mcfProbeMsg = "";   /* 刚跑完那次探测的实况:known 仍 false 时要摊给用户看 */
 function mcfShowUnknown(name) {
   const note = $("mcfAutoNote");
   note.className = "mcf-auto-note warn";
   note.textContent = "开着,但这个模型目录里没有、也没探测过 —— 现在按配置默认走。";
+  if (mcfProbeMsg) {
+    note.textContent += " 刚才那次探测:" + mcfProbeMsg
+      + "。已连通但窗口/图片输入没探出来 = 服务端不肯回探测请求;"
+      + "开着智能配置只能交给服务端默认,**关掉自己填**最稳"
+      + "(推理档位探测给不了,那是目录/声明的事)。";
+    mcfProbeMsg = "";
+  }
   const btn = document.createElement("button");
   btn.className = "mcf-probe"; btn.type = "button";
   btn.textContent = "探测一次";
@@ -5428,21 +5454,39 @@ function mcfShowUnknown(name) {
     note.textContent = "正在探测 " + name + " …(会发一条真实请求,可能要几秒)";
     pywebview.api.test_model(p.id || "", name, p.base_url || "", p.api_key || "").then(r => {
       if (!$("mcfAuto").checked) return;
-      if (r && r.ok) {
-        const m = mcfTarget.m;
-        if (r.context_window) { m.context_window = r.context_window; m.known = true; }
-        if (typeof r.supports_vision === "boolean") {
-          m.supports_vision = r.supports_vision; m.known = true;
-        }
-        mcfApplyAuto();               // 再问一遍:这回有数了,直接落进表单
-      } else {
+      if (!r || !r.ok) {
         mcfShowUnknown(name);
         const n2 = $("mcfAutoNote");
         n2.textContent = "探测没成:" + ((r && r.msg) || "桥没应答")
           + " —— 查一下接口地址与密钥再试,或关掉自己填。";
         const b2 = n2.querySelector(".mcf-probe");
         if (b2) b2.disabled = false;
+        return;
       }
+      const m = mcfTarget.m;
+      if (r.context_window) { m.context_window = r.context_window; m.known = true; }
+      if (typeof r.supports_vision === "boolean") {
+        m.supports_vision = r.supports_vision; m.known = true;
+      }
+      // v0.9.162 修复(用户图 p4):以前探测"成功"却两样都没探到时,remember
+      // 不落盘、known 仍 false,界面一字不动回到"探测一次"—— 点了等于没点。
+      // 现在探到什么**当场填什么**(预览态):窗口/图片输入直接落表单;
+      // 连推理档位探测给不了这件事也说清 —— 那是目录/声明的事,不是探测的事。
+      const gotW = !!r.context_window;
+      const gotV = typeof r.supports_vision === "boolean";
+      if (gotW || gotV) {
+        mcfSetVals({
+          w: gotW ? String(r.context_window) : (mcfUserVals ? mcfUserVals.w : ""),
+          o: mcfUserVals ? mcfUserVals.o : "",
+          v: gotV ? (r.supports_vision ? "1" : "0") : (mcfUserVals ? mcfUserVals.v : ""),
+          p: "", l: [],
+        });
+      }
+      // known 仍 false(探到的不足以落盘)时,mcfApplyAuto 会重建"探测一次"
+      // 的原始文案 —— 带上这次探测的实况,把"已连通但探不出"摊开,不无声打转。
+      mcfProbeMsg = (r.msg || "") + (gotW ? " · 窗口已填入" : "")
+        + (gotV ? " · 图片输入已填入" : "");
+      mcfApplyAuto();               // 再问一遍:known 变了就按 known 回填全量
     }).catch(() => {
       if (!$("mcfAuto").checked) return;
       mcfShowUnknown(name);
@@ -11208,9 +11252,14 @@ function tpSubmit() {
   const cmd = (inp.value || "").trim();
   if (!cmd) return;
   if (!api || !api.terminal_run) { toast("这一页只在桌面版有", true); return; }
-  const go = () => api.terminal_run(cmd).then(r => {
-    if (!r || !r.ok) { toast((r && r.msg) || "没跑起来", true); return; }
+  const go = () => api.terminal_run(cmd, tpCwd).then(r => {
+    if (!r || !r.ok) {
+      // cd 被拒之类:像终端那样把错误印在流里,不用 toast 抢戏
+      tpAppendLine("t-err", (r && r.msg) || "没跑起来");
+      return;
+    }
     inp.value = "";
+    if (r.moved) { tpCwd = r.cwd || tpCwd; tpSetPrompt(); }
     tpLoad(false);
   }).catch(e => toast("执行失败:" + String(e).slice(0, 60), true));
   if (permCurrent === "confirm" || permCurrent === "accept_edits") {
@@ -11220,38 +11269,67 @@ function tpSubmit() {
   go();
 }
 
+/* 终端流(v0.9.162):坞的 body 不再是"每条命令一张卡",而是 PowerShell
+   那种**一屏流** —— 横幅 + 每条命令一行 `PS cwd> 命令` + 输出直接铺开,
+   非零退出码落一行暗字。体验归体验:**每条命令仍过沙箱硬闸与权限档**,
+   cd 也只在工作区里挪 —— 坞不为"像终端"把安全口径放宽一格。 */
+let tpCwd = "";
+
+function tpSetPrompt() {
+  const p = $("tpPrompt");
+  if (p) {
+    const short = (tpCwd || "").replace(/^[:/]+/, "").replace(/\\/g, "/") || "…";
+    p.textContent = "PS " + short + ">";
+    p.title = tpCwd || "";
+  }
+}
+
+function tpAppendLine(cls, text) {
+  const body = $("tpBody");
+  if (!body) return;
+  const d = document.createElement("div");
+  d.className = cls || "";
+  d.textContent = text;
+  body.appendChild(d);
+  body.scrollTop = body.scrollHeight;
+}
+
+function tpPromptLine(cwd, cmd) {
+  return "PS " + String(cwd || "").replace(/\//g, "\\") + "> " + cmd;
+}
+
 async function tpLoad(quiet) {
   const api = window.pywebview && pywebview.api;
   const body = $("tpBody");
   if (!body || !api || !termDockOpen()) return;
-  if (!api.get_terminal) { body.innerHTML = '<div class="tp-note">桌面版里才有这一坞。</div>'; return; }
+  if (!api.get_terminal) { body.innerHTML = '<div class="t-banner">桌面版里才有这一坞。</div>'; return; }
   let r = null;
   try { r = await api.get_terminal(); } catch (e) { if (!quiet) toast("读后台命令失败", true); return; }
   if (!r || !r.ok) { $("tdNote").textContent = (r && r.msg) || ""; return; }
   $("tdNote").textContent = r.note ? "只留每条的输出尾部" : "";
+  if (r.cwd) { tpCwd = r.cwd; tpSetPrompt(); }
   const jobs = r.jobs || [];
-  if (!jobs.length) {
-    body.innerHTML = '<div class="tp-note">这一程还没有后台命令。在上面输入一条,或让学长把长命令丢到后台 —— 它们都会出现在这里。</div>';
-    tpTick(4000);
-    return;
+  // 流重拼:横幅 + 逐条(按账本插入序,id 号即次序)+ 结尾提示符。
+  // terminal_facts 为"在跑优先"排过序,流要的是先后 —— 用 id 还原。
+  const ordered = [...jobs].sort((a, b) =>
+    (parseInt(String(a.id).slice(1), 10) || 0) - (parseInt(String(b.id).slice(1), 10) || 0));
+  const parts = ['<div class="t-banner">Windows PowerShell</div>'
+    + '<div class="t-banner">版权所有(C) Microsoft Corporation。保留所有权利。</div>'
+    + '<div class="t-banner"> </div>'
+    + '<div class="t-banner">沙箱照拦:禁配规则/断网联网每条都查;cd 只在工作区里挪。</div>'
+    + '<div> </div>'];
+  for (const j of ordered) {
+    parts.push(`<div><span class="t-prompt">${esc(tpPromptLine(j.cwd || tpCwd, ""))}</span><span class="t-cmd">${esc(j.command)}</span>${j.running
+      ? ` <span class="t-dim">⏳ ${j.elapsed}s</span> <button class="t-stop" data-kill="${esc(j.id)}">停</button>`
+      : ""}</div>`);
+    if (j.tail) parts.push(`<div>${esc(j.tail)}</div>`);
+    if (!j.running && j.exit_code) parts.push(`<div class="t-dim"># 退出码 ${j.exit_code}${j.killed ? "(已终止)" : ""}</div>`);
   }
-  body.innerHTML = jobs.map(j => {
-    const state = j.running ? "🟢 在跑" : (j.killed ? "⛔ 已终止" : (j.exit_code
-      ? "🔴 退出码 " + j.exit_code : "✅ 跑完"));
-    const open = tpShow.indexOf(j.id) >= 0;
-    const kill = j.running ? `<button class="tp-kill" data-kill="${esc(j.id)}">停</button>` : "";
-    return `<div class="tp-row" data-job="${esc(j.id)}">
-      <span class="tp-n">${state}</span>
-      <span class="tp-cmd" title="${esc(j.command)}">${esc(j.command)}</span>
-      <span class="tp-n">${j.elapsed}s · ${j.chars} 字</span>
-      <button class="act-ib" data-tail="${esc(j.id)}">${open ? "收起" : "看输出"}</button>
-      ${kill}</div>${open ? `<pre class="tp-out">${esc(j.tail || "(还没有输出)")}</pre>` : ""}`;
-  }).join("");
-  body.querySelectorAll("[data-tail]").forEach(el => el.addEventListener("click", () => {
-    const id = el.dataset.tail;
-    tpShow = tpShow.split(",").filter(x => x && x !== id).concat([id]).join(",");
-    tpLoad(true);
-  }));
+  if (!ordered.length) parts.push('<div class="t-dim"># 还没有跑过命令 —— 上面输入一条,或让学长把长命令丢到后台,都会落在这条流里。</div>');
+  parts.push(`<div><span class="t-prompt">${esc(tpPromptLine(tpCwd, ""))}</span><span class="t-cursor">▌</span></div>`);
+  const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
+  body.innerHTML = parts.join("");
+  if (nearBottom || !quiet) body.scrollTop = body.scrollHeight;
   body.querySelectorAll("[data-kill]").forEach(el => el.addEventListener("click", () => {
     pywebview.api.terminal_kill(el.dataset.kill).then(x => {
       if (!x || !x.ok) toast((x && x.msg) || "没停下来", true);

@@ -75,6 +75,65 @@ def test_kill_unknown_id_is_an_honest_no(tmp_path):
     assert not got["ok"] and "没有" in got["msg"]
 
 
+# ------------------------------------------------- 终端坞:PowerShell 与 cd
+
+def test_terminal_run_uses_powershell_and_carries_cwd(tmp_path):
+    """坞的命令走 PowerShell 前缀 + 桥记的当前目录 —— `PS D:\...>` 那种体验
+    归体验,沙箱硬闸在它前面一格不少。"""
+    b = _bridge(tmp_path)
+    got = b.terminal_run("echo sidepanel-ps-test")
+    assert got["ok"] and got["cwd"] == str(tmp_path)
+    try:
+        from minicode.tools import shell
+        with shell._bg_lock:
+            job = shell._bg_jobs[got["id"]]
+        assert job.command == "echo sidepanel-ps-test"
+    finally:
+        from minicode.tools import shell
+        shell.user_kill(got["id"])
+
+
+def test_cd_moves_inside_workspace_and_refuses_outside(tmp_path):
+    """cd 是坞体验的核心:工作区内落账生效;**出围栏如实拒** —— 坞不为
+    体验把写侧安全放宽一格。"""
+    b = _bridge(tmp_path)
+    (tmp_path / "sub").mkdir()
+    r = b.terminal_run("cd sub")
+    assert r["ok"] and r["moved"] and r["cwd"] == str(tmp_path / "sub")
+    assert b._dock_cwd == tmp_path / "sub"
+    r2 = b.terminal_run("cd ..")
+    assert r2["ok"] and b._dock_cwd == tmp_path
+    r3 = b.terminal_run("cd C:/Windows")
+    assert not r3["ok"] and "工作区" in r3["msg"]
+    r4 = b.terminal_run("cd 没这个目录")
+    assert not r4["ok"] and "没有这个目录" in r4["msg"]
+    assert b._dock_cwd == tmp_path, "失败的 cd 不许动当前目录"
+
+
+def test_non_cd_commands_run_in_the_dock_cwd(tmp_path, monkeypatch):
+    """非 cd 命令带着坞的当前目录进 Popen —— `_bg_start` 收到的 shim 就是证据。"""
+    from minicode.tools import shell
+    b = _bridge(tmp_path)
+    (tmp_path / "sub").mkdir()
+    b.terminal_run("cd sub")
+    seen = {}
+    real_start = shell._bg_start
+
+    def spy(ctx, command, argv, env, creationflags, env_note):
+        seen["workspace"] = str(ctx.workspace)
+        seen["argv"] = argv
+        return real_start(ctx, command, argv, env, creationflags, env_note)
+
+    monkeypatch.setattr(shell, "_bg_start", spy)
+    got = b.terminal_run("echo hi")
+    assert got["ok"]
+    assert seen["workspace"] == str(tmp_path / "sub"), \
+        "cd 之后的命令必须跑在挪过去的目录里"
+    assert seen["argv"][:2] == ["powershell", "-NoLogo"], \
+        "坞的命令走 PowerShell 前缀(-NoLogo -NoProfile)"
+    shell.user_kill(got["id"])
+
+
 # ------------------------------------------------------------- 转发与网页版的墙
 
 def test_facade_exposes_the_sidebar_methods():

@@ -378,8 +378,8 @@ class PublicApi:
     def file_write(self, path: str, content: str, base_sha: str = "") -> dict:
         return self._b.file_write(path, content, base_sha)
 
-    def terminal_run(self, command: str) -> dict:
-        return self._b.terminal_run(command)
+    def terminal_run(self, command: str, cwd: str = "") -> dict:
+        return self._b.terminal_run(command, cwd)
 
     def terminal_kill(self, job_id: str) -> dict:
         return self._b.terminal_kill(job_id)
@@ -767,6 +767,8 @@ class Bridge:
         self._liveness_running = False
         self._mcp_tools = list(mcp_tools or [])
         self._sandbox = sandbox
+        self._dock_cwd: Path | None = None   # 终端坞的当前目录(cd 持续;None=工作区根)
+        self._dock_job_cwds: dict[str, str] = {}   # 哪条后台账在哪条目录里跑的(流式回显用)
         self._mcp = None                     # create_app 注入,退出时统一关停
         self._runners: dict[str, SessionRunner] = {}
         self._seq = 0
@@ -1449,7 +1451,13 @@ class Bridge:
     def get_terminal(self) -> dict:
         """「终端」那一屏:后台命令的清单与输出末尾。只读 —— 输入命令要走对话里的确认。"""
         from minicode.tools import shell
-        return {"ok": True, **shell.terminal_facts()}
+        out = {"ok": True, **shell.terminal_facts()}
+        # 终端坞的流要按"当年的目录"回显每条命令的提示符;账本不记 cwd,
+        # 桥内存里记一行账(进程生命周期内有效,坞的本就随程)
+        for row in out.get("jobs", []):
+            row["cwd"] = self._dock_job_cwds.get(row["id"], "")
+        out["cwd"] = str(self._dock_cwd or self.workspace)
+        return out
 
     # ---------------------------------------------------- 侧边栏底座(v0.9.159)
 
@@ -1530,11 +1538,45 @@ class Bridge:
         return filepanel.write(Path(self.workspace), str(path or ""), str(content or ""),
                                str(base_sha or ""))
 
-    def terminal_run(self, command: str) -> dict:
-        """终端页:用户亲手跑一条命令 —— 沙箱硬闸照拦,进的还是同一本后台账。"""
+    def terminal_run(self, command: str, cwd: str = "") -> dict:
+        """终端坞:用户亲手跑一条命令 —— 沙箱硬闸照拦,进的还是同一本后台账。
+
+        v0.9.162:坞要的是 PowerShell 终端的体验 —— `cwd` 是**坞的当前目录**
+        (桥内存里持着,`cd` 落地时更新);纯 cd 由这里就地处理(不起新进程):
+        解析、验在工作区内、落账、回新路径;其余命令带 cwd 交给
+        `shell.user_run(powershell=True)`。**工作区外不去**:cd 出围栏如实拒,
+        那条围栏是写侧安全的同一根桩,坞不为体验开口子。
+        """
         from minicode.tools import shell
-        return shell.user_run(self.config, self._sandbox, Path(self.workspace),
-                              str(command or ""))
+        text = str(command or "").strip()
+        if not text:
+            return {"ok": False, "msg": "命令是空的"}
+        base = Path(self._dock_cwd or self.workspace)
+        m = re.match(r"^\s*cd\s*(.*)$", text, re.IGNORECASE)
+        if m:
+            target = m.group(1).strip().strip('"')
+            dest = (Path(target) if Path(target).is_absolute()
+                    else base / target) if target else Path(self.workspace)
+            try:
+                dest = dest.resolve()
+            except OSError:
+                return {"ok": False, "msg": f"cd 的目标解析不了:{target!r}"}
+            if not dest.is_dir():
+                return {"ok": False, "msg": f"没有这个目录:{dest}"}
+            try:
+                dest.relative_to(Path(self.workspace).resolve())
+            except ValueError:
+                return {"ok": False,
+                        "msg": "cd 只能在工作区里挪(写侧围栏是同一根桩;"
+                               "要出工作区请在对话里说,走确认流程)"}
+            self._dock_cwd = dest
+            return {"ok": True, "moved": True, "cwd": str(dest)}
+        got = shell.user_run(self.config, self._sandbox, Path(self.workspace),
+                             text, cwd=base, powershell=True)
+        if got.get("ok"):
+            got["cwd"] = str(base)
+            self._dock_job_cwds[got["id"]] = str(base)
+        return got
 
     def terminal_kill(self, job_id: str) -> dict:
         from minicode.tools import shell

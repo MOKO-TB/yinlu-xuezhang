@@ -124,7 +124,7 @@ def main() -> int:
               "旧 JS 块(termLoad/termSetOpen)不残留")
         page.click("#btnTerminal")
         page.wait_for_function(
-            "() => document.querySelectorAll('.term-dock .tp-row').length === 1")
+            "() => document.querySelectorAll('.term-dock .t-cmd').length === 1")
         check(page.locator('.term-dock #tpCmd').count() == 1,
               "终端坞(同一本后台账)照常活着,输入行在场")
 
