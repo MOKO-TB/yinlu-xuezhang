@@ -51,6 +51,7 @@ class StateFile:
 SHIP_NEVER: tuple[StateFile, ...] = (
     StateFile("sessions", DIR, "会话留档:构建机上跑过的每一句对话都在这里"),
     StateFile("checkpoints", DIR, "改动前像(/undo 与 /rewind 的账本):里面是别人的文件改之前的原文,绝不外发"),
+    StateFile("shadow-git", DIR, "影子 git 库(H 的整树检查点):里面是**你工作区每一份文件的原文**,绝不外发、绝不进安装包"),
     StateFile("config.json", FILE, "用户配置:构建机这份含模型 Key,由 spec 另行注入内置 Key"),
     StateFile("model_caps.json", FILE, "能力探测缓存:里面是本机模型服务的指纹"),
     StateFile("token-usage.db", FILE, "token 用量库:装着构建机的用量记录"),

@@ -864,6 +864,8 @@ cd /d/game/mini-code
 
 64. **`authorization_code` 那条 OAuth 流没做,而且是有意拒绝的(C,v0.9.156)** —— `ROADMAP` §四 C 原文要两条流:`client_credentials` 与 `authorization_code`。**第一条做了,第二条明确不做**,理由是它要的东西与第一条不是一个量级:①要在**用户机器上开一个回调端口**(监听 127.0.0.1)把重定向接回来;②要**拉起浏览器**;③要管 PKCE 与 refresh token。开端口与拉起浏览器各自都是一个决定,而它们与"连一台 MCP 服务器"不是同一件事。**所以它被拒绝而不是被忽略**:配置里写了 `oauth.type: authorization_code`(或 implicit / device_code)会拿到一句"本项目没有实现,两条替代路是……",而**不是**"什么都不发生、然后一个看不懂的 401"。要用它的那一天,先想清楚那三件事各自怎么办。**顺带两条同源的实情**:①`headers` 里的静态 `${ENV}` **没设时也会原样发出去**(`os.path.expandvars` 只替换认得的名字)—— 回来的同样是一句看不懂的 401;这一版**没动它**(改了会让"故意写一个字面量"的既有配置变样),而正确的那条路现在是 `oauth`。②`stdio` 服务器没有可注入的请求头,所以那边配 `oauth` 也会得到一句说明,令牌该走 `env`。 |
 
+65. **`H` Shadow Git 检查点——第一层已落地(影子库本体 + 数据边界登记 + 13 支测试),接线未做(2026-10-10)**。用户已点头(允许往其仓库写提交),回滚语义定为**"只还原,绝不删"**。**已落**:`minicode/shadow_git.py`(`available`/`shadow_dir`/`ensure`/`snapshot`/`snapshots`/`tracked_paths`/`restore_only`/`drop`)+ `state_files.py`/`mydata.py`/`.gitignore` 三处登记 + `tests/test_shadow_git.py`。**它补的是自建 undo 记不住的那一半**:`checkpoints.py` 的快照挂在 `write_file`/`edit_file`/`apply_patch` 的 handler 上,所以 **`bash`/`py_script` 间接改过的文件没人告诉它**;这里记的是"这一刻整个工作区长什么样"。**⚠ 下一轮接线时直接用这两条结论**:①**惰性快照不能放在 `agent.py:1574` 那个 `tool.handler(...)` 前面** —— 那段 docstring 明写"唯一可以放进线程池的一段,除了 handler 本身不碰任何共享状态",两路工具并行跑时两个 `git add -A` 打同一本影子库就是数据竞争;正确落点是 **`_execute`(`agent.py:1425`)** 那一层:它是"单只走本体、够两只才起池"的分岔口,每次工具调用都在**主线程**上串行过一遍,在那里按"这只非只读 + 这一轮还没快照过"惰性触发一次即可(每轮开头复位那个标志)。②**`ROADMAP` 原文那句"最低实现: `git add -N` + `git commit --no-verify`"是错的** —— 那样提交进的是**用户自己的历史**,而同一行"理由"栏写的正是"后者不动仓库历史";已经有一支针真起一个 `git init` 的仓库去断"`git log` 一条都不许多"。**还差**:接线(上面那两处)、`/rewind` 多一档"从影子库还原"、config 开关(建议**默认关**:快照要花磁盘与 git 时间,不该替用户花)、以及 `drop` 的用户入口。 |
+
 ## 7. 新会话上手指南
 
 1. 读本文档 + `README.md`(能力/配置/命令全集)。

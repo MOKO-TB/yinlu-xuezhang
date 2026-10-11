@@ -4,6 +4,7 @@ __pycache__/
 config.json
 sessions/
 checkpoints/
+shadow-git/
 web-sessions/
 web-usage.log
 /web-daily.json
