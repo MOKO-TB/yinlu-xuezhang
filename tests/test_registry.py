@@ -27,7 +27,9 @@ def test_registry_contents():
                      "reminder", "mood", "schedule", "desktop_notify", "get_weather", "campus_notices",
                      "export_ics",
                      "map_find_place", "map_show_list", "map_highlight_building",
-                     "map_drop_pin", "map_clear"]
+                     "map_drop_pin", "map_clear",
+                     # v0.9.154 I:子代理 → 主会话留话(排在最后,见 registry_split 那支)
+                     "notify_parent"]
     assert len(set(names)) == len(names)
 
 
@@ -121,6 +123,9 @@ def test_read_only_flags():
         "map_highlight_building": True,
         "map_drop_pin": True,
         "map_clear": True,
+        # v0.9.154 I:提醒一下不该点一次头 —— 它只往内存里加一句话,
+        # 不碰文件、不联网、不执行任何东西。
+        "notify_parent": True,
     }
 
 
