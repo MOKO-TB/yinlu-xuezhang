@@ -31,6 +31,15 @@ from pathlib import Path
 from minicode.skills import _csv_decl, _parse_frontmatter
 
 PROFILE_DIR = "agents"
+# 别的工具的**子代理档位**目录(v0.9.152,E「子代理外部目录兼容」)。
+#
+# **只认工作区里的那几个** —— 不去翻你本机的 `~/.claude/agents`、`~/.codex/agents`。
+# 这一层的语义是"仓库自带的档位定义跟着仓库走";读工作区外面是另一笔账,与
+# `resolve_path`/敏感路径那套围栏同一条:不能因为"这是配置文件"就读出去。
+#
+# **顺序即优先级**:`profile_dirs` 把本项目自己的 `agents/` 排在前面,这几个排在最后,
+# 而装载规则是"同名先装载的那份赢" —— 也就是**你在这个项目里写的压过从别处带过来的**。
+COMPAT_PROFILE_DIRS = (".cursor/agents", ".claude/agents", ".codex/agents")
 # 这些键出现在定义文件里一律剥掉(红线 3)。名单一次列全比逐条争论"这个算不算提权"
 # 便宜:它们各自的正路都在 config.json 里,不需要 markdown 来开这条口子。
 PRIVILEGED_KEYS = ("permission_mode", "permissionmode", "permission", "auto_approve",
@@ -56,7 +65,11 @@ class Profile:
 
 
 def profile_dirs(workspace) -> list[Path]:
-    """先应用数据目录(没有工作区时的落点),再工作区;同名先装载的那份赢。"""
+    """先应用数据目录(没有工作区时的落点),再工作区;同名先装载的那份赢。
+
+    工作区那一段是**两截**:本项目自己的 `agents/` 在前,别的工具的那几个
+    (`COMPAT_PROFILE_DIRS`)在后 —— 后者优先级天然更低,因为"同名先装载的赢"。
+    """
     dirs: list[Path] = []
     try:
         from minicode.paths import app_path
@@ -66,7 +79,25 @@ def profile_dirs(workspace) -> list[Path]:
     ws = str(workspace or "").strip()
     if ws:
         dirs.append(Path(ws) / PROFILE_DIR)
+        dirs.extend(Path(ws) / d for d in COMPAT_PROFILE_DIRS)
     return dirs
+
+
+def _compat_origin(workspace, d: Path) -> str:
+    """`d` 是不是别的工具的子代理目录;是就回它的相对名(如 `.cursor/agents`),否则空串。
+
+    只用来**说话**(认到一份就要讲清它是从哪儿认来的),不参与任何判定 ——
+    判定只看"哪一份先装载"。
+    """
+    ws = str(workspace or "").strip()
+    if not ws:
+        return ""
+    try:
+        rel = d.resolve().relative_to(Path(ws).resolve())
+    except (ValueError, OSError):
+        return ""
+    text = rel.as_posix()
+    return text if text in COMPAT_PROFILE_DIRS else ""
 
 
 def _as_bool(value):
@@ -103,6 +134,7 @@ def load(workspace=None, bases: dict | None = None, step_cap: int = 0) -> tuple[
     for d in profile_dirs(workspace):
         if not d.is_dir():
             continue
+        origin = _compat_origin(workspace, d)
         for entry in sorted(d.iterdir()):
             if entry.suffix.lower() not in (".md", ".markdown"):
                 continue
@@ -174,4 +206,11 @@ def load(workspace=None, bases: dict | None = None, step_cap: int = 0) -> tuple[
                 description=str(meta.get("description") or ""),
                 tools=tools, read_only=read_only, steps=steps,
                 extra_prompt=body.strip(), source=str(entry))
+            if origin:
+                # **认到了别人的档位要说一声。** 不说的话,用户看到自己多了一档
+                # 会以为"我没定义过它,怎么冒出来的" —— 而这一层最容易让人困惑的
+                # 正是这件事。同时讲清优先级:本项目自己那份压过它。
+                notes.append("%s:%s 是从 `%s/` 认来的(别的工具的子代理目录),"
+                             "不是你在这个项目里写的 —— 同名时本项目自己的 `%s/` 压过它"
+                             % (entry.name, name, origin, PROFILE_DIR))
     return profiles, notes

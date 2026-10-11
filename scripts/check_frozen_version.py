@@ -977,6 +977,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 漏收的表现不是报错:用户在工作区写了一份 agents/scout.md,应用**完全当它不存在**,
     # 而任务面板里那一档永远派不出去,一句解释都没有 —— 与"配置读了没人接"同一种坏法。
     "minicode.agent_profiles": ("load", "Profile", "profile_dirs", "PROFILE_DIR",
+                               # v0.9.152 E「子代理外部目录兼容」:漏 `COMPAT_PROFILE_DIRS`
+                               # = 装好的包里那三个目录**一份都不认**(用户从 Cursor /
+                               # Claude Code / Codex 带来的档位定义静默消失,而源码态
+                               # 一切正常 —— 与上面那条"完全当它不存在"同一种坏法)。
+                               "COMPAT_PROFILE_DIRS",
                                "PRIVILEGED_KEYS", "NEVER_CHILD_TOOLS"),
     # v0.9.95:换模型重建客户端的那条构造(漏收 = 档位分模型整块没了)
     "minicode.llm": ("scoped",                 # v0.9.110:400 摘字段重发的那张梯子

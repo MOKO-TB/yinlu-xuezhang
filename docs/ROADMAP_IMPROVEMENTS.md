@@ -74,7 +74,7 @@
 
 | 编号 | 功能 | 理由 | 最低实现 |
 |---|---|---|---|
-| E | 子代理外部目录兼容（读） | 生态利好，只读层面兼容即可 | .cursor/agents/、.claude/agents/、.codex/agents/ 扫描 + frontmatter name/description |
+| ~~E~~ | ~~子代理外部目录兼容（读）~~ **已于 v0.9.152 落地**（`agent_profiles.COMPAT_PROFILE_DIRS` = `.cursor/agents/` / `.claude/agents/` / `.codex/agents/`，追加进 `profile_dirs()` 的工作区那一段）。**三条比原文更严的口径**：①**只认工作区里的那几个**，不去翻你本机的 `~/.claude/agents`（这一层的语义是"仓库自带的定义跟着仓库走"，读工作区外面是另一笔账）；②**顺序即优先级**——本项目自己的 `agents/` 在前面，同名时它赢；③**四条红线对它们一样适用**，这是这一层唯一可能出事的地方（它多开了一个读 markdown 的口子，而那里的文件是别人写的、会跟着 clone 走），有一支针拿一份写了提权字段的 `.cursor` 文件去撞。 | 生态利好，只读层面兼容即可 | .cursor/agents/、.claude/agents/、.codex/agents/ 扫描 + frontmatter name/description |
 | H | Shadow Git 检查点 | 自建 undo vs Shadow Git，后者不动仓库历史 | 改前 git add -N + git commit --no-verify；/rewind 三档 |
 | I | 跨会话消息工具（子代理 → 主会话） | 子代理没有提问通道，补齐「信箱」 | 子代理会话侧加 SendInterjection 工具 |
 | J | @ 引用 + .cursorrules/.clinerules 兼容 | 用户定位具体规则文件时要做 | @<path> importer + .cursor/rules/*.mdc / .clinerules/*.md 读取 |
@@ -82,7 +82,7 @@
 
 ## 五、当前版本自画像
 
-- **强项**（2026-10-10 v0.9.147 复核；**本轮新增的加粗**）：独立完整体、桌面 GUI、个人数据闭环、验收闸、钩子改写重跑（`on_error` 与 per-entry `timeout` 可配，见 `minicode/hooks.py`）、无头模式 6 态 7 码（含 `--output-schema`）**+ 事件流（`--output-format stream-json`，v0.9.144）**、microcompact、**日预算已是硬闸（v0.9.144，同日补上计划外的 `task_token_budget`）**、**规划锁（未批不许写）**、**子代理档位可自定义**、**改动前先读过（v0.9.133）**、**「以后都允许」落一条本机规则（v0.9.133）**、**`apply_patch` 一次落一整包且对不上就整包不写（v0.9.134）**、**Job Object 让「终止」成为操作系统保证的终止（v0.9.135）**、**本 agent 反过来可作 MCP 服务端（`--mcp-serve`，v0.9.144）**、**`bash_input` 给后台命令喂 stdin（v0.9.146）**、**`diagnostics` 编辑后多语言诊断回灌（v0.9.147）**、**`--version` 零成本本地旗标（v0.9.145）**
+- **强项**（2026-10-10 v0.9.152 复核；**本轮新增的加粗**）：独立完整体、桌面 GUI、个人数据闭环、验收闸、钩子改写重跑（`on_error` 与 per-entry `timeout` 可配，见 `minicode/hooks.py`）**+ 事件钩子三点齐了（`session_start` / `user_prompt_submit` / `stop`，v0.9.151）**、无头模式 6 态 7 码（含 `--output-schema`）**+ 事件流（`--output-format stream-json`，v0.9.144）**、microcompact、**日预算已是硬闸（v0.9.144，同日补上计划外的 `task_token_budget`）**、**规划锁（未批不许写）**、**子代理档位可自定义，v0.9.152 起还会认别的工具放在仓库里的档位目录（`.cursor/agents/` 等）**、**改动前先读过（v0.9.133）**、**「以后都允许」落一条本机规则（v0.9.133）**、**`apply_patch` 一次落一整包且对不上就整包不写（v0.9.134）**、**Job Object 让「终止」成为操作系统保证的终止（v0.9.135）**、**本 agent 反过来可作 MCP 服务端（`--mcp-serve`，v0.9.144）**、**`bash_input` 给后台命令喂 stdin（v0.9.146）**、**`diagnostics` 编辑后多语言诊断回灌（v0.9.147）**、**`--version` 零成本本地旗标（v0.9.145）**、**指令文件第三级：子目录就近 `AGENTS.md`，按被碰到的文件取层、每层各自采纳（v0.9.149）**
 - **弱项**（2026-10-10 逐条读码复核，上一版那四条里**三条已收、只剩一条**）：①**OS 沙箱只走了 S5a**（降权 S5b、AppContainer S5c 未做，理由与前置决策见 `docs/plan-P0-安全与正确性收口.md` §三.5 与 `HANDOFF.md` §6 第 52 条）。**已收的三条**：~~日预算只提醒不成闸~~ → v0.9.144 改成硬闸；~~无头模式没有 `stream-json` 事件流~~ → v0.9.144 补上；~~指令文件只有两级~~ → **v0.9.149 补上第三级**（子目录就近 `AGENTS.md`，按被碰到的文件取层、每层各自采纳，见 §四 A 与 `docs/roadmap-分层指令文件.md` §九）。
 - **下一步**：`docs/plan-能力补齐-第一批.md` 的五件**已全部交完**（1-1 / 1-3 / 1-4 → v0.9.144，1-5 → v0.9.146，1-2 → v0.9.147）。剩下的按 ROI 排：§6 第 52 条欠的 S5b/S5c、本文的 A（子目录嵌套）与 C/E/H/I/J/K、以及 §6 第 53 条那几处小账。**本文 §四 那张 12 条路线图里，D 与 G 已经是既成事实**（D 的 `plan_lock` v0.9.129 落地、G 的会话级硬闸 `session_token_limit` 早就在循环顶部查），**F 也本来就不成立**（`on_error` 就是可配的失败语义）—— 三条都别再当待办读。
 

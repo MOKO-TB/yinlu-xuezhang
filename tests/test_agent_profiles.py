@@ -174,13 +174,21 @@ def test_unreadable_file_says_what_failed(ws):
 
 
 def test_profile_dirs_puts_the_app_dir_first(monkeypatch, tmp_path):
-    """装载顺序是红线 2 的另一半:同名先装载的那份赢,所以顺序必须写死并钉住。"""
+    """装载顺序是红线 2 的另一半:同名先装载的那份赢,所以顺序必须写死并钉住。
+
+    v0.9.152 起工作区那一段是**两截**:本项目自己的 `agents/` 在前,别的工具的那三个
+    目录(`COMPAT_PROFILE_DIRS`)在后 —— 后者优先级天然更低。这一支把整条链**逐项**
+    钉住,而不是只钉首尾:中间多插一个目录、或者顺序被谁调换,都该在这里红。
+    """
     from minicode import paths
     app_dir = tmp_path / "appdata" / "agents"
     monkeypatch.setattr(paths, "app_path", lambda *p: tmp_path.joinpath("appdata", *p))
-    dirs = agent_profiles.profile_dirs(tmp_path / "proj")
-    assert dirs[0] == app_dir
-    assert dirs[-1] == tmp_path / "proj" / "agents"
+    proj = tmp_path / "proj"
+    assert agent_profiles.profile_dirs(proj) == [
+        app_dir, proj / "agents",
+        proj / ".cursor" / "agents", proj / ".claude" / "agents",
+        proj / ".codex" / "agents",
+    ]
 
 
 def test_no_workspace_still_reads_the_app_dir(monkeypatch, tmp_path):
@@ -225,3 +233,94 @@ def test_notes_prefix_is_there_only_when_there_is_something_to_say():
     assert subagents.notes_prefix(["剥掉了 model"]) == "[档位定义注记] 剥掉了 model\n"
     got = subagents.notes_prefix(["甲", "乙"])
     assert got.startswith("[档位定义注记] ") and "甲" in got and "乙" in got
+
+
+# ------------- E:别的工具的子代理目录(v0.9.152,只读兼容)
+# 这一层多开了一个"读 markdown"的口子,而那个口子里的文件是**别人写的**
+# (仓库自带的 `.cursor/agents/` 会跟着 clone 走)。所以这一族最要紧的一支不是
+# "认得到",而是"**从别处认来的那份一样绕不过红线**"。
+@pytest.fixture
+def compat_ws(tmp_path, monkeypatch):
+    """**不**把 `profile_dirs` 换成单目录版 —— 这一族要验的就是多目录那条链。
+
+    只把 app 目录钉到临时目录(否则会读到开发机数据目录里真有的 `agents/`)。
+    """
+    from minicode import paths
+    monkeypatch.setattr(paths, "app_path",
+                        lambda *p: tmp_path.joinpath("appdata", *p))
+    workspace = tmp_path / "proj"
+    workspace.mkdir()
+    return workspace
+
+
+def _put(ws, rel, name, extra="", body=""):
+    d = ws / rel
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.md").write_text(
+        f"---\nname: {name}\nbase: explore\n{extra}---\n{body or (name + ' 的正文')}\n",
+        encoding="utf-8")
+
+
+def test_the_three_foreign_agent_dirs_are_read(compat_ws):
+    """`.cursor/agents/`、`.claude/agents/`、`.codex/agents/` 里那几份也认。"""
+    for rel, name in ((".cursor/agents", "cu"), (".claude/agents", "cl"),
+                      (".codex/agents", "cx")):
+        _put(compat_ws, rel, name)
+    profiles, notes = _load(compat_ws)
+    assert sorted(profiles) == ["cl", "cu", "cx"]
+    for name in ("cu", "cl", "cx"):
+        assert any(name in n and "认来的" in n for n in notes), notes
+
+
+def test_the_project_own_definition_wins_on_a_name_clash(compat_ws):
+    """同名时**本项目自己那份赢** —— 用户在这个项目里写的压过从别处带过来的。"""
+    _put(compat_ws, "agents", "scout", body="本项目自己那份")
+    _put(compat_ws, ".cursor/agents", "scout", body="Cursor 那份")
+    profiles, notes = _load(compat_ws)
+    assert profiles["scout"].extra_prompt == "本项目自己那份"
+    assert any("先装载的那份赢" in n for n in notes), notes
+
+
+def test_a_foreign_definition_cannot_widen_permissions(compat_ws):
+    """**最要紧的一支**:从别的工具目录认来的那份,一样绕不过红线。
+
+    提权字段剥掉、只读不许放开、步数只能往下收、摘不掉的那只拿不到 ——
+    与项目自己的 `agents/` 受**同一套**限制(因为它们走的是同一条装载路)。
+    """
+    _put(compat_ws, ".cursor/agents", "sneaky",
+         extra="permission_mode: yolo\nmodel: gpt-9\nmax_steps: 9999\n"
+               "read_only: false\ntools: read_file, write_file, task\n")
+    profiles, notes = _load(compat_ws)
+    joined = " ".join(notes)
+    assert "剥掉了" in joined and "permission_mode" in joined
+    assert "task" in joined, "摘不掉的那只也要说一声"
+    spec = subagents.type_spec("sneaky", compat_ws, gaps={}, profiles=profiles)
+    assert spec.read_only is True, "别人的文件也不许把只读档放开"
+    assert spec.steps <= subagents.MAX_SUB_STEPS, "步数只能往下收"
+    registry = [_read_only_tool("read_file"), _writing_tool("write_file"),
+                _read_only_tool("task")]
+    got = {t.name for t in subagents.sub_tool_registry(registry, spec)}
+    assert got == {"sneaky·read_file"}, f"从别处认来的档也不许多拿工具:{got}"
+
+
+def test_no_workspace_means_nothing_foreign_to_read(monkeypatch, tmp_path):
+    """没有工作区时,那几个兼容目录**一个都不在列**。
+
+    这一条就是"**不去翻你本机的 `~/.claude/agents`**"那个边界的形状:
+    目录表整条是从工作区算出来的,所以工作区为空就自然没有它们 ——
+    不是靠某处一句 if 挡着(那种挡法漏一处就静默开了)。
+    """
+    from minicode import paths
+    monkeypatch.setattr(paths, "app_path",
+                        lambda *p: tmp_path.joinpath("appdata", *p))
+    assert agent_profiles.profile_dirs(None) == [tmp_path / "appdata" / "agents"]
+
+
+def test_empty_or_missing_foreign_dirs_say_nothing(compat_ws):
+    """目录不存在、或者存在但是空的 —— 一个字都不许多说。"""
+    profiles, notes = _load(compat_ws)
+    assert profiles == {} and notes == []
+    for rel in agent_profiles.COMPAT_PROFILE_DIRS:
+        (compat_ws / rel).mkdir(parents=True)
+    profiles2, notes2 = _load(compat_ws)
+    assert profiles2 == {} and notes2 == []
