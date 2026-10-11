@@ -27,6 +27,8 @@
   "session_token_limit": 0,
   "subagent_time_limit_seconds": 600,
   "subagent_nesting": false,
+  "shadow_git": true,
+  "_说明_shadow_git": "影子 git 检查点(H,v0.9.157)。默认 true:每次**要动文件之前**把整个工作区快照进数据目录里的影子库(shadow-git/),于是 **bash / py_script 间接改过的文件**也回滚得回来(自建 undo 只记得住 agent 亲手写的那些)。它绝不碰你仓库的 .git;`/snapshots` 列出最近几次、`/restore <序号>` 还原,而**还原只写回快照里有的文件、绝不删除**(快照之后新建的文件原样留在原处)。**想关就置 false** —— 它要花磁盘与 git 的时间(单次快照有 20 秒上限,超了就放弃这一次并如实说)。",
   "_说明_subagent_nesting": "子代理能不能再派子代理(v0.9.155)。默认 false = 今天的行为(子代理不能派活,深度只有一层)。打开之后有三件事要知道:①只有写档(implement/code 这类)拿得到派活工具,只读档(explore/review/audit)永远拿不到——否则\"派一路只读侦察\"就成了绕开只读限制去写文件的入口;②深度最多 3 层(subagents.MAX_SUB_DEPTH),到顶那层连工具都不出现;③它们共用父批那张文件占用表,全机在飞的子代理数受 subagents.GLOBAL_SUBAGENT_CEILING(24)管,而**超时不覆盖后代**——父级到点不再等,孙辈仍会把当前那一步跑完。把它当\"高级开关\",不是\"更多并行\"。",
   "subagent_models": {},
   "_说明_subagent_models": "按档位分模型(v0.9.95):{\"explore\": \"模型名\", \"code\": \"模型名\"}。只换模型名、不换供应商;名字必须是当前供应商里已启用的模型,对不上就退回主模型并在那一路的报告里写清为什么退。留空 = 所有档位都用主模型。",

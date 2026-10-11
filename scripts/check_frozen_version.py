@@ -37,6 +37,8 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # 于是用户在 config.json 里打开之后一切照旧、且没有任何声音
                         # (与"配置读了没人接"同一种坏法)。
                         "subagent_nesting",
+                        # v0.9.157 H:漏收 = config 里写了 shadow_git 没人读
+                        "shadow_git",
                         # v0.9.95:按档位分模型(漏收 = config.json 里写了 subagent_models 没人读,
                         # 而报告还在说「本档模型 X」—— 那就是当着面编一句没依据的话)
                         "subagent_models",
@@ -460,6 +462,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.121 记忆注入改按条让位(漏收 = 装好的包里又回到"按字符硬切":
     # 半条记忆当完整句子用,而且整块丢掉项目级那批新的)
     # v0.9.126 并发资格表(漏收 = 包内没人知道哪几只工具能同跑,或更糟:默认全放)
+    # v0.9.157 H:影子 git 检查点。⚠ **必须单开一组**:整个功能就活在这个模块里,
+    # 漏收 = 装好的包里它整个不在 —— 而表现是**静默失效**(`/snapshots` 永远空着、
+    # `/restore` 永远说"库里是空的"),没有任何一条报错指向这里。
+    "minicode.shadow_git": ("available", "shadow_dir", "ensure", "snapshot",
+                            "snapshots", "tracked_paths", "restore_only", "drop"),
     "minicode.tools.concurrency": ("CONCURRENT_SAFE", "mark_concurrent"),
     # v0.9.156 C:MCP 的 OAuth 动态授权那一个模块。
     # ⚠ **必须单开一组**:第一版我把这些名字挂在 `minicode.mcp` 那一组下面,而
@@ -901,6 +908,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # 会走到"找不到入口"的分支、回一句"这里没有可以转达的对象",
                        # 看起来像"主会话那边满着",其实是包里少了一段。
                        "queue_note", "_take_notes", "NOTE_MAX",
+                       # v0.9.157 H:接进回合的那两处(漏 `_shadow_snapshot_once`
+                       # = 包里永远不快照;漏 `shadow_line` = 那一行报表说不出状态)
+                       "shadow_line", "_shadow_snapshot_once",
                        # v0.9.105 /rewind 点头前那一屏:预览与动手共用一份筛选
                        # (漏 rollback_preview = 命令行只能盲退;漏 _rollback_scope =
                        # 两处各筛一遍,总有一天预览说 2 处而实际退 1 处)
