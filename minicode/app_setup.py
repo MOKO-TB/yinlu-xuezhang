@@ -517,7 +517,7 @@ mcp_log = _mcp_log      # 公开别名(gui_bridge 复用同一套日志行为)
 def build_runner_agent(config: Config, workspace: Path, ui, llm,
                        sessions_dir: Path | None = None,
                        mcp_tools: list | None = None,
-                       sandbox=None) -> tuple[Agent, Session]:
+                       sandbox=None, origin: str = "") -> tuple[Agent, Session]:
     """造一个"会话运行器"(独立 Agent + Session),供后台并发任务使用。
 
     LLM 客户端、MCP 工具、沙箱状态都是**外部传入共享**的:
@@ -545,7 +545,7 @@ def build_runner_agent(config: Config, workspace: Path, ui, llm,
     session = Session(system_prompt=build_system_prompt(
         workspace, reply_style=getattr(config, "reply_style", "normal")),
                       log_dir=sessions_dir or SESSIONS_DIR,
-                      workspace=workspace)
+                      workspace=workspace, origin=origin)
     ctx.session = session   # export_trace(v0.9.98):轨迹从活动会话现取,不翻留档文件
     agent = Agent(
         llm=llm,

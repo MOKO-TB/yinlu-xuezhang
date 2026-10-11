@@ -60,13 +60,18 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         # 界面说明写「关掉就回到以前的行为」而实际关不掉 —— 一句假话
                         "read_before_edit"),
     "minicode.gui_bridge": ("test_model", "fetch_models",
-                            # v0.9.159 侧边栏底座的桥面(漏收 = tab 摆出来了,
+                            # v0.9.159/160 侧边栏底座的桥面(漏收 = tab 摆出来了,
                             # 点一下就是 TypeError —— 界面比后端诚实不了)
                             "get_extensions", "git_overview", "git_status",
                             "git_diff", "git_log", "git_stage", "git_unstage",
                             "git_commit", "git_restore", "git_restore_snapshot",
                             "file_read", "file_write",
                             "terminal_run", "terminal_kill",
+                            # v0.9.160 侧聊线程(漏 `_sidechat_resolve` =
+                            # key 与留档名两种寻址少一条,冷线程唤醒就是死路)
+                            "sidechat_new", "sidechat_threads",
+                            "sidechat_read", "sidechat_send",
+                            "_sidechat_resolve",
                             # v0.9.142「智能配置」那一屏的数据源(漏收 = 前端那只开关
                             # 永远停在「正在问这台机器知道些什么…」,而界面看着正常)
                             "model_auto_info",
@@ -1294,6 +1299,9 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     'id="spTabs"', 'id="spPages"', 'data-sp="activity"', "SidePages",
     "MiniCodePages", "git_overview", "terminal_run", "file_read",
     "spSubBody", "fpList", "gpBody",
+    # v0.9.160 侧聊页(漏 SideChatFeed = 事件路由的钩子不在,侧聊的回复
+    # 永远画不进页面;漏 scThread = 线程清单没有着落)
+    "SideChatFeed", "scThread", "sidechat_send",
     # v0.9.94 p3/p5:权限档位改成界面自己画的浮层菜单(原生 select 的白字在深色
     # 模式下看不见)。漏 permPill = 顶栏那个按钮整个没了;漏 permMenu = 点了没菜单
     "permPill", "permMenu", "PERM_META",

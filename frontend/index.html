@@ -1875,6 +1875,22 @@ try {
   .fp-bar .path{ flex:1; min-width:0; font-family:Consolas,monospace; font-size:10.5px;
                  color:var(--text-3); overflow:hidden; text-overflow:ellipsis;
                  white-space:nowrap; direction:rtl; text-align:left; }
+  /* 侧聊页(sc-,v0.9.160):气泡从上往下排,300px 宽度下的轻量聊天面 */
+  .sp-body.chatflow{ display:flex; flex-direction:column; }
+  .sc-thread{ max-width:150px; background:var(--glass-lite); border:1px solid var(--line-soft);
+              border-radius:var(--r-s); color:var(--text-1); font-size:11.5px;
+              padding:3px 5px; min-width:0; }
+  .sc-b{ max-width:88%; padding:6px 9px; border-radius:12px; font-size:12px;
+         line-height:1.55; margin:4px 0; word-break:break-word; }
+  .sc-b p{ margin:0 0 6px; } .sc-b p:last-child{ margin:0; }
+  .sc-b pre{ white-space:pre-wrap; word-break:break-all; font-size:11px; margin:4px 0; }
+  .sc-b code{ font-family:Consolas,monospace; font-size:11px; }
+  .sc-u{ align-self:flex-end; background:var(--glass-lite); }
+  .sc-a{ align-self:flex-start; background:var(--glass-soft); }
+  .sc-s{ align-self:center; color:var(--text-3); font-size:11px;
+         text-align:center; max-width:95%; }
+  .sc-t{ align-self:flex-start; color:var(--text-3); font-size:11px; padding:1px 6px; }
+  .sc-t.done{ color:var(--text-2); }
   .act-head{ display:flex; align-items:center; gap:6px; padding:12px 12px 6px; }
   .act-head b{ font-size:13px; color:var(--text-1); white-space:nowrap; }
   .act-sum{ margin-left:auto; font-size:11px; color:var(--text-3); min-width:0;
@@ -2473,6 +2489,7 @@ try {
     <button id="btnSpGit" title="Git 工作台:改了什么、暂存/提交、历史与影子快照(绝不 push/pull)">🌿<span class="cap">Git</span></button>
     <button id="btnSpFiles" title="文件:工作区里的文件看内容、改内容、存回去(围栏内)">📄<span class="cap">文件</span></button>
     <button id="btnSpSubs" title="子代理:这一程派出去的帮手,谁在跑、报告说了什么">🤖<span class="cap">帮手</span></button>
+    <button id="btnSpChat" title="侧聊:不打断主任务的小会话,问点别的照常回话">💬<span class="cap">侧聊</span></button>
     <button id="btnAutomate" title="自动化:本机登记了哪几个定时任务、下一次什么时候跑、上次跑出什么,以及关掉/开回来">⏱<span class="cap">自动化</span></button>
     <button id="btnMyData" title="我的数据:都存在哪台目录、都有哪些文件,以及导出/导入迁移包(密钥与教务登录态永不外发)">💾<span class="cap">数据</span></button>
     <button id="btnSandbox" style="display:none" title="沙箱状态">🛡<span class="cap">沙箱</span></button>
@@ -4316,6 +4333,9 @@ window.__gcodeEvent = function (e) {
     if (!currentSessionKey || e.session === currentSessionKey) renderPlanCard(p);
     return;
   }
+  // 侧聊线程(v0.9.160):事件带着自己的 session 键,归侧聊页 —— 必须排在
+  // 下面那道"后台会话不进当前视图"的闸**之前**,否则永远轮不到页面收。
+  if (SideChatFeed(e)) return;
   // 后台会话的事件:不往当前视图里画(切回去时会用 resumed 重建)
   if (e.session && currentSessionKey && e.session !== currentSessionKey
       && e.type !== "cleared" && e.type !== "resumed"
@@ -11440,10 +11460,204 @@ function fpNewFile() {
   ta.focus();
 }
 
-/* rail 上的三个新入口:与 tab 同一个 open(),不另立开关。 */
+/* rail 上的入口:与 tab 同一个 open(),不另立开关。 */
 $("btnSpGit").addEventListener("click", () => SidePages.open("git"));
 $("btnSpFiles").addEventListener("click", () => SidePages.open("files"));
 $("btnSpSubs").addEventListener("click", () => SidePages.open("subagents"));
+$("btnSpChat").addEventListener("click", () => SidePages.open("sidechat"));
+
+/* ---------------- 侧聊页(v0.9.160,内置第五页) ----------------
+   每条线程 = 一个 origin=sidechat 的后台会话:不抢当前视角、不进侧栏/托盘,
+   跨重启还活着(留档在,重开即接上)。事件带着自己的 session 键 —— 正在看的
+   线程画进这里,没看的只更新忙闲;绝不漏进主聊天区(路由在后台闸之前)。
+   轻量是刻意的:气泡只认正文与工具行,工作过程的全套卡片留在主聊天区。 */
+const SC = { keys: new Set(), activeKey: "", activeFile: "", busy: false, bubble: null };
+SidePages.register({
+  id: "sidechat", title: "侧聊", icon: "💬",
+  setup(el) {
+    el.innerHTML = `
+      <div class="sp-head"><b>💬 侧聊</b>
+        <select class="sc-thread" id="scThread" title="换一条线程"></select>
+        <button class="act-ib" id="scNew" title="开一条新线程">＋</button></div>
+      <div class="sp-body chatflow" id="scBody"></div>
+      <div class="tp-input">
+        <textarea id="scText" rows="1" placeholder="问点别的,不打断主任务(Enter 发送)"
+          style="resize:none;height:52px"></textarea>
+        <button class="b-yes" id="scSend">发</button>
+      </div>`;
+    $("scNew").addEventListener("click", () => scNewThread());
+    $("scThread").addEventListener("change", () => scOpen($("scThread").value));
+    $("scSend").addEventListener("click", scSend);
+    $("scText").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); scSend(); }
+    });
+  },
+  onShow() { scRefresh(); },
+});
+
+function scNow() {
+  return window.pywebview && pywebview.api && pywebview.api.sidechat_new ? pywebview.api : null;
+}
+
+async function scRefresh(keep) {
+  const api = scNow(), sel = $("scThread");
+  if (!api || !sel) return;
+  let r = null;
+  try { r = await api.sidechat_threads(); } catch (e) { return; }
+  const threads = (r && r.threads) || [];
+  sel.innerHTML = threads.length
+    ? threads.map(t => `<option value="${esc(t.file)}">${esc(t.title)}${t.busy ? " · 在跑" : ""}</option>`).join("")
+    : '<option value="">(还没有线程)</option>';
+  if (keep && threads.some(t => t.file === keep)) sel.value = keep;
+  else if (threads.length) sel.value = threads[0].file;
+  if (threads.length) scOpen(sel.value);
+  else scShowEmpty();
+}
+
+function scShowEmpty() {
+  SC.activeKey = ""; SC.activeFile = ""; SC.busy = false; SC.bubble = null;
+  $("scBody").innerHTML = '<div class="sp-empty">侧聊是**不打断主任务**的小会话:'
+    + "问个概念、改段文案、随手一算 —— 它有自己的上下文,主任务在跑也照常回话。"
+    + "点右上角 ＋ 开第一条。</div>";
+}
+
+async function scNewThread() {
+  const api = scNow();
+  if (!api) { toast("这一页只在桌面版有", true); return; }
+  let r = null;
+  try { r = await api.sidechat_new(); } catch (e) { return; }
+  if (!r || !r.ok) { toast((r && r.msg) || "没开成", true); return; }
+  SC.keys.add(r.key); SC.activeKey = r.key; SC.activeFile = r.file;
+  SC.busy = false; SC.bubble = null;
+  $("scBody").innerHTML = "";
+  await scRefresh(r.file);
+}
+
+async function scOpen(file) {
+  const api = scNow();
+  if (!api || !file) return;
+  let r = null;
+  try { r = await api.sidechat_read(file); } catch (e) { return; }
+  if (!r || !r.ok) { toast((r && r.msg) || "读不出这条线程", true); return; }
+  SC.keys.add(r.key); SC.activeKey = r.key; SC.activeFile = r.file;
+  SC.busy = !!r.busy; SC.bubble = null;
+  const body = $("scBody");
+  body.innerHTML = "";
+  for (const m of (r.messages || [])) {
+    if (m.role === "user") scBubble("sc-u", m.text || "");
+    else if (m.role === "assistant") {
+      const b = scBubble("sc-a", m.text || "");
+      if (m.tools) scToolLine(String(m.tools) + "(已做完)");
+    } else if (m.role === "tool") {
+      // 历史里的工具往返折叠成一行:气泡面只留正文,这是侧聊的分工
+    }
+  }
+  if (!(r.messages || []).length) {
+    body.innerHTML = "";
+    const tip = document.createElement("div");
+    tip.className = "sp-empty";
+    tip.textContent = "新线程,还没有说过话。";
+    body.appendChild(tip);
+  }
+  scScroll();
+}
+
+function scBubble(cls, text) {
+  const b = document.createElement("div");
+  b.className = "sc-b " + cls;
+  b.textContent = text;
+  $("scBody").appendChild(b);
+  return b;
+}
+
+function scToolLine(text, done) {
+  const t = document.createElement("div");
+  t.className = "sc-t" + (done ? " done" : "");
+  t.textContent = (done ? "🔧 " : "⏳ ") + text;
+  $("scBody").appendChild(t);
+  return t;
+}
+
+function scScroll() {
+  const body = $("scBody");
+  if (body) body.scrollTop = body.scrollHeight;
+}
+
+function scSend() {
+  const api = scNow();
+  const box = $("scText");
+  const text = (box.value || "").trim();
+  if (!text || SC.busy) return;
+  if (!api) { toast("这一页只在桌面版有", true); return; }
+  scBubble("sc-u", text);
+  box.value = "";
+  scScroll();
+  SC.busy = true;
+  api.sidechat_send(SC.activeFile || SC.activeKey || "", text).then(r => {
+    if (!r || !r.ok) { toast((r && r.msg) || "没发出去", true); SC.busy = false; return; }
+    SC.keys.add(r.key); SC.activeKey = r.key; SC.activeFile = r.file;
+  }).catch(() => { SC.busy = false; });
+}
+
+/* 事件路由:__gcodeEvent 在"后台会话不进当前视图"那道闸**之前**先问这里。
+   属于侧聊线程的事件绝不漏进主聊天区;正在看的画进页面,没看的只记忙闲。 */
+function SideChatFeed(e) {
+  if (!e || !e.session || !SC.keys.has(e.session)) return false;
+  if (e.session !== SC.activeKey) {
+    if (e.type === "busy" && !e.value) scRefreshSoon();
+    return true;                       // 没看的线程:忙闲记账就好,正文等用户切过去再读
+  }
+  switch (e.type) {
+    case "text_delta": {
+      if (!SC.bubble) SC.bubble = scBubble("sc-a", "");
+      SC.bubble.textContent += e.text || "";
+      scScroll();
+      break;
+    }
+    case "finish_stream": {
+      if (SC.bubble && window.marked && marked.parse) {
+        SC.bubble.innerHTML = marked.parse(SC.bubble.textContent || "");
+      }
+      SC.bubble = null;
+      scScroll();
+      break;
+    }
+    case "busy": {
+      SC.busy = !!e.value;
+      if (!SC.busy) scRefreshSoon();
+      break;
+    }
+    case "tool_start": {
+      SC._pendingTool = scToolLine(e.name || e.tool || "工具");
+      scScroll();
+      break;
+    }
+    case "tool_done": {
+      if (SC._pendingTool) { SC._pendingTool.textContent = "🔧 " + (e.name || "工具") + " · 完成"; SC._pendingTool.classList.add("done"); SC._pendingTool = null; }
+      scScroll();
+      break;
+    }
+    case "info": {
+      if (e.text) { scBubble("sc-s", e.text); scScroll(); }
+      break;
+    }
+    case "error": {
+      if (e.text) { scBubble("sc-s", e.text); scScroll(); }
+      break;
+    }
+  }
+  return true;
+}
+
+let scRefreshTimer = 0;
+function scRefreshSoon() {
+  if (!gpIsPage("sidechat")) return;
+  clearTimeout(scRefreshTimer);
+  scRefreshTimer = setTimeout(() => {
+    const sel = $("scThread");
+    scRefresh(sel ? sel.value : "");
+  }, 400);
+}
 
 /* 开机:恢复上次停在哪一页(不替用户拉开整栏)。 */
 function sidePanelRestore() {

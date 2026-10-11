@@ -31,6 +31,7 @@ class SessionSummary:
     first_user_text: str = ""  # 第一条用户消息(v0.9.98):自动标题的原料
     title: str = ""            # 用户手改的标题(v0.9.126):空 = 没改过,照自动派生
     archived: bool = False     # 归档标记:沉底、不删除、也不改任何人的序号来源
+    origin: str = ""           # 来源标记(v0.9.160):"sidechat" = 侧聊线程,侧栏不列
 
 
 def derive_title(text: str, limit: int = 24) -> str:
@@ -161,13 +162,21 @@ def set_archived(path: Path, flag: bool) -> str:
 
 class Session:
     def __init__(self, system_prompt: str, log_dir: Path | None = None,
-                 workspace: Path | None = None):
+                 workspace: Path | None = None, origin: str = ""):
         self.messages: list[dict] = [{"role": "system", "content": system_prompt}]
         self._log_dir = Path(log_dir) if log_dir is not None else None
         self._log_path: Path | None = None   # 懒创建:发出第一条消息时才落盘
         # 会话属于哪个工作区:留档里记一份,切换会话时界面能标出"这条不是当前
         # 工作区的记录"。以前这里记的是 Path.cwd(),那是进程启动目录,不是工作区。
         self.workspace = Path(workspace) if workspace is not None else None
+        # 来源标记(v0.9.160):建文件那刻写进 session_start("sidechat" = 侧聊
+        # 线程)。落盘是懒的,标记必须住在会话本体上等 _ensure_log 一起落,
+        # 事后补写要追"文件什么时候出现",追不上。
+        self._origin = str(origin or "")
+
+    @property
+    def origin(self) -> str:
+        return self._origin
 
     @property
     def log_path(self) -> Path | None:
@@ -183,12 +192,15 @@ class Session:
         while self._log_path.exists():  # 同秒内可能开多个会话
             suffix += 1
             self._log_path = self._log_dir / f"session_{base}_{suffix}.jsonl"
-        self._log_only({
+        entry = {
             "type": "session_start",
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
             "workspace": str(self.workspace) if self.workspace else "",
             "schema": LOG_SCHEMA_VERSION,   # F4(v0.9.100):留档版本记账
-        })
+        }
+        if self._origin:
+            entry["origin"] = self._origin
+        self._log_only(entry)
 
     def fresh_start(self) -> None:
         """完全重置为全新会话(旧留档文件保留在磁盘上,由调用方处置)。"""
@@ -737,6 +749,7 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
         workspace = ""
         title = ""
         archived = False
+        origin = ""
         started = time.strftime("%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime))
         for line in p.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -752,6 +765,7 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
                 workspace = str(obj.get("workspace") or "")
                 title = str(obj.get("title") or "")
                 archived = bool(obj.get("archived"))
+                origin = str(obj.get("origin") or "")
             if obj.get("role") in ("user", "assistant", "tool"):
                 n_messages += 1
             if obj.get("role") == "user" and isinstance(obj.get("content"), str):
@@ -762,7 +776,7 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
             path=p, time=started, n_messages=n_messages,
             last_user_text=last_user_text.replace("\n", " ")[:60],
             workspace=workspace, first_user_text=first_user_text,
-            title=title, archived=archived,
+            title=title, archived=archived, origin=origin,
         ))
     # 归档的沉到末尾,但**不从这里消失**:侧栏 /resume / 分支 / 搜索用的是同一份序号,
     # 一隐藏就把别人的坐标弄破(要"删除"得是另一件明说过的动作,这里不代做)。

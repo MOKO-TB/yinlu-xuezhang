@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 import threading
 import time
 from dataclasses import replace
@@ -382,6 +383,23 @@ class PublicApi:
 
     def terminal_kill(self, job_id: str) -> dict:
         return self._b.terminal_kill(job_id)
+
+    # ---------------------------------------------- 侧聊转发(v0.9.160)
+
+    def sidechat_new(self) -> dict:
+        """开一条侧聊线程(后台新会话,不抢当前视角)。"""
+        return self._b.sidechat_new()
+
+    def sidechat_threads(self) -> dict:
+        """侧聊线程清单(磁盘上 origin=sidechat 的会话)。"""
+        return self._b.sidechat_threads()
+
+    def sidechat_read(self, target: str) -> dict:
+        """读一条侧聊线程(冷的从留档唤醒)。"""
+        return self._b.sidechat_read(target)
+
+    def sidechat_send(self, target: str, text: str) -> dict:
+        return self._b.sidechat_send(target, text)
 
 
     def set_job_enabled(self, job_id: str, on: bool) -> dict:
@@ -788,11 +806,16 @@ class Bridge:
 
     # ------------------------------------------------------------ 会话运行器
 
-    def open_session(self, load_path: Path | None = None) -> SessionRunner:
+    def open_session(self, load_path: Path | None = None, *,
+                     current: bool = True, origin: str = "") -> SessionRunner:
         """新建一个会话运行器(可顺带从留档恢复),并切为当前会话。
 
         LLM/MCP/沙箱都是共享的,只有 Agent/Session/UI 适配器是新的 ——
         所以多开一个会话很便宜,也不会重复拉起 MCP 子进程。
+
+        v0.9.160 起两个可选口径:`current=False` 表示**不抢当前视角**
+        (侧聊线程在后台开,主聊天区一个字都不动);`origin` 写进留档开头
+        的 session_start 行("sidechat"),侧栏列表靠它把这类会话藏起来。
         """
         self._seq += 1
         ui = SessionGuiUI(self.ui, f"s{self._seq}")
@@ -801,13 +824,14 @@ class Bridge:
         agent, session = build_runner_agent(
             self.config, self.workspace, ui, self._shared_llm,
             sessions_dir=self.sessions_dir, mcp_tools=self._mcp_tools,
-            sandbox=self._sandbox)
+            sandbox=self._sandbox, origin=origin)
         agent.mcp = self._mcp
         if load_path is not None:
             session.load_from(Path(load_path))
         runner = SessionRunner(ui.session_key, agent, session, ui)
         self._runners[runner.key] = runner
-        self._current = runner
+        if current:
+            self._current = runner
         return runner
 
     def _watch_model_recovery(self, ui) -> None:
@@ -1515,6 +1539,89 @@ class Bridge:
     def terminal_kill(self, job_id: str) -> dict:
         from minicode.tools import shell
         return shell.user_kill(str(job_id or ""))
+
+    # ---------------------------------------------------- 侧聊(v0.9.160)
+
+    def _sidechat_resolve(self, target: str) -> SessionRunner | None:
+        """侧聊线程的寻址:key("s12",活的)或留档文件名(冷的,可能要唤醒)。"""
+        text = str(target or "").strip()
+        if not text:
+            return None
+        if text in self._runners:
+            return self._runners[text]
+        if not re.fullmatch(r"session_[\w.-]+\.jsonl", text):
+            return None                  # 只认留档名的形状,不给路径穿越留门
+        return self._runner_for_log(self.sessions_dir / text)
+
+    def sidechat_new(self) -> dict:
+        """开一条侧聊线程:后台新会话,**不抢当前视角**,会话本体带着
+        origin=sidechat(第一句话落地建留档时写进 session_start)。
+        线程即刻可用;留档文件名要等首条消息才存在,所以这里给空串 ——
+        **key 才是主键**,file 只在跨重启寻址时才用得上。"""
+        runner = self.open_session(current=False, origin="sidechat")
+        return {"ok": True, "key": runner.key,
+                "file": runner.log_path.name if runner.log_path else "",
+                "title": ""}
+
+    def sidechat_threads(self) -> dict:
+        """侧聊线程清单:磁盘上 origin=sidechat 的会话(跨重启活着),
+        活着的带 key 与忙闲。**不混主会话** —— 这份清单只属于侧聊页。"""
+        out = []
+        for s in list_sessions(self.sessions_dir, limit=200):
+            if s.origin != "sidechat":
+                continue
+            live = self._runner_for_log(s.path)
+            out.append({"file": s.path.name,
+                        "key": live.key if live else "",
+                        "title": display_title(s) or "(新对话)",
+                        "busy": bool(live and live.busy),
+                        "n_messages": s.n_messages, "time": s.time})
+        return {"ok": True, "threads": out}
+
+    def sidechat_read(self, target: str) -> dict:
+        """读一条侧聊线程:活着的直接给内存上下文;冷的从留档唤醒(此后它就是
+        活的,接着聊不用再开)。**不碰当前视角** —— 主聊天区一个字都不动。"""
+        runner = self._sidechat_resolve(target)
+        if runner is None:
+            # 冷线程:按留档名唤醒;名字不合形状的,这里就是终点
+            text = str(target or "").strip()
+            if re.fullmatch(r"session_[\w.-]+\.jsonl", text) \
+                    and (self.sessions_dir / text).is_file():
+                runner = self.open_session(load_path=self.sessions_dir / text,
+                                           current=False, origin="sidechat")
+            else:
+                return {"ok": False, "msg": "没有这条侧聊线程"}
+        return {"ok": True, "key": runner.key,
+                "file": runner.log_path.name if runner.log_path else "",
+                "busy": bool(runner.busy),
+                "messages": self._messages_for_frontend(runner.session)}
+
+    def sidechat_send(self, target: str, text: str) -> dict:
+        """往一条侧聊线程里说话:与主会话的 send_task 同一套判据 ——
+        忙 = 插话进信箱(同一只 queue_interjection),闲 = 开新回合。
+        冷线程先唤醒再发,前端拿到的 key 是活的。"""
+        text = (text or "").strip()
+        if not text:
+            return {"ok": False, "msg": "话是空的"}
+        runner = self._sidechat_resolve(target)
+        if runner is None:
+            text2 = str(target or "").strip()
+            if re.fullmatch(r"session_[\w.-]+\.jsonl", text2) \
+                    and (self.sessions_dir / text2).is_file():
+                runner = self.open_session(load_path=self.sessions_dir / text2,
+                                           current=False, origin="sidechat")
+            else:
+                return {"ok": False, "msg": "没有这条侧聊线程"}
+        if runner.busy:
+            if not runner.agent.queue_interjection(text):
+                return {"ok": False, "msg": "插话排到顶了,等这一步跑完再发"}
+            return {"ok": True, "queued": True, "key": runner.key,
+                    "file": runner.log_path.name if runner.log_path else ""}
+        runner.thread = threading.Thread(target=self._run_task,
+                                         args=(runner, text), daemon=True)
+        runner.thread.start()
+        return {"ok": True, "key": runner.key,
+                "file": runner.log_path.name if runner.log_path else ""}
 
     def get_automation(self) -> dict:
         """「自动化」那一屏:本机登记了哪几个定时任务、下一次什么时候跑、上次跑出什么。
@@ -3715,6 +3822,11 @@ class Bridge:
         items = []
         for i, s in enumerate(list_sessions(self.sessions_dir,
                                         limit=SESSION_LIST_LIMIT), start=1):
+            # 侧聊线程(v0.9.160)不进侧栏 —— 但**序号照原名单发**:
+            # /resume 与侧栏搜索用的是同一份全量序号,在这里重排等于把别人的
+            # 坐标弄破(归档那次的教训)。跳过 = 只是不显示,不是从名单消失。
+            if s.origin == "sidechat":
+                continue
             # 每条会话都带工作区名:前端按它分组(当前工作区的组不额外标名)。
             # 老留档没有 workspace 字段 → 归进"(未记录)"组,不与当前混在一起。
             if s.workspace:
@@ -3750,15 +3862,20 @@ class Bridge:
         try:
             for s in list_sessions(self.sessions_dir,
                                    limit=max(1, int(limit)))[:_tray.MENU_RECENT]:
+                if s.origin == "sidechat":       # 侧聊线程不进托盘最近清单
+                    continue
                 out.append((s.path.name, display_title(s)
                             or s.last_user_text or "(空会话)"))
         except Exception:
             return []
         return out
 
-    def _history_for_frontend(self) -> list[dict]:
+    @staticmethod
+    def _messages_for_frontend(session, workspace=None) -> list[dict]:
+        """一份会话的消息翻成前端形状(v0.9.160 从 _history_for_frontend 抽出:
+        侧聊线程恢复历史要走同一条,两处各写一套迟早形状漂移)。"""
         out = []
-        for m in self.session.messages:
+        for m in session.messages:
             role = m.get("role")
             if role == "system":
                 continue
@@ -3771,12 +3888,15 @@ class Bridge:
                             "tools": names})
             else:
                 item = {"role": role, "text": display_text(content)}
-                if role == "user":
-                    atts = restore_user_atts(self.workspace, content)
+                if role == "user" and workspace is not None:
+                    atts = restore_user_atts(workspace, content)
                     if atts:
                         item["atts"] = atts
                 out.append(item)
         return out
+
+    def _history_for_frontend(self) -> list[dict]:
+        return self._messages_for_frontend(self.session, self.workspace)
 
     # 确认握手:Agent 线程阻塞在此,前端点按钮后返回
     def confirm_tool(self, tool: Tool, args: dict, reason: str = "",

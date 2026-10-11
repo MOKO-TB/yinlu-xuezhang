@@ -398,6 +398,14 @@ def main() -> int:
                             ".hidden"),
               "🤖 那一点落在子代理页")
         page.click("#btnActivity")
+        page.wait_for_timeout(150)
+        page.click("#btnSpChat")
+        page.wait_for_timeout(250)
+        check(page.evaluate("() => document.querySelector('.sp-page[data-sp=\"sidechat\"]')"
+                            " && !document.querySelector('.sp-page[data-sp=\"sidechat\"]')"
+                            ".hidden"),
+              "💬 那一点落在侧聊页(v0.9.160)")
+        page.click("#btnActivity")
         page.click("#btnAutomate")
         page.wait_for_timeout(250)
         check(page.evaluate("() => document.getElementById('autoOverlay')"
