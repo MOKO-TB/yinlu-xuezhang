@@ -206,7 +206,7 @@ python main.py --version             # 打印名字与版本就退出(不发请�
 - **改动前像落盘(v0.9.131)**:`/undo`、`/rewind`、「本轮改动」逐文件回退那本账以前只在内存里,所以「改完三个文件、程序崩了或重启,回来清单是空的、磁盘却还是改过的样子」会真发生。现在每处改动的**改之前原文**按会话落在本机 `checkpoints/`(工具还没跑就先写,所以写到一半崩了也在)。一条硬规矩:**存不下的就整条不记** —— 因为「没有前像」在回退端的含义是「这文件当时不存在」,按那个含义退会**删掉你现在的文件**,所以宁可清单少一条,也不留一条假前像。这份账本**不进安装包、不进迁移包**(里面是别人文件改之前的原文),会话留档被删时它跟着被扫掉。
 
 CLI 命令:`/help` `/clear` `/model`(供应商列表)`/history` `/resume [<n>]` `/find、/rename、/archive、/unarchive、/fork [<关键词>]`(搜自己的历史会话)`/undo`(清单;`diff <编号>` 看改动、`<编号>`·`last`·`all` 才动手,动手都要点头)`/compact`
-`/sandbox` `/permission [档位]`(四档权限 + 项目白名单生不生效)`/think [档位]`(思考档位)`/instructions`(这一轮读到了哪几层指令:内置 + 用户级 + 项目级,各几行、有没有被截)`/rewind <第几问> [files|talk|both]`(退到那一问之前:文件与对话一起退,默认 both;留档不删)`/workspace [路径|default]` `/memory` `/remember` `/dream` `/skills` `/kb`(知识库统计)`/plan`
+`/sandbox` `/permission [档位]`(四档权限 + 项目白名单生不生效)`/think [档位]`(思考档位)`/instructions`(这一轮读到了哪几层指令:内置 + 用户级 + 项目级,各几行、有没有被截)`/rewind <第几问> [files|talk|both]`(退到那一问之前:文件与对话一起退,默认 both;留档不删)`/snapshots`(影子库里有哪几次整树检查点)`/restore <序号>`(还原到那次快照,**只还原、绝不删** —— H,v0.9.157)`/workspace [路径|default]` `/memory` `/remember` `/dream` `/skills` `/kb`(知识库统计)`/plan`
 `/library [书名]`(不带参数=馆藏库状态;带书名=直接在 133 万条书目里搜,与 `library_search` 工具同一个 handler)`/style [normal|guide]`(回复风格,guide=讲解模式)、`/usage [1|7|30]`(token 用量)`/browser`(浏览器能力状态)`/review <分支>`(审查一个分支相对分叉点的改动:文件账+提交清单+逐文件 diff,只审不改)`/exit`;
 `Ctrl+C` 中断当前回合。
 

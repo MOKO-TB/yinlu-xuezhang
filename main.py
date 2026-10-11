@@ -221,6 +221,50 @@ REWIND_USAGE = ('用法: /rewind <第几问> [files|talk|both] —— 退到那�
                 "(默认 both:文件与对话一起退;留档不删,想找回原会话用 /resume)")
 
 
+def _snapshots_command(agent, ui) -> None:
+    """`/snapshots`:影子库里有哪几次整树快照(H,v0.9.157)。"""
+    from minicode import shadow_git
+    ui.info(agent.shadow_line())
+    rows = shadow_git.snapshots(agent.ctx.workspace)
+    if not rows:
+        ui.info("库里还是空的 —— 它是**要动文件之前**才快照的,所以只读的会话里它就该是空的。")
+        return
+    lines = ["最近的整树快照(新到旧,`/restore N` 里的 N 就是下面这个序号):"]
+    for n, r in enumerate(rows, start=1):
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["ts"]))
+        lines.append(f"  {n}. {when}  {r['subject']}")
+    lines.append("**回滚只还原、绝不删**:快照之后新建的文件会原样留着。")
+    ui.info("\n".join(lines))
+
+
+def _restore_command(agent, ui, rest: list) -> None:
+    """`/restore <序号|sha>`:把工作区还原到那次快照(H,v0.9.157)。"""
+    from minicode import shadow_git
+    if not rest:
+        ui.error("用法: /restore <序号> —— 序号看 /snapshots。")
+        return
+    rows = shadow_git.snapshots(agent.ctx.workspace)
+    want = str(rest[0]).strip()
+    if want.isdigit():
+        idx = int(want)
+        if not (1 <= idx <= len(rows)):
+            ui.error(f"序号要在 1..{len(rows)} 之间(先 /snapshots 看一眼)。")
+            return
+        sha = rows[idx - 1]["sha"]
+    else:
+        hit = [r for r in rows if r["sha"].startswith(want)]
+        if len(hit) != 1:
+            ui.error(f"'{want}' 对不上唯一一次快照(先 /snapshots,或用序号)。")
+            return
+        sha = hit[0]["sha"]
+    n, why = shadow_git.restore_only(agent.ctx.workspace, sha)
+    if why:
+        ui.error(f"没还原成:{why}")
+        return
+    ui.info(f"已把 {n} 份文件还原到那次快照。**没有删除任何东西** —— "
+            "快照之后新建的文件还在原处(这是有意的:它只把你改过的东西退回去)。")
+
+
 def _rewind_command(agent, session, ui, rest: list) -> None:
     """`/rewind`:检查点。R3 那套坐标与纪元闸早就在了,可它只有「编辑重发」一条路能碰到。
 
@@ -587,6 +631,10 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
         _undo_command(agent, ui, parts[1:])
     elif name == "/instructions":
         ui.info(_instructions_text(workspace))
+    elif name == "/snapshots":
+        _snapshots_command(agent, ui)
+    elif name == "/restore":
+        _restore_command(agent, ui, parts[1:])
     elif name == "/rewind":
         _rewind_command(agent, session, ui, parts[1:])
     elif name == "/compact":

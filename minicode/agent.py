@@ -233,6 +233,10 @@ class Agent:
         self._agents_layers: set[str] = set()
         self._agents_pending: dict[str, dict] = {}
         self._agents_noted: set[str] = set()
+        # H(v0.9.157):这一轮**已经**快照过没有 + 这一轮快照到的 sha。
+        # 先有默认值(与 `_inbox` 同一个理由:查它不要求'回合已经开过')。
+        self._shadow_turn_done = False
+        self._shadow_shas: list[str] = []
         self.mcp = None            # app_setup 注入:McpManager,退出时关停
         # 超长输出转存:图形版/CLI 默认开;**对外模式由 web_profile 关掉**
         # (每个访客一个 Bridge,但工作区目录是共用的,落文件等于跨访客可见)。
@@ -372,6 +376,8 @@ class Agent:
     def _run_turn_body(self, user_input: str, content=None, *,
                        add_user: bool = True, output_directive: str = "") -> None:
         """`run_turn` 的主体。拆出来只为让上面那个 `finally` 有一个干净的落点。"""
+        # 一轮一次(H,v0.9.157):`_shadow_snapshot_once` 靠这个标志只做第一次。
+        self._shadow_turn_done = False
         self._output_directive = output_directive or ""
         # 先问项目指令采不采纳(它可能改提示词内容),再按指纹决定要不要重建 ——
         # 顺序反了就会"跨天/换规矩"这一句抢在一次点头之前说,而说的还是旧的那份。
@@ -1558,6 +1564,11 @@ class Agent:
         # 改写过的参数必须在快照之前定稿 —— 快照、卡片、handler 拿到的是同一份,
         # 而"原本要做什么"落在安全日志里(_log_hook_rewrite),不是丢了。
         self._snapshot_before_mutation(tool, args)
+        # H(v0.9.157):**整个工作区**的快照,一轮只做一次,而且只在这一轮第一次要动
+        # 东西之前 —— 只读的回合不为它付钱。它盖住的正是上面那份自建 undo 记不住的
+        # 那一半:`bash` / `py_script` 间接改过的文件(那些不经过 `SNAPSHOT_TOOLS`,
+        # 所以上面那个函数对它们**直接 return**)。
+        self._shadow_snapshot_once(tool)
         self.ui.tool_start(tool, args)
         return Prepared(tool=tool, args=args, timing=t, hook_ctx=hook_ctx,
                         rewrite_note=rewrite_note, ask_extra=ask_extra)
@@ -1843,6 +1854,43 @@ class Agent:
         # 持久化有没有意义的关键,放在“改完之后”就晚了。
         if self._undo_open:
             self._save_checkpoints()
+
+    def _shadow_snapshot_once(self, tool: Tool) -> None:
+        """一轮里第一次要动东西之前,把**整个工作区**快照进影子库(H,v0.9.157)。
+
+        **为什么落在 `_prepare` 这一层**:它留在主线程按序跑 —— `_execute` 的
+        docstring 写着"只有 `_run_handler` 会进线程池,门、确认框、回合状态与跨步
+        计数都留在主线程"。并发批次里几路工具各调一次 `_prepare`,而它是串行的,
+        所以不会两路同时 `git add -A` 打同一本影子库。
+
+        **子代理直接跳过**(`_is_sub`):它们跑在**另一个线程**上,而且几路并行 ——
+        让它们也快照就是上面那个竞争面本身。代价是"子代理用 bash 间接改的文件"
+        不在这张网里,这一条如实写在这里,不假装盖住了。
+
+        **失败一律静默**:它是一张保险,不是一次同步 —— 但不生效这件事要在
+        `shadow_line()` 那一行说得出来,否则用户以为有网而其实没有。
+        """
+        if self._is_sub or self._shadow_turn_done:
+            return
+        if tool.read_only or not bool(getattr(self.ctx.config, "shadow_git", True)):
+            return
+        # 先置位再动手:快照本身要跑好几秒,中途别的工具进来不该再触发第二次。
+        self._shadow_turn_done = True
+        from minicode import shadow_git
+        sha = shadow_git.snapshot(self.ctx.workspace,
+                                  label=f"改动前 · {tool.name.rsplit('·', 1)[-1]}")
+        if sha:
+            self._shadow_shas.append(sha)
+
+    def shadow_line(self) -> str:
+        """影子库那一行(给 `/snapshots` 与侧栏用):一眼看出"这一轮有没有网"。"""
+        from minicode import shadow_git
+        if not bool(getattr(self.ctx.config, "shadow_git", True)):
+            return "影子检查点:关(想开就在 config.json 里把 shadow_git 置 true)"
+        if not shadow_git.available():
+            return "影子检查点:这台机器上没有 git,没生效"
+        n = len(shadow_git.snapshots(self.ctx.workspace, limit=1))
+        return f"影子检查点:开(库里最近 {n} 次;这一轮已快照 {len(self._shadow_shas)} 次)"
 
     def _snapshot_one(self, raw: str) -> "int | None":
         """存一份改动前像,返回那条 seq;存不了就返回 None(这一步少一条能退的)。"""
