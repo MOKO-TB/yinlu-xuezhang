@@ -159,7 +159,14 @@ def main() -> int:
               and "版权所有" in page.locator("#tpBody").inner_text(),
               "打开就是 PowerShell 的横幅(不是卡片列表)")
         check(page.locator("#tpPrompt").text_content().startswith("PS "),
-              "输入行的提示符是 PS <目录>>")
+              "提示符内联在流尾(PS <目录>>),不是底部对话框")
+        # 主题化(用户图 p1):浅色模式下坞不再是钉死的黑块 —— 背景走主题变量
+        bg = page.evaluate(
+            "() => getComputedStyle(document.querySelector('.td-body')).backgroundColor")
+        check(bg not in ("rgb(20, 20, 24)", "rgb(20,20,24)"),
+              f"浅色模式下坞底不再是硬编码黑(实际 {bg})")
+        check(page.locator('.td-tab .td-shellname').count() == 1,
+              "头部有 ZCode 式的工作区标签")
         check(page.evaluate("() => document.getElementById('btnTermToggle')"
                             ".classList.contains('on')"),
               "切换终端按钮亮了")
@@ -196,13 +203,13 @@ def main() -> int:
 
         # ⑥ 坞里发话:accept_all 档直接过桥(带坞的当前目录);cd 就地生效
         page.fill("#tpCmd", "git status")
-        page.click("#tpRun")
+        page.press("#tpCmd", "Enter")
         page.wait_for_timeout(150)
         calls = page.evaluate("window.__CALLS__")
         check(["terminal_run", "git status", "D:/demo/campus"] in calls,
               "坞的输入行逐字过 terminal_run(带当前目录)")
         page.fill("#tpCmd", "cd sub")
-        page.click("#tpRun")
+        page.press("#tpCmd", "Enter")
         page.wait_for_timeout(150)
         check(page.evaluate("() => document.getElementById('tpPrompt')"
                             ".textContent.includes('sub')"),

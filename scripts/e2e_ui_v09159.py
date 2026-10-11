@@ -202,7 +202,7 @@ def main() -> int:
         check(page.locator('#tpBody .t-cmd').count() == 2,
               "后台账里的命令在(与「后台命令」面板同一本,流里按先后排)")
         page.fill("#tpCmd", "git status")
-        page.click("#tpRun")
+        page.press("#tpCmd", "Enter")
         page.wait_for_timeout(150)
         calls = page.evaluate("window.__CALLS__")
         check(["terminal_run", "git status"] in calls,

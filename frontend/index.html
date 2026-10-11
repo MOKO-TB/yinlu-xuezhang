@@ -1820,18 +1820,32 @@ try {
   .td-head b{ font-size:12.5px; }
   .td-note{ flex:1; min-width:0; font-size:11px; color:var(--text-3);
             overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .td-body{ flex:1; min-height:0; overflow-y:auto; padding:8px 10px;
-            /* v0.9.162:终端流 —— 深底等宽,像 PowerShell 不像卡片列表 */
-            background:#141418; color:#d6d6dc;
+  .td-body{ flex:1; min-height:0; overflow-y:auto; padding:8px 10px; cursor:text;
+            /* v0.9.162 补丁(用户图 p1/p2):颜色全部走主题变量 —— 浅色浅底、
+               深色深底,不再是一块钉死的黑(浅色模式下它跟整体打架);
+               字体仍是等宽,终端的样子由排版给,不由硬编码的深色给。 */
+            background:var(--glass-soft); color:var(--text-1);
             font-family:Consolas,"Cascadia Mono",monospace; font-size:12px;
             line-height:1.55; white-space:pre-wrap; word-break:break-all; }
-  .td-body .t-cmd{ color:#7ec8a9; }
-  .td-body .t-dim{ color:#6b6b74; }
-  .td-body .t-err{ color:#e08585; }
-  .td-body .t-banner{ color:#9a9aa4; }
-  .td-body .t-prompt{ color:#c8a86b; }
-  .td-body .t-stop{ color:#e08585; cursor:pointer; text-decoration:underline;
-                    background:none; border:none; font:inherit; padding:0; }
+  .td-body .t-cmd{ color:var(--primary-text,#1d7a5f); font-weight:700; }
+  .td-body .t-dim{ color:var(--text-3); }
+  .td-body .t-err{ color:var(--danger,#c0392b); }
+  .td-body .t-banner{ color:var(--text-3); }
+  .td-body .t-prompt{ color:var(--text-1); font-weight:700; }
+  .td-body .t-stop{ color:var(--danger,#c0392b); cursor:pointer;
+                    text-decoration:underline; background:none; border:none;
+                    font:inherit; padding:0; }
+  .td-body .t-line{ display:flex; align-items:baseline; gap:6px; }
+  .td-body .t-line .t-prompt{ flex:none; }
+  .td-body input#tpCmd{ flex:1; min-width:0; background:transparent;
+    border:none; outline:none; color:var(--text-1);
+    font-family:Consolas,"Cascadia Mono",monospace; font-size:12px;
+    padding:0; caret-color:var(--primary-text,#1d7a5f); }
+  .td-tab{ display:flex; align-items:center; gap:6px; flex:none;
+           background:var(--glass-lite); border:1px solid var(--line-soft);
+           border-radius:var(--r-s,8px); padding:2px 4px 2px 8px;
+           font-size:11.5px; color:var(--text-1); }
+  .td-tab .td-shellname{ font-family:Consolas,monospace; }
   .td-resizer{ position:absolute; left:0; right:0; top:-2px; height:5px;
                cursor:row-resize; z-index:6; }
   .td-resizer:hover{ background:linear-gradient(180deg, var(--glass-lite),
@@ -1880,17 +1894,8 @@ try {
   .gp-bar{ display:flex; align-items:center; gap:8px; margin-top:5px; }
   .gp-bar .st{ flex:1; font-size:11px; color:var(--text-3); }
   .gp-commit{ flex:none; padding:8px 10px; border-top:1px solid var(--line-soft); }
-  /* 终端页:输入行(.tp-row/.tp-out/.tp-note 沿用后台命令面板那套) */
-  .tp-input{ flex:none; display:flex; gap:5px; padding:7px 10px;
-             border-top:1px solid var(--line-soft); align-items:center;
-             background:#141418; }
-  .tp-prompt{ flex:none; max-width:46%; overflow:hidden; text-overflow:ellipsis;
-              white-space:nowrap; color:#c8a86b; font-size:11.5px;
-              font-family:Consolas,"Cascadia Mono",monospace; }
-  .tp-input input{ flex:1; min-width:0; background:var(--glass-lite);
-    border:1px solid var(--line-soft); border-radius:var(--r-s);
-    color:var(--text-1); padding:6px 8px; font-size:12px;
-    font-family:Consolas,monospace; }
+  /* 终端页时代的 .tp-input 输入行已随对话框式坞退役(v0.9.162 补丁):
+     现在的输入内联在终端流的提示符后(见 .t-line input#tpCmd)。 */
   .tp-kill{ border:1px solid var(--line-soft); background:transparent;
             color:var(--danger,#c0392b); border-radius:var(--r-s);
             cursor:pointer; font-size:11px; padding:2px 7px; }
@@ -2690,17 +2695,17 @@ try {
        输入行走 terminal_run —— 沙箱硬闸照拦。 -->
   <section class="term-dock" id="termDock" hidden>
     <div class="td-head">
-      <b>🖥 终端</b>
-      <span class="td-note" id="tdNote"></span>
+      <b>终端</b><span class="td-note" id="tdNote"></span>
       <button class="act-ib" id="tpRefresh" title="重新读一遍">↻</button>
-      <button class="act-ib" id="tdClose" title="收起(Ctrl+`)">✕</button>
+      <span class="td-tab"><span class="td-shellname" id="tdTabName">…</span>
+        <button class="act-ib" id="tdClose" title="收起(Ctrl+`)">✕</button></span>
     </div>
     <div class="td-resizer" id="tdGrip" title="拖动调高度(200~560px)· 双击回 280"></div>
-    <div class="td-body" id="tpBody"></div>
-    <div class="tp-input">
-      <span class="tp-prompt" id="tpPrompt">PS …&gt;</span>
-      <input id="tpCmd" placeholder="命令(回车执行;cd 在工作区内挪)" spellcheck="false">
-      <button class="b-yes" id="tpRun">跑</button>
+    <div class="td-body" id="tpBody" title="点击就地输入">
+      <div id="tpStream"></div>
+      <div class="t-line"><span class="t-prompt" id="tpPrompt">PS …&gt;</span><input
+        id="tpCmd" spellcheck="false" autocomplete="off"
+        aria-label="终端命令(回车执行;cd 在工作区内挪)"></div>
     </div>
   </section>
 
@@ -11237,8 +11242,11 @@ function toggleTermDock(force) {
   dock.classList.toggle("open", on);
   $("btnTermToggle").classList.toggle("on", on);
   try { localStorage.setItem("dock.open", on ? "1" : "0"); } catch (e) {}
-  if (on) tpLoad(false);
-  else if (tpTimer) { clearTimeout(tpTimer); tpTimer = 0; }
+  if (on) {
+    const tn = $("tdTabName");
+    if (tn) tn.textContent = (wsInfo && wsInfo.name) || "mini-code";
+    tpLoad(false);
+  } else if (tpTimer) { clearTimeout(tpTimer); tpTimer = 0; }
 }
 
 function tpTick(ms) {
@@ -11285,13 +11293,14 @@ function tpSetPrompt() {
 }
 
 function tpAppendLine(cls, text) {
-  const body = $("tpBody");
-  if (!body) return;
+  const stream = $("tpStream");
+  if (!stream) return;
   const d = document.createElement("div");
   d.className = cls || "";
   d.textContent = text;
-  body.appendChild(d);
-  body.scrollTop = body.scrollHeight;
+  stream.appendChild(d);
+  const body = $("tpBody");
+  if (body) body.scrollTop = body.scrollHeight;
 }
 
 function tpPromptLine(cwd, cmd) {
@@ -11301,13 +11310,15 @@ function tpPromptLine(cwd, cmd) {
 async function tpLoad(quiet) {
   const api = window.pywebview && pywebview.api;
   const body = $("tpBody");
-  if (!body || !api || !termDockOpen()) return;
-  if (!api.get_terminal) { body.innerHTML = '<div class="t-banner">桌面版里才有这一坞。</div>'; return; }
+  const stream = $("tpStream");
+  if (!body || !stream || !api || !termDockOpen()) return;
+  if (!api.get_terminal) { stream.innerHTML = '<div class="t-banner">桌面版里才有这一坞。</div>'; return; }
   let r = null;
   try { r = await api.get_terminal(); } catch (e) { if (!quiet) toast("读后台命令失败", true); return; }
   if (!r || !r.ok) { $("tdNote").textContent = (r && r.msg) || ""; return; }
   $("tdNote").textContent = r.note ? "只留每条的输出尾部" : "";
   if (r.cwd) { tpCwd = r.cwd; tpSetPrompt(); }
+  $("tdTabName").textContent = (wsInfo && wsInfo.name) || "mini-code";
   const jobs = r.jobs || [];
   // 流重拼:横幅 + 逐条(按账本插入序,id 号即次序)+ 结尾提示符。
   // terminal_facts 为"在跑优先"排过序,流要的是先后 —— 用 id 还原。
@@ -11325,10 +11336,9 @@ async function tpLoad(quiet) {
     if (j.tail) parts.push(`<div>${esc(j.tail)}</div>`);
     if (!j.running && j.exit_code) parts.push(`<div class="t-dim"># 退出码 ${j.exit_code}${j.killed ? "(已终止)" : ""}</div>`);
   }
-  if (!ordered.length) parts.push('<div class="t-dim"># 还没有跑过命令 —— 上面输入一条,或让学长把长命令丢到后台,都会落在这条流里。</div>');
-  parts.push(`<div><span class="t-prompt">${esc(tpPromptLine(tpCwd, ""))}</span><span class="t-cursor">▌</span></div>`);
+  if (!ordered.length) parts.push('<div class="t-dim"># 还没有跑过命令 —— 在下面的提示符后输入一条,或让学长把长命令丢到后台,都会落在这条流里。</div>');
   const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
-  body.innerHTML = parts.join("");
+  stream.innerHTML = parts.join("");
   if (nearBottom || !quiet) body.scrollTop = body.scrollHeight;
   body.querySelectorAll("[data-kill]").forEach(el => el.addEventListener("click", () => {
     pywebview.api.terminal_kill(el.dataset.kill).then(x => {
@@ -11345,8 +11355,8 @@ function gpIsPage(id) { return SidePages._active === id && actOpen; }
    松手记账(与面板宽度同一条路),双击回 280。 */
 (function termDockWiring() {
   $("tpRefresh").addEventListener("click", () => tpLoad(false));
-  $("tpRun").addEventListener("click", tpSubmit);
   $("tpCmd").addEventListener("keydown", (e) => { if (e.key === "Enter") tpSubmit(); });
+  $("tpBody").addEventListener("click", () => { if (window.getSelection && !String(getSelection())) $("tpCmd").focus(); });
   $("tdClose").addEventListener("click", () => toggleTermDock(false));
   $("btnTermToggle").addEventListener("click", () => toggleTermDock());
   $("btnPanelToggle").addEventListener("click", () => setActivityOpen(!actOpen));
