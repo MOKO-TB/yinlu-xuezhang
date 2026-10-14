@@ -3725,9 +3725,11 @@ function checkUpdateNow() {
   }
   if (v && !/·检查中$/.test(v.textContent)) v.textContent += " ·检查中";
   pywebview.api.check_update_now().then(r => {
+    // v0.9.174:后端分了 ok/why —— "已经是最新"与"根本问不出去"要说两句不同的话,
+    // 把后者说成前者就是这个项目不许的假绿(这台机器上真踩过:证书链不通)。
     if (r && r.update) { openUpdateDlg(r.update); }
     else if (r && r.ok) { toast("已是最新版本 v" + (r.current || "")); }
-    else { toast((r && r.msg) || "查不到更新", true); }
+    else { toast((r && (r.why || r.msg)) || "查不到更新", true); }
   }).catch(() => toast("检查更新失败(网络不通?)", true)).finally(() => {
     if (v) v.textContent = v.textContent.replace(/ ?·检查中$/, "");
   });

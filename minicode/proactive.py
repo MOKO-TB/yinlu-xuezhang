@@ -391,38 +391,74 @@ def _ver_tuple(text: str) -> tuple[int, ...]:
     return tuple(int(n) for n in nums) or (0,)
 
 
-def check_update(current: str, timeout: float = 10.0) -> dict | None:
+def _release_payload(timeout: float = 10.0) -> "tuple[dict | None, str]":
+    """取最新 release 的 JSON,回 (数据或 None, 没拿到时的实话)。
+
+    **证书这一关要试两次**,理由是本机实测踩出来的:有些机器(R 里的"加速器"、
+    公司代理、安全软件)把 HTTPS **接管**了 —— 它把自己那张根证书装进
+    **Windows 证书库**,却不会装进 Python 包里那份 `certifi`。表现是"浏览器上得去、
+    Windows 处处上得去,而 python 一调就是 `CERTIFICATE_VERIFY_FAILED`"
+    (本机实测:签发者是某加速器的根,`httpx` 默认失败、系统证书库成功)。
+    只试一次的话,这一格在那些机器上会**永远静默** —— 用户点「检查更新」得到的是
+    "已是最新版本",而真相是它一次都没问出去。第二次用 `ssl.create_default_context()`
+    (Windows 上它会读系统证书库),两次都失败才算真的不通。
+    """
+    import httpx
+    headers = {"Accept": "application/vnd.github+json"}
+    why: list[str] = []
+    resp = None
+    try:
+        resp = httpx.get(RELEASE_API, timeout=timeout, headers=headers)
+    except Exception as e:
+        why.append(f"默认证书链不通({type(e).__name__})")
+        try:
+            import ssl
+            resp = httpx.get(RELEASE_API, timeout=timeout, headers=headers,
+                             verify=ssl.create_default_context())
+        except Exception as e2:
+            why.append(f"换系统证书库也失败({type(e2).__name__})")
+    if resp is None:
+        return None, "网络或证书不通:" + "、".join(why)
+    if resp.status_code == 404:
+        return None, "这个仓库还没有发布过 Release(所以没有可比的版本)"
+    if resp.status_code != 200:
+        return None, f"接口回了 HTTP {resp.status_code}"
+    try:
+        data = resp.json()
+    except Exception:
+        return None, "接口回的正文不是 JSON"
+    if not isinstance(data, dict):
+        return None, "接口回的 JSON 形状不对"
+    return data, ""
+
+
+def check_update(current: str, timeout: float = 10.0, *,
+                 detail: bool = False) -> "dict | None":
     """查 GitHub 公开仓库的最新 release,比当前版本新才返回;失败一律 None。
 
     返回里带**整段更新日志**(body,`NOTES_MAX` 截断并标 truncated)与发布日期 ——
     界面那张「更新日志」卡要的就是它们(用户图 p1:版本 + 日期 + 日志 + 打开)。
     只在"真比当前新"时返回:同版本/更旧/接口失败/没有 release(404)全部 None,
-    一次网络抖动绝不该在界面上变成一句话。
+    一次网络抖动绝不该在界面上变成一句话(自动那条路上,静默就是对的)。
+
+    `detail=True` 给**手动查**那条路用:它必须分得清"已经是最新"与"根本问不出去"
+    —— 两者都回 None 的话,界面只能把失败说成"已是最新",那是这个项目不许的假绿。
+    此时返回 `{"ok": bool, "update": dict|None, "why": str}`。
     """
-    import httpx
-    try:
-        resp = httpx.get(RELEASE_API, timeout=timeout,
-                         headers={"Accept": "application/vnd.github+json"})
-    except Exception:
-        return None
-    if resp.status_code != 200:
-        return None
-    try:
-        data = resp.json()
-    except Exception:
-        return None
-    if not isinstance(data, dict):
-        return None
+    data, why = _release_payload(timeout)
+    if data is None:
+        return {"ok": False, "update": None, "why": why} if detail else None
     tag = str(data.get("tag_name") or data.get("name") or "").strip()
     url = str(data.get("html_url") or "")
     if not tag or _ver_tuple(tag) <= _ver_tuple(current):
-        return None
+        return {"ok": True, "update": None, "why": ""} if detail else None
     notes = str(data.get("body") or "").strip()
     published = str(data.get("published_at") or "")
-    return {"version": tag.lstrip("vV"), "url": url,
-            "notes": notes[:NOTES_MAX], "truncated": len(notes) > NOTES_MAX,
-            "date": published[:10],
-            "name": str(data.get("name") or "").strip()}
+    got = {"version": tag.lstrip("vV"), "url": url,
+           "notes": notes[:NOTES_MAX], "truncated": len(notes) > NOTES_MAX,
+           "date": published[:10],
+           "name": str(data.get("name") or "").strip()}
+    return {"ok": True, "update": got, "why": ""} if detail else got
 
 
 # ---------------------------------------------------------------- 桌面通知文案

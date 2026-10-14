@@ -1556,14 +1556,18 @@ class Bridge:
         通道、日志截断都只有一处);这里只是把它变成一个可以按需唤起的口。
         `update_check: false` 时**连手动也不出网** —— 关掉的语义是"完全不出网",
         不该被一个按钮绕过去。
+
+        **手动这条要走 `detail=True`**(v0.9.174):自动那条路"静默"是对的(一次网络
+        抖动不该在界面上变成一句话),但手动点了一下必须说实话 —— "已经是最新"与
+        "根本问不出去"是两件事,都回 `None` 的话界面只能把后者说成前者,那是假绿。
         """
         from minicode import __version__, proactive
         if not getattr(self.config, "update_check", True):
-            return {"ok": False, "msg": "更新检查已在 config.json 里关掉(update_check: false)"}
-        got = proactive.check_update(__version__)
-        if not got:
-            return {"ok": True, "update": None, "current": __version__}
-        return {"ok": True, "update": got, "current": __version__}
+            return {"ok": False, "update": None, "current": __version__,
+                    "why": "更新检查已在 config.json 里关掉(update_check: false)"}
+        res = proactive.check_update(__version__, detail=True)
+        return {"ok": bool(res.get("ok")), "update": res.get("update"),
+                "current": __version__, "why": str(res.get("why") or "")}
 
     def git_overview(self) -> dict:
         """Git 页一屏数据:git 在不在 + 状态 + 影子快照。当前工作区的账。"""

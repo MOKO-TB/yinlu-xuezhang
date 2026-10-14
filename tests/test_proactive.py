@@ -224,7 +224,7 @@ def test_update_check_switch_off_means_no_network(monkeypatch):
         bridge = Bridge(cfg, Path(td), TerminalUI(cfg, Path(td)),
                         sessions_dir=Path(td) / "sessions")
         got = bridge.check_update_now()
-        assert got["ok"] is False and "关掉" in got["msg"]
+        assert got["ok"] is False and "关掉" in got["why"]
     assert calls == [], "关着的时候手动那条也不许出网"
 
 
@@ -1244,3 +1244,103 @@ def test_backup_job_runs_for_real_when_due(monkeypatch, tmp_path):
     row = _jobs.load_state()["data_backup_weekly"]
     assert row["runs"] == 1 and "没配置 backup_dir" in row["result"]
     assert proactive._run_due_jobs(bridge, now=saturday_morning) == []
+
+
+# ------------------------------------------------ 证书被接管时的第二跳(v0.9.174)
+#
+# 这一段是**本机实测踩出来的**:有些机器上的 HTTPS 被加速器/代理/安全软件接管,
+# 它把根证书装进 Windows 证书库、不装进 Python 那份 certifi —— 于是"浏览器上得去、
+# python 一调就 CERTIFICATE_VERIFY_FAILED"。只试一次的话,这一格在那些机器上会
+# **永远静默**(点「检查更新」得到"已是最新",而真相是一次都没问出去)。
+
+class _OkResp:
+    status_code = 200
+
+    def json(self):
+        return {"tag_name": "v9.9.9", "html_url": "u", "body": "b"}
+
+
+def test_cert_failure_falls_back_to_the_system_store(monkeypatch):
+    seen = []
+
+    def fake_get(*a, **k):
+        seen.append("verify" in k)
+        if "verify" not in k:
+            raise __import__("ssl").SSLError("CERTIFICATE_VERIFY_FAILED")
+        return _OkResp()
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    got = proactive.check_update("0.9.17")
+    assert got and got["version"] == "9.9.9", "换系统证书库那一次该拿到数据"
+    assert seen == [False, True], "第一次不带 verify、第二次带 —— 顺序不许反"
+
+
+def test_both_attempts_failing_is_reported_as_such(monkeypatch):
+    def boom(*a, **k):
+        raise ConnectionError("offline")
+
+    monkeypatch.setattr(httpx, "get", boom)
+    got = proactive.check_update("0.9.17", detail=True)
+    assert got["ok"] is False and got["update"] is None
+    assert "网络或证书不通" in got["why"] and "系统证书库" in got["why"], \
+        f"两种尝试都要说出来:{got['why']}"
+
+
+def test_detail_says_up_to_date_is_not_the_same_as_failed(monkeypatch):
+    """"已经是最新"与"问不出去"必须说两句不同的话 —— 都回 None 的话,界面只能
+    把后者说成前者,那正是这个项目不许的假绿。"""
+    class Same:
+        status_code = 200
+
+        def json(self):
+            return {"tag_name": "v0.9.17", "html_url": "x", "body": ""}
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: Same())
+    up = proactive.check_update("0.9.17", detail=True)
+    assert up["ok"] is True and up["update"] is None and up["why"] == ""
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: (_ for _ in ()).throw(
+        ConnectionError("offline")))
+    bad = proactive.check_update("0.9.17", detail=True)
+    assert bad["ok"] is False and bad["update"] is None and bad["why"]
+
+
+def test_detail_always_returns_a_dict_even_on_404(monkeypatch):
+    class NoRelease:
+        status_code = 404
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: NoRelease())
+    got = proactive.check_update("0.9.17", detail=True)
+    assert got["ok"] is False and "还没有发布过 Release" in got["why"]
+
+
+def test_the_automatic_path_stays_silent(monkeypatch):
+    """自动那条路(启动时)不许因为一次失败就在界面上冒一句话 —— 与今天逐字一致。"""
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: (_ for _ in ()).throw(
+        ConnectionError("offline")))
+    assert proactive.check_update("0.9.17") is None
+
+
+def test_the_manual_bridge_says_which_one_it_is(monkeypatch):
+    """桥那一层:关掉开关 / 问不出去 / 真没有新版本,三种回话各不相同。"""
+    from minicode import gui_bridge
+    api = gui_bridge.Bridge.__new__(gui_bridge.Bridge)   # 实现那一层(门面只转发)
+
+    class Cfg:
+        update_check = False
+
+    api.config = Cfg()
+    off = api.check_update_now()
+    assert off["ok"] is False and "update_check" in off["why"]
+
+    Cfg.update_check = True
+    monkeypatch.setattr(proactive, "check_update",
+                        lambda cur, **k: {"ok": False, "update": None,
+                                          "why": "网络或证书不通:x"})
+    bad = api.check_update_now()
+    assert bad["ok"] is False and "证书" in bad["why"]
+
+    monkeypatch.setattr(proactive, "check_update",
+                        lambda cur, **k: {"ok": True, "update": None, "why": ""})
+    up = api.check_update_now()
+    assert up["ok"] is True and up["update"] is None
