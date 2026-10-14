@@ -471,6 +471,42 @@ def notes_prefix(notes: list) -> str:
     return ("[档位定义注记] " + " ".join(notes) + "\n") if notes else ""
 
 
+def _fire_subagent_hook(kind: str, config, *, type_key: str, task: str,
+                        ok: "bool | None" = None) -> str:
+    """发一次子代理生命周期钩子,返回它要附的那句话(没配 / 没话说 = 空串)。
+
+    **为什么在这一层发**:子代理自己叫不了事件钩子(`is_sub=True`,连
+    session_start 都不叫,理由见 agent 那边),而"派了一路"与"这一路收口了"
+    本来就是**主代理**做的两件事 —— 所以这两只在 `run_subagent` 这个唯一的
+    派发口上发,并行批次里每一路各发一次。
+
+    载荷:`{event, type, task}`,收口那次多一个 `ok`。**只带这三样** ——
+    子代理的报告正文不进载荷(它可能有几十 KB,而钩子是命令行,写不下也不该写);
+    要正文的钩子自己去读留档,那是它自己的事。
+
+    口径与 `Agent._collect_event_hook` 一致:只收 `context` 那一句话,钩子坏了
+    就把它的抱怨也附上(除非 `failure_mode: "open"` 说了别吵),**绝不改派活内容、
+    绝不改结论**。读配置炸了返回空串:附不上话不许把一路子代理弄坏。
+    """
+    cfg_hooks = getattr(config, "hooks", None)
+    if not isinstance(cfg_hooks, dict) or not cfg_hooks:
+        return ""
+    from minicode import hooks
+    payload = {"event": kind, "type": type_key, "task": task}
+    if ok is not None:
+        payload["ok"] = ok
+    try:
+        got = hooks.run_hook(kind, cfg_hooks, "", args=payload)
+    except Exception:
+        return ""
+    if got is None:
+        return ""
+    bits = [b for b in (str(got.get("context") or ""),
+                        "" if got.get("ok") or got.get("suppressed")
+                        else str(got.get("output") or "")) if b]
+    return " / ".join(bits)
+
+
 def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
                  llm, ui, config: Config, registry: list[Tool],
                  undo_stack: list | None = None,
@@ -552,18 +588,50 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
             # H4:子代理不叫 session_start/user_prompt_submit —— 它拿到的是任务文本,
             # 不是一次用户开的会话;叫了会让"每次开一句话说一句"的钩子每路各冒一次。
             is_sub=True,
+            # v0.9.173:给它开一个**递话盒** —— 别的活会话 / 界面上的人能在它跑的
+            # 时候递一句话进来(它下一次发请求前读到)。标签带路号:并行批次里
+            # 同类型的几路得能分得清谁是谁,不然递话那只会回"说不清是哪一个"。
+            mail_label=route_label or f"子代理·{spec.type}",
+            mail_kind="子代理",
         )
         if undo_stack is not None:
             sub_agent._undo_stack = undo_stack      # 与主代理共用,见 docstring
-        sub_agent.run_turn(task_text)
+        # v0.9.173:`subagent_start` —— 起跑前那句话是给**子代理**读的(与
+        # session_start 附在这次请求里对称)。它只往任务文本尾部加一句注记,
+        # 不改派活内容,也不拦这一次派发(事件钩子没有"否决"这个动作)。
+        start_note = _fire_subagent_hook("subagent_start", config,
+                                         type_key=spec.type, task=task_text)
+        if start_note:
+            task_text = task_text + f"\n〔subagent_start 钩子〕{start_note}"
+        try:
+            sub_agent.run_turn(task_text)
+        finally:
+            # v0.9.173:这一路跑完就**摘掉它的递话盒** —— 不摘的话盒子会一直挂在
+            # `mailbox` 的活对象表里,别人照着它递话只会把话放进一个再也没人取的
+            # 筐里(而回话还是"已放进去了",那是最坏的一种成功)。顺带把那一路
+            # 自己的外部资源(MCP 子进程之类)一起收掉。
+            sub_agent.close()
     except Exception as e:                      # 单路失败不该带走整批
-        return f"子代理执行出错: {type(e).__name__}: {e}"
+        # 收口那一次也得发 —— 这一路是**失败**收的,`ok=False` 就是这句实话。
+        stop_note = _fire_subagent_hook("subagent_stop", config, type_key=spec.type,
+                                        task=task_text, ok=False)
+        text = f"子代理执行出错: {type(e).__name__}: {e}"
+        return text + (f"\n〔subagent_stop 钩子〕{stop_note}" if stop_note else "")
 
     report = next((m.get("content") for m in reversed(sub_session.messages)
                    if m.get("role") == "assistant" and m.get("content")),
                   None)
+    # `ok` 要在**替身文案之前**取:下面那句"(子代理已结束…)"本身是非空字符串,
+    # 拿它去判 `bool()` 永远是 True —— 那就是一条"跑完了但没话说"被报成成功。
+    has_report = bool(report)
     report = report or "(子代理已结束,但未返回文本报告)"
-    return _files_note(spec, sub_session) + _web_note(spec, sub_session) + report
+    # v0.9.173:`subagent_stop` —— 收口那句话附在**回主代理的报告**尾部(与 `stop`
+    # 留给下一轮对称)。`ok` 的判断只有一条:有没有一份真的文本报告 ——
+    # "跑完了但没话说"算没成,那正是主代理该知道的事。
+    stop_note = _fire_subagent_hook("subagent_stop", config, type_key=spec.type,
+                                    task=task_text, ok=has_report)
+    tail = f"\n〔subagent_stop 钩子〕{stop_note}" if stop_note else ""
+    return _files_note(spec, sub_session) + _web_note(spec, sub_session) + report + tail
 
 
 def _files_note(spec: SubAgentSpec, sub_session) -> str:

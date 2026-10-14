@@ -921,3 +921,215 @@ def test_project_deny_and_redline_reject_say_different_things(tmp_path, monkeypa
     gate2 = _StubGate(REJECT)          # 没有 reject_reason = 红线
     agent2, s3, ui2 = _hook_agent(tmp_path, {}, gate=gate2)
     assert agent2._execute(_call(pattern="x")) == HARD_REJECT_NOTE
+
+
+
+# ------------------------------- H7(v0.9.173):失败那半边 + 失败语义可配 + 子代理两只
+#
+# 这一批钉四件事:①`post_tool_failure` 只在**失败**时叫、且与 post_tool 互斥;
+# ②它是**观测**不是闸(钩子的 stdout 改不了"这一步算不算失败");
+# ③失败语义两个名字都认(`failure_mode` / `on_error`),单条赢全局,写错退回收;
+# ④子代理那两只在**派发口**上叫,一进一出各附一句,而子代理自己不叫事件钩子。
+
+def test_post_tool_failure_fires_only_when_the_step_failed(tmp_path):
+    cmd, fired = _counting_hook(tmp_path, "paa")
+    cfg = {"post_tool_failure": {"command": cmd}}
+    # 失败那一步:叫一次
+    agent, s, ui = _hook_agent(tmp_path, cfg,
+                               handler=lambda ctx, **k: "错误: 没找到 `x`")
+    agent._execute(_call(pattern="x"))
+    assert _hits(fired) == 1, "失败的那一步该叫一次 post_tool_failure"
+    # 成功那一步:一次都不叫(它走的是 post_tool)
+    agent2, s2, ui2 = _hook_agent(tmp_path, cfg,
+                                  handler=lambda ctx, **k: "跑完了,找到 2 处")
+    agent2._execute(_call(pattern="x"))
+    assert _hits(fired) == 1, "成功的那一步不该叫 post_tool_failure(它没失败)"
+
+
+def test_post_tool_failure_payload_carries_tool_args_result_and_event(tmp_path):
+    """载荷形状与 post_tool 同一份(多了 `event`):失败那半边的钩子同样要知道
+    "失败的是哪只工具、什么参数、原文说了什么" —— 缺一样它就只能去猜。"""
+    seen = tmp_path / "payload.json"
+    script = tmp_path / "peek.py"
+    script.write_text(
+        "import json,sys,pathlib\n"
+        "seen = pathlib.Path(sys.argv[2])\n"
+        "data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))\n"
+        "seen.write_text(json.dumps({'tool': data.get('tool'),\n"
+        "                            'pattern': (data.get('args') or {}).get('pattern'),\n"
+        "                            'result': data.get('result'),\n"
+        "                            'event': data.get('event')},\n"
+        "                           ensure_ascii=False), encoding='utf-8')\n",
+        encoding="utf-8")
+    cfg = {"post_tool_failure": {
+        "command": f'python "{script}" "{{result_file}}" "{seen}"'}}
+    agent, s, ui = _hook_agent(tmp_path, cfg,
+                               handler=lambda ctx, **k: "错误: 参数 pattern 不合法")
+    agent._execute(_call(pattern="啊"))
+    got = json.loads(seen.read_text(encoding="utf-8"))
+    assert got["tool"] == "grep" and got["pattern"] == "啊"
+    assert got["event"] == "post_tool_failure"
+    assert "参数 pattern 不合法" in got["result"], "失败原文要一起给到,不然钩子没法判断"
+
+
+def test_post_tool_failure_cannot_flip_the_verdict(tmp_path):
+    """它是一次**观测**,不是一道闸:钩子说 allow 也改不了"这一步失败了"这个事实。"""
+    cmd = _json_hook(tmp_path, {"decision": "allow", "context": "已记到外部看板"},
+                     name="allow_hook.py")
+    agent, s, ui = _hook_agent(tmp_path, {"post_tool_failure": {"command": cmd}},
+                               handler=lambda ctx, **k: "错误: 没找到")
+    out = agent._execute(_call(pattern="x"))
+    assert out.startswith("错误"), "钩子的 stdout 不该有权力把失败改成成功"
+    assert "已记到外部看板" in out, "它附的那句话要活着到模型面前"
+
+
+def test_post_tool_failure_can_send_text_back_to_the_model(tmp_path):
+    """与 post_tool 同一档:`updated_output` 是**追加**的正文(不替换原结果)。"""
+    cmd = _json_hook(tmp_path, {"updated_output": "同一个参数已经失败两次了,换个写法"},
+                     name="feed.py")
+    agent, s, ui = _hook_agent(tmp_path, {"post_tool_failure": {"command": cmd}},
+                               handler=lambda ctx, **k: "错误: 没找到")
+    out = agent._execute(_call(pattern="x"))
+    assert out.startswith("错误: 没找到"), "原结果一个字都不许被吞"
+    assert "〔post_tool_failure 钩子回灌〕" in out and "换个写法" in out
+
+
+def test_failure_mode_open_lets_a_broken_pre_hook_through():
+    """`failure_mode: "open"` = 钩子自己坏了就放行(今天的默认是 closed,拦)。"""
+    cfg = {"pre_tool": {"command": "exit 5", "failure_mode": "open"}}
+    r = hooks.run_hook("pre_tool", cfg, "bash", args={"command": "ls"})
+    assert r["blocked"] is False and r["ok"] is False
+    assert r["failure_mode"] == "open"
+    # 老名字 on_error 的 continue 走同一条路(两个词一件事)
+    r2 = hooks.run_hook("pre_tool", {"pre_tool": {"command": "exit 5",
+                                                 "on_error": "continue"}},
+                        "bash", args={"command": "ls"})
+    assert r2["blocked"] is False and r2["failure_mode"] == "open"
+
+
+def test_failure_mode_unknown_value_stays_closed():
+    """拼错的开关不该悄悄把审计变成"什么都不拦" —— 不认识就当 closed。"""
+    for bad in ("opne", "open!", "yes", "1"):
+        r = hooks.run_hook("pre_tool", {"pre_tool": {"command": "exit 5",
+                                                    "failure_mode": bad}},
+                           "bash", args={"command": "ls"})
+        assert r["blocked"] is True and r["failure_mode"] == "closed", bad
+
+
+def test_top_level_failure_mode_is_the_default_and_the_entry_wins():
+    """全局 `hooks.failure_mode` 管没写单条的那些;单条上写的赢过它。"""
+    cfg = {"failure_mode": "open", "pre_tool": {"command": "exit 5"}}
+    r = hooks.run_hook("pre_tool", cfg, "bash", args={"command": "ls"})
+    assert r["blocked"] is False, "全局说了 open,这一条没写就该按 open"
+    cfg2 = {"failure_mode": "open",
+            "pre_tool": {"command": "exit 5", "failure_mode": "closed"}}
+    r2 = hooks.run_hook("pre_tool", cfg2, "bash", args={"command": "ls"})
+    assert r2["blocked"] is True, "单条上写了 closed,全局 open 不该盖过它"
+
+
+def test_open_swallows_the_broken_hook_line_only_on_non_gate_kinds(tmp_path):
+    """`open` 在非闸类上的含义:钩子坏了这件事别往模型那边说(审计里照旧留着)。
+
+    闸类不走这条路 —— 它们坏掉时已经由 `blocked` 说话了,再收一句等于没说。
+    """
+    cfg = {"post_tool": {"command": "exit 5", "failure_mode": "open"}}
+    agent, s, ui = _hook_agent(tmp_path, cfg)
+    out = agent._execute(_call(pattern="x"))
+    assert "工具钩子 post_tool 失败" not in out, "说了 open 就别再拿这句占上下文"
+    r = hooks.run_hook("post_tool", cfg, "grep", args={"pattern": "x"}, result="跑完了")
+    assert r["suppressed"] is True and r["ok"] is False
+    assert r["output"], "审计那一份仍要有原文 —— 收的是'别往模型说',不是'别记'"
+    # 默认(closed)照旧附行
+    agent2, s2, ui2 = _hook_agent(tmp_path, {"post_tool": {"command": "exit 5"}})
+    assert "工具钩子 post_tool 失败" in agent2._execute(_call(pattern="x"))
+
+
+def test_event_kinds_now_cover_the_subagent_lifecycle():
+    assert hooks.EVENT_KINDS == ("session_start", "user_prompt_submit", "stop",
+                                 "subagent_start", "subagent_stop")
+    assert "post_tool_failure" in hooks.TOOL_EVENT_KINDS
+    assert len(hooks.ALL_KINDS) == len(set(hooks.ALL_KINDS)) == 9
+    # 非工具类事件照样不被 tools/paths 筛成永不触发(老口径不许被新类型破坏)
+    assert hooks._matches({"tools": ["bash"]}, "", None) is True
+
+
+def test_hooks_list_shows_the_global_key_as_a_setting_not_a_hook(tmp_path):
+    """`failure_mode` 是全局键,不该被列成"一类钩子"(那会让人以为能给它配 command)。"""
+    from minicode import hook_packs
+    cfg = Config(providers=[], hooks={"failure_mode": "open",
+                                      "pre_tool": "python x.py"})
+    ctx = ToolContext(workspace=tmp_path, config=cfg)
+    out = hook_packs.list_line(ctx)
+    assert "· failure_mode" not in out
+    assert "· pre_tool" in out
+    assert "全局失败语义:open" in out
+
+
+def test_subagent_start_note_reaches_the_subagent_and_stop_note_the_parent(
+        tmp_path, monkeypatch):
+    """子代理那两只在**派发口**上各叫一次:`start` 那句附在子代理读到的任务文本上、
+    `stop` 那句附在回主代理的报告尾部 —— 一进一出,谁都没有被静默吞掉。"""
+    from minicode import app_setup, subagents
+    from minicode.tools.registry import build_default_registry
+    monkeypatch.setattr(app_setup, "build_system_prompt", lambda *a, **k: "sys")
+    start_cmd, start_n = _counting_hook(tmp_path, "sa")
+    start_json = _json_hook(tmp_path, {"context": "这个仓库的测试要加 -p no:randomly"},
+                            name="sa_ctx.py")
+    stop_json = _json_hook(tmp_path, {"context": "这一路跑完了"}, name="ss_ctx.py")
+    spec = subagents.type_spec("explore", tmp_path, gaps={})
+
+    def _cfg(hooks_cfg):
+        return Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",
+                                          api_key="k", model="m")],
+                      active_provider_id="t", hooks=hooks_cfg)
+
+    # 只配 start:那句注记该落在**子代理读到的任务文本**上(报告里看不到它)
+    cfg = _cfg({"subagent_start": {"command": start_json}})
+    report = subagents.run_subagent(
+        ToolContext(workspace=tmp_path, config=cfg), spec, "看一眼",
+        _Steps(AssistantTurn(text="报告")), _RecUI(), cfg,
+        list(build_default_registry()))
+    assert "这个仓库的测试要加" not in report, "start 那句是给子代理看的,不进报告"
+
+    # 只配 stop:那句该在回到主代理的报告里
+    cfg2 = _cfg({"subagent_stop": {"command": stop_json}})
+    report2 = subagents.run_subagent(
+        ToolContext(workspace=tmp_path, config=cfg2), spec, "看一眼",
+        _Steps(AssistantTurn(text="报告")), _RecUI(), cfg2,
+        list(build_default_registry()))
+    assert "〔subagent_stop 钩子〕" in report2 and "这一路跑完了" in report2
+
+    # 计数:一路子代理 = 一次 subagent_start
+    cfg3 = _cfg({"subagent_start": {"command": start_cmd}})
+    subagents.run_subagent(
+        ToolContext(workspace=tmp_path, config=cfg3), spec, "看一眼",
+        _Steps(AssistantTurn(text="报告")), _RecUI(), cfg3,
+        list(build_default_registry()))
+    assert _hits(start_n) == 1, "一路子代理 = 一次 subagent_start"
+
+
+def test_the_subagent_really_reads_the_start_note(tmp_path, monkeypatch):
+    """上一条只能从"报告里没有它"反证;这一条直接看子代理的会话里有没有那句。"""
+    from minicode import app_setup, subagents
+    from minicode.tools.registry import build_default_registry
+    monkeypatch.setattr(app_setup, "build_system_prompt", lambda *a, **k: "sys")
+    seen: list = []
+
+    class _SpyLLM:
+        def stream_chat(self, messages, *a, **k):
+            seen.append([dict(m) for m in messages])
+            return AssistantTurn(text="报告")
+
+    cfg = Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",
+                                     api_key="k", model="m")],
+                 active_provider_id="t",
+                 hooks={"subagent_start": {"command": _json_hook(
+                     tmp_path, {"context": "记得先读 CONTRIBUTING"}, name="sa2.py")}})
+    subagents.run_subagent(ToolContext(workspace=tmp_path, config=cfg),
+                           subagents.type_spec("explore", tmp_path, gaps={}),
+                           "看一眼", _SpyLLM(), _RecUI(), cfg,
+                           list(build_default_registry()))
+    first = json.dumps(seen[0], ensure_ascii=False)
+    assert "记得先读 CONTRIBUTING" in first, "start 那句没到子代理眼前"
+    assert "〔subagent_start 钩子〕" in first
+    assert first.count("看一眼") >= 1, "原任务文本一个字都不许被换掉"

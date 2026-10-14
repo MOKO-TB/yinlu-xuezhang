@@ -324,7 +324,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        "EXIT_DENY", "HOOK_TIMEOUT_MAX",
                        # v0.9.115 H4:非工具类事件那张名单(漏收 = `deny 没生效` 那句
                        # 提醒不再说出,用户配了拒绝钩子却拦住任何东西都没有)
-                       "EVENT_KINDS"),
+                       "EVENT_KINDS",
+                       # v0.9.173:失败语义可配 + 事件面扩到九类。漏 `failure_mode`
+                       # 的表现最坏:全局那个开关静默失效,而用户以为"钩子坏了就放行"
+                       # 已经配好了 —— 实际按 closed 拦,一步都过不去。
+                       "failure_mode", "FAILURE_MODES", "TOOL_EVENT_KINDS",
+                       "ALL_KINDS", "TOP_KEYS"),
 
     # ---- v0.9.120:无头模式(`--json`)----
     # 漏 HeadlessUI / EXIT_ASK_REFUSED 的表现不是报错,而是**装好的包里那条路上
@@ -942,6 +947,21 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 漏 VOICE_WARN = 那句"只当草稿"的口径没了)
     "minicode.voice": ("available", "listen_once", "voice_probe",
                        "VOICE_WARN", "INSTALL_HINT", "VoiceMissing", "VOICE_DISTS"),
+    # ---- v0.9.173:递话(漏收 = 装好的包里"边跑边递一句话"那条路整个不存在,
+    # 而界面上什么异常都看不到:递话那只会回一句"现在没有能递话的对象") ----
+    "minicode.mailbox": ("open", "close", "post", "take", "listing", "find",
+                         "session_message", "MSG_CHARS", "BOX_MAX"),
+
+    # ---- v0.9.173:工具面按需加载(漏收 = `tool_loading: "lazy"` 在装好的包里
+    # 静默变回 all —— 用户以为省了固定开销,其实一点没省,而且看不出来) ----
+    "minicode.tool_profile": ("LOADABLE", "is_loadable", "index_line", "index_text",
+                              "split", "projection", "search", "make_handler",
+                              "first_sentence", "SEARCH_DESCRIPTION", "INDEX_CHARS"),
+
+    # ---- v0.9.173:看图(view_image;漏收 = 模型看不见自己画出来的图,
+    # 表现是"它凭代码猜图表对不对",而不是报错) ----
+    "minicode.view_image": ("view_image",),
+
     "minicode.ocr": ("recognize", "ocr_image", "ocr_probe", "recognize_system",
                      "recognize_vision", "system_ready", "vision_ready",
                      "normalize_system_text", "SYSTEM_WARN", "VISION_PROMPT",

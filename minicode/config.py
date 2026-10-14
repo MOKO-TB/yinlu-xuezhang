@@ -351,6 +351,12 @@ class Config:
     # {args_file}/{result_file}=参数/结果的临时 JSON 路径(经文件交付,
     # 不进命令行);pre 非零退出=拦截该步,post 失败只在结果尾如实附一行。
     hooks: dict = field(default_factory=dict)
+    # 工具面按需加载(v0.9.173):"all"(默认)= 每轮把注册表原样发给模型(与今天
+    # 逐字一致);"lazy" = 只发常驻 + 本会话已取回的,其余以一行索引进系统提示词
+    # (靠 `tool_search` 取回)。**默认 all 是有意的**:这一改动的核心主张(模型会主动
+    # 去要它需要的工具)在本机验证不了 —— 内置端点 401,没有真端点就数不出命中率。
+    # 详见 `minicode/tool_profile.py` 开头那段。写别的值一律退回 "all"。
+    tool_loading: str = "all"
     # 回复风格(Z1,v0.9.104):normal=直接帮做(默认);guide=讲解模式 —— 不代做,
     # 拆步骤引导同学自己完成(适合学习场景)。只影响提示词段,不影响任何工具与门。
     reply_style: str = "normal"
@@ -662,6 +668,10 @@ def _config_from_raw(raw: dict) -> Config:
         vision=bool(raw.get("vision", False)),
         capabilities=raw.get("capabilities") if isinstance(raw.get("capabilities"), dict) else {},
         hooks=raw.get("hooks") if isinstance(raw.get("hooks"), dict) else {},
+        # v0.9.173:只认 all / lazy 两个词 —— 拼错的开关不该把工具面偷偷瘦下来。
+        tool_loading=(str(raw.get("tool_loading") or "all").strip().lower()
+                      if str(raw.get("tool_loading") or "all").strip().lower()
+                      in ("all", "lazy") else "all"),
         reply_style=str(raw.get("reply_style") or "normal").strip().lower(),
         allowed_attach_origins=[str(x).strip() for x in
                                 (raw.get("allowed_attach_origins") or [])
@@ -768,6 +778,7 @@ def save_config(path: Path, cfg: Config) -> None:
         "task_token_budget": cfg.task_token_budget,
         "daily_token_budget": cfg.daily_token_budget,
         "net_policy": cfg.net_policy,
+        "tool_loading": cfg.tool_loading,
         "session_keep_last": cfg.session_keep_last,
         "subagent_time_limit_seconds": cfg.subagent_time_limit_seconds,
         # 空 dict 也照样存:用户写过就该在 config.json 里看得见(看不见就会被当成没生效)

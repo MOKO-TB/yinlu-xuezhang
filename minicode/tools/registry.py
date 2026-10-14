@@ -40,6 +40,7 @@ def build_default_registry() -> list[Tool]:
         *catalog_web.tools(),
         *catalog_web.mcp_admin_tool(),
         *catalog_knowledge.skills_plan_search(),
+        *catalog_knowledge.tool_search_tool(),   # v0.9.173:按需加载的门(永远常驻)
         # v0.9.98:运行轨迹导出与历史检索(会话记录一族)
         *catalog_knowledge.trace_tool(),
         *catalog_knowledge.history_tool(),

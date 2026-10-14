@@ -143,9 +143,16 @@ def list_line(ctx) -> str:
     if not isinstance(hooks, dict) or not hooks:
         lines.append("  · 一条都没挂(config.json 的 hooks 字段是空的)")
     else:
+        from minicode.hooks import TOP_KEYS
         for kind, raw in hooks.items():
+            if kind in TOP_KEYS:
+                continue     # `failure_mode` 是全局键不是一类钩子(v0.9.173),下面单独说
             cmd = raw if isinstance(raw, str) else (raw or {}).get("command", "")
             lines.append(f"  · {kind}:{str(cmd)[:120]}")
+        mode = str(hooks.get("failure_mode") or "").strip()
+        if mode:
+            lines.append(f"  (全局失败语义:{mode} —— 钩子自己坏了时按它办;"
+                         "单条上写了 failure_mode / on_error 的以单条为准)")
     lines.append("可挂的配方:")
     for key, tpl in TEMPLATES.items():
         lines.append(f"  · {key} —— {tpl['title']}")

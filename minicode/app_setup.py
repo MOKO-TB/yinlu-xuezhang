@@ -565,8 +565,17 @@ def build_runner_agent(config: Config, workspace: Path, ui, llm,
     inbox_ref: dict = {}
     registry.append(build_task_tool(ctx, llm, ui, config, registry,
                                     parent_undo=undo_ref, parent_inbox=inbox_ref))
-    session = Session(system_prompt=build_system_prompt(
-        workspace, reply_style=getattr(config, "reply_style", "normal")),
+    # v0.9.173:按需加载开着时,系统提示词里挂一份"不在本轮工具面里的能力"索引。
+    # **它是这一整套能成立的前提** —— 模型不会去要一个它不知道存在的东西。
+    # 只报索引行(名字 + 一句话),不贴 schema:贴了就等于没省。
+    prompt_head = build_system_prompt(
+        workspace, reply_style=getattr(config, "reply_style", "normal"))
+    if str(getattr(config, "tool_loading", "all") or "all").strip().lower() == "lazy":
+        from minicode import tool_profile
+        idx = tool_profile.index_text(registry)
+        if idx:
+            prompt_head = prompt_head + "\n\n" + idx
+    session = Session(system_prompt=prompt_head,
                       log_dir=sessions_dir or SESSIONS_DIR,
                       workspace=workspace, origin=origin)
     ctx.session = session   # export_trace(v0.9.98):轨迹从活动会话现取,不翻留档文件
@@ -581,6 +590,11 @@ def build_runner_agent(config: Config, workspace: Path, ui, llm,
                                          for t in registry}),
         ui=ui,
         ctx=ctx,
+        # v0.9.173:会话也开一个**递话盒** —— 别的活会话(侧聊页那一条、后台任务)
+        # 可以递一句话进来,它下一次发请求前读到。标签用「来源·工作区名」:一句人
+        # 看得懂的"这是谁";重名时那只会请递话方用 handle 指到具体一个
+        # (见 `mailbox.find`:猜一个然后递错人,比回一句"你说的是哪个"坏得多)。
+        mail_label=f"{'侧聊' if origin == 'sidechat' else '会话'}·{Path(workspace).name}",
     )
     agent._undo_stack = undo_ref
     # 子代理 → 主会话那条路现在通了(I,v0.9.154):放进容器的是**方法本身**,

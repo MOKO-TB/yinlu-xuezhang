@@ -12,6 +12,37 @@ from minicode import asking, feedback_report, growth, kb, memory, planning, repo
 from minicode.tools.base import Tool
 
 
+def tool_search_tool() -> list[Tool]:
+    """按需取回工具(v0.9.173):默认不进每轮工具面的那些,靠它取回来。
+
+    它**自己永远常驻** —— 它是那扇门,门不在就谁也进不来。`read_only=True`:
+    它只读注册表与它自己的描述,不碰磁盘、不起进程、不花额度。
+
+    真正的逻辑在 `minicode/tool_profile.py`(三层判定、匹配、会话级已加载集合);
+    Tool 字面量留在这里,是因为注册表那道"每只工具写在哪份目录里"的闸按文件名
+    扫 `Tool(` 字面量 —— 造在别处会被判成"目录与顺序对不上"。
+    """
+    from minicode import tool_profile
+    from minicode.tools.registry import build_default_registry
+    return [
+        Tool(
+            name="tool_search",
+            description=tool_profile.SEARCH_DESCRIPTION,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string",
+                              "description": "要干什么(自然语言,如「这周空档」"
+                                             "「把图生成出来」);传空串 = 列出全部"
+                                             "可加载工具并一次取回"},
+                },
+            },
+            handler=tool_profile.make_handler(build_default_registry),
+            read_only=True,
+        ),
+    ]
+
+
 def skills_plan_search() -> list[Tool]:
     """技能 / 计划 / 知识库检索三件(它们在注册表里是连着的)。"""
     return [

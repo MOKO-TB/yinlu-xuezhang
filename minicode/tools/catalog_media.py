@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from minicode import charts, images, ocr
+from minicode import charts, images, ocr, view_image
 from minicode.tools.base import Tool
 
 
@@ -85,5 +85,27 @@ def tools() -> list[Tool]:
             },
             handler=images.image_generate,
             read_only=False,
+        ),
+        Tool(
+            name="view_image",
+            description=(
+                "**看图**:把工作区里的一张图片发给你自己看(下一轮就能看到)。"
+                "render_chart 画的图表、generate_image 生成的图、browser_screenshot 的"
+                "网页截图 —— 想核对画出来对不对时用它,而不是凭代码猜;用户让你"
+                "「看看这张图」时也用它。**只认工作区内的图片**;当前模型不支持视觉时"
+                "它会如实说并指路 `ocr_image`(那只取字,不是看图)。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string",
+                             "description": "图片路径(相对工作区或绝对路径),png/jpg/webp 等"},
+                    "note": {"type": "string",
+                             "description": "可选:一句你想从这张图里确认什么(会随图一起给你)"},
+                },
+                "required": ["path"],
+            },
+            handler=view_image.view_image,
+            read_only=True,
         ),
     ]

@@ -13,9 +13,22 @@
 - **退出码三种命运**(分开是因为该说的话完全不同):
   `0` = 跑成了,整体 stdout 若是 JSON 对象就按结构化决策办;
   `2` = 钩子**明确拒绝**这一步(与 Claude/Cline 同口径),拒绝理由回给模型;
-  其它非零 / 超时 / 起不动 = **钩子自己坏了**,拦不拦由 `on_error` 决定
-  (默认 `block` 照旧拦;写 `continue` 则放行并在结果里如实附一行)。
-  混成一句话,用户就分不清该改命令还是该改做法。
+  其它非零 / 超时 / 起不动 = **钩子自己坏了**,拦不拦由失败语义决定 ——
+  单条 `failure_mode`(或老名字 `on_error`,两个词都认)优先,其次全局
+  `hooks.failure_mode`,都没有 = `closed` 照旧拦。写 `open`(=`on_error:
+  "continue"`)则放行并在结果里如实附一行。混成一句话,用户就分不清该改命令
+  还是该改做法。**注意 `failure_mode` 只在闸类(`pre_tool`/`permission_request`)
+  上决定拦不拦** —— 其余各类本来就不拦东西,写 `open` 在那几类上的含义是
+  "钩子坏掉这件事别往模型那边说"(审计里照旧留着)。
+- **事件面**(v0.9.173 起九类):有工具维度的 `pre_tool` / `post_tool` /
+  `post_tool_failure`(失败那半边,与 post_tool 同载荷同档,一次调用只命中一个)/
+  `permission_request`;无工具维度的 `session_start` / `user_prompt_submit` /
+  `stop` / `subagent_start` / `subagent_stop`(见 `TOOL_EVENT_KINDS` /
+  `EVENT_KINDS` 上面的注释)。**刻意没做的**:`pre_compact` / `post_compact`
+  (压缩那条路最脆 —— KV Cache 前缀 + 配对修复 + 协议合法,不在这一轮往上面
+  插管子)、`file_changed` / `config_change` / `cwd_changed`(前两个已有更贴的
+  机制:改动可见性走 `_mark_after_mutation` + 时间线,配置改动走 `config.json`
+  本身;后一个每次 `cd` 都发一条,噪声远大于信息)。
 - 结构化决策可带的字段:`decision`(allow|deny|continue)、pre 的 `updated_input`
   (改写这一步的参数)、post 的 `updated_output`(要回灌给模型的正文,如 lint
   失败原文)与 `context`(一行附注)。**没有"替换结果"的语义** —— 原文丢了就是
@@ -43,15 +56,67 @@ HOOK_NOTE_CHARS = 1200      # 附注一句话的上限(截了几字要在正文�
 HOOK_OUTPUT_CHARS = 8000    # 要回灌给模型的正文(lint/测试原文)的上限
 HOOK_STDOUT_CHARS = 65536   # 解析用的 stdout 读数上限:再多也只可能是刷屏不是结论
 EXIT_DENY = 2           # 与 Claude/Cline 同一口径:2 = 我(钩子)明确拒绝这一步
-# 非工具类事件(H4,v0.9.115;`stop` 是 v0.9.151 补的最后一个):没有"哪只工具"这个
-# 维度,也只能往请求里附一句话 —— 既不改写参数、不接管结果,更拦不住用户开口说的
-# 那句话。
+
+# 有"哪只工具"这个维度的事件 —— `tools` / `paths` / `command_prefix` / `args_match`
+# 四个 matcher 只在这几类上说得通(见 `_matches`)。
 #
-# `stop` 与另外两个**时机不同**:它在一轮**结束时**跑,而那一轮已经发不出请求了,
+# `post_tool_failure`(v0.9.173)是 `post_tool` 的**失败那半边**:同一次调用只会命中
+# 其中一个(成功了走 post_tool、失败了走它),载荷同形状(带 args 与 result)。
+# 为什么值得单开一格而不是让 post_tool 自己看 result:①"失败"的判定在这个项目里
+# 只有一处(`toolsum.is_failure`),钩子里手写一份字符串匹配迟早跟它对不上;②外部
+# 系统要的是**一条条失败事件**,连续性它自己数得出来 —— 我们这边的
+# `_fail_streak_count` 是**本回合内**的内部计数(跨回合清零),塞进载荷反而误导。
+TOOL_EVENT_KINDS = ("pre_tool", "post_tool", "post_tool_failure", "permission_request")
+
+# 非工具类事件(H4,v0.9.115;`stop` v0.9.151;子代理那两只 v0.9.173):没有"哪只工具"
+# 这个维度,也只能附一句话 —— 既不改写参数、不接管结果,更拦不住用户开口说的那句话。
+# **配了 tools/paths 也不会被筛成永不触发**(见 `_matches`)。
+#
+# `stop` 与另外几个**时机不同**:它在一轮**结束时**跑,而那一轮已经发不出请求了,
 # 所以它附的那句话落在**下一轮的第一条请求**上(见 `Agent._fire_stop_hooks`)。
 # 这不是缺陷,是这一格的边界 —— 钩子改不了已经发生的事,能做的只有"给下一轮留句话"
 # 与"把这一轮记下来"。
-EVENT_KINDS = ("session_start", "user_prompt_submit", "stop")
+#
+# 子代理那两只由 `run_subagent` 那一层发,**不由子代理自己发** —— 子代理里
+# `is_sub=True`,连 session_start 都不叫;派活与收口这两件事本来就是主代理做的。
+# 一进一出各留一句话:`subagent_start` 那句附在**子代理读到的任务文本**上(与
+# session_start 附在这次请求里对称),`subagent_stop` 那句附在**回主代理的报告**上
+# (与 stop 留给下一轮对称)。两处都只加一句话,不改派活内容、不改结论。
+EVENT_KINDS = ("session_start", "user_prompt_submit", "stop",
+               "subagent_start", "subagent_stop")
+
+ALL_KINDS = TOOL_EVENT_KINDS + EVENT_KINDS
+
+# `hooks` 底下**不是**"某一类钩子"的键(全局开关):遍历配置时要跳过 —— 否则
+# `failure_mode` 会被当成一类钩子名显示出来(见 `hook_packs.list_line`)。
+TOP_KEYS = ("failure_mode",)
+
+# 钩子**自己坏了**(起不动 / 超时 / 非零退出且不是 EXIT_DENY)时怎么办:
+# `closed` = 拦(今天的默认,即 `on_error: "block"`);`open` = 放行(`on_error:
+# "continue"`)。两个词都认 —— `failure_mode` 是对标矩阵里的叫法(Cline 的
+# fail_open/fail_closed),`on_error` 是本项目 v0.9.115 起就在用的叫法。
+# **同一件事不留第二套实现**,只是两边的用户都念得出口。单条上写的赢过全局,
+# 两边都没写 = `closed`(与 `on_error` 缺省 block 逐字节一致)。
+FAILURE_MODES = {"closed": "closed", "block": "closed", "fail_closed": "closed",
+                 "open": "open", "continue": "open", "fail_open": "open"}
+
+
+def failure_mode(spec: dict, hooks_cfg: dict | None) -> str:
+    """这一条钩子坏掉时是拦(`closed`)还是放(`open`)。
+
+    优先级:单条 `failure_mode` → 单条 `on_error` → 全局 `hooks.failure_mode`
+    → `closed`。**不认识的值一律按 `closed`**(与今天 `on_error != "continue"`
+    就拦同一条口径):一个拼错的开关不该悄悄把审计变成"什么都不拦"。
+    """
+    for raw in (spec.get("failure_mode"), spec.get("on_error"),
+                (hooks_cfg or {}).get("failure_mode")):
+        if raw is None or not str(raw).strip():
+            continue
+        got = FAILURE_MODES.get(str(raw).strip().lower())
+        if got:
+            return got
+        return "closed"      # 写了但不认识 —— 按拦办,别猜用户想放行
+    return "closed"
 
 
 def _as_list(val) -> list:
@@ -138,28 +203,32 @@ def run_hook(kind: str, hooks_cfg: dict | None, tool: str = "",
     """跑一条钩子;没配置该类返回 None(调用方直接跳过,零开销)。
 
     五类钩子共用这一份形状:`pre_tool`(拦/改写这一步)、`post_tool`(回灌正文)、
+    `post_tool_failure`(v0.9.173:同一次调用**失败**时走它,载荷与 post_tool 一样)、
     `permission_request`(H3,v0.9.115:替用户在确认框之前答一句 allow/deny)、
-    `session_start` / `user_prompt_submit` / `stop`(H4:只能往请求里附一句话 ——
-    前两个附在**这一次请求**,`stop` 附在**下一轮的第一条请求**,见 `EVENT_KINDS`
-    上面那段)。
+    `session_start` / `user_prompt_submit` / `stop` / `subagent_start` /
+    `subagent_stop`(H4 起:只能附一句话 —— 前两个附在**这一次请求**,`stop` 附在
+    **下一轮的第一条请求**,子代理那两只一进一出各附一句,见 `EVENT_KINDS` 上面那段)。
     `updated_input` 只在 pre 上成立 —— 门已经对 permission_request 判过 ASK 了,
-    这时候再改参数就是"对 A 点头、执行 B";`updated_output` 只在 post 上成立;
-    `context` 六类都能带。
+    这时候再改参数就是"对 A 点头、执行 B";`updated_output` 只在两个 post 上成立;
+    `context` 各类都能带。
 
     H1 的形状(旧的两个键名字与语义都保留,配了钩子的人不改配置行为不变):
 
     - `ok` / `blocked` —— 老口径。pre 的"没跑成"与非零退出仍归 blocked,
       但**只有 exit 2 与 `decision:"deny"` 才是"钩子明确拒绝"**,其它非零退出
-      按"钩子自己坏了"走 `on_error`(默认 block,可写 continue)。
+      按"钩子自己坏了"走失败语义(单条 `failure_mode` / `on_error` 优先,其次全局
+      `hooks.failure_mode`,都没有 = `closed` 拦)。
       分开是因为这两种情况该说的话完全不同:一种是有人判了这一步,
       一种是一条命令没跑成 —— 混成一句话,用户就再也分不清该改命令还是该改做法。
     - `decision` —— allow|deny|continue(不认识的值当 continue)。
     - `updated_input` —— 仅 pre_tool 有意义:改写这一步的参数。形状只在这里查
       (必须是非空 dict),**必填项与参数名由调用方对着 schema 再查、权限门由调用方
       重跑** —— 门的真相只有一处,不在钩子层复刻第二套。
-    - `updated_output` / `context` —— 仅 post_tool 有意义:要回灌给模型的正文
+    - `updated_output` / `context` —— 仅两个 post 有意义:要回灌给模型的正文
       (如 lint/测试的失败原文)与一行附注。**没有"替换结果"的语义**,原文丢了
-      就是丢了,所以这两样都是追加(见 agent._execute 的接法)。
+      就是丢了,所以这两样都是追加(见 agent._finish 的接法)。
+    - `failure_mode` / `suppressed` —— 这次按哪种失败语义走的,以及"钩子坏了这句
+      要不要往模型那边说"(非闸类 + `open` 时为真;审计里照旧留着)。
     - `elapsed_ms` / `ran` / `hook` —— 实测耗时与"到底跑没跑",给观测线用。
     """
     got = _entry(hooks_cfg, kind)
@@ -168,18 +237,23 @@ def run_hook(kind: str, hooks_cfg: dict | None, tool: str = "",
     cmd_tpl, spec = got
     if not _matches(spec, tool, args):
         return None
-    payload_key = "result_file" if kind == "post_tool" else "args_file"
-    if kind == "post_tool":
+    payload_key = "result_file" if kind in ("post_tool", "post_tool_failure") else "args_file"
+    if kind in ("post_tool", "post_tool_failure"):
         # H6:post 的载荷原来只有 {tool, result} —— 一条"写完 .py 顺手 lint 一遍"
         # 的钩子拿不到路径,只能去解析给人看的那句结果文本,而结果文本不是接口。
         # 加 `args` 是**追加键**:老钩子照旧读它的 tool/result,一个字都不用改。
+        # `post_tool_failure` 用**同一份载荷**(加一个 `event`) —— 失败那半边的钩子
+        # 想做的事(记一笔、报给外部系统、回灌一句"别重试同一个参数")与成功那半边
+        # 一样需要 tool/args/result,两套形状只会让人抄错一份。
         payload = {"tool": tool, "args": args or {}, "result": result}
+        if kind == "post_tool_failure":
+            payload["event"] = kind
     else:
         payload = args
 
     cmd, tmp = _render(cmd_tpl, tool, payload, payload_key, workspace)
     seconds, timeout_note = _timeout_for(spec)
-    on_error = str(spec.get("on_error") or "block").strip().lower()
+    mode = failure_mode(spec, hooks_cfg)
     started = time.perf_counter()
     exit_code: "int | None" = None
     raw = ""
@@ -202,16 +276,17 @@ def run_hook(kind: str, hooks_cfg: dict | None, tool: str = "",
     spec_out, reason = _parse_stdout(raw)
     decision = _decision(spec_out.get("decision"))
     if broken:
-        # 没跑成:pre 拦不拦由 on_error 决定,post 永远不拦(老口径)。
+        # 没跑成:拦不拦由 `failure_mode`(老名字 `on_error`)决定,而**只有闸类**
+        # (pre_tool / permission_request)拦得住东西 —— 见下面 `blocked` 那两行。
         # 钩子自己说的话排在后面 —— 它可能已经打了一半才卡住,那句才是线索。
         ok, declared = False, False
-        decision = "deny" if on_error != "continue" else "continue"
+        decision = "deny" if mode == "closed" else "continue"
         reason = broken + (f" — 它卡住前还说了:{reason[:200]}" if reason else "")
     elif exit_code == EXIT_DENY:
         ok, decision, declared = False, "deny", True
     elif exit_code not in (0, None):
         ok, declared = False, False
-        decision = "deny" if on_error != "continue" else "continue"
+        decision = "deny" if mode == "closed" else "continue"
         reason = (reason or f"钩子退出码 {exit_code}").strip()
     else:
         ok = True
@@ -224,6 +299,8 @@ def run_hook(kind: str, hooks_cfg: dict | None, tool: str = "",
     # 的 deny = **替用户答了一句"不"**。后者只在钩子真跑成、并且明确表过态时才成立
     # —— 钩子没跑成的时候,agent 一律退回"照常弹框"(见 `_ask_via_permission_hook`),
     # 一条坏掉的策略钩子既不配替人拒绝、更不配替人放行。
+    # `post_tool_failure` 与 `post_tool` 同档:**它是一次观测,不是一道闸** ——
+    # 失败已经发生了,一条钩子的 stdout 不该有权力改写"这一步到底算不算失败"。
     blocked = (kind in ("pre_tool", "permission_request") and decision == "deny")
 
     got_input = None
@@ -238,24 +315,32 @@ def run_hook(kind: str, hooks_cfg: dict | None, tool: str = "",
     out_text = _clip_note(reason, HOOK_NOTE_CHARS)
     if timeout_note:
         out_text = (out_text + "\n" if out_text else "") + timeout_note
-    # 非工具类事件(H4)只带走一样东西:context。`deny` 在这两类上**不生效** ——
-    # 钩子拦不住用户开口说的那句话,这既没配过也没实现过。但"配了一句拒绝、什么
-    # 也没拦住"必须当场说出来,悄悄吞掉等于教用户去信任一个不存在的能力。
+    # 非工具类事件(H4)只带走一样东西:context。`deny` 在这几类上**不生效** ——
+    # 钩子拦不住用户开口说的那句话(子代理那两只也一样:它们拦不住一次派活)。
+    # 这既没配过也没实现过。但"配了一句拒绝、什么也没拦住"必须当场说出来,
+    # 悄悄吞掉等于教用户去信任一个不存在的能力。
     if kind in EVENT_KINDS and decision == "deny":
         out_text = (out_text + "\n" if out_text else "") + \
-            "(这一类钩子只能往这次请求里附一句话,拦不下用户的发言,deny 没生效)"
+            "(这一类钩子只能附一句话,拦不下这一步,deny 没生效)"
 
     # 只有**结构化**声明的两样才会被调用方追加进结果:普通 stdout 文本今天
     # 是丢掉的,把它当成"要回灌的正文"等于改了没动过配置的人的行为。
     body = _clip_note(str(spec_out.get("updated_output") or ""),
-                      HOOK_OUTPUT_CHARS) if kind == "post_tool" else ""
+                      HOOK_OUTPUT_CHARS) \
+        if kind in ("post_tool", "post_tool_failure") else ""
     extra = _clip_note(str(spec_out.get("context") or ""), HOOK_NOTE_CHARS)
+    # `failure_mode: "open"` 在**非闸类**上唯一说得通的含义:钩子自己坏了这件事
+    # 别往模型那边说(它在审计里照旧留着)。闸类上它已经决定了拦不拦,不需要再来
+    # 一遍 —— 那一格由 `blocked` 说话。默认 closed = 今天的表现(坏了就如实附一行)。
+    suppressed = bool(not ok and mode == "open"
+                      and kind not in ("pre_tool", "permission_request"))
     return {"ok": ok, "blocked": blocked, "decision": decision,
             # declared = 这一步是被"有人判了"拦下的,不是被一条没跑成的命令拦下的。
             # 调用方靠它决定回话怎么说:前者该问做法,后者该修钩子。
             "declared": declared, "output": out_text, "reason": reason,
             "updated_input": got_input, "updated_output": body, "context": extra,
             "elapsed_ms": elapsed, "ran": True, "hook": kind,
+            "failure_mode": mode, "suppressed": suppressed,
             "exit_code": exit_code}
 
 

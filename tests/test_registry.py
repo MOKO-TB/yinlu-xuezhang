@@ -7,7 +7,10 @@ def test_registry_contents():
     assert names == ["read_file", "write_file", "edit_file",
                      "apply_patch",          # v0.9.134:整包统一 diff,紧跟 edit_file
                      "bash",
-                     "bash_status", "bash_kill", "bash_input", "py_script",
+                     "bash_status", "bash_kill", "bash_input",
+                     # v0.9.173:递话(正在跑的对象之间留一句话),与上面三只同族
+                     "session_message",
+                     "py_script",
                      "glob", "grep", "repo_outline",
                      "diagnostics",
                      # v0.9.164~170 符号与结构一组(registry 里紧跟 diagnostics):
@@ -23,9 +26,15 @@ def test_registry_contents():
                      "browser_close", "browser_status", "page_parse",
                      "mcp", "mcp_resource",
                      "use_skill", "plan", "ask_user",
-                     "search_knowledge", "export_trace",
+                     "search_knowledge",
+                     # v0.9.173:按需加载的门(永远常驻;只读 —— 它只读注册表
+                     # 与自己的描述,不碰磁盘、不起进程、不花额度)
+                     "tool_search",
+                     "export_trace",
                      "export_feedback", "search_history",
                      "ocr_image", "render_chart", "generate_image",
+                     # v0.9.173:看图 —— 只读,只是把工作区里已有的图发给模型自己看
+                     "view_image",
                      "campus_calendar", "calendar_edit", "gpa_calc",
                      "scores",
                      "kb_suggest", "library_search", "library_guide", "memory",
@@ -57,6 +66,10 @@ def test_read_only_flags():
         # 往下走(喂进去的可能就是 y、是密码)。它写的是 `text` 而不是 `command`,
         # 所以**不经过命令文本那道判定**,确认框必须说清这一点。
         "bash_input": False,
+        # v0.9.173:递话 —— 只把一句话放进另一个盒子,不写盘、不起进程,所以只读。
+        # 它不需要确认框的理由与 notify_parent 一字不差(框会弹在递话那一侧,
+        # 点头的人管不了对面要不要照做);要堵的是对外形态,web_profile 里排除。
+        "session_message": True,
         "permissions": True,           # 只是看一眼这个项目批了什么
         "permissions_trust": False,    # 批准 = 从此免确认放行,必须用户点过头
         "hooks": True,               # 看一眼挂着什么/预览配方,不改任何东西
@@ -101,6 +114,7 @@ def test_read_only_flags():
         "page_parse": True,           # 只把页面上的表读成结构化文字,不写文件不驱动页面
         "use_skill": True,
         "search_knowledge": True,
+        "tool_search": True,          # v0.9.173:只读(取回工具不改任何本机状态)
         # 会话导成可回放的轨迹 JSON:往工作区**写一份文件**,且内容是对话原文 —— 要确认
         "export_trace": False,
         "export_feedback": False,
@@ -113,6 +127,10 @@ def test_read_only_flags():
         # 图片生成:api 一条会把描述发给外部服务并花 Key 额度,card 一条往 images/ 写
         # PNG —— 两条都要确认
         "generate_image": False,
+        # v0.9.173:看图 —— 它把工作区里**已有的**一张图发进会话(下一轮模型就能看到)。
+        # 不落盘、不联网、不读本机数据,所以是只读;图会随消息外发,那由
+        # trust/沙箱那条线管(与 ocr_image 同一档的外发口径)。
+        "view_image": True,
         "campus_calendar": True,      # 校历查询:只读本地数据文件
         "gpa_calc": True,             # 绩点计算:纯计算,不落盘
         "kb_suggest": False,          # 写候选文件:确认框就是"用户同意存入"那一步

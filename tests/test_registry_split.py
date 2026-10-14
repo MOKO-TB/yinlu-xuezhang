@@ -36,6 +36,11 @@ ORDER = [
     # v0.9.146:后台命令的"嘴"。插在 bash_kill 之后、py_script 之前 ——
     # 后台那一族(派活/看进度/终止/喂输入)必须连在一起,而 py_script 是另一族。
     "bash_input",
+    # v0.9.173:递话(把一句话放进正在跑的子代理 / 另一条活会话的盒子)。它写在与
+    # 上面三只**同一份目录**里 —— catalog_bg 这一族的题目是"多任务并行时的手":
+    # 那三只管命令、这一只管会话与子代理。位置因此紧随 bash_input(目录顺序 = 注册表
+    # 顺序,`test_every_catalog_group_is_wired_into_the_registry` 盯着这条)。
+    "session_message",
     "py_script", "glob", "grep",
     "repo_outline",
     # v0.9.147:诊断工具(按扩展名跑检查器)。挨着 repo_outline —— 同属"看代码"一族,
@@ -69,9 +74,15 @@ ORDER = [
     # v0.9.102:MCP resources(read 过确认框)
     "mcp_resource",
     "use_skill", "plan", "ask_user", "search_knowledge",
+    # v0.9.173:按需加载的门(tool_search)。上面那一族是"找东西"(技能/计划/提问/
+    # 检索),它补上"找能力"这一格;下面 export_trace 起是"会话记录"另一族。
+    # 它**永远常驻** —— 门不在,分层里那些工具谁也进不来。
+    "tool_search",
     # v0.9.98:运行轨迹导出,挨着历史检索;v0.9.99:反馈包(同一族)
     "export_trace", "export_feedback", "search_history",
     "ocr_image", "render_chart", "generate_image",
+    # v0.9.173:看图,挨着它对着的那三只"出图/取字"的工具
+    "view_image",
     "campus_calendar",
     # v0.9.62:校历补录(贴通知→核对→入库),挨着它读写的 campus_calendar
     "calendar_edit",
@@ -133,7 +144,7 @@ def test_order_pin_is_not_stale():
     v0.9.96 加 `ask_user` 时它的位置就钉在 `plan` 后面 —— 模型每轮拿到的 tools 数组
     是这个顺序,挪位置等于改行为面,所以新工具插在谁后面都要在这里写明。
     """
-    assert len(ORDER) == len(set(ORDER)) == 70      # v0.9.170:69 + code_outline
+    assert len(ORDER) == len(set(ORDER)) == 73      # v0.9.173:70 + view_image + session_message + tool_search
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

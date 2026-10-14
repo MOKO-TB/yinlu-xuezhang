@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+from minicode import mailbox
 from minicode.tools import shell
 from minicode.tools.base import Tool
 
@@ -99,4 +100,49 @@ def tools() -> list[Tool]:
             },
             handler=shell.bash_input,
         ),
+
+        # --------------------- 递话(v0.9.173):正在跑的对象之间留一句话
+        #
+        # 与上面三只(看后台命令 / 杀 / 喂输入)同属"多任务并行时的手"这一族:
+        # 那三只管**命令**,这一只管**会话与子代理** —— 一条在跑的东西想让
+        # 另一条知道点事。完整的边界写在 `minicode/mailbox.py` 的模块说明里,
+        # 这里的 description 只讲用法与"谁真的用得上",不把它吹成常驻双向通道。
+        SESSION_MESSAGE,
     ]
+
+
+SESSION_MESSAGE = Tool(
+    name="session_message",
+    description=(
+        "递话 / 看在跑的对象:把一句话放进**正在跑的子代理**或**另一条活会话**的"
+        "盒子里,它下一次发请求前就会读到(读到的形态是系统侧注记,"
+        "**不会冒充用户说的话**)。action=list 先看现在有谁在跑"
+        "(带 handle 与各自己压了几条);action=send 递一句话,目标写 list 里"
+        "那个 handle(标签重名时只认 handle —— 递错人比多打几个字坏得多)。\n"
+        "**四条边界,先说清楚**:①主代理调 `task` 时**阻塞等报告**,所以它自己"
+        "多半调不了这只工具 —— 真正即时的投递方是**另一条并发会话**"
+        "(侧聊页那条、后台任务)与界面上的人;②只在对方**两步之间**递,不入它的"
+        "handler 中间(那会把调用与结果拆对);③**没有回执**,对方收下了会不会照做"
+        "这一层管不着;④盒子活在内存里,对方跑完/关掉就摘 —— 摘了以后递会得到"
+        "一句实话,不是静默丢掉。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["list", "send"],
+                       "description": "list(默认)看在跑的谁;send 递一句话"},
+            "target": {"type": "string",
+                       "description": "send 时必填:list 里那个 handle(如 sub-1 / sess-2)"},
+            "text": {"type": "string",
+                     "description": "要递的那句话;上限 1200 字,超了会截断并写明截了几字"},
+        },
+        "required": ["action"],
+    },
+    handler=mailbox.session_message,
+    # **只读**:它不写盘、不起进程、不改本机任何东西 —— 只把一句话放进另一个盒子。
+    # 不需要确认框的理由与 `notify_parent` 一字不差:那张框会弹在**递话那一侧**,
+    # 而点头的人管不了对面要不要照做 —— 那是给了个假的把关。对面真去写文件时,
+    # **它自己的**权限门照样拦(所以这条链没有提权)。真正要堵的是对外形态:
+    # 访客绝不能往主人的会话里递话(`web_profile` 里写死了排除)。
+    read_only=True,
+)

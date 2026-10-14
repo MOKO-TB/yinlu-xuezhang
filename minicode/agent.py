@@ -24,6 +24,7 @@ from minicode.model_catalog import window_for
 from minicode.permission import ASK, REJECT, PATCH_TOOL_NAME, PermissionGate
 from minicode import toolsum
 from minicode import diagnostics
+from minicode import mailbox
 from minicode.diagnostics import SYNTAX_CHECK_TOOLS, SYNTAX_SCAN_LIMIT
 from minicode.session import Session, outbound as session_outbound, repair_tool_pairs
 from minicode.tools.base import (
@@ -153,7 +154,8 @@ class Prepared:
 class Agent:
     def __init__(self, llm: LLMClient, registry: list[Tool], session: Session,
                  gate: PermissionGate, ui: TerminalUI, ctx: ToolContext,
-                 max_steps: int = 0, is_sub: bool = False):
+                 max_steps: int = 0, is_sub: bool = False,
+                 mail_label: str = "", mail_kind: str = "会话"):
         self.llm = llm
         self.registry = registry
         self.session = session
@@ -171,6 +173,17 @@ class Agent:
         # 这里不写第二个默认值 —— 显式传参(子代理那一档)优先,没传就回 config。
         self.max_steps = int(max_steps) if max_steps else int(ctx.config.max_steps)
         self._tool_map = {t.name: t for t in registry}
+        # 工具面按需加载(v0.9.173)。`_loaded` 是**本会话**已取回的那批名字;
+        # 与 `ctx.tool_loaded` 是**同一个 set 对象** —— `tool_search` 取回时往它里
+        # 加一个名字,下一次投影立刻带上(两条路两个集合,迟早对不上)。
+        # `ctx.tool_catalog` 给那只工具现取现读注册表用(可调用 —— 列表会被热重载
+        # 与对外形态就地换掉,冻一份就漂了)。子代理那条路会在它自己的 Agent 构造时
+        # 把这两个字段换成**它自己的**(与 `notify_parent` 显式写、不吃继承同一条)。
+        self._tool_loading = str(
+            getattr(getattr(ctx, "config", None), "tool_loading", "all") or "all").strip().lower()
+        self._loaded: set[str] = set()
+        ctx.tool_loaded = self._loaded
+        ctx.tool_catalog = lambda: self.registry
         # 上一次请求**真发出去多少 prompt token**(服务端返回的,不是估的)与当时的
         # 消息条数。量窗口那把尺子从此有了实测的下限 —— 见 `context_tokens`。
         self._real_prompt: tuple[int, int] | None = None
@@ -251,6 +264,15 @@ class Agent:
         # 同样带锁:子代理跑在**另一个线程**上,而 `_pending_prior` 是个裸字符串。
         self._notes: list[str] = []
         self._notes_lock = threading.Lock()
+        # 别人的递话盒(v0.9.173):别的活会话 / 用户从界面上递给**这一条**的话。
+        # `mail_label` 给空 = 这一条会话不参与递话(不占一个能被找见的名字)。
+        # 盒子由 `mailbox.open` 造、`close()` 摘 —— 摘掉之后别人再递会得到一句
+        # "那个对象已经不在了",不是静默丢掉(见 mailbox 的模块说明)。
+        self._mail_handle = (mailbox.open(mail_kind, mail_label)
+                             if str(mail_label or "").strip() else "")
+        # 工具要认得出"列表里那一条就是你自己",也要说得出你现在都开给谁了 ——
+        # 写回 ctx(与 `notify_parent` 那边把入口写在 ctx 上同一条先例)。
+        ctx.mail_handle = self._mail_handle
 
     # 「最近一次默认那一路」的读取位:界面替身、测试与 add_tool_result 都从这里取
     # (读的是 `_last_timing` 这一份,不是散着的两个字段)。写也走这里 —— 那等于
@@ -272,7 +294,13 @@ class Agent:
         self._last_timing["hook_ms"] = value
 
     def close(self) -> None:
-        """释放外部资源(当前是 MCP 子进程);重复调用安全。"""
+        """释放外部资源(当前是 MCP 子进程);重复调用安全。
+
+        v0.9.173 起还负责**摘掉自己的递话盒** —— 会话关了以后别人再往这儿递,
+        该得到一句"那个对象已经不在了",而不是把话放进一个再也没人取的盒子。
+        """
+        mailbox.close(self._mail_handle)
+        self._mail_handle = ""
         mcp = getattr(self, "mcp", None)
         if mcp is not None:
             try:
@@ -458,7 +486,7 @@ class Agent:
                 try:
                     turn = self.llm.stream_chat(
                         self._messages_for_request(),
-                        self.registry,
+                        self._tools_for_request(),
                         on_text=self.ui.on_text_delta,
                         on_reasoning=self.ui.on_reasoning_delta,
                         on_retry=self._on_retry,
@@ -761,6 +789,15 @@ class Agent:
         notes = self._take_notes()
         if notes:
             prior = f"{prior}\n{notes}".strip() if prior else notes
+        # 别人的递话(v0.9.173)走**同一个出口、同一个时机**:它也是"系统侧、只活
+        # 一次请求"的注记,而**不能**走插话那条(那条到留档里是 `role: user` ——
+        # 机器加的东西冒充用户说的,模型会当新要求办,理由同 `queue_note`)。
+        # 取空即消费,与上面 `_take_notes` 一字不差的理由:攒着的话,"这句到底
+        # 哪一轮看到的"就说不清了。
+        relayed = mailbox.take(self._mail_handle)
+        if relayed:
+            block = "\n".join(relayed)
+            prior = f"{prior}\n{block}".strip() if prior else block
         # 回合级的输出要求(`--output-schema` 附的那句)与 `_pending_prior` **走同一个
         # 注入点但活得更久**:先验只在这次请求里(用完即清,否则同一条会在每一步重复
         # 出现),而"只输出一个合 schema 的 JSON"必须每一步都说 —— 模型往往先调几轮
@@ -1213,6 +1250,22 @@ class Agent:
         """
         self._tool_map = {t.name: t for t in self.registry}
 
+    def _tools_for_request(self) -> list["Tool"]:
+        """这一次请求发给模型的**工具面**(v0.9.173)。
+
+        `all`(默认)逐字返回注册表 —— 与这一格出现之前一模一样。
+        `lazy` 时按 `minicode/tool_profile.py` 的三层投影:常驻 + **本会话已取回**
+        的那批;没取回的只以一行索引出现在系统提示词里(`app_setup` 拼那段)。
+
+        **`self.registry` 一个字都不动** —— 它还要给 `task`(子代理注册表)、给权限门、
+        给 `_tool_map` 查表用。删工具与"不发给模型看"是两件事:前者会让"它明明有这个
+        能力"变成真的没有(与 `web_profile` 只是投影不是删工具同一条口径)。
+        """
+        if self._tool_loading != "lazy":
+            return self.registry
+        from minicode import tool_profile
+        return tool_profile.projection(self.registry, self._loaded, mode="lazy")
+
     # ------------------------------------------------------------ 压缩
 
     # 实测下限能用多久:同一轮里消息只会多出几条(工具结果 + 助手那句话)。
@@ -1599,12 +1652,16 @@ class Agent:
         self._mark_after_mutation(tool, args, result)
         self._note_read_path(tool, args, result)
         # post 钩子:失败不拦截,在结果尾部如实附一行(一行,不刷屏)
+        # v0.9.173:「这一步算不算失败」先判、且只在**原始结果**上判 —— 钩子自己
+        # 附加的那几行(尤其"钩子失败"那句)不该反过来影响判定。判定问
+        # `toolsum.is_failure`(唯一口径,与失败连击同一条)。
+        failed = toolsum.is_failure(result)
         post = self._run_config_hook("post_tool", tool, args, result=result)
         post_ctx = ""
         if post is not None:
             t["hook_ms"] = (t["hook_ms"] or 0) + int(post.get("elapsed_ms") or 0)
             self._note_hook_health("post_tool", tool.name, post)
-            if not post.get("ok"):
+            if not post.get("ok") and not post.get("suppressed"):
                 result = result + f"\n(工具钩子 post_tool 失败:{post.get('output') or '原因不明'})"
             # 钩子要回灌的正文(lint/测试的失败原文)**追加**在结果里,不替换 ——
             # 原结果被吞掉就是真没了,这个项目不写"我把它换成了别的"这种账。
@@ -1615,6 +1672,26 @@ class Agent:
             if body:
                 result = result + f"\n〔post_tool 钩子回灌〕\n{body}"
             post_ctx = str(post.get("context") or "")
+        if failed:
+            # v0.9.173:`post_tool_failure` —— 失败那半边。同一次调用只会命中
+            # post_tool 与它其中一个。**与 post_tool 同档**:只观测,不拦、不改写
+            # (失败已经发生了,一条钩子的 stdout 不该有权力改写"这一步算不算失败")。
+            # 外部系统要的是**一条条失败事件**,连续性它自己数得出来 —— 所以连击数
+            # 不塞进载荷(我们那个 `_fail_streak_count` 是**本回合内**的计数,
+            # 口径不同,塞进去只会误导)。
+            fail = self._run_config_hook("post_tool_failure", tool, args, result=result)
+            if fail is not None:
+                t["hook_ms"] = (t["hook_ms"] or 0) + int(fail.get("elapsed_ms") or 0)
+                self._note_hook_health("post_tool_failure", tool.name, fail)
+                if not fail.get("ok") and not fail.get("suppressed"):
+                    result = result + ("\n(工具钩子 post_tool_failure 失败:"
+                                       f"{fail.get('output') or '原因不明'})")
+                body = str(fail.get("updated_output") or "")
+                if body:
+                    result = result + f"\n〔post_tool_failure 钩子回灌〕\n{body}"
+                more = str(fail.get("context") or "")
+                if more:
+                    post_ctx = (post_ctx + "\n" + more).strip() if post_ctx else more
         # v0.9.147:诊断回灌。放在 `_truncate` **之前** —— 与上面 post 钩子正文同一条
         # 理由:绕过截断等于给一条外部命令开了无上限的出口。
         result = self._diagnostics_feedback(tool, args, result)
@@ -2085,6 +2162,11 @@ class Agent:
         if got is None:
             return
         self._note_hook_health(kind, "", got)
+        if got.get("suppressed"):
+            # `failure_mode: "open"`(v0.9.173):钩子自己坏了这件事只进审计,
+            # 不往模型那边说 —— 一条爱超时的审计钩子不该每一轮都占掉一行上下文。
+            # 闸类不走这条路(它们的坏掉已经由 blocked 说话)。
+            return
         bits = [b for b in (str(got.get("context") or ""),
                             "" if got.get("ok") else str(got.get("output") or "")) if b]
         if not bits:

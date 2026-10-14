@@ -37,6 +37,12 @@ class ToolContext:
     # 值是主代理 `Agent.queue_note` 这个可调用对象,不是字符串 —— 收不收得下、
     # 带不带锁由主代理那一边说了算,这里只负责递。
     notify_parent: Any | None = None
+    # 这一条会话 / 子代理自己的**递话盒** handle(v0.9.173,`session_message` 用):
+    # 由 `Agent.__init__` 在开盒之后写上来 —— 那一只工具既要说得出现在能递给谁,
+    # 也得认得出"列表里那一条就是你自己"。子代理的 ctx 是 `dc_replace` 派生的,
+    # 这个值会在子 Agent 构造时被它自己的 handle 覆盖(与 `notify_parent`
+    # **显式写、不吃继承**同一个道理)。
+    mail_handle: str = ""
     # 子代理的**深度**(L,v0.9.155):主会话是 0,子代理是 1,孙辈是 2。
     # `run_subagent` 在派生 ctx 时 +1;`task` 那只工具据它决定还要不要往下派。
     # 开关默认关,所以这个数今天恒为 0 或 1 —— 它先在这里把路铺好。
