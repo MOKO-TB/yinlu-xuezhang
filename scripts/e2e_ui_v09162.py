@@ -68,6 +68,9 @@ const base = {
     return Promise.resolve({ok: true}); },
   mydata_open_dir: () => { window.__CALLS__.push(["mydata_open_dir"]);
     return Promise.resolve({ok: true}); },
+  voice_listen: (s, lang) => { window.__CALLS__.push(["voice_listen", s]);
+    return Promise.resolve({ok: true, text: "帮我把这章整理成笔记",
+      confidence: "high", engine: "Windows 语音识别(离线)"}); },
   extensions_overview: () => { window.__CALLS__.push(["extensions_overview"]);
     return Promise.resolve({ok: true,
       skills: [{name: "code-review", description: "审代码", channel: "内置技能"},
@@ -291,6 +294,18 @@ def main() -> int:
         page.wait_for_timeout(150)
         calls3 = page.evaluate("window.__CALLS__")
         check(any(c[0] == "mydata_open_dir" for c in calls3), "「打开数据目录」过桥")
+
+        # ⑧ 语音输入(v0.9.172+,ROADMAP §四 K):🎤 → 离线听一句 → **只填不发**
+        page.evaluate('() => document.getElementById("updateOverlay").classList.remove("show")')
+        page.fill("#input", "")
+        page.click("#btnVoice")
+        page.wait_for_timeout(250)
+        calls4 = page.evaluate("window.__CALLS__")
+        check(any(c[0] == "voice_listen" for c in calls4), "🎤 过桥(voice_listen)")
+        check(page.input_value("#input") == "帮我把这章整理成笔记",
+              "听到的话**填进输入框**")
+        check(not page.evaluate("() => !!document.querySelector('#chat .msg')"),
+              "**没有自动发送**(语音识别会错,发出去等于替用户签字)")
 
         check(not errors, f"无页面错误(实际:{errors[:2] or '无'})")
         browser.close()

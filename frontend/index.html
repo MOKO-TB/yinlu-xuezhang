@@ -847,6 +847,13 @@ try {
   .box .attach{ background:transparent; border:none; cursor:pointer; font-size:19px;
                 padding:2px 6px; line-height:1; color:var(--text-2); transition:.15s; }
   .box .attach:hover{ transform:scale(1.12) rotate(-6deg); }
+  /* 语音输入(v0.9.172+):与 📎 同一排;听的时候闪一下并换成"在听"的样子 ——
+     状态要看得见,否则用户不知道它到底有没有在听。 */
+  .box .mic{ background:transparent; border:none; cursor:pointer; font-size:18px;
+             padding:2px 6px; line-height:1; color:var(--text-2); transition:.15s; }
+  .box .mic:hover{ transform:scale(1.12); }
+  .box .mic.rec{ color:var(--danger,#c0392b); animation:micPulse 1s infinite; }
+  @keyframes micPulse{ 0%,100%{ opacity:1; } 50%{ opacity:.35; } }
   .topbar button.on{ border-color:var(--accent); background:var(--success-bg);
                      color:var(--success); }
 
@@ -2702,6 +2709,7 @@ try {
         <div class="at-menu" id="atMenu" style="display:none"></div>
         <div class="at-menu" id="slashMenu" style="display:none"></div>
         <button class="attach" id="btnAttach" title="上传文件或图片(会复制到工作区 uploads/)">📎</button>
+        <button class="mic" id="btnVoice" title="语音输入:点一下,说一句(离线识别,填进输入框不自动发)">🎤</button>
         <textarea id="input" rows="1" placeholder="描述任务，Enter 发送，Shift+Enter 换行"></textarea>
         <button class="send" id="btnSend">发送</button>
         <button class="stop" id="btnStop">停止</button>
@@ -10572,6 +10580,33 @@ function renderAttachments() {
   });
 }
 function clearAttachments() { attachments = []; renderAttachments(); }
+
+/* 语音输入(v0.9.172+,ROADMAP §四 K):点 🎤 → 离线听一句 → **填进输入框**。
+   两条刻意:①**不自动发送** —— 语音识别会错,自动发出去等于替用户签字;
+   ②听的过程中按钮闪红,再点一次不重入(设备被占会互相打架)。 */
+let voiceBusy = false;
+$("btnVoice").addEventListener("click", () => {
+  if (voiceBusy) { toast("正在听…说一句就行", true); return; }
+  if (!(window.pywebview && pywebview.api && pywebview.api.voice_listen)) {
+    toast("这一屏只在桌面版有", true); return;
+  }
+  const btn = $("btnVoice");
+  voiceBusy = true; btn.classList.add("rec");
+  toast("在听…说一句(最多等 8 秒)");
+  pywebview.api.voice_listen(8, "").then(r => {
+    if (r && r.ok && r.text) {
+      const inp = $("input");
+      inp.value = inp.value.trim() ? (inp.value.replace(/\s+$/, "") + " " + r.text) : r.text;
+      inp.dispatchEvent(new Event("input"));
+      inp.focus();
+      toast("已填进输入框 —— 看一眼再发");
+    } else {
+      toast((r && r.why) || "没听到", true);
+    }
+  }).catch(() => toast("语音输入失败", true)).finally(() => {
+    voiceBusy = false; btn.classList.remove("rec");
+  });
+});
 
 $("btnAttach").addEventListener("click", () => {
   if (busy) { toast("有任务正在进行中", true); return; }

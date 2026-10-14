@@ -185,7 +185,7 @@
 
 | 候选 | 来源 | 价值 | 备注 |
 |---|---|---|---|
-| **K 语音输入** | ROADMAP §四 仅剩未收的一条 | 中 | `--voice` 或输入框 🎤 → winrt `SpeechRecognizer` 离线 STT;winrt 绑定与 OCR 同一族(缺了如实说) |
+| ~~**K 语音输入**~~ ✅ | ROADMAP §四 仅剩未收的一条 | **已于 2026-10-14 交付** —— `minicode/voice.py` + 输入行 🎤(离线 Windows 语音识别;只填不发;四种"没听到"各有实话);**工具版 `voice_input` 与 CLI `--voice` 留到注册表精确清单恢复绿之后补**(见下) | `--voice` 或输入框 🎤 → winrt `SpeechRecognizer` 离线 STT;winrt 绑定与 OCR 同一族(缺了如实说) |
 | **S5b/S5c OS 沙箱降权** | §6 第 52 条 | 高(安全) | **等用户拍板**;fail-open 语义:做错了不是"没保护",是每条命令都跑不起来 |
 | 代码库语义索引 | 批次 2/3 | 中 | `retrieval.py`+`embed.py` 只接 KB;工作区已有 grep/符号工具兜底,**建议等真实"找不到代码"的反馈** |
 | 子代理 worktree 隔离与 steer | 批次 2/3 | 中 | 长任务不污染主工作区 + 给在跑的子代理递话 |
