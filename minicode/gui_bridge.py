@@ -348,6 +348,10 @@ class PublicApi:
         """手动查一次新版本(侧栏版本号可点;卡片/提示条也能再唤)。"""
         return self._b.check_update_now()
 
+    def extensions_overview(self) -> dict:
+        """扩展中心一屏:技能/渠道/MCP/侧边栏扩展/钩子 五类现成数据。"""
+        return self._b.extensions_overview()
+
     def git_overview(self) -> dict:
         """Git 页一屏:git 可用性 + 状态 + 影子快照。"""
         return self._b.git_overview()
@@ -1469,6 +1473,32 @@ class Bridge:
         """数据目录 extensions/ 里的三方扩展清单(只发现,不执行;加载在前端)。"""
         from minicode import extensions
         return extensions.discover()
+
+    def extensions_overview(self) -> dict:
+        """扩展中心一屏(底座「扩展」页):五类扩展各一份**现成**数据,只读展示。
+
+        五类:技能 / 技能渠道 / MCP / **侧边栏扩展** / 钩子。
+        **侧边栏那半是这一页存在的理由**:`extensions.discover` 早就把
+        "装了没生效"的原因备好了(`skipped:[{dir,msg}]`),而此前它只写进
+        `console.warn` —— 用户把自己写的扩展放进目录、界面上什么都没发生,
+        也不知道为什么。这里不新算任何东西,只是把四处现成结论拼一屏
+        (与 `get_board` 同一个形状)。
+        """
+        from minicode import extensions
+        from minicode.skills import describe_channels
+        side = extensions.discover()
+        hooks = [h for h in (getattr(self.config, "hooks", None) or [])
+                 if isinstance(h, dict)]
+        return {"ok": True,
+                "skills": self.get_skills().get("skills") or [],
+                "skill_channels": describe_channels(self.workspace),
+                "mcp": self._mcp_summary(),
+                "sidepages": {"items": side.get("items") or [],
+                              "skipped": side.get("skipped") or [],
+                              "root": side.get("root") or ""},
+                "hooks": {"count": len(hooks),
+                          "events": sorted({str(h.get("event") or "?")
+                                            for h in hooks})}}
 
     def check_update_now(self) -> dict:
         """手动查一次新版本(侧栏版本号可点)。

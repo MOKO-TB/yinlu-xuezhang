@@ -171,3 +171,38 @@ def test_bridge_extensions_forward(tmp_path, monkeypatch):
     (tmp_path / "extensions" / "db" / "page.js").write_text("// hi", encoding="utf-8")
     got2 = b.get_extensions()
     assert [x["id"] for x in got2["items"]] == ["db"]
+
+
+# ------------------------------------------------- 扩展中心(v0.9.172+)
+
+def test_extensions_overview_composes_five_sections(tmp_path, monkeypatch):
+    """一屏五区:技能/渠道/MCP/侧边栏扩展/钩子 —— 都是**现成**数据的拼装,
+    不新算任何东西(与 get_board 同一个形状)。"""
+    from minicode import extensions
+    b = _bridge(tmp_path)
+    root = tmp_path / "extensions"
+    (root / "db").mkdir(parents=True)
+    (root / "db" / "manifest.json").write_text(
+        '{"title": "库", "entry": "page.js"}', encoding="utf-8")
+    (root / "db" / "page.js").write_text("// ok", encoding="utf-8")
+    (root / "broken").mkdir()
+    (root / "broken" / "manifest.json").write_text("{oops", encoding="utf-8")
+    monkeypatch.setattr(extensions, "extension_root", lambda: root)
+    got = b.extensions_overview()
+    assert got["ok"]
+    assert set(k for k in got if k != "ok") == {
+        "skills", "skill_channels", "mcp", "sidepages", "hooks"}
+    assert got["sidepages"]["items"] and got["sidepages"]["items"][0]["id"] == "db"
+    skipped = got["sidepages"]["skipped"]
+    assert skipped and skipped[0]["dir"] == "broken" and "读不出来" in skipped[0]["msg"], \
+        "装了没生效的原因必须带上(这一页存在的理由)"
+    assert got["sidepages"]["root"] == str(root)
+    assert isinstance(got["hooks"], dict) and "count" in got["hooks"]
+
+
+def test_extensions_overview_facade_and_web_wall():
+    from minicode.gui_bridge import PublicApi
+    assert callable(getattr(PublicApi, "extensions_overview", None))
+    from minicode.web_profile import PublicFacade
+    assert "extensions_overview" not in PublicFacade(object()).allowed_methods(), \
+        "访客不装代码:这一屏一个名字都不进网页白名单"

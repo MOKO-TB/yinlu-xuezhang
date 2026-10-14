@@ -1960,6 +1960,25 @@ try {
          text-align:center; max-width:95%; }
   .sc-t{ align-self:flex-start; color:var(--text-3); font-size:11px; padding:1px 6px; }
   .sc-t.done{ color:var(--text-2); }
+  /* 扩展页(ext-,v0.9.172+):分区标题 + 一行一条;「没装上」那几条用警示色,
+     它们此前只活在 console 里。 */
+  .ext-sec{ margin-bottom:12px; }
+  .ext-cap{ font-size:11.5px; color:var(--text-3); margin:8px 0 4px;
+            padding-bottom:3px; border-bottom:1px solid var(--line-soft); }
+  .ext-row{ display:flex; align-items:baseline; gap:7px; padding:3px 4px;
+            border-radius:var(--r-s); font-size:12px; }
+  .ext-row:hover{ background:var(--glass-lite); }
+  .ext-row b{ flex:none; color:var(--text-1); font-weight:600; }
+  .ext-row span{ flex:1; min-width:0; color:var(--text-3); font-size:11.5px;
+                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ext-row.chan{ margin-top:2px; }
+  .ext-row.chan b{ color:var(--primary-text,#1d7a5f); }
+  .ext-row.bad b{ color:var(--danger,#c0392b); }
+  .ext-row.bad span{ color:var(--danger,#c0392b); white-space:normal; }
+  .ext-row.dim{ opacity:.75; }
+  .ext-path{ font-family:Consolas,monospace; font-size:10.5px; color:var(--text-3);
+             padding:3px 4px; overflow:hidden; text-overflow:ellipsis;
+             white-space:nowrap; direction:rtl; text-align:left; }
   .act-head{ display:flex; align-items:center; gap:6px; padding:12px 12px 6px; }
   .act-head b{ font-size:13px; color:var(--text-1); white-space:nowrap; }
   .act-sum{ margin-left:auto; font-size:11px; color:var(--text-3); min-width:0;
@@ -11936,6 +11955,145 @@ function scRefreshSoon() {
     const sel = $("scThread");
     scRefresh(sel ? sel.value : "");
   }, 400);
+}
+
+/* ---------------- 扩展页(底座第六页,v0.9.172+) ----------------
+   五类扩展收一屏:技能 / 技能渠道 / 侧边栏扩展 / MCP / 钩子。**这一页存在的
+   理由是侧边栏那半** —— `extensions.discover` 早就把"装了没生效"的原因备好了
+   (skipped),而此前它只写进 console.warn:用户把扩展放进目录、界面上什么都没
+   发生,也不知道为什么。只读展示 + 打开数据目录;不造启停开关(没有运行时
+   语义的开关就是装饰板),不改信任模型(见 SECURITY.md 专节)。 */
+SidePages.register({
+  id: "extensions", title: "扩展", icon: "🧩",
+  setup(el) {
+    el.innerHTML = `
+      <div class="sp-head"><b>🧩 扩展</b>
+        <span class="gp-sync" id="extSum"></span>
+        <button class="act-ib" id="extOpenDir" title="在资源管理器里打开数据目录(扩展放在它的 extensions/ 下)">📂</button>
+        <button class="act-ib" id="extRefresh" title="重新读一遍">↻</button></div>
+      <div class="sp-body" id="extBody"></div>`;
+    $("extRefresh").addEventListener("click", () => extLoad());
+    $("extOpenDir").addEventListener("click", () => {
+      if (pywebview.api && pywebview.api.mydata_open_dir) {
+        pywebview.api.mydata_open_dir().catch(() => {});
+      }
+    });
+  },
+  onShow() { extLoad(); },
+});
+
+function extSection(title, countText) {
+  const box = document.createElement("div");
+  box.className = "ext-sec";
+  const head = document.createElement("div");
+  head.className = "ext-cap";
+  head.textContent = title + (countText ? " · " + countText : "");
+  box.appendChild(head);
+  return box;
+}
+
+function extRow(name, sub, cls) {
+  const row = document.createElement("div");
+  row.className = "ext-row" + (cls ? " " + cls : "");
+  const n = document.createElement("b");
+  n.textContent = name;
+  const s = document.createElement("span");
+  s.textContent = sub || "";
+  row.appendChild(n);
+  row.appendChild(s);
+  return row;
+}
+
+async function extLoad() {
+  const api = window.pywebview && pywebview.api;
+  const body = $("extBody");
+  if (!body || !api) return;
+  if (!api.extensions_overview) { body.innerHTML = '<div class="sp-empty">桌面版里才有这一页。</div>'; return; }
+  let r = null;
+  try { r = await api.extensions_overview(); } catch (e) { return; }
+  if (!r || !r.ok) { body.innerHTML = `<div class="sp-empty">${esc((r && r.msg) || "读不出来")}</div>`; return; }
+  body.textContent = "";
+  const skills = r.skills || [];
+  const side = r.sidepages || {};
+  const skipped = side.skipped || [];
+  const items = side.items || [];
+  $("extSum").textContent = `${skills.length} 技能 · ${items.length} 页 · ${(r.mcp || []).length} MCP`;
+  // ① 侧边栏扩展(放最前:装了没生效的原因在这里)
+  const sec1 = extSection("🧩 侧边栏扩展", items.length + " 个已装"
+    + (skipped.length ? ` · ${skipped.length} 个没装上` : ""));
+  for (const it of items) {
+    sec1.appendChild(extRow(it.title || it.id, `${it.id}${it.version ? " · v" + it.version : ""}`));
+  }
+  for (const sk of skipped) {
+    sec1.appendChild(extRow(sk.dir + " —— 没装上", sk.msg, "bad"));
+  }
+  if (!items.length && !skipped.length) {
+    const tip = document.createElement("div");
+    tip.className = "sp-empty";
+    tip.textContent = "还没有三方扩展。放进数据目录的 extensions/<名字>/(manifest.json + page.js)"
+      + "就会被装进来 —— 放进去 = 你亲手装的,来路不明的别放。";
+    sec1.appendChild(tip);
+  }
+  if (side.root) {
+    const root = document.createElement("div");
+    root.className = "ext-path";
+    root.textContent = "目录:" + side.root;
+    root.title = side.root;
+    sec1.appendChild(root);
+  }
+  body.appendChild(sec1);
+  // ② 技能(按渠道归组)
+  const sec2 = extSection("⭐ 技能", skills.length + " 个");
+  const byChannel = {};
+  for (const s of skills) {
+    const c = s.channel || "其他";
+    (byChannel[c] = byChannel[c] || []).push(s);
+  }
+  for (const [chan, list] of Object.entries(byChannel)) {
+    sec2.appendChild(extRow(chan, list.length + " 个", "chan"));
+    for (const s of list) sec2.appendChild(extRow(s.name, s.description || ""));
+  }
+  if (!skills.length) {
+    const tip = document.createElement("div");
+    tip.className = "sp-empty";
+    tip.textContent = "一个技能都没有 —— 三个渠道都是空的。";
+    sec2.appendChild(tip);
+  }
+  body.appendChild(sec2);
+  // ③ 技能渠道
+  const chans = r.skill_channels || [];
+  const sec3 = extSection("📚 技能渠道", chans.length + " 个");
+  for (const c of chans) {
+    sec3.appendChild(extRow(c.label + (c.exists ? "" : "(这个渠道不存在)"),
+      `${c.count} 个技能 · ${c.path || "—"}`, c.exists ? "" : "dim"));
+  }
+  body.appendChild(sec3);
+  // ④ MCP
+  const mcp = r.mcp || [];
+  if (mcp.length) {
+    const sec4 = extSection("🔌 MCP 服务器", mcp.length + " 台");
+    for (const m of mcp) {
+      const name = m.name || m.id || "?";
+      const state = m.connected ? `已连${m.tools ? " · " + m.tools + " 只工具" : ""}`
+        : (m.enabled === false ? "已停用" : "未连上");
+      sec4.appendChild(extRow(name, state + (m.msg ? " · " + m.msg : ""),
+        m.connected ? "" : "dim"));
+    }
+    body.appendChild(sec4);
+  }
+  // ⑤ 钩子
+  const hooks = r.hooks || {count: 0, events: []};
+  const sec5 = extSection("🪝 工具钩子", hooks.count + " 条");
+  if (hooks.count) {
+    sec5.appendChild(extRow((hooks.events || []).join(" / ") || "—",
+      "事件钩子(改写在 config.json 的 hooks 里配)"));
+  } else {
+    const tip = document.createElement("div");
+    tip.className = "sp-empty";
+    tip.textContent = "没有挂任何钩子 —— 钩子只在 config.json 里配(不放工作区,防注入)。";
+    sec5.appendChild(tip);
+  }
+  body.appendChild(sec5);
 }
 
 /* 开机:恢复上次停在哪一页(不替用户拉开整栏)。 */

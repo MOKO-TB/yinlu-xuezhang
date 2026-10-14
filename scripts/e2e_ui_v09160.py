@@ -121,7 +121,7 @@ def main() -> int:
         page.click("#btnActivity")
         page.wait_for_selector(".app.act-open")
         tabs = page.locator("#spTabs .sp-tab")
-        check(tabs.count() == 5, f"内置页 5 格(v0.9.162 起终端搬进底部坞,实际 {tabs.count()})")
+        check(tabs.count() == 6, f"内置页 6 格(v0.9.172+ 加了扩展页,实际 {tabs.count()})")
         page.locator('#spTabs .sp-tab[title="侧聊"]').click()
         page.wait_for_timeout(300)
         check(page.locator('.sp-page[data-sp="sidechat"]').is_visible(),

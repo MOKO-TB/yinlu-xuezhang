@@ -167,13 +167,13 @@ def main() -> int:
 
         # ① tab 是注册表画的:五个内置页,一页一格
         tabs = page.locator("#spTabs .sp-tab")
-        check(tabs.count() == 5, f"内置页 5 格(v0.9.162 起终端搬进底部坞,实际 {tabs.count()})")
+        check(tabs.count() == 6, f"内置页 6 格(v0.9.172+ 加了扩展页,实际 {tabs.count()})")
         check(page.locator('.sp-page[data-sp="activity"]').count() == 1,
               "活动监控成为底座第一页(容器在 sp-pages 里)")
 
         # ② 三方扩展同一张表:register 即出现,没有特权通道
         n = page.evaluate(EXT_JS)
-        check(n == 6, f"三方注册后 6 格(实际 {n})")
+        check(n == 7, f"三方注册后 7 格(实际 {n})")
         page.locator('#spTabs .sp-tab[title="扩展页"]').click()
         page.wait_for_timeout(120)
         check(page.locator('.sp-page[data-sp="ext:hello"]').is_visible(),

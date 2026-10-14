@@ -66,6 +66,19 @@ const base = {
     buffer_chars: 4000, note: "只留尾部"}),
   open_url: (u) => { window.__CALLS__.push(["open_url", u]);
     return Promise.resolve({ok: true}); },
+  mydata_open_dir: () => { window.__CALLS__.push(["mydata_open_dir"]);
+    return Promise.resolve({ok: true}); },
+  extensions_overview: () => { window.__CALLS__.push(["extensions_overview"]);
+    return Promise.resolve({ok: true,
+      skills: [{name: "code-review", description: "审代码", channel: "内置技能"},
+               {name: "my-skill", description: "自写", channel: "应用目录"}],
+      skill_channels: [{key: "builtin", label: "内置技能", note: "", path: "D:/x/skills",
+                        exists: true, count: 26}],
+      mcp: [{name: "files", connected: true, tools: 3}],
+      sidepages: {items: [{id: "db", title: "数据库", version: "0.1"}],
+                  skipped: [{dir: "broken", msg: "manifest.json 读不出来:JSONDecodeError"}],
+                  root: "D:/demo/app/extensions"},
+      hooks: {count: 1, events: ["stop"]}}); },
   check_update_now: () => { window.__CALLS__.push(["check_update_now"]);
     return Promise.resolve({ok: true, current: "0.9.162", update: {
       version: "0.9.173", date: "2026-10-14", truncated: false,
@@ -256,6 +269,28 @@ def main() -> int:
         page.click("#proactiveGo")
         page.wait_for_timeout(150)
         check(page.locator("#updateOverlay").is_visible(), "按钮开的是更新日志卡")
+
+        # ⑦ 扩展页(底座第六页,v0.9.172+):五区渲染 + **没装上的一条可见**
+        #    (此前只有 console.warn)+ 打开数据目录过桥
+        page.click("#updLater")            # 先把上一节开着的更新卡收掉
+        page.wait_for_timeout(120)
+        page.evaluate('() => openPanel("side:extensions")')   # 确保面板开 + 切到扩展页
+        page.wait_for_timeout(250)
+        check(page.locator('.sp-page[data-sp="extensions"]').is_visible(), "扩展页打开")
+        caps = page.eval_on_selector_all("#extBody .ext-cap",
+                                         "els => els.map(e => e.textContent)")
+        check(len(caps) == 5, f"五区标题都在(实际 {caps})")
+        check(any("侧边栏扩展" in c for c in caps) and any("技能渠道" in c for c in caps),
+              "侧边栏扩展与技能渠道两区在场")
+        body_txt = page.locator("#extBody").inner_text()
+        check("broken" in body_txt and "读不出来" in body_txt,
+              "**没装上的那条带着原因摊开了**(此前只活在 console 里)")
+        check("数据库" in body_txt and "D:/demo/app/extensions" in body_txt,
+              "已装扩展与数据目录路径都在")
+        page.click("#extOpenDir")
+        page.wait_for_timeout(150)
+        calls3 = page.evaluate("window.__CALLS__")
+        check(any(c[0] == "mydata_open_dir" for c in calls3), "「打开数据目录」过桥")
 
         check(not errors, f"无页面错误(实际:{errors[:2] or '无'})")
         browser.close()

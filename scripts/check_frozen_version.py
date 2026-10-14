@@ -81,6 +81,8 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # v0.9.162+:侧栏版本号点开手动查更新(漏收 = 那颗版本号
                             # 点了没反应,而启动那条检查照常亮)
                             "check_update_now",
+                            # v0.9.172+:扩展中心一屏(漏收 = 「扩展」页永远读不出来)
+                            "extensions_overview",
                             # v0.9.142「智能配置」那一屏的数据源(漏收 = 前端那只开关
                             # 永远停在「正在问这台机器知道些什么…」,而界面看着正常)
                             "model_auto_info",
@@ -1324,6 +1326,11 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.162 ZCode 同款双开关与底部终端坞(漏 termDock/toggleTermDock =
     # 顶栏那颗「切换终端」按下去没人应;漏 btnPanelToggle = 「切换面板」是死钮)
     "termDock", "toggleTermDock", "btnPanelToggle", "btnTermToggle",
+    # v0.9.172+ 扩展页(漏 extBody = 那一页渲染不出来;漏 extensions_overview
+    # = 页在、数据不来。容器由注册表在 JS 里建,所以针挑的是注册那行的字面量)
+    'id: "extensions", title: "扩展"', "extBody", "extensions_overview",
+    # v0.9.166/167:快捷键速查面板与全局命令面板
+    "btnShortcuts", "shortcutsOverlay", "btnCmdPalette", "cmdPaletteOverlay", "toggleCmdPalette",
     # v0.9.94 p3/p5:权限档位改成界面自己画的浮层菜单(原生 select 的白字在深色
     # 模式下看不见)。漏 permPill = 顶栏那个按钮整个没了;漏 permMenu = 点了没菜单
     "permPill", "permMenu", "PERM_META",
