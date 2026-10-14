@@ -46,7 +46,11 @@ RAIL_IDS = ["btnMap", "btnSchedule", "btnMood", "btnPlan", "btnActivity",
 TOPBAR_ICON_IDS = ["btnSideToggle",
                    # v0.9.162:ZCode 同款的两颗面板开关 —— 与收起栏同类
                    # (管"那块面板在不在",不是面板入口),紧挨窗口钮。
-                   "btnPanelToggle", "btnTermToggle"]
+                   "btnPanelToggle", "btnTermToggle",
+                   # v0.9.163~172 那轮加的两颗:全局命令面板(Ctrl+Shift+P)与
+                   # 快捷键表。同样不是**面板入口**(一个开浮层、一个只是张对照表),
+                   # 所以按这一类钉住,而不是塞进入口栏。
+                   "btnCmdPalette", "btnShortcuts"]
 # 无边框窗口的自绘三颗:只在 win_state 说"这窗真没系统标题栏"时才出现
 WIN_CTRL_IDS = ["winMin", "winMax", "winClose"]
 
@@ -139,10 +143,13 @@ def test_topbar_keeps_only_status_and_no_navigation(topbar: str, rail: str):
     # v0.9.162:再加「切换面板 / 切换终端」两颗开关(ZCode 同款,管那两块
     # 停靠面板在不在)。这几颗都不是**面板入口**(开关 ≠ 入口),所以入口
     # 仍然一颗不许进顶栏 —— 上限 6→10→12,再多才是往顶栏塞导航。
+    # v0.9.163~172:命令面板 + 快捷键表两颗,同样是"开关/浮层"不是入口 → 12→14。
+    # 数进去的还有三个非控件:`tbDrag`(拖拽区)、`topToggles`(那一簇的容器)、
+    # `winBtns`(无边框自绘三颗的容器)—— 它们不是按钮,但都在顶栏里,一并计入。
     for bid in TOPBAR_ICON_IDS + WIN_CTRL_IDS:
         assert f'id="{bid}"' in topbar, f"顶栏少了 {bid}"
         assert f'id="{bid}"' not in rail, f"{bid} 搬完还留在入口栏(两处都会翻状态)"
-    assert len(re.findall(r'id="([A-Za-z0-9_]+)"', topbar)) <= 12, \
+    assert len(re.findall(r'id="([A-Za-z0-9_]+)"', topbar)) <= 14, \
         "顶栏控件数又涨回去了 —— 这轮要解决的正是「上面的工具堆太多」"
 
 

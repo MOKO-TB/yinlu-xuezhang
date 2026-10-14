@@ -27,23 +27,20 @@ def build_default_registry() -> list[Tool]:
     """
     tools = [
         *catalog_files.tools(),
-        # v0.9.146:后台命令三只(bash_status / bash_kill / bash_input)拆到独立目录,
-        # 但**必须插在这里** —— 它们要挨着 `bash`(派活),而 `py_script` 是另一族。
-        # 顺序即行为面,见文件 docstring。
+        # v0.9.146:后台命令三只(bash_status/kill/input)拆到独立目录,挨着 bash
         *catalog_bg.tools(),
         *catalog_files.script_tools(),
-        # v0.9.147:诊断(按扩展名跑检查器),挨着 `repo_outline` —— 同属"看代码"一族,
-        # 而且模型改完一处代码后紧接着想问的正是"这下对不对"。
+        # v0.9.147:诊断(按扩展名跑检查器),挨着 repo_outline
         *catalog_diag.tools(),
         *catalog_files.perms_tools(),
-        # v0.9.116 L3:钩子配方两只,挨着权限那组(都是"用户点头才改配置"的一族)
+        # v0.9.116 L3:钩子配方两只,挨着权限那组
         *catalog_files.hooks_tools(),
         # v0.9.98:git 工作副本(隔离工作区 W1),挨着项目权限那组
         *catalog_files.worktree_tools(),
         *catalog_web.tools(),
         *catalog_web.mcp_admin_tool(),
         *catalog_knowledge.skills_plan_search(),
-        # v0.9.98:运行轨迹导出,挨着历史检索(同属会话记录一族)
+        # v0.9.98:运行轨迹导出与历史检索(会话记录一族)
         *catalog_knowledge.trace_tool(),
         *catalog_knowledge.history_tool(),
         *catalog_media.tools(),
@@ -51,6 +48,8 @@ def build_default_registry() -> list[Tool]:
         *catalog_knowledge.kb_suggest_tool(),
         *catalog_places.library_tools(),
         *catalog_knowledge.memory_tool(),
+        # v0.9.163:代码库全景百科(对标 ZCode/Qoder)
+        *catalog_knowledge.repo_wiki_tool(),
         *catalog_remind.remind_tools(),
         *catalog_places.map_tools(),
         # v0.9.154 I:子代理 → 主会话留话(只读;只有子代理那边有对象可转达)

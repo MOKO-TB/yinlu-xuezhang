@@ -3,7 +3,7 @@
 技能正文是给模型读的提示词,但它同时**带着要真跑的脚本**:模板语法错了、
 诚实口径写漏了,表现是"用户机器上一次运行报 SyntaxError"或"学长替他编了
 参考文献"。所以这里两件事都当测试钉住:
-1. 口径关键字必须在正文里(不代写/不抓真题/扫描版做不了/不许编数字);
+1. 口径关键字必须在正文里(不代写/不抓真题/扫描版先走 OCR 且走不通才如实说/不许编数字);
 2. 正文里的 python 块必须能编译,模板函数还要 exec 出来真调用一次。
 """
 from __future__ import annotations
@@ -87,9 +87,17 @@ def test_question_bank_only_formats_what_he_gave():
     assert "答案错位" in body, "错位(背下错误答案)比缺答案更危险,必须有这一条"
 
 
-def test_lecture_notes_says_scanned_pdf_cannot_be_done():
+def test_lecture_notes_routes_scanned_pdf_to_ocr_then_stays_honest():
     body = _skill("lecture-notes").body
-    assert "扫描版" in body and "做不了" in body
+    assert "扫描版" in body
+    # v0.9.172+:扫描版不再是一句"做不了"就推掉 —— 先交给 ocr_image 逐页抽图识别,
+    # 而且它给的页号才是真的页码锚点。这条测试因此从"钉住拒绝"改成"钉住路由"。
+    assert "ocr_image" in body and ".pdf" in body, \
+        "扫描版 PDF 要先喂 ocr_image,而不是直接告诉用户做不了"
+    assert "OCR 结果只当待核对草稿" in body, "OCR 出来的是草稿,公式/上下标必须让他自己核"
+    # 但 OCR 也走不通(没引擎、模型看不见图)时仍要如实说,不许"按章节名编一版"。
+    assert "OCR 也走不通" in body and "虚构内容" in body, \
+        "兜底那句诚实口径不能因为接了 OCR 就删掉"
     assert "【此处有一张图片" in body, "抽不到的地方要留标记,不能空着让他以为课件没写"
     assert "补充,非课件原文" in body
     assert "不编考点" in body

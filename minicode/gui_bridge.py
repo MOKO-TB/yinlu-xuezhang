@@ -119,8 +119,8 @@ class PublicApi:
         """编辑重发;`revert_files=True` 才一起退回那一问之后改过的文件(前端点过头)。"""
         return self._b.edit_resend(ordinal, new_text, expect, bool(revert_files))
 
-    def fork_session(self, ordinal: int) -> dict:
-        return self._b.fork_session(ordinal)
+    def fork_session(self, index, upto=None) -> dict:
+        return self._b.fork_session(index, upto)
 
     def get_suggestions(self) -> dict:
         return self._b.get_suggestions()
@@ -382,11 +382,48 @@ class PublicApi:
     def git_commit(self, message: str) -> dict:
         return self._b.git_commit(message)
 
+    def git_suggest_commit(self) -> dict:
+        return self._b.git_suggest_commit()
+
     def git_restore(self, path: str) -> dict:
         return self._b.git_restore(path)
 
     def git_restore_snapshot(self, sha: str) -> dict:
         return self._b.git_restore_snapshot(sha)
+
+    def git_drop_snapshots(self) -> dict:
+        return self._b.git_drop_snapshots()
+
+    def git_uncommitted_diff(self) -> dict:
+        return self._b.git_uncommitted_diff()
+
+    def run_tests(self, target: str = "") -> dict:
+        return self._b.run_tests(target)
+
+    def find_symbol_references(self, symbol: str, path_pattern: str = "") -> dict:
+        return self._b.find_symbol_references(symbol, path_pattern)
+
+    def get_shortcuts_catalog(self) -> dict:
+        return self._b.get_shortcuts_catalog()
+
+    def rename_symbol(self, symbol: str, new_name: str, dry_run: bool = True, path_pattern: str = "") -> dict:
+        return self._b.rename_symbol(symbol, new_name, dry_run, path_pattern)
+
+    def call_hierarchy(self, symbol: str, direction: str = "incoming", depth: int = 2, path_pattern: str = "", format: str = "tree") -> dict:
+        return self._b.call_hierarchy(symbol, direction, depth, path_pattern, format)
+
+    def get_symbol_definition(self, symbol: str, path: str = "", peek: bool = True) -> dict:
+        return self._b.get_symbol_definition(symbol, path, peek)
+
+    def get_code_outline(self, path: str, depth: int = 2, show_signatures: bool = True, show_docstrings: bool = True) -> dict:
+        return self._b.get_code_outline(path, depth, show_signatures, show_docstrings)
+
+    def get_context_mentions(self, query: str = "") -> dict:
+        return self._b.get_context_mentions(query)
+
+    def get_commands_catalog(self) -> dict:
+        return self._b.get_commands_catalog()
+
 
     def file_read(self, path: str) -> dict:
         return self._b.file_read(path)
@@ -645,6 +682,18 @@ class PublicApi:
         面板是纯展示入口,不给它变成任意目录遍历器。
         """
         return self._b.list_project_files(path, subdir)
+
+    def get_instruction_layers(self) -> dict:
+        """获取当前工作区所有指令层及采纳状态(v0.9.172,清偿 §6 51(g))。"""
+        return self._b.get_instruction_layers()
+
+    def adopt_instruction_layer(self, rel: str = "") -> dict:
+        """采纳根项目或指定子目录的指令文件(v0.9.172)。"""
+        return self._b.adopt_instruction_layer(rel)
+
+    def revoke_instruction_layer(self, rel: str = "") -> dict:
+        """撤销根项目或指定子目录的指令文件采纳(v0.9.172)。"""
+        return self._b.revoke_instruction_layer(rel)
 
 
 def _instructions_info(workspace, extra_rels=()) -> dict:
@@ -1588,6 +1637,10 @@ class Bridge:
             self.ui.push("info", text="已提交:" + str(message or "").strip().splitlines()[0][:60])
         return got
 
+    def git_suggest_commit(self) -> dict:
+        from minicode import gitpanel
+        return gitpanel.suggest_commit_message(Path(self.workspace))
+
     def git_restore(self, path: str) -> dict:
         from minicode import gitpanel
         got = gitpanel.restore(Path(self.workspace), str(path or ""))
@@ -1602,6 +1655,200 @@ class Bridge:
             self.invalidate_env_info()
             self.ui.push("info", text=got.get("msg") or "影子快照已还原")
         return got
+
+    def git_drop_snapshots(self) -> dict:
+        """清空当前工作区影子快照检查点库。"""
+        from minicode import shadow_git
+        ok = shadow_git.drop(Path(self.workspace))
+        self.invalidate_env_info()
+        if ok:
+            self.ui.push("info", text="影子快照已清空")
+            return {"ok": True, "msg": "影子快照已清空"}
+        return {"ok": False, "msg": "清理影子快照失败或原本为空"}
+
+    def git_uncommitted_diff(self) -> dict:
+        from minicode import gitpanel
+        return gitpanel.uncommitted_diff(Path(self.workspace))
+
+    def run_tests(self, target: str = "") -> dict:
+        """受控运行工作区测试并返回结构化通过/失败与错误堆栈报告(v0.9.164)。"""
+        from minicode import test_runner
+        ws = Path(self.workspace) if self.workspace else Path.cwd()
+        return test_runner.run_tests(ws, target=str(target or "").strip() or None)
+
+    def find_symbol_references(self, symbol: str, path_pattern: str = "") -> dict:
+        """跨文件查找符号的全部引用与调用位置(v0.9.166)。"""
+        from minicode import find_references
+        ws = Path(self.workspace) if self.workspace else Path.cwd()
+        return find_references.find_symbol_references(
+            ws, symbol=str(symbol or "").strip(), path_pattern=str(path_pattern or "").strip()
+        )
+
+    def get_shortcuts_catalog(self) -> dict:
+        """返回客户端支持的全部快捷键清单(v0.9.166,对标 HANDOFF §48(b))。"""
+        return {
+            "ok": True,
+            "groups": [
+                {
+                    "title": "导航与面板切换",
+                    "items": [
+                        {"key": "Ctrl+Shift+P", "desc": "打开全局命令面板 (Command Palette)"},
+                        {"key": "Ctrl+Alt+B", "desc": "打开 / 收起右侧底座(Git/文件/自动化/监控)"},
+                        {"key": "Ctrl+`", "desc": "打开 / 收起底部终端坞"},
+                        {"key": "Ctrl+Shift+M", "desc": "打开 / 收起任务监控栏"},
+                        {"key": "Ctrl+K", "desc": "打开模型管理面板"},
+                        {"key": "Ctrl+/", "desc": "打开 / 关闭快捷键速查面板"},
+                        {"key": "Ctrl+B", "desc": "切换会话列表侧栏"},
+                        {"key": "Ctrl+N", "desc": "新建对话任务"},
+                    ],
+                },
+                {
+                    "title": "终端与工程动作",
+                    "items": [
+                        {"key": "Ctrl+Shift+T", "desc": "运行工作区测试套件 (/test)"},
+                        {"key": "Ctrl+Shift+R", "desc": "深度审查未提交代码改动 (/review)"},
+                        {"key": "Ctrl+Shift+G", "desc": "自动分析改动并起草提交说明 (/commit)"},
+                    ],
+                },
+                {
+                    "title": "对话与输入交互",
+                    "items": [
+                        {"key": "Enter", "desc": "发送消息 / 提交提示词"},
+                        {"key": "Shift+Enter", "desc": "输入框换行"},
+                        {"key": "Ctrl+Enter", "desc": "换行或执行当前命令"},
+                        {"key": "@", "desc": "触发工作区文件引用搜索菜单"},
+                        {"key": "/", "desc": "触发内置斜杠命令菜单 (/review, /test, /ref, /rename 等)"},
+                        {"key": "Esc", "desc": "关闭当前打开的弹窗或下拉菜单"},
+                    ],
+                },
+            ],
+        }
+
+    def rename_symbol(self, symbol: str, new_name: str, dry_run: bool = True, path_pattern: str = "") -> dict:
+        """跨文件重命名符号与重构预演(v0.9.167)。"""
+        from minicode import rename_symbol
+        ws = str(self.workspace) if self.workspace else str(Path.cwd())
+        return rename_symbol.rename_symbol(
+            workspace=ws,
+            symbol=str(symbol or "").strip(),
+            new_name=str(new_name or "").strip(),
+            dry_run=bool(dry_run),
+            path_pattern=str(path_pattern or "").strip() or None,
+        )
+
+    def call_hierarchy(self, symbol: str, direction: str = "incoming", depth: int = 2, path_pattern: str = "", format: str = "tree") -> dict:
+        """跨文件分析函数/方法的调用层次结构与依赖拓扑(v0.9.168)。"""
+        from minicode import call_hierarchy
+        ws = Path(self.workspace) if self.workspace else Path.cwd()
+        data = call_hierarchy.build_call_hierarchy(
+            workspace=ws,
+            symbol=str(symbol or "").strip(),
+            direction=str(direction or "incoming").strip(),
+            depth=int(depth or 2),
+            path_pattern=str(path_pattern or "").strip(),
+        )
+        tree_node = data.get("incoming_tree") or data.get("outgoing_tree") or {}
+        text_tree = call_hierarchy.format_hierarchy_tree(tree_node, data["direction"])
+        mermaid_code = call_hierarchy.format_hierarchy_mermaid(tree_node, data["direction"])
+        return {
+            "ok": True,
+            "data": data,
+            "tree": text_tree,
+            "mermaid": mermaid_code,
+        }
+
+    def get_symbol_definition(self, symbol: str, path: str = "", peek: bool = True) -> dict:
+        """跨文件提取符号定义与实现代码(v0.9.169)。"""
+        from minicode import symbol_definition
+        ws = Path(self.workspace) if self.workspace else Path.cwd()
+        return symbol_definition.find_symbol_definition(
+            workspace=ws,
+            symbol=str(symbol or "").strip(),
+            path=str(path or "").strip() or None,
+            peek=bool(peek),
+        )
+
+    def get_code_outline(self, path: str, depth: int = 2, show_signatures: bool = True, show_docstrings: bool = True) -> dict:
+        """提取指定源码文件的结构大纲与类/成员树(v0.9.170)。"""
+        from minicode import code_outline
+        ws = Path(self.workspace) if self.workspace else Path.cwd()
+        extractor = code_outline.CodeOutlineExtractor(ws)
+        data = extractor.extract_outline(
+            rel_path=str(path or "").strip(),
+            depth=int(depth),
+            show_signatures=bool(show_signatures),
+            show_docstrings=bool(show_docstrings),
+        )
+        return {
+            "ok": data.get("ok", False),
+            "data": data,
+            "text": extractor.format_outline(data) if data.get("ok") else data.get("error", ""),
+        }
+
+    def get_context_mentions(self, query: str = "") -> dict:
+        """返回当前工作区支持的全部智能上下文实体提及(@mentions, v0.9.168, 清偿 HANDOFF §48(c))。"""
+        q = str(query or "").strip().lower()
+        entities = [
+            {"id": "plan", "label": "@plan", "name": "任务计划", "desc": "当前任务执行计划与步骤状态", "icon": "🗂️", "category": "系统实体"},
+            {"id": "todo", "label": "@todo", "name": "待办提醒", "desc": "今日待办清单与临期催办事项", "icon": "⏰", "category": "系统实体"},
+            {"id": "schedule", "label": "@schedule", "name": "课表作息", "desc": "今日课程节次与空闲时段安排", "icon": "📅", "category": "系统实体"},
+            {"id": "git", "label": "@git", "name": "Git 状态", "desc": "工作区未提交改动与分支概况", "icon": "🌿", "category": "系统实体"},
+            {"id": "wiki", "label": "@wiki", "name": "项目百科", "desc": "代码库全景架构与技术栈摘要", "icon": "📖", "category": "系统实体"},
+            {"id": "test", "label": "@test", "name": "测试报告", "desc": "最近一次测试套件执行通过/失败结论", "icon": "🧪", "category": "系统实体"},
+            {"id": "problems", "label": "@problems", "name": "代码诊断", "desc": "工作区语法检查与类型报错诊断", "icon": "🩺", "category": "系统实体"},
+        ]
+        if q:
+            entities = [
+                e for e in entities
+                if q in e["id"] or q in e["label"].lower() or q in e["name"].lower() or q in e["desc"].lower()
+            ]
+        return {"ok": True, "mentions": entities}
+
+    def get_commands_catalog(self) -> dict:
+        """返回命令面板(Ctrl+Shift+P)支持的全部命令与动作清单(v0.9.167/168,对标 HANDOFF §48(a))。"""
+        return {
+            "ok": True,
+            "commands": [
+                {"id": "act_map", "title": "校园地图", "desc": "打开肇庆校区手绘地图与建筑搜索", "category": "视图", "action": "openMap", "key": ""},
+                {"id": "act_schedule", "title": "课表管理", "desc": "查看课表周视图与换楼风险", "category": "生活", "action": "openSchedule", "key": ""},
+                {"id": "act_models", "title": "模型管理", "desc": "配置大模型供应商、API Key 与基座模型", "category": "设置", "action": "openModels", "key": "Ctrl+K"},
+                {"id": "act_mydata", "title": "我的数据", "desc": "一览、导出与迁移本机数据", "category": "数据", "action": "openMyData", "key": ""},
+                {"id": "act_skills", "title": "技能管理", "desc": "管理自定义技能与技能分享包", "category": "扩展", "action": "openSkills", "key": ""},
+                {"id": "act_automate", "title": "定时自动化", "desc": "管理定时执行任务与自动化指令", "category": "工具", "action": "openAutomate", "key": ""},
+                {"id": "act_memory", "title": "长期记忆", "desc": "管理学长的长期记忆库条目", "category": "记忆", "action": "openMemory", "key": ""},
+                {"id": "act_board", "title": "跨会话看板", "desc": "查看全局多任务会话运行进展看板", "category": "任务", "action": "openBoard", "key": ""},
+                {"id": "act_usage", "title": "用量与Token", "desc": "查看各模型 Token 消耗与成本统计", "category": "统计", "action": "openUsage", "key": ""},
+                {"id": "act_export", "title": "导出对话记录", "desc": "导出当前会话的完整记录与执行轨迹", "category": "调试", "action": "exportTrace", "key": ""},
+                {"id": "act_theme", "title": "切换主题", "desc": "切换晨光薄荷(浅色)与暮色青辉(深色)航拍主题", "category": "外观", "action": "toggleTheme", "key": ""},
+                {"id": "act_term", "title": "切换终端坞", "desc": "打开或收起底部终端坞", "category": "终端", "action": "toggleTermDock", "key": "Ctrl+`"},
+                {"id": "act_panel", "title": "切换底座面板", "desc": "打开或收起右侧底座面板(Git/文件/自动化/监控)", "category": "视图", "action": "toggleSidePanel", "key": "Ctrl+Alt+B"},
+                {"id": "act_shortcuts", "title": "快捷键速查", "desc": "查看系统全部全局快捷键列表", "category": "帮助", "action": "toggleShortcutsModal", "key": "Ctrl+/"},
+                {"id": "act_new_task", "title": "新建会话", "desc": "开启全新对话任务", "category": "会话", "action": "newTask", "key": "Ctrl+N"},
+                {"id": "slash_def", "title": "/def", "desc": "跨文件精准查看符号定义与实现代码: /def <符号>", "category": "代码", "action": "fillPrompt", "param": "/def "},
+                {"id": "slash_definition", "title": "/definition", "desc": "跨文件跳转符号定义并预览实现: /definition <符号>", "category": "代码", "action": "fillPrompt", "param": "/definition "},
+                {"id": "slash_outline", "title": "/outline", "desc": "提取指定代码文件的结构大纲与类/成员树: /outline <文件>", "category": "代码", "action": "fillPrompt", "param": "/outline "},
+                {"id": "slash_hierarchy", "title": "/hierarchy", "desc": "代码调用层次结构与依赖拓扑分析: /hierarchy <符号>", "category": "代码", "action": "fillPrompt", "param": "/hierarchy "},
+                {"id": "slash_callers", "title": "/callers", "desc": "向上追溯谁调用了该函数/方法: /callers <符号>", "category": "代码", "action": "fillPrompt", "param": "/callers "},
+                {"id": "slash_rename", "title": "/rename", "desc": "跨文件符号重命名与重构预演: /rename <原名> <新名>", "category": "重构", "action": "fillPrompt", "param": "/rename "},
+                {"id": "slash_ref", "title": "/ref", "desc": "跨文件查找符号全部调用与引用: /ref <符号>", "category": "代码", "action": "fillPrompt", "param": "/ref "},
+                {"id": "slash_symbol", "title": "/symbol", "desc": "跨语言定位符号定义: /symbol <符号>", "category": "代码", "action": "fillPrompt", "param": "/symbol "},
+                {"id": "slash_test", "title": "/test", "desc": "运行工作区测试套件与自愈诊断: /test [目标]", "category": "测试", "action": "fillPrompt", "param": "/test "},
+                {"id": "slash_commit", "title": "/commit", "desc": "智能生成规范 Conventional Commit 提交说明", "category": "Git", "action": "fillPrompt", "param": "/commit"},
+                {"id": "slash_snapshots", "title": "/snapshots", "desc": "查看工作区影子快照检查点列表", "category": "Git", "action": "fillPrompt", "param": "/snapshots"},
+                {"id": "slash_restore", "title": "/restore", "desc": "从指定快照检查点安全还原文件(只还原、绝不删): /restore <序号|sha>", "category": "Git", "action": "fillPrompt", "param": "/restore "},
+                {"id": "slash_wiki", "title": "/wiki", "desc": "查看代码库全景百科架构与命令", "category": "项目", "action": "fillPrompt", "param": "/wiki"},
+                {"id": "slash_review", "title": "/review", "desc": "审查工作区未提交改动(分级审查)", "category": "代码", "action": "fillPrompt", "param": "/review"},
+                {"id": "slash_undo", "title": "/undo", "desc": "回退最近修改的代码文件", "category": "编辑", "action": "fillPrompt", "param": "/undo"},
+                {"id": "slash_fork", "title": "/fork", "desc": "分叉当前或历史会话开辟新分支任务: /fork [序号]", "category": "会话", "action": "fillPrompt", "param": "/fork "},
+                {"id": "slash_clear", "title": "/clear", "desc": "清空上下文并新建会话", "category": "会话", "action": "fillPrompt", "param": "/clear"},
+                {"id": "slash_model", "title": "/model", "desc": "查看当前模型与上下文配额", "category": "模型", "action": "fillPrompt", "param": "/model"},
+                {"id": "slash_help", "title": "/help", "desc": "查看全部斜杠命令与使用帮助", "category": "帮助", "action": "fillPrompt", "param": "/help"},
+                {"id": "slash_instructions", "title": "/instructions", "desc": "查看当前会话各层指令文件读取与采纳状态", "category": "项目", "action": "fillPrompt", "param": "/instructions"},
+                {"id": "slash_adopt_instructions", "title": "/instructions adopt", "desc": "采纳工作区根项目或指定子目录的指令: /instructions adopt [目录]", "category": "项目", "action": "fillPrompt", "param": "/instructions adopt "},
+                {"id": "slash_revoke_instructions", "title": "/instructions revoke", "desc": "撤销工作区根项目或指定子目录的指令采纳: /instructions revoke [目录]", "category": "项目", "action": "fillPrompt", "param": "/instructions revoke "},
+            ],
+        }
+
 
     def file_read(self, path: str) -> dict:
         """文件页:读工作区内的一个文本文件(围栏/凭据/二进制各有各的实话)。"""
@@ -2035,6 +2282,53 @@ class Bridge:
         只读、有上限;敏感目录与越界路径一律拒绝(ws.list_files 兑底)。
         """
         return ws.list_files(path, subdir, home=Path.home())
+
+    def get_instruction_layers(self) -> dict:
+        """获取当前工作区所有指令层及采纳状态(v0.9.172,清偿 §6 51(g))。"""
+        return _instructions_info(
+            self.workspace,
+            sorted(getattr(self.agent, "_agents_layers", ()))
+        )
+
+    def adopt_instruction_layer(self, rel: str = "") -> dict:
+        """采纳根项目或指定子目录的指令文件(v0.9.172)。"""
+        from minicode.app_setup import adopt_layer, adopt_root_agents, layer_at
+        rel = (rel or "").strip()
+        if not rel:
+            ok, res = adopt_root_agents(self.workspace)
+            if ok:
+                if hasattr(self.agent, "_refresh_clock"):
+                    self.agent._refresh_clock()
+                return {"ok": True, "sha": res, "msg": f"已采纳工作区根项目指令(sha={res[:10]}…)"}
+            return {"ok": False, "msg": f"采纳失败: {res}"}
+        else:
+            layer = layer_at(self.workspace, rel)
+            if not layer:
+                return {"ok": False, "msg": f"目录 {rel} 未找到有效的指令文件"}
+            sha = adopt_layer(self.workspace, layer)
+            if hasattr(self.agent, "_refresh_clock"):
+                self.agent._refresh_clock()
+            return {"ok": True, "sha": sha, "msg": f"已采纳目录 {rel} 的指令(sha={sha[:10]}…)"}
+
+    def revoke_instruction_layer(self, rel: str = "") -> dict:
+        """撤销根项目或指定子目录的指令文件采纳(v0.9.172)。"""
+        from minicode import permspec
+        from minicode.app_setup import revoke_root_agents
+        rel = (rel or "").strip()
+        if not rel:
+            ok = revoke_root_agents(self.workspace)
+            if ok:
+                if hasattr(self.agent, "_refresh_clock"):
+                    self.agent._refresh_clock()
+                return {"ok": True, "msg": "已撤销工作区根项目指令的采纳"}
+            return {"ok": False, "msg": "撤销未执行:根项目指令原本未被采纳"}
+        else:
+            ok = permspec.revoke_agents(self.workspace, rel=rel)
+            if ok:
+                if hasattr(self.agent, "_refresh_clock"):
+                    self.agent._refresh_clock()
+                return {"ok": True, "msg": f"已撤销目录 {rel} 的指令采纳"}
+            return {"ok": False, "msg": f"撤销未执行:目录 {rel} 原本未被采纳"}
 
     def switch_workspace(self, path: str) -> dict:
         return self._apply_workspace(path)
@@ -2862,34 +3156,94 @@ class Bridge:
             out["reverted"] = reverted
         return out
 
-    def fork_session(self, ordinal: int) -> dict:
-        """会话分支(C4,v0.9.102):保留到第 ordinal 问(含),从这里开一份新会话。
+    def fork_session(self, target_or_ordinal, upto=None) -> dict:
+        """会话分支(C4,v0.9.102 / v0.9.171):
+        既支持从当前会话的第 ordinal 问分叉(单问分支),
+        也支持从侧栏历史会话(文件名或序号)整树派生新会话(分支任务)。
 
         原会话**原样保留** —— 分叉不是截断,是"从这一刻换个思路再走一遍"。
         行级复制留档(原消息的 ts 原样),再按 resume 同一条路建运行器接上。
         """
         if self._busy:
             return {"ok": False, "msg": "有任务正在进行中,分叉要等它停"}
-        src = self.session.log_path
-        if src is None:
-            return {"ok": False, "msg": "当前会话还没有留档(先说一句话)"}
-        idx, _content = self._find_user_message(int(ordinal))
-        if idx < 0:
-            return {"ok": False, "msg": f"第 {ordinal} 问已不在当前上下文(可能已被压缩)"}
+
         from minicode.session import fork_log_file
-        got = fork_log_file(src, idx + 1, self.sessions_dir, self.workspace)
-        if got is None:
-            return {"ok": False, "msg": "分叉失败:源留档读不到"}
-        new_path, kept = got
-        runner = self.open_session(load_path=new_path)
-        key = runner.key
-        self.ui.push("cleared", session=key)
-        self.ui.push("resumed", session=key, messages=self._history_for_frontend())
-        self.ui.push("info", session=key,
-                     text=f"已分叉出新会话:保留到第 {kept} 问(原会话原样保留在侧栏)。"
-                          f"从现在起两边各走各的。")
-        self._push_sessions()
-        return {"ok": True, "session": key, "file": new_path.name}
+
+        # 1. 优先尝试按历史会话文件名或序号定位会话
+        chosen, _summaries = self._resolve_session_summary(target_or_ordinal)
+        if chosen is None and isinstance(target_or_ordinal, str) and (
+            target_or_ordinal.endswith(".jsonl") or not target_or_ordinal.isdigit()
+        ):
+            return {"ok": False, "msg": f"目标会话不存在或未找到留档: {target_or_ordinal}"}
+
+        if chosen is not None and (not isinstance(target_or_ordinal, (int, str))
+                                   or not str(target_or_ordinal).isdigit()
+                                   or self.session.log_path is None
+                                   or str(chosen.path) != str(self.session.log_path)
+                                   or upto is not None):
+            src = chosen.path
+            if not src.exists():
+                return {"ok": False, "msg": "分叉失败:源留档不存在"}
+            limit = int(upto) if upto is not None and str(upto).isdigit() and int(upto) > 0 else max(1, chosen.n_messages)
+            got = fork_log_file(src, limit, self.sessions_dir, self.workspace)
+            if got is None:
+                return {"ok": False, "msg": "分叉失败:源留档读不到或内容为空"}
+            new_path, kept = got
+            runner = self.open_session(load_path=new_path)
+            key = runner.key
+            self.ui.push("cleared", session=key)
+            self.ui.push("resumed", session=key, messages=self._history_for_frontend())
+            self.ui.push("info", session=key,
+                         text=f"已从 {chosen.path.name} 分叉出新会话:复制 {kept} 条消息(原会话原样保留在侧栏)。"
+                              f"从现在起两边各走各的。")
+            self._push_sessions()
+            return {"ok": True, "session": key, "file": new_path.name, "msg": f"已从 {chosen.path.name} 分叉出新会话"}
+
+        # 2. 如果 target_or_ordinal 是纯数字且当前会话有此问,作为当前会话的第 ordinal 问分叉
+        ord_val = None
+        try:
+            ord_val = int(target_or_ordinal)
+        except (TypeError, ValueError):
+            pass
+
+        if ord_val is not None and self.session.log_path is not None and self._find_user_message(ord_val)[0] >= 0:
+            src = self.session.log_path
+            idx, _content = self._find_user_message(ord_val)
+            got = fork_log_file(src, idx + 1, self.sessions_dir, self.workspace)
+            if got is None:
+                return {"ok": False, "msg": "分叉失败:源留档读不到"}
+            new_path, kept = got
+            runner = self.open_session(load_path=new_path)
+            key = runner.key
+            self.ui.push("cleared", session=key)
+            self.ui.push("resumed", session=key, messages=self._history_for_frontend())
+            self.ui.push("info", session=key,
+                         text=f"已分叉出新会话:保留到第 {kept} 问(原会话原样保留在侧栏)。"
+                              f"从现在起两边各走各的。")
+            self._push_sessions()
+            return {"ok": True, "session": key, "file": new_path.name, "msg": f"已分叉出新会话:保留到第 {kept} 问"}
+
+        # 3. 若当前会话无对应序号,但历史会话能按序号命中
+        if chosen is not None:
+            src = chosen.path
+            limit = int(upto) if upto is not None and str(upto).isdigit() and int(upto) > 0 else max(1, chosen.n_messages)
+            got = fork_log_file(src, limit, self.sessions_dir, self.workspace)
+            if got is None:
+                return {"ok": False, "msg": "分叉失败:源留档读不到"}
+            new_path, kept = got
+            runner = self.open_session(load_path=new_path)
+            key = runner.key
+            self.ui.push("cleared", session=key)
+            self.ui.push("resumed", session=key, messages=self._history_for_frontend())
+            self.ui.push("info", session=key,
+                         text=f"已从 {chosen.path.name} 分叉出新会话:复制 {kept} 条消息(原会话原样保留在侧栏)。"
+                              f"从现在起两边各走各的。")
+            self._push_sessions()
+            return {"ok": True, "session": key, "file": new_path.name, "msg": f"已从 {chosen.path.name} 分叉出新会话"}
+
+        if self.session.log_path is None:
+            return {"ok": False, "msg": "当前会话还没有留档(先说一句话)"}
+        return {"ok": False, "msg": f"找不到目标会话或第 {target_or_ordinal} 问不在当前上下文"}
 
     def _find_user_message(self, ordinal: int) -> tuple[int, str]:
         """第 ordinal 条用户消息的 (下标, 内容)。数法在 `session.user_message_at`

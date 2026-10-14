@@ -409,7 +409,7 @@ class TerminalUI:
             "  /sandbox [on|off] 查看/临时切换沙箱(持久化改 config.json)\n"
             "  /permission [档位] 查看/切换权限档位(confirm/accept_edits/accept_all/full;不带参数时同时报出项目白名单的生不生效)\n"
             "  /think [档位]     查看/切换思考档位(default/off/low/high/max,按模型能力)\n"
-            "  /instructions 这一轮的指令层:内置 + 用户级/项目级各读到几行、来自哪份文件\n"
+            "  /instructions [adopt|revoke [rel]] 指令层状态/采纳/撤销(v0.9.172)\n"
             "  /rewind <第几问> [files|talk|both] 退到那一问之前:文件与对话一起退"
             "  /snapshots                  整树检查点:影子库里有哪几次(影子库在数据目录里,不碰你仓库的 .git;H,v0.9.157)",
             "  /restore <序号>              还原到那次快照 —— **只还原、绝不删**(快照之后新建的文件原样留着)",

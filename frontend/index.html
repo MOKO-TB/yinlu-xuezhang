@@ -2651,6 +2651,18 @@ try {
             <path d="M4.6 6.6 7 9l-2.4 2.4M8.8 11.6h4.6" fill="none"
                   stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg></button>
+        <button class="tb-ico" id="btnCmdPalette" title="全局命令面板(Ctrl+Shift+P / Ctrl+P)"
+                aria-label="全局命令面板">
+          <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
+            <path d="M4.5 5.5l4 3.5-4 3.5M9.5 12.5h4" fill="none"
+                  stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg></button>
+        <button class="tb-ico" id="btnShortcuts" title="快捷键速查(Ctrl+/)"
+                aria-label="快捷键速查">
+          <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
+            <rect x="1.6" y="4" width="14.8" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/>
+            <path d="M4 7h1.5M7.5 7h1.5M11 7h1.5M5 10.5h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg></button>
       </span>
       <!-- 三颗一律画 SVG(不用 −□✕ 三个字符):字符各自的基线与字宽不同,
            摆在同一行就是"没居中",用户图 p1 点的正是这个。 -->
@@ -2742,6 +2754,7 @@ try {
   <section class="term-dock" id="termDock" hidden>
     <div class="td-head">
       <b>终端</b><span class="td-note" id="tdNote"></span>
+      <button class="act-ib" id="tpRunTests" title="运行项目测试套件(/test)">🧪 跑测试</button>
       <button class="act-ib" id="tpRefresh" title="重新读一遍">↻</button>
       <span class="td-tab"><span class="td-shellname" id="tdTabName">…</span>
         <button class="act-ib" id="tdClose" title="收起(Ctrl+`)">✕</button></span>
@@ -2994,6 +3007,27 @@ try {
   </div>
 </div>
 <div class="toasts" id="toasts"></div>
+
+<div class="overlay" id="shortcutsOverlay">
+  <div class="dialog sc-dlg" style="max-width:580px;max-height:85vh;display:flex;flex-direction:column;border-radius:12px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;border-bottom:1px solid var(--border-soft, rgba(127,127,127,0.15));padding-bottom:8px;">
+      <h3 style="margin:0;font-size:15px;display:flex;align-items:center;gap:6px;">⌨️ 快捷键速查中心</h3>
+      <button class="b-no" id="btnShortcutsClose" style="padding:2px 10px;font-size:12px;cursor:pointer;">✕</button>
+    </div>
+    <div id="shortcutsBody" style="overflow-y:auto;padding-right:4px;flex:1;display:flex;flex-direction:column;gap:14px;"></div>
+  </div>
+</div>
+
+<div class="overlay" id="cmdPaletteOverlay">
+  <div class="dialog cmd-dlg" style="max-width:560px;width:90%;max-height:80vh;display:flex;flex-direction:column;border-radius:12px;padding:12px;gap:10px;box-shadow:var(--shadow);">
+    <div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border-soft, rgba(127,127,127,0.15));padding-bottom:8px;">
+      <span style="font-size:14px;opacity:0.75;">⌨️</span>
+      <input id="cmdPaletteInput" type="text" placeholder="输入命令名称或搜索动作..." style="flex:1;background:transparent;border:none;outline:none;font-size:14px;color:var(--text-1,#fff);" autocomplete="off" />
+      <kbd style="font-size:11px;opacity:0.6;background:var(--kbd-bg, rgba(255,255,255,0.08));border:1px solid var(--border-soft, rgba(255,255,255,0.15));padding:2px 6px;border-radius:4px;">ESC</kbd>
+    </div>
+    <div id="cmdPaletteList" style="overflow-y:auto;max-height:50vh;display:flex;flex-direction:column;gap:3px;padding-right:2px;"></div>
+  </div>
+</div>
 
 <div class="overlay" id="provOverlay">
   <div class="dialog prov-dlg">
@@ -3985,15 +4019,19 @@ document.addEventListener("keydown", ev => {
     // 是天天要的动作。输入框里正在打字时也接住 —— 用户按的就是"搜索"这个意图。
     if (k === "f") { ev.preventDefault(); openFind(); return; }
     if (k === "k") { ev.preventDefault(); openProvDlg(); return; }
+    if (k === "p") { ev.preventDefault(); toggleCmdPalette(); return; }
     if (k === "n") { ev.preventDefault(); $("btnNewTask").click(); return; }
     // Ctrl+B 收起/展开左侧栏(Qoder 同一颗):输入框里正在打字时也接住 ——
     // 用户按的就是"把这一列收起来"这个意图,与 Ctrl+F 那条同一个判断。
     if (k === "b") { ev.preventDefault(); toggleSide(); return; }
+    if (k === "/" || ev.key === "/" || ev.key === "?") { ev.preventDefault(); toggleShortcutsModal(); return; }
   }
   // Ctrl+Shift+K 聚焦输入框(单列 Ctrl+K 已被模型管理占了;带 Shift 避让)、
+  // Ctrl+Shift+P 打开全局命令面板、
   // Ctrl+Shift+[ / ] 在侧栏会话清单里前后切换 —— 与切标签页的肌肉记忆一致。
   if (ev.ctrlKey && ev.shiftKey && !ev.altKey) {
     const k = String(ev.key || "").toLowerCase();
+    if (k === "p") { ev.preventDefault(); toggleCmdPalette(); return; }
     if (k === "k") { ev.preventDefault(); $("input").focus(); return; }
     if (ev.key === "[") { ev.preventDefault(); stepSession(-1); return; }
     if (ev.key === "]") { ev.preventDefault(); stepSession(1); return; }
@@ -4021,6 +4059,10 @@ document.addEventListener("keydown", ev => {
   }
   if (ev.key !== "Escape") return;
   hideSelBar();
+  const cp = $("cmdPaletteOverlay");
+  if (cp && cp.classList.contains("show")) { closeCmdPalette(); return; }
+  const sc = $("shortcutsOverlay");
+  if (sc && sc.classList.contains("show")) { sc.classList.remove("show"); return; }
   // 先关灯箱,再收地图(确认框开着时先让用户处理确认框)
   const lb = $("mapLightbox");
   if (lb && lb.classList.contains("show")) { lb.classList.remove("show"); return; }
@@ -4034,6 +4076,424 @@ document.addEventListener("keydown", ev => {
   }
   if (!document.querySelector(".overlay.show") && window.CampusMap) window.CampusMap.close();
 });
+
+function renderShortcutsModal(catalog) {
+  const body = $("shortcutsBody");
+  if (!body) return;
+  body.innerHTML = "";
+  const groups = (catalog && catalog.groups) || [
+    {
+      title: "导航与面板切换",
+      items: [
+        { key: "Ctrl+Alt+B", desc: "打开 / 收起右侧底座(Git/文件/自动化/监控)" },
+        { key: "Ctrl+`", desc: "打开 / 收起底部终端坞" },
+        { key: "Ctrl+Shift+M", desc: "打开 / 收起任务监控栏" },
+        { key: "Ctrl+K", desc: "打开模型管理面板" },
+        { key: "Ctrl+/", desc: "打开 / 关闭快捷键速查面板" },
+        { key: "Ctrl+B", desc: "切换会话列表侧栏" },
+        { key: "Ctrl+N", desc: "新建对话任务" },
+      ],
+    },
+    {
+      title: "终端与工程动作",
+      items: [
+        { key: "Ctrl+Shift+T", desc: "运行工作区测试套件 (/test)" },
+        { key: "Ctrl+Shift+R", desc: "深度审查未提交代码改动 (/review)" },
+        { key: "Ctrl+Shift+G", desc: "自动分析改动并起草提交说明 (/commit)" },
+      ],
+    },
+    {
+      title: "对话与输入交互",
+      items: [
+        { key: "Enter", desc: "发送消息 / 提交提示词" },
+        { key: "Shift+Enter", desc: "输入框换行" },
+        { key: "Ctrl+Enter", desc: "换行或执行当前命令" },
+        { key: "@", desc: "触发工作区文件引用搜索菜单" },
+        { key: "/", desc: "触发内置斜杠命令菜单 (/review, /test, /ref 等)" },
+        { key: "Esc", desc: "关闭当前打开的弹窗或下拉菜单" },
+      ],
+    },
+  ];
+  groups.forEach(g => {
+    const sec = document.createElement("div");
+    sec.style.marginBottom = "8px";
+    const title = document.createElement("div");
+    title.style.fontWeight = "600";
+    title.style.fontSize = "13px";
+    title.style.marginBottom = "6px";
+    title.style.color = "var(--text-bright, #fff)";
+    title.textContent = g.title;
+    sec.appendChild(title);
+
+    const tbl = document.createElement("div");
+    tbl.style.display = "grid";
+    tbl.style.gridTemplateColumns = "160px 1fr";
+    tbl.style.gap = "6px 12px";
+    tbl.style.fontSize = "12px";
+    g.items.forEach(it => {
+      const k = document.createElement("div");
+      k.innerHTML = `<kbd style="background:var(--kbd-bg, rgba(255,255,255,0.08));border:1px solid var(--border-soft, rgba(255,255,255,0.15));padding:2px 6px;border-radius:4px;font-family:monospace;font-size:11px;">${it.key}</kbd>`;
+      const d = document.createElement("div");
+      d.style.color = "var(--text-soft, rgba(255,255,255,0.7))";
+      d.textContent = it.desc;
+      tbl.appendChild(k);
+      tbl.appendChild(d);
+    });
+    sec.appendChild(tbl);
+    body.appendChild(sec);
+  });
+}
+
+function openShortcutsModal() {
+  const modal = $("shortcutsOverlay");
+  if (!modal) return;
+  modal.classList.add("show");
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.get_shortcuts_catalog) {
+    window.pywebview.api.get_shortcuts_catalog().then(res => {
+      renderShortcutsModal(res);
+    }).catch(() => renderShortcutsModal(null));
+  } else {
+    renderShortcutsModal(null);
+  }
+}
+
+function closeShortcutsModal() {
+  const modal = $("shortcutsOverlay");
+  if (modal) modal.classList.remove("show");
+}
+
+function toggleShortcutsModal() {
+  const modal = $("shortcutsOverlay");
+  if (modal && modal.classList.contains("show")) {
+    closeShortcutsModal();
+  } else {
+    openShortcutsModal();
+  }
+}
+
+if ($("btnShortcuts")) $("btnShortcuts").addEventListener("click", toggleShortcutsModal);
+if ($("btnShortcutsClose")) $("btnShortcutsClose").addEventListener("click", closeShortcutsModal);
+if ($("shortcutsOverlay")) {
+  $("shortcutsOverlay").addEventListener("click", (e) => {
+    if (e.target === $("shortcutsOverlay")) closeShortcutsModal();
+  });
+}
+
+/* ============================================================
+   全局命令面板 (Command Palette Ctrl+Shift+P / Ctrl+P, v0.9.167)
+   对标 VS Code / Cursor / Windsurf 工业级命令面板与 HANDOFF §48(a)
+   ============================================================ */
+let cmdPaletteData = [];
+let cmdFilteredList = [];
+let cmdSelectedIndex = 0;
+
+function getBuiltinCommands() {
+  return [
+    { id: "act_cmd_palette", title: "命令面板", desc: "全局命令与斜杠指令快速检索与执行", category: "系统", action: "toggleCmdPalette", key: "Ctrl+Shift+P" },
+    { id: "act_map", title: "校园地图", desc: "打开肇庆校区手绘地图与建筑搜索", category: "视图", action: "openMap", key: "" },
+    { id: "act_schedule", title: "课表管理", desc: "查看课表周视图与换楼风险", category: "生活", action: "openSchedule", key: "" },
+    { id: "act_models", title: "模型管理", desc: "配置大模型供应商、API Key 与基座模型", category: "设置", action: "openModels", key: "Ctrl+K" },
+    { id: "act_mydata", title: "我的数据", desc: "一览、导出与迁移本机数据", category: "数据", action: "openMyData", key: "" },
+    { id: "act_skills", title: "技能管理", desc: "管理自定义技能与技能分享包", category: "扩展", action: "openSkills", key: "" },
+    { id: "act_automate", title: "定时自动化", desc: "管理定时执行任务与自动化指令", category: "工具", action: "openAutomate", key: "" },
+    { id: "act_memory", title: "长期记忆", desc: "管理学长的长期记忆库条目", category: "记忆", action: "openMemory", key: "" },
+    { id: "act_board", title: "跨会话看板", desc: "查看全局多任务会话运行进展看板", category: "任务", action: "openBoard", key: "" },
+    { id: "act_usage", title: "用量与Token", desc: "查看各模型 Token 消耗与成本统计", category: "统计", action: "openUsage", key: "" },
+    { id: "act_export", title: "导出对话记录", desc: "导出当前会话的完整记录与执行轨迹", category: "调试", action: "exportTrace", key: "" },
+    { id: "act_theme", title: "切换主题", desc: "切换晨光薄荷(浅色)与暮色青辉(深色)航拍主题", category: "外观", action: "toggleTheme", key: "" },
+    { id: "act_term", title: "切换终端坞", desc: "打开或收起底部终端坞", category: "终端", action: "toggleTermDock", key: "Ctrl+`" },
+    { id: "act_panel", title: "切换底座面板", desc: "打开或收起右侧底座面板(Git/文件/自动化/监控)", category: "视图", action: "toggleSidePanel", key: "Ctrl+Alt+B" },
+    { id: "act_shortcuts", title: "快捷键速查", desc: "查看系统全部全局快捷键列表", category: "帮助", action: "toggleShortcutsModal", key: "Ctrl+/" },
+    { id: "act_new_task", title: "新建会话", desc: "开启全新对话任务", category: "会话", action: "newTask", key: "Ctrl+N" },
+    { id: "slash_def", title: "/def", desc: "跨文件精准查看符号定义与实现代码: /def <符号>", category: "代码", action: "fillPrompt", param: "/def " },
+    { id: "slash_definition", title: "/definition", desc: "跨文件跳转符号定义并预览实现: /definition <符号>", category: "代码", action: "fillPrompt", param: "/definition " },
+    { id: "slash_outline", title: "/outline", desc: "提取指定代码文件的结构大纲与类/成员树: /outline <文件>", category: "代码", action: "fillPrompt", param: "/outline " },
+    { id: "slash_hierarchy", title: "/hierarchy", desc: "代码调用层次结构与依赖拓扑分析: /hierarchy <符号>", category: "代码", action: "fillPrompt", param: "/hierarchy " },
+    { id: "slash_callers", title: "/callers", desc: "向上追溯谁调用了该函数/方法: /callers <符号>", category: "代码", action: "fillPrompt", param: "/callers " },
+    { id: "slash_rename", title: "/rename", desc: "跨文件符号重命名与重构预演: /rename <原名> <新名>", category: "重构", action: "fillPrompt", param: "/rename " },
+    { id: "slash_ref", title: "/ref", desc: "跨文件查找符号全部调用与引用: /ref <符号>", category: "代码", action: "fillPrompt", param: "/ref " },
+    { id: "slash_symbol", title: "/symbol", desc: "跨语言定位符号定义: /symbol <符号>", category: "代码", action: "fillPrompt", param: "/symbol " },
+    { id: "slash_test", title: "/test", desc: "运行工作区测试套件与自愈诊断: /test [目标]", category: "测试", action: "fillPrompt", param: "/test " },
+    { id: "slash_commit", title: "/commit", desc: "智能生成规范 Conventional Commit 提交说明", category: "Git", action: "fillPrompt", param: "/commit" },
+    { id: "slash_snapshots", title: "/snapshots", desc: "查看工作区影子快照检查点列表", category: "Git", action: "fillPrompt", param: "/snapshots" },
+    { id: "slash_restore", title: "/restore", desc: "从指定快照检查点安全还原文件(只还原、绝不删): /restore <序号|sha>", category: "Git", action: "fillPrompt", param: "/restore " },
+    { id: "slash_wiki", title: "/wiki", desc: "查看代码库全景百科架构与命令", category: "项目", action: "fillPrompt", param: "/wiki" },
+    { id: "slash_review", title: "/review", desc: "审查工作区未提交改动(分级审查)", category: "代码", action: "fillPrompt", param: "/review" },
+    { id: "slash_undo", title: "/undo", desc: "回退最近修改的代码文件", category: "编辑", action: "fillPrompt", param: "/undo" },
+    { id: "slash_fork", title: "/fork", desc: "分叉当前或历史会话开辟新分支任务: /fork [序号]", category: "会话", action: "fillPrompt", param: "/fork " },
+    { id: "slash_clear", title: "/clear", desc: "清空上下文并新建会话", category: "会话", action: "fillPrompt", param: "/clear" },
+    { id: "slash_model", title: "/model", desc: "查看当前模型与上下文配额", category: "模型", action: "fillPrompt", param: "/model" },
+    { id: "slash_help", title: "/help", desc: "查看全部斜杠命令与使用帮助", category: "帮助", action: "fillPrompt", param: "/help" },
+    { id: "slash_instructions", title: "/instructions", desc: "查看当前会话各层指令文件读取与采纳状态", category: "项目", action: "fillPrompt", param: "/instructions" },
+    { id: "slash_adopt_instructions", title: "/instructions adopt", desc: "采纳工作区根项目或指定子目录的指令: /instructions adopt [目录]", category: "项目", action: "fillPrompt", param: "/instructions adopt " },
+    { id: "slash_revoke_instructions", title: "/instructions revoke", desc: "撤销工作区根项目或指定子目录的指令采纳: /instructions revoke [目录]", category: "项目", action: "fillPrompt", param: "/instructions revoke " },
+  ];
+}
+
+function renderCmdPaletteList() {
+  const container = $("cmdPaletteList");
+  if (!container) return;
+  container.innerHTML = "";
+  if (!cmdFilteredList || cmdFilteredList.length === 0) {
+    const empty = document.createElement("div");
+    empty.style.padding = "14px";
+    empty.style.textAlign = "center";
+    empty.style.fontSize = "12px";
+    empty.style.color = "var(--text-3, rgba(255,255,255,0.4))";
+    empty.textContent = "无匹配命令或动作";
+    container.appendChild(empty);
+    return;
+  }
+  cmdFilteredList.forEach((it, idx) => {
+    const row = document.createElement("div");
+    row.className = "cmd-item" + (idx === cmdSelectedIndex ? " selected" : "");
+    row.style.display = "flex";
+    row.style.alignItems = "center";
+    row.style.justifyContent = "space-between";
+    row.style.padding = "7px 10px";
+    row.style.borderRadius = "6px";
+    row.style.cursor = "pointer";
+    row.style.fontSize = "13px";
+    if (idx === cmdSelectedIndex) {
+      row.style.background = "var(--primary-light, rgba(63,189,174,0.18))";
+      row.style.outline = "1px solid var(--primary, #3fbdae)";
+    } else {
+      row.style.background = "transparent";
+    }
+    const left = document.createElement("div");
+    left.style.display = "flex";
+    left.style.alignItems = "center";
+    left.style.gap = "8px";
+    left.style.overflow = "hidden";
+    left.style.textOverflow = "ellipsis";
+    left.style.whiteSpace = "nowrap";
+
+    if (it.category) {
+      const tag = document.createElement("span");
+      tag.style.fontSize = "10px";
+      tag.style.padding = "1px 5px";
+      tag.style.borderRadius = "4px";
+      tag.style.background = "var(--glass-lite, rgba(255,255,255,0.08))";
+      tag.style.color = "var(--text-2, rgba(255,255,255,0.75))";
+      tag.textContent = it.category;
+      left.appendChild(tag);
+    }
+
+    const t = document.createElement("span");
+    t.style.fontWeight = "500";
+    t.style.color = "var(--text-1, #fff)";
+    t.textContent = it.title;
+    left.appendChild(t);
+
+    if (it.desc) {
+      const d = document.createElement("span");
+      d.style.fontSize = "11px";
+      d.style.color = "var(--text-3, rgba(255,255,255,0.5))";
+      d.style.marginLeft = "4px";
+      d.textContent = it.desc;
+      left.appendChild(d);
+    }
+
+    row.appendChild(left);
+
+    if (it.key) {
+      const k = document.createElement("kbd");
+      k.style.fontSize = "10px";
+      k.style.padding = "2px 5px";
+      k.style.background = "var(--kbd-bg, rgba(255,255,255,0.06))";
+      k.style.border = "1px solid var(--border-soft, rgba(255,255,255,0.12))";
+      k.style.borderRadius = "4px";
+      k.style.color = "var(--text-2, rgba(255,255,255,0.7))";
+      k.textContent = it.key;
+      row.appendChild(k);
+    }
+
+    row.addEventListener("mouseenter", () => {
+      cmdSelectedIndex = idx;
+      renderCmdPaletteList();
+    });
+    row.addEventListener("click", () => {
+      executeCmdPaletteItem(it);
+    });
+    container.appendChild(row);
+  });
+
+  const selectedEl = container.children[cmdSelectedIndex];
+  if (selectedEl && selectedEl.scrollIntoView) {
+    selectedEl.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function filterCmdPalette(q) {
+  const query = (q || "").trim().toLowerCase();
+  if (!query) {
+    cmdFilteredList = [...cmdPaletteData];
+  } else {
+    cmdFilteredList = cmdPaletteData.filter(it => {
+      const t = (it.title || "").toLowerCase();
+      const d = (it.desc || "").toLowerCase();
+      const c = (it.category || "").toLowerCase();
+      const p = (it.param || "").toLowerCase();
+      return t.includes(query) || d.includes(query) || c.includes(query) || p.includes(query);
+    });
+  }
+  cmdSelectedIndex = 0;
+  renderCmdPaletteList();
+}
+
+function executeCmdPaletteItem(it) {
+  if (!it) return;
+  closeCmdPalette();
+  if (it.action === "toggleCmdPalette") {
+    return;
+  }
+  if (it.action === "openMap") {
+    if (window.CampusMap && window.CampusMap.open) window.CampusMap.open();
+    else if ($("btnMap")) $("btnMap").click();
+    return;
+  }
+  if (it.action === "openSchedule") {
+    if ($("btnSchedule")) $("btnSchedule").click();
+    return;
+  }
+  if (it.action === "openModels") {
+    openProvDlg();
+    return;
+  }
+  if (it.action === "openMyData") {
+    if ($("btnMyData")) $("btnMyData").click();
+    return;
+  }
+  if (it.action === "openSkills") {
+    if ($("btnSkills")) $("btnSkills").click();
+    return;
+  }
+  if (it.action === "openAutomate") {
+    if ($("btnAutomate")) $("btnAutomate").click();
+    return;
+  }
+  if (it.action === "openMemory") {
+    if ($("btnMemory")) $("btnMemory").click();
+    return;
+  }
+  if (it.action === "openBoard") {
+    if ($("btnBoard")) $("btnBoard").click();
+    return;
+  }
+  if (it.action === "openUsage") {
+    if ($("btnUsage")) $("btnUsage").click();
+    return;
+  }
+  if (it.action === "exportTrace") {
+    if ($("btnExport")) $("btnExport").click();
+    return;
+  }
+  if (it.action === "toggleTheme") {
+    if ($("btnTheme")) $("btnTheme").click();
+    return;
+  }
+  if (it.action === "toggleTermDock") {
+    toggleTermDock();
+    return;
+  }
+  if (it.action === "toggleSidePanel") {
+    setActivityOpen(!actOpen);
+    return;
+  }
+  if (it.action === "toggleShortcutsModal") {
+    toggleShortcutsModal();
+    return;
+  }
+  if (it.action === "newTask") {
+    if ($("btnNewTask")) $("btnNewTask").click();
+    return;
+  }
+  if (it.action === "fillPrompt") {
+    const inp = $("input");
+    if (inp) {
+      inp.value = it.param || "";
+      inp.focus();
+    }
+    return;
+  }
+}
+
+function openCmdPalette() {
+  const modal = $("cmdPaletteOverlay");
+  if (!modal) return;
+  modal.classList.add("show");
+  const inp = $("cmdPaletteInput");
+  if (inp) {
+    inp.value = "";
+    setTimeout(() => inp.focus(), 30);
+  }
+  const fallback = () => {
+    cmdPaletteData = getBuiltinCommands();
+    filterCmdPalette("");
+  };
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.get_commands_catalog) {
+    window.pywebview.api.get_commands_catalog().then(res => {
+      if (res && res.ok && Array.isArray(res.commands) && res.commands.length) {
+        cmdPaletteData = res.commands;
+        filterCmdPalette("");
+      } else {
+        fallback();
+      }
+    }).catch(fallback);
+  } else {
+    fallback();
+  }
+}
+
+function closeCmdPalette() {
+  const modal = $("cmdPaletteOverlay");
+  if (modal) modal.classList.remove("show");
+}
+
+function toggleCmdPalette() {
+  const modal = $("cmdPaletteOverlay");
+  if (modal && modal.classList.contains("show")) {
+    closeCmdPalette();
+  } else {
+    openCmdPalette();
+  }
+}
+
+if ($("btnCmdPalette")) $("btnCmdPalette").addEventListener("click", toggleCmdPalette);
+if ($("cmdPaletteOverlay")) {
+  $("cmdPaletteOverlay").addEventListener("click", (e) => {
+    if (e.target === $("cmdPaletteOverlay")) closeCmdPalette();
+  });
+}
+if ($("cmdPaletteInput")) {
+  $("cmdPaletteInput").addEventListener("input", (e) => {
+    filterCmdPalette(e.target.value);
+  });
+  $("cmdPaletteInput").addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (cmdFilteredList.length > 0) {
+        cmdSelectedIndex = (cmdSelectedIndex + 1) % cmdFilteredList.length;
+        renderCmdPaletteList();
+      }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (cmdFilteredList.length > 0) {
+        cmdSelectedIndex = (cmdSelectedIndex - 1 + cmdFilteredList.length) % cmdFilteredList.length;
+        renderCmdPaletteList();
+      }
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (cmdFilteredList.length > 0 && cmdFilteredList[cmdSelectedIndex]) {
+        executeCmdPaletteItem(cmdFilteredList[cmdSelectedIndex]);
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeCmdPalette();
+    }
+  });
+}
+
 chat.addEventListener("scroll", hideSelBar);
 window.addEventListener("blur", hideSelBar);
 function startEdit(ord, text) {
@@ -5057,6 +5517,19 @@ function openSessMenu(ev, s, row) {
   const items = [
     { label: "打开这条会话",
       on: () => pywebview.api.resume_session(id).then(r => { if (r && r.ok === false) toast(r.msg, true); }) },
+    { label: "🌿 分叉此会话 (Fork)",
+      on: () => {
+        if (busy) { toast("当前有任务正在进行中,分叉要等它停", true); return; }
+        appConfirm("分叉此会话并开辟新分支任务?\n\n原会话原样保留在侧栏,新会话接管当前上下文。", () => {
+          pywebview.api.fork_session(id).then(r => {
+            if (r && r.ok) {
+              toast(r.msg || "会话分叉成功");
+            } else if (r && r.msg) {
+              toast(r.msg, true);
+            }
+          }).catch(e => toast(String(e).slice(0, 60), true));
+        }, "分叉会话");
+      } },
     { label: "重命名", on: () => startSessRename(id, row) },
     { label: s.archived ? "取消归档" : "归档(沉到列表末尾,不删除)",
       on: () => pywebview.api.archive_session(id, !s.archived).then(r => {
@@ -10290,10 +10763,21 @@ $("chat").addEventListener("click", (e) => {
   openLightbox(img.src);
 });
 
-/* @ 文件引用:v0.9.64 —— 输入 @ 弹出工作区文件补全(Codex/Cursor 同款交互)。
-   数据是真的:每 keystroke 防抖 150ms 问桥(桥上走 fs.search_files,跳过依赖/产物目录)。
-   菜单开着时 Enter/Tab 选词、↑↓ 换选、Esc 关菜单,都不触发发送。 */
+/* @ 文件与智能上下文实体引用:v0.9.64/v0.9.168 —— 输入 @ 弹出智能实体与工作区文件补全。
+   对标 Cursor/Windsurf/Codex，彻底清偿 HANDOFF §48(c) 欠账。
+   支持引用系统实体: @plan(计划), @todo(待办), @schedule(课表), @git(Git状态), @wiki(项目百科), @test(测试报告), @problems(诊断)
+   以及工作区文件路径检索。 */
 const atState = { active: false, tokenStart: -1, items: [], sel: 0, timer: null };
+
+const BUILTIN_MENTIONS = [
+  { path: "@plan", name: "任务计划", desc: "当前任务执行计划与步骤状态", icon: "🗂️", isMention: true },
+  { path: "@todo", name: "待办提醒", desc: "今日待办清单与临期催办事项", icon: "⏰", isMention: true },
+  { path: "@schedule", name: "课表作息", desc: "今日课程节次与空闲时段安排", icon: "📅", isMention: true },
+  { path: "@git", name: "Git 状态", desc: "工作区未提交改动与分支概况", icon: "🌿", isMention: true },
+  { path: "@wiki", name: "项目百科", desc: "代码库全景架构与技术栈摘要", icon: "📖", isMention: true },
+  { path: "@test", name: "测试报告", desc: "最近一次测试套件执行结论", icon: "🧪", isMention: true },
+  { path: "@problems", name: "代码诊断", desc: "工作区语法检查与类型报错诊断", icon: "🩺", isMention: true },
+];
 
 function atMenuClose() {
   atState.active = false;
@@ -10307,8 +10791,9 @@ function atMenuPick(i) {
   if (!it) return;
   const end = ta.selectionStart;
   const text = ta.value;
-  ta.value = text.slice(0, atState.tokenStart) + it.path + " " + text.slice(end);
-  ta.selectionStart = ta.selectionEnd = atState.tokenStart + it.path.length + 1;
+  const insertText = it.path;
+  ta.value = text.slice(0, atState.tokenStart) + insertText + " " + text.slice(end);
+  ta.selectionStart = ta.selectionEnd = atState.tokenStart + insertText.length + 1;
   atMenuClose();
   ta.focus();
   ta.style.height = "auto";
@@ -10319,9 +10804,7 @@ function atMenuRender() {
   const menu = $("atMenu");
   if (!atState.active) { atMenuClose(); return; }
   if (!atState.items.length) {
-    // 加载中 / 无匹配:不关菜单(关了 fetch 回来就会被 active 闸拦掉),
-    // 摆一行实话 —— 这两种样子用户都该看得见。
-    menu.innerHTML = '<div class="at-empty">没有匹配的文件 — 直接贴相对路径也可以</div>';
+    menu.innerHTML = '<div class="at-empty">没有匹配的文件或实体 — 直接贴相对路径也可以</div>';
     menu.style.display = "block";
     return;
   }
@@ -10329,7 +10812,11 @@ function atMenuRender() {
   atState.items.forEach((it, i) => {
     const el = document.createElement("div");
     el.className = "at-item" + (i === atState.sel ? " on" : "");
-    el.textContent = it.path;
+    if (it.isMention) {
+      el.innerHTML = `<span style="margin-right:6px">${it.icon}</span><span style="font-weight:600;color:var(--primary,#3fbdae)">${it.path}</span> <span style="font-size:11px;color:var(--text-3,rgba(255,255,255,0.5));margin-left:4px">${it.name} · ${it.desc}</span>`;
+    } else {
+      el.textContent = it.path;
+    }
     const hint = document.createElement("span");
     hint.className = "at-hint";
     hint.textContent = "@" + (i === atState.sel ? "↵ 引用" : "");
@@ -10357,17 +10844,38 @@ function atMenuQuery() {
   atState.active = true;
   atState.tokenStart = at;
   atState.sel = 0;
+
+  const qLower = token.toLowerCase();
+  const matchedMentions = BUILTIN_MENTIONS.filter(m =>
+    !token || m.path.toLowerCase().slice(1).startsWith(qLower) || m.name.toLowerCase().includes(qLower) || m.desc.toLowerCase().includes(qLower)
+  );
+
   clearTimeout(atState.timer);
   atState.timer = setTimeout(() => {
     const api = window.pywebview && pywebview.api;
-    if (!api || !api.workspace_search_files) { atMenuClose(); return; }
+    if (!api || !api.workspace_search_files) {
+      if (atState.active) {
+        atState.items = matchedMentions;
+        atMenuRender();
+      }
+      return;
+    }
     api.workspace_search_files(token, 8).then(r => {
-      if (!atState.active) return;                        // 期间菜单已关
-      atState.items = ((r && r.items) || []).map(p => ({ path: p }));
+      if (!atState.active) return;
+      const fileItems = ((r && r.items) || []).map(p => ({ path: p, isMention: false }));
+      atState.items = [...matchedMentions, ...fileItems];
       atMenuRender();
-    }).catch(() => atMenuClose());
+    }).catch(() => {
+      if (atState.active) {
+        atState.items = matchedMentions;
+        atMenuRender();
+      }
+    });
   }, 150);
-  if (atState.active) atMenuRender();                     // 先画骨架(加载中)
+  if (atState.active) {
+    atState.items = matchedMentions;
+    atMenuRender();
+  }
 }
 
 /* / 动作面板(v0.9.65):输入 / 弹出动作清单 —— 全部是左栏已有的真动作,
@@ -11219,15 +11727,70 @@ SidePages.register({
       <div class="sp-head"><b>🌿 Git</b>
         <span class="gp-branch" id="gpBranch"></span>
         <span class="gp-sync" id="gpSync"></span>
+        <button class="act-ib" id="gpTest" title="运行项目测试套件(/test)">🧪 测试</button>
+        <button class="act-ib" id="gpReview" title="AI 深度审查未提交改动(/review)">✨ 审查</button>
         <button class="act-ib" id="gpRefresh" title="重新读一遍状态">↻</button></div>
       <div class="sp-body" id="gpBody"></div>
       <div class="gp-commit" id="gpCommitBox" hidden>
         <textarea class="gp-msg" id="gpMsg" placeholder="提交说明(只提交上面已暂存的那些)…"></textarea>
         <div class="gp-bar"><span class="st" id="gpStaged"></span>
+          <button class="act-ib" id="gpGenMsg" title="智能生成规范提交说明">✨ 生成说明</button>
           <button class="b-yes" id="gpDoCommit">提交</button></div>
       </div>
       <div class="gp-diff" id="gpDiff" hidden><pre id="gpDiffText"></pre></div>`;
     $("gpRefresh").addEventListener("click", () => gitLoad());
+    $("gpGenMsg").addEventListener("click", () => {
+      const api = window.pywebview && pywebview.api;
+      if (!api || !api.git_suggest_commit) return;
+      const btn = $("gpGenMsg");
+      const oldText = btn.textContent;
+      btn.textContent = "⏳ 分析中...";
+      btn.disabled = true;
+      api.git_suggest_commit().then(r => {
+        btn.textContent = oldText;
+        btn.disabled = false;
+        if (r && r.ok && r.message) {
+          $("gpMsg").value = r.message;
+          toast("已填入建议提交说明");
+        } else {
+          toast((r && r.msg) || "生成建议说明失败", true);
+        }
+      }).catch(e => {
+        btn.textContent = oldText;
+        btn.disabled = false;
+        toast("生成说明出错:" + String(e).slice(0, 60), true);
+      });
+    });
+    $("gpTest").addEventListener("click", () => {
+      const ta = $("input");
+      if (!ta) return;
+      const cmd = (slashCmds || []).find(c => c.cmd === "/test");
+      const prompt = cmd ? cmd.prompt : "请为当前工作区运行测试套件并汇报结论。";
+      ta.value = prompt;
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
+      if (busy) {
+        ta.focus();
+        toast("当前回合还在跑,测试指令已填进输入框 —— 完事按回车就发", true);
+        return;
+      }
+      send();
+    });
+    $("gpReview").addEventListener("click", () => {
+      const ta = $("input");
+      if (!ta) return;
+      const cmd = (slashCmds || []).find(c => c.cmd === "/review");
+      const prompt = cmd ? cmd.prompt : "请审查当前工作区所有未提交的代码改动(staged 与 unstaged)。";
+      ta.value = prompt;
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
+      if (busy) {
+        ta.focus();
+        toast("当前回合还在跑,审查指令已填进输入框 —— 完事按回车就发", true);
+        return;
+      }
+      send();
+    });
     $("gpDoCommit").addEventListener("click", () => {
       const msg = $("gpMsg").value.trim();
       if (!msg) { toast("先写提交说明", true); return; }
@@ -11513,6 +12076,23 @@ function gpIsPage(id) { return SidePages._active === id && actOpen; }
    松手记账(与面板宽度同一条路),双击回 280。 */
 (function termDockWiring() {
   $("tpRefresh").addEventListener("click", () => tpLoad(false));
+  if ($("tpRunTests")) {
+    $("tpRunTests").addEventListener("click", () => {
+      const ta = $("input");
+      if (!ta) return;
+      const cmd = (slashCmds || []).find(c => c.cmd === "/test");
+      const prompt = cmd ? cmd.prompt : "请为当前工作区运行测试套件并汇报结论。";
+      ta.value = prompt;
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
+      if (busy) {
+        ta.focus();
+        toast("当前回合还在跑,测试指令已填进输入框 —— 完事按回车就发", true);
+        return;
+      }
+      send();
+    });
+  }
   $("tpCmd").addEventListener("keydown", (e) => { if (e.key === "Enter") tpSubmit(); });
   $("tpBody").addEventListener("click", () => { if (window.getSelection && !String(getSelection())) $("tpCmd").focus(); });
   $("tdClose").addEventListener("click", () => toggleTermDock(false));

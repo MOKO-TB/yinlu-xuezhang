@@ -344,7 +344,7 @@ def test_ocr_pdf_without_any_backend_says_what_is_missing(tmp_path, monkeypatch)
 
 def test_ocr_image_routes_pdf_to_the_pdf_chain(tmp_path, monkeypatch):
     """同一个出口:`ocr_image` 收到 .pdf 就交给 PDF 链(工具名与参数面不变)。"""
-    pdf = _pdf_with_image(tmp_path, pages=1)
+    _pdf_with_image(tmp_path, pages=1)      # 造那份 PDF:路径由 fixture 拼,这里只要它在盘上
     seen = {}
 
     def fake_pdf(ctx, p, *, backend="auto", lang="", max_chars=6000):

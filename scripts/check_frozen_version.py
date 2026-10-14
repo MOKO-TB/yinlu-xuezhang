@@ -188,7 +188,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "add_automation", "remove_automation", "plan_review",
                             "plan_review_reply", "_plan_review_trace",
                             "export_skill_pack", "import_skill_pack",
-                            "apply_skill_pack", "recent_for_tray"
+                            "apply_skill_pack", "recent_for_tray",
+                            # v0.9.166/167:快捷键速查与命令面板、符号引用与重命名
+                            "get_shortcuts_catalog", "find_symbol_references",
+                            "rename_symbol", "get_commands_catalog",
+                            # v0.9.172: 指令采纳与撤销 (清偿 §6 51(g))
+                            "get_instruction_layers", "adopt_instruction_layer",
+                            "revoke_instruction_layer",
                             ),
     # v0.9.39 p2:标题栏整模块。漏收 = 桥里那句 `from minicode import window_chrome`
     # 在装好的包里 ImportError,而它被前端那个 try/catch 吞掉 → 表现为"改了个寂寞"。
@@ -385,6 +391,8 @@ TARGETS: dict[str, tuple[str, ...]] = {
         # 正是这一层在安全上唯一的严格之处 —— 它静默失效等于把那次点头省掉了。
         "subdir_agents_layers", "layer_at", "layer_prompt_section",
         "adopt_layer", "layer_adopted", "_rel_dir",
+        # v0.9.172: 指令撤销与根层采纳撤销封装 (清偿 §6 51(g))
+        "revoke_layer", "adopt_root_agents", "revoke_root_agents",
         "INSTRUCTION_GUARD", "USER_AGENTS_NAME", "AGENTS_CHAR_LIMIT", "AGENTS_FILES",
         "apply_retention"),
     "minicode.paths": ("_is_writable", "_local_state_dir", "diagnostics",
@@ -439,9 +447,20 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           "register_protocol", "handoff", "start_listener",
                           "pending_uri_arg", "take_pending_panel"),
     # v0.9.159:侧边栏底座的后端三件(漏收 = 界面上 tab 摆出来了、桥一敲就是 TypeError)
-    "minicode.gitpanel": ("status", "diff", "log", "stage", "unstage",
+    "minicode.gitpanel": ("suggest_commit_message", "status", "diff", "log", "stage", "unstage",
                           "commit", "restore", "snapshot_list",
-                          "snapshot_restore", "_safe_rel", "available"),
+                          "snapshot_restore", "uncommitted_diff",
+                          "_safe_rel", "available"),
+    "minicode.repo_wiki": ("get_or_build_wiki", "scan_workspace",
+                           "format_wiki_view", "repo_wiki_tool", "get_wiki_file"),
+    "minicode.test_runner": ("detect_framework", "run_tests", "get_last_run",
+                            "format_test_report", "test_runner_tool"),
+    # v0.9.165:代码库精准符号搜索
+    "minicode.symbol_search": ("search_symbols", "symbol_search_tool", "format_symbols_view"),
+    # v0.9.166:代码库引用查找与影响面分析
+    "minicode.find_references": ("find_symbol_references", "find_references_tool", "format_references_view", "analyze_impact"),
+    # v0.9.167:跨文件符号重命名与重构预演
+    "minicode.rename_symbol": ("rename_symbol", "rename_symbol_tool", "is_valid_identifier", "rename_symbol_in_code", "IDENTIFIER_RE"),
     "minicode.filepanel": ("read", "write"),
     "minicode.extensions": ("extension_root", "discover", "_validate"),
     "minicode.reasoning": ("reasoning_snapshot", "get_capability",
@@ -1266,7 +1285,8 @@ TARGETS: dict[str, tuple[str, ...]] = {
                           # v0.9.149 第三级的按层记账。漏 `agents_adopted_layers` =
                           # 侧栏那一行报不出"这一层采纳了没有";漏新那个键名 =
                           # 子目录层的点头写进去又读不回来(与上面同一种坏法)。
-                          "agents_adopted_layers", "AGENTS_LAYERS_KEY",
+                          # v0.9.172: 指令采纳撤销支持
+                          "agents_adopted_layers", "AGENTS_LAYERS_KEY", "revoke_agents",
                           # v0.9.133 P0-2「以后都允许」。漏 `remember` = 那颗按钮点下去
                           # 什么都不写(界面上说"已记住"而盘上一条都没有);漏
                           # `granted_rule` = 按钮出现的条件与真写下去的判断分成两套,
@@ -1314,6 +1334,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # (漏 resolve_range = 五档区间没法定起止;漏 dashboard =
                        # 新弹窗整页空,老 statistics 还在,只是没人喂新版面)
                        "resolve_range", "dashboard"),
+    # v0.9.168:跨文件调用层次结构与依赖拓扑分析 (第 68 个内置工具)
+    "minicode.call_hierarchy": ("extract_python_calls", "build_call_hierarchy",
+                                "format_hierarchy_tree", "format_hierarchy_mermaid",
+                                "call_hierarchy_tool"),
+    # v0.9.169:跨文件符号定义提取与实现跳转 (第 69 个内置工具)
+    "minicode.symbol_definition": ("extract_python_definition", "find_symbol_definition",
+                                   "symbol_definition_tool"),
 }
 
 # ---- 包内前端(v0.9.94 起):界面那半边不在 PYZ 里,它由 packaging/gcode.spec 的
@@ -1321,12 +1348,24 @@ TARGETS: dict[str, tuple[str, ...]] = {
 # 包里少了这一屏」只能靠这条补上。漏收的表现全是不报错的那种:控件不在,点了没反应,
 # 或者干脆还是旧的那副样子。
 FRONTEND_TARGETS: tuple[str, ...] = (
+    # v0.9.168:智能上下文实体提及与调用层次快捷指令 (清偿 HANDOFF §48(c))
+    "BUILTIN_MENTIONS", "slash_hierarchy",
+    # v0.9.169:符号定义提取快捷指令
+    "slash_def",
+    # v0.9.170:代码大纲快捷指令
+    "slash_outline",
+    # v0.9.171:影子检查点与会话分叉快捷指令
+    "slash_snapshots", "slash_restore", "slash_fork",
+    # v0.9.172:指令采纳与撤销快捷指令
+    "slash_instructions", "slash_adopt_instructions", "slash_revoke_instructions",
     # v0.9.159 侧边栏底座(漏一条 = 装好的包里 tab 条不出现或页面对不上账:
     # spTabs/spPages 是容器,SidePages/MiniCodePages 拼写写死在前端源码里,
     # git_overview/terminal_run/file_read 是页面上每一个数的来源)
     'id="spTabs"', 'id="spPages"', 'data-sp="activity"', "SidePages",
     "MiniCodePages", "git_overview", "terminal_run", "file_read",
-    "spSubBody", "fpList", "gpBody",
+    "spSubBody", "fpList", "gpBody", "gpReview", "gpTest", "tpRunTests",
+    # v0.9.165:智能生成提交说明
+    "gpGenMsg",
     # v0.9.160 侧聊页(漏 SideChatFeed = 事件路由的钩子不在,侧聊的回复
     # 永远画不进页面;漏 scThread = 线程清单没有着落)
     "SideChatFeed", "scThread", "sidechat_send",
@@ -1493,6 +1532,9 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.142「智能配置」那一格(漏 `mcfApplyAuto` = 开关点下去什么都不发生;
     # 漏 `mcfAutoNote` = 灰掉了却不解释,那正是这一轮要消灭的"不会配")
     "mcfApplyAuto", "mcfAutoNote", "id=\"mcfAuto\"", "function mcfApplyAuto",
+    # v0.9.166:全局快捷键速查中心
+    "btnShortcuts", "shortcutsOverlay", "btnShortcutsClose", "shortcutsBody",
+    "function renderShortcutsModal", "function toggleShortcutsModal",
 )
 
 

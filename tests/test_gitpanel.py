@@ -167,3 +167,43 @@ def test_network_verbs_are_not_in_this_layer(tmp_path):
                  if "_run(workspace" in l or '_run(repo' in l]
         assert not any(f'"{verb}"' in l for l in calls), f"{verb} 不该出现在命令表里"
         assert not any(f"'{verb}'" in l for l in calls), f"{verb} 不该出现在命令表里"
+
+
+def test_uncommitted_diff_detects_changes_and_clean_workspace(tmp_path):
+    repo = _repo(tmp_path, "a.txt")
+    clean_got = gitpanel.uncommitted_diff(repo)
+    assert clean_got["ok"] is True
+    assert clean_got["has_changes"] is False
+
+    (repo / "a.txt").write_text("改动内容\n", encoding="utf-8")
+    (repo / "untracked.txt").write_text("新文件\n", encoding="utf-8")
+    dirty_got = gitpanel.uncommitted_diff(repo)
+    assert dirty_got["ok"] is True
+    assert dirty_got["has_changes"] is True
+    assert "+改动内容" in dirty_got["diff"]
+    assert "untracked.txt" in dirty_got["summary"]
+    assert dirty_got["untracked_count"] == 1
+
+
+def test_suggest_commit_message(tmp_path):
+    repo = _repo(tmp_path, "a.py")
+    clean = gitpanel.suggest_commit_message(repo)
+    assert clean["ok"] is True
+    assert clean["has_changes"] is False
+
+    # 改动测试文件
+    (repo / "test_a.py").write_text("def test_foo(): pass\n", encoding="utf-8")
+    _git(repo, "add", "test_a.py")
+    got_test = gitpanel.suggest_commit_message(repo)
+    assert got_test["ok"] is True
+    assert got_test["has_changes"] is True
+    assert got_test["type"] == "test"
+    assert got_test["message"].startswith("test(")
+
+    # 改动文档文件
+    (repo / "README.md").write_text("# Doc\n", encoding="utf-8")
+    got_doc = gitpanel.suggest_commit_message(repo)
+    assert got_doc["ok"] is True
+    assert got_doc["has_changes"] is True
+
+

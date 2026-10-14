@@ -216,20 +216,71 @@ def _instructions_text(workspace) -> str:
     return "\n".join(lines)
 
 
+def _instructions_command(agent, ui, rest: list | None = None, workspace=None) -> None:
+    """`/instructions [adopt|revoke [rel]]`:查看、采纳或撤销项目指令(v0.9.172,清偿 §6 51(g))。"""
+    ws = workspace or getattr(agent.ctx, "workspace", None)
+    if rest and str(rest[0]).lower() in ("adopt", "采纳"):
+        from minicode.app_setup import adopt_layer, adopt_root_agents, layer_at
+        rel = str(rest[1]) if len(rest) > 1 else ""
+        if not rel:
+            ok, res = adopt_root_agents(ws)
+            if ok:
+                agent._refresh_clock()
+                ui.info(f"已采纳工作区根项目指令(sha={res[:10]}…)。")
+            else:
+                ui.info(f"采纳失败: {res}。")
+        else:
+            layer = layer_at(ws, rel)
+            if not layer:
+                ui.info(f"目录 {rel} 未找到有效的指令文件。")
+            else:
+                sha = adopt_layer(ws, layer)
+                agent._refresh_clock()
+                ui.info(f"已采纳目录 {rel} 的指令(sha={sha[:10]}…)。")
+        return
+    if rest and str(rest[0]).lower() in ("revoke", "撤销", "取消采纳"):
+        from minicode import permspec
+        from minicode.app_setup import revoke_root_agents
+        rel = str(rest[1]) if len(rest) > 1 else ""
+        if not rel:
+            ok = revoke_root_agents(ws)
+            if ok:
+                agent._refresh_clock()
+                ui.info("已撤销工作区根项目指令的采纳(下一次开工需重新确认)。")
+            else:
+                ui.info("撤销未执行:根项目指令原本未被采纳。")
+        else:
+            ok = permspec.revoke_agents(ws, rel=rel)
+            if ok:
+                agent._refresh_clock()
+                ui.info(f"已撤销目录 {rel} 的指令采纳。")
+            else:
+                ui.info(f"撤销未执行:目录 {rel} 原本未被采纳。")
+        return
+    ui.info(_instructions_text(ws))
+
+
 REWIND_SCOPES = ("files", "talk", "both")
 REWIND_USAGE = ('用法: /rewind <第几问> [files|talk|both] —— 退到那一问**之前**'
                 "(默认 both:文件与对话一起退;留档不删,想找回原会话用 /resume)")
 
 
-def _snapshots_command(agent, ui) -> None:
-    """`/snapshots`:影子库里有哪几次整树快照(H,v0.9.157)。"""
+def _snapshots_command(agent, ui, rest: list | None = None) -> None:
+    """`/snapshots [drop|clean]`:影子库快照列表或清空影子库(H,v0.9.157 / v0.9.171)。"""
     from minicode import shadow_git
+    if rest and str(rest[0]).lower() in ("drop", "clean", "purge"):
+        ok = shadow_git.drop(agent.ctx.workspace)
+        if ok:
+            ui.info("影子检查点库已清空。")
+        else:
+            ui.info("清理未执行:影子库不存在或已被清空。")
+        return
     ui.info(agent.shadow_line())
     rows = shadow_git.snapshots(agent.ctx.workspace)
     if not rows:
         ui.info("库里还是空的 —— 它是**要动文件之前**才快照的,所以只读的会话里它就该是空的。")
         return
-    lines = ["最近的整树快照(新到旧,`/restore N` 里的 N 就是下面这个序号):"]
+    lines = ["最近的整树快照(新到旧,`/restore N` 里的 N 就是下面这个序号;`/snapshots clean` 可清空):"]
     for n, r in enumerate(rows, start=1):
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["ts"]))
         lines.append(f"  {n}. {when}  {r['subject']}")
@@ -310,7 +361,7 @@ def _rewind_command(agent, session, ui, rest: list) -> None:
     if scope in ("both", "talk"):
         lines.append(f"  对话:那一条与其后共 {drop} 条离开上下文"
                      "(留档 sessions/ 不删,想看回来过的内容用 /resume 或界面上翻)")
-    lines.append("  注:命令与外部程序改的文件从来不在账里,这一档退不到它们。")
+    lines.append("  注:命令与外部程序改的文件从来不在账里,这一档退不到它们(若需整树还原外部改动,先 /snapshots 再 /restore)。")
     if not ui.confirm_destructive("\n".join(lines), f"退到第 {n} 问之前?"):
         ui.info("已取消:文件与对话都没动。")
         return
@@ -630,9 +681,9 @@ def handle_slash(cmd: str, session: Session, config, ui: TerminalUI,
     elif name == "/undo":
         _undo_command(agent, ui, parts[1:])
     elif name == "/instructions":
-        ui.info(_instructions_text(workspace))
+        _instructions_command(agent, ui, parts[1:], workspace)
     elif name == "/snapshots":
-        _snapshots_command(agent, ui)
+        _snapshots_command(agent, ui, parts[1:])
     elif name == "/restore":
         _restore_command(agent, ui, parts[1:])
     elif name == "/rewind":
@@ -761,6 +812,24 @@ def pop_workspace_flag(argv: list[str]) -> tuple[str, list[str]]:
         rest.append(item)
         i += 1
     return value, rest
+
+
+ADOPT_AGENTS_FLAGS = ("--adopt-project-agents", "--adopt-agents")
+
+
+def pop_adopt_agents_flag(argv: list[str]) -> tuple[bool, list[str]]:
+    """摘出 `--adopt-project-agents` 旗标(v0.9.172,清偿 §6 51(g))。
+
+    在无头或自动化脚本场景下显式采纳项目指令,向 sys.stderr 输出回执。
+    """
+    found = False
+    rest = []
+    for item in argv:
+        if item in ADOPT_AGENTS_FLAGS:
+            found = True
+        else:
+            rest.append(item)
+    return found, rest
 
 
 def startup_workspace(explicit: str) -> Path:
@@ -914,6 +983,7 @@ def main() -> None:
     # Cursor / Qoder 一类)按 stdio 调用。分支必须在 `TerminalUI` **之前** return
     # —— 它会往 stdout 打横幅,而服务端的 stdout 只能是协议报文。
     serve, argv_for_ws = mcp_server.pop_mcp_serve_flag(argv_for_ws)
+    adopt_flag, argv_for_ws = pop_adopt_agents_flag(argv_for_ws)
     if serve and out_fmt != "text":
         print("错误: --mcp-serve 与 --json / --output-format 不能同时给"
               "(服务端的 stdout 只能是协议报文)。", file=sys.stderr)
@@ -921,6 +991,13 @@ def main() -> None:
     if serve:
         explicit_ws, _ = pop_workspace_flag(argv_for_ws)
         workspace = startup_workspace(explicit_ws)
+        if adopt_flag:
+            from minicode.app_setup import adopt_root_agents
+            ok, res = adopt_root_agents(workspace)
+            if ok:
+                print(f"[minicode] 已采纳项目指令(sha={res[:10]}…)", file=sys.stderr)
+            else:
+                print(f"[minicode] 采纳项目指令未执行: {res}", file=sys.stderr)
         raise SystemExit(mcp_server.serve(config, workspace))
     if out_fmt in ("json", "stream-json"):
         # 那份 JSON 必须按 UTF-8 出去:控制台代码页对管道无效,默认会按 cp936 建流,
@@ -930,6 +1007,13 @@ def main() -> None:
     model_probe.ensure_async(config.base_url, config.api_key, config.model)
     explicit_ws, rest_argv = pop_workspace_flag(argv_for_ws)
     workspace = startup_workspace(explicit_ws)
+    if adopt_flag:
+        from minicode.app_setup import adopt_root_agents
+        ok, res = adopt_root_agents(workspace)
+        if ok:
+            print(f"[minicode] 已采纳项目指令(sha={res[:10]}…)", file=sys.stderr)
+        else:
+            print(f"[minicode] 采纳项目指令未执行: {res}", file=sys.stderr)
     ui = TerminalUI(config, workspace)
     # --json / stream-json:外面再包一层静默 UI。横幅/进度/错误一律改道 stderr,
     # 要人点头的入口全部答"不",结局由退出码与最后那份结果说 —— 见 minicode/headless.py。

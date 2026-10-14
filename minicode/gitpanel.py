@@ -265,3 +265,173 @@ def snapshot_restore(workspace: Path, sha: str) -> dict:
     if n <= 0:
         return {"ok": False, "msg": out or "还原失败"}
     return {"ok": True, "msg": f"已还原 {n} 个文件" + (f":{out}" if out else "")}
+
+
+def uncommitted_diff(workspace: Path, max_chars: int = 150_000) -> dict:
+    """提取当前工作区所有未提交改动(暂存 + 未暂存)的完整 diff 与统计。
+
+    供审查专线(/review)与一键代码检查调用。
+    """
+    code_stat, out_stat = _run(workspace, ["diff", "HEAD", "--stat", "--no-color"])
+    if code_stat != 0:
+        code_stat, out_stat = _run(workspace, ["diff", "--stat", "--no-color"])
+    code_diff, out_diff = _run(workspace, ["diff", "HEAD", "--no-color", "--no-renames"])
+    if code_diff != 0:
+        code_diff, out_diff = _run(workspace, ["diff", "--no-color", "--no-renames"])
+
+    st = status(workspace)
+    untracked = [r["path"] for r in st.get("rows", []) if r.get("x") == "?"]
+
+    if not out_diff.strip() and not untracked:
+        return {"ok": True, "has_changes": False, "summary": "工作区干净,没有未提交改动。", "diff": ""}
+
+    if len(out_diff) > max_chars:
+        out_diff = out_diff[:max_chars] + f"\n…(差异超过 {max_chars} 字符截断)"
+
+    summary_lines = []
+    if out_stat.strip():
+        summary_lines.append("【改动概览】:\n" + out_stat.strip())
+    if untracked:
+        summary_lines.append("【未跟踪文件】:\n  " + "\n  ".join(untracked[:20]))
+
+    return {
+        "ok": True,
+        "has_changes": True,
+        "summary": "\n\n".join(summary_lines),
+        "diff": out_diff.strip(),
+        "untracked_count": len(untracked),
+    }
+
+
+def suggest_commit_message(workspace: Path) -> dict:
+    """根据暂存区(或未提交改动)智能推导符合 Conventional Commits 规范的提交说明。
+
+    格式: <type>(<scope>): <简要说明>
+    带详细要点清单,供 Git 侧边栏与 /commit 命令一键装载使用。
+    """
+    # 优先看暂存区
+    code_stat, out_stat = _run(workspace, ["diff", "--cached", "--stat", "--no-color"])
+    code_names, out_names = _run(workspace, ["diff", "--cached", "--name-status", "--no-color"])
+    is_staged = code_stat == 0 and bool(out_stat.strip())
+
+    if not is_staged:
+        # 暂存区为空时,分析未提交的改动
+        code_stat, out_stat = _run(workspace, ["diff", "HEAD", "--stat", "--no-color"])
+        if code_stat != 0:
+            code_stat, out_stat = _run(workspace, ["diff", "--stat", "--no-color"])
+        code_names, out_names = _run(workspace, ["diff", "HEAD", "--name-status", "--no-color"])
+        if code_names != 0:
+            code_names, out_names = _run(workspace, ["diff", "--name-status", "--no-color"])
+
+    st = status(workspace)
+    untracked = [r["path"] for r in st.get("rows", []) if r.get("x") == "?"]
+
+    if not out_stat.strip() and not untracked:
+        return {
+            "ok": True,
+            "has_changes": False,
+            "message": "",
+            "type": "",
+            "scope": "",
+            "is_staged": False,
+            "note": "当前工作区干净,没有需要提交的改动。",
+        }
+
+    changed_files: list[tuple[str, str]] = []
+    for line in out_names.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2:
+            changed_files.append((parts[0], parts[1]))
+    if not is_staged:
+        for u in untracked:
+            if not any(f == u for _, f in changed_files):
+                changed_files.append(("?", u))
+
+    # 推导 scope
+    scopes: list[str] = []
+    for _, f in changed_files:
+        f_norm = f.replace("\\", "/")
+        if f_norm.startswith("tests/"):
+            scopes.append("test")
+        elif f_norm.startswith("frontend/"):
+            scopes.append("ui")
+        elif f_norm.startswith("minicode/tools/"):
+            scopes.append("tools")
+        elif "gitpanel" in f_norm:
+            scopes.append("git")
+        elif "symbol_search" in f_norm:
+            scopes.append("symbols")
+        elif "test_runner" in f_norm:
+            scopes.append("runner")
+        elif "repo_wiki" in f_norm:
+            scopes.append("wiki")
+        elif f_norm.startswith("docs/") or f_norm in ("README.md", "HANDOFF.md"):
+            scopes.append("docs")
+        elif f_norm.startswith("scripts/"):
+            scopes.append("scripts")
+        else:
+            p_first = f_norm.split("/")[0]
+            scopes.append(p_first if p_first else "core")
+
+    primary_scope = "workspace"
+    if scopes:
+        # 取最高频 scope
+        counts: dict[str, int] = {}
+        for s in scopes:
+            counts[s] = counts.get(s, 0) + 1
+        primary_scope = max(counts, key=counts.get)
+
+    # 推导 type: test, docs, feat, fix, refactor, chore
+    paths = [f for _, f in changed_files]
+    statuses = [s for s, _ in changed_files]
+
+    if all(p.startswith("tests/") or p.endswith("_test.py") or Path(p).stem.startswith("test_") or Path(p).stem.endswith("_test") for p in paths):
+        ctype = "test"
+    elif all(p.endswith(".md") or p.startswith("docs/") for p in paths):
+        ctype = "docs"
+    elif any(s in ("A", "?") for s in statuses):
+        ctype = "feat"
+    elif any("fix" in p.lower() or "bug" in p.lower() for p in paths):
+        ctype = "fix"
+    elif any(s == "D" for s in statuses):
+        ctype = "refactor"
+    else:
+        ctype = "feat" if any("minicode/" in p or "frontend/" in p for p in paths) else "chore"
+
+    # 生成简洁动词与摘要
+    main_target = paths[0] if paths else "project"
+    target_name = Path(main_target).stem
+    if ctype == "test":
+        desc = f"add tests for {target_name}"
+    elif ctype == "docs":
+        desc = f"update documentation for {target_name}"
+    elif ctype == "feat":
+        desc = f"implement {target_name} updates"
+    elif ctype == "fix":
+        desc = f"fix issues in {target_name}"
+    else:
+        desc = f"update {target_name}"
+
+    subject = f"{ctype}({primary_scope}): {desc}"
+
+    bullets: list[str] = []
+    for st_flag, f in changed_files[:8]:
+        action_word = "add" if st_flag in ("A", "?") else ("delete" if st_flag == "D" else "update")
+        bullets.append(f"- {f}: {action_word}")
+    if len(changed_files) > 8:
+        bullets.append(f"- ... (另有 {len(changed_files) - 8} 个文件变更)")
+
+    msg = subject + ("\n\n" + "\n".join(bullets) if bullets else "")
+
+    return {
+        "ok": True,
+        "has_changes": True,
+        "message": msg,
+        "type": ctype,
+        "scope": primary_scope,
+        "is_staged": is_staged,
+        "file_count": len(changed_files),
+        "note": f"基于 {'已暂存' if is_staged else '未暂存'} 改动生成。",
+    }
+
+

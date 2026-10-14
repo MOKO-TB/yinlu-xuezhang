@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from minicode import asking, feedback_report, growth, kb, memory, planning, session, skills
+from minicode import asking, feedback_report, growth, kb, memory, planning, repo_wiki, session, skills
 from minicode.tools.base import Tool
 
 
@@ -311,3 +311,38 @@ def memory_tool() -> list[Tool]:
             read_only=False,
         ),
     ]
+
+
+def repo_wiki_tool() -> list[Tool]:
+    """代码库全景百科(v0.9.163,对标 ZCode/Qoder:架构概览、模块分工、命令与约定)。"""
+    return [
+        Tool(
+            name="repo_wiki",
+            description=(
+                "查询或刷新当前工作区的代码库百科(Repo-Wiki):架构概览、顶层模块分工、"
+                "构建/测试/运行命令与工程约定。接手复杂开发、排查项目规范、查测试怎么跑、"
+                "或探索新仓库时优先调用。action='summary'(默认返回架构与模块大纲)、"
+                "action='module'(查询指定模块细则,target=模块名或目录)、"
+                "action='commands'(查询构建与测试命令清单)、"
+                "action='conventions'(查询项目代码与错误处理约定)、"
+                "action='refresh'(重新扫描工作区并强制更新百科数据)。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["summary", "module", "commands", "conventions", "refresh"],
+                        "description": "查询维度:summary(默认概览),module(查模块),commands(查命令),conventions(查约定),refresh(强制重新扫描刷新)",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "action=module 时的目标模块或目录名称(如 minicode, frontend, tests)",
+                    },
+                },
+            },
+            handler=repo_wiki.repo_wiki_tool,
+            read_only=True,
+        ),
+    ]
+

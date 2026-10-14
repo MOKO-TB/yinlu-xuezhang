@@ -39,6 +39,9 @@ PIN = {
     # glob 找 figure_kit.py 的真实路径(技能可能装在应用目录,不能假设相对路径)。
     # 两个工具都真实存在,确认过加进清单。
     "glob", "render_chart",
+    # v0.9.172+:lecture-notes 的"扫描版 PDF"分支改走 ocr_image 逐页抽内嵌图识别。
+    # (v0.9.173 补钉:那一轮改了技能正文却漏了这份清单,清单自己把自己抓了出来。)
+    "ocr_image",
 }
 
 _SNAKE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")

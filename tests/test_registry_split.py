@@ -41,6 +41,20 @@ ORDER = [
     # v0.9.147:诊断工具(按扩展名跑检查器)。挨着 repo_outline —— 同属"看代码"一族,
     # 而模型改完一处代码后紧接着想问的正是"这下对不对"。
     "diagnostics",
+    # v0.9.164:测试套件运行与自愈诊断(执行工作区测试),挨着 diagnostics
+    "test_runner",
+    # v0.9.165:代码库符号索引精准搜索(对标 Cursor/Codex),挨着 test_runner/diagnostics
+    "symbol_search",
+    # v0.9.166:跨文件代码引用查找与影响面分析(对标 Cursor/Codex),挨着 symbol_search
+    "find_references",
+    # v0.9.167:跨文件符号重命名与重构预演(对标 Cursor/Codex),挨着 find_references
+    "rename_symbol",
+    # v0.9.168:跨文件调用层次结构与依赖拓扑分析(对标 VS Code/Cursor/Codex),挨着 rename_symbol
+    "call_hierarchy",
+    # v0.9.169:跨文件符号定义提取与实现跳转(对标 VS Code/Cursor/Codex),挨着 call_hierarchy
+    "symbol_definition",
+    # v0.9.170:代码结构大纲与类/成员树(对标 VS Code/Cursor/Codex),挨着 symbol_definition
+    "code_outline",
     # v0.9.87:项目级权限白名单(看 = 只读,批准 = 要确认),紧挨着文件/命令那组
     "permissions", "permissions_trust",
     # v0.9.116 L3:钩子配方(查/预览 = 只读,挂上 = 要确认),挨着权限那组走
@@ -67,6 +81,8 @@ ORDER = [
     "kb_suggest",
     "library_search", "library_guide",
     "memory",
+    # v0.9.163:代码库全景百科(对标 ZCode/Qoder)
+    "repo_wiki",
     "reminder", "mood", "schedule", "desktop_notify", "get_weather", "campus_notices",
     # v0.9.58:.ics 兜底导出,挨着它吃的三路数据(课表/待办/校历)所在的组
     "export_ics",
@@ -117,7 +133,7 @@ def test_order_pin_is_not_stale():
     v0.9.96 加 `ask_user` 时它的位置就钉在 `plan` 后面 —— 模型每轮拿到的 tools 数组
     是这个顺序,挪位置等于改行为面,所以新工具插在谁后面都要在这里写明。
     """
-    assert len(ORDER) == len(set(ORDER)) == 62      # v0.9.154:61 + notify_parent
+    assert len(ORDER) == len(set(ORDER)) == 70      # v0.9.170:69 + code_outline
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

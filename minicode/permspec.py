@@ -327,6 +327,49 @@ def agents_adopted_layers(workspace) -> dict:
     return dict(layers) if isinstance(layers, dict) else {}
 
 
+def revoke_agents(workspace, rel: str = "") -> bool:
+    """撤销这个项目指定层(根层或子目录层)的指令采纳记录(v0.9.172,清偿 §6 51(g))。
+
+    `rel` 为空串 = 撤销工作区根层的采纳,移除 agents_sha256/agents_lines/agents_at。
+    `rel` 非空 = 撤销对应子目录那一层的采纳,从 agents_layers 里移除那一项。
+
+    安全边界:
+    1. 绝不碰白名单(sha256/rules/approved_at)与记住的权限(granted);
+    2. 绝不碰其他层的采纳记录;
+    3. 若该层原本就未采纳,返回 False;成功撤销返回 True。
+    """
+    key = str(Path(workspace).resolve())
+    table = _read_trust()
+    row = table.get(key)
+    if not isinstance(row, dict):
+        return False
+    changed = False
+    if not rel:
+        fields = ("agents_sha256", "agents_lines", "agents_at")
+        if any(f in row for f in fields):
+            for f in fields:
+                row.pop(f, None)
+            changed = True
+    else:
+        layers = row.get(AGENTS_LAYERS_KEY)
+        if isinstance(layers, dict) and str(rel) in layers:
+            layers = dict(layers)
+            layers.pop(str(rel), None)
+            if layers:
+                row[AGENTS_LAYERS_KEY] = layers
+            else:
+                row.pop(AGENTS_LAYERS_KEY, None)
+            changed = True
+    if not changed:
+        return False
+    if row:
+        table[key] = row
+    else:
+        table.pop(key, None)
+    _write_trust(table)
+    return True
+
+
 def granted_raw(workspace) -> list:
     """本机记住的那几条的原始形状(不是 `Rule`,装载时才校验)。"""
     raw = _row(workspace).get(GRANTED_KEY)

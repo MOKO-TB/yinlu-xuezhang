@@ -140,7 +140,7 @@ def test_facade_exposes_the_sidebar_methods():
     from minicode.gui_bridge import PublicApi
     for n in ("get_extensions", "git_overview", "git_status", "git_diff",
               "git_log", "git_stage", "git_unstage", "git_commit",
-              "git_restore", "git_restore_snapshot", "file_read",
+              "git_restore", "git_restore_snapshot", "git_drop_snapshots", "file_read",
               "file_write", "terminal_run", "terminal_kill"):
         assert callable(getattr(PublicApi, n, None)), n
 

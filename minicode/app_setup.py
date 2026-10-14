@@ -241,6 +241,29 @@ def adopt_layer(workspace, layer: dict) -> str:
     return found["sha"]
 
 
+def revoke_layer(workspace, layer: dict) -> bool:
+    """撤销指定层的采纳(v0.9.172,清偿 §6 51(g))。只动这一层。"""
+    rel = str(layer.get("rel") or "")
+    return permspec.revoke_agents(workspace, rel=rel)
+
+
+def adopt_root_agents(workspace) -> tuple[bool, str]:
+    """采纳工作区根部的项目级指令(若存在)。回 (是否成功, 说明或指纹)。
+
+    供 CLI --adopt-project-agents 或 GUI 一键采纳使用(v0.9.172)。
+    """
+    found, _ = _combined_root_found(workspace)
+    if found is None:
+        return False, "工作区根未找到项目级指令文件"
+    permspec.adopt_agents(workspace, found["sha"], found["lines"], rel="")
+    return True, found["sha"]
+
+
+def revoke_root_agents(workspace) -> bool:
+    """撤销工作区根部的项目级指令采纳(v0.9.172)。"""
+    return permspec.revoke_agents(workspace, rel="")
+
+
 def layer_prompt_section(workspace, layer: dict) -> str:
     """一层子目录指令进**工具结果**的那一段。
 

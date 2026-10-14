@@ -10,6 +10,11 @@ def test_registry_contents():
                      "bash_status", "bash_kill", "bash_input", "py_script",
                      "glob", "grep", "repo_outline",
                      "diagnostics",
+                     # v0.9.164~170 符号与结构一组(registry 里紧跟 diagnostics):
+                     # 它们答的是"这段代码长什么样/谁在用",只读那几只免确认。
+                     "test_runner",
+                     "symbol_search", "find_references", "rename_symbol",
+                     "call_hierarchy", "symbol_definition", "code_outline",
                      "permissions", "permissions_trust",
                      "hooks", "hooks_apply", "worktree",
                      "web_crawl", "web_search",
@@ -24,6 +29,7 @@ def test_registry_contents():
                      "campus_calendar", "calendar_edit", "gpa_calc",
                      "scores",
                      "kb_suggest", "library_search", "library_guide", "memory",
+                     "repo_wiki",            # v0.9.171:代码库百科(只读查询)
                      "reminder", "mood", "schedule", "desktop_notify", "get_weather", "campus_notices",
                      "export_ics",
                      "map_find_place", "map_show_list", "map_highlight_building",
@@ -69,6 +75,17 @@ def test_read_only_flags():
         # v0.9.147:诊断**不标只读** —— 它会执行工作区里的检查器(`cargo check` 会跑
         # `build.rs`),与 `hooks`(只读列清单)正好形成对照:列清单只读,真跑要点头。
         "diagnostics": False,
+        # v0.9.164~170 符号与结构一组。口径分两档:纯查询的(test_runner 除外的
+        # 那几只)只读免确认;而 test_runner 会**真跑**工作区的测试命令(与
+        # diagnostics 同一档:可能执行项目里的构建脚本),rename_symbol 会改盘 ——
+        # 这两只必须点头。
+        "test_runner": False,
+        "symbol_search": True,        # 只解析源码找符号定义,不写不跑
+        "find_references": True,      # 只找引用与影响面,不写不跑
+        "rename_symbol": False,       # dry_run 默认预演,但真改会写多份文件:要确认
+        "call_hierarchy": True,       # 只算调用拓扑,不写不跑
+        "symbol_definition": True,    # 只取定义位置与代码块,不写不跑
+        "code_outline": True,         # 只列文件骨架,不写不跑
         "web_crawl": False,
         "web_search": False,         # 联网访问搜索引擎:与 web_crawl 同级要确认
         # 浏览器会带用户的登录态、browser_eval 能在页面里执行 JS:要确认,
@@ -104,6 +121,7 @@ def test_read_only_flags():
         "plan": False,
         "ask_user": True,            # 只是问一句,什么都不改:给它弹确认框等于"要确认一次确认"
         "memory": False,
+        "repo_wiki": True,            # v0.9.171:代码库百科,只查已生成的大纲,不写不跑
         "reminder": False,           # 待办提醒写本机清单文件,要确认
         "mood": False,               # 情绪记录写本机 mood.json:全 app 最私密的一份,
                                      # 每一次落盘都该在确认框里看得见(与 reminder 同级)
