@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import re
 import sys
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -304,6 +305,21 @@ def main() -> int:
         check("检查更新" in (rows.first.inner_text() if rows.count() else ""),
               "第一条就是「检查更新」")
         page.keyboard.press("Escape")
+        page.wait_for_timeout(150)
+
+        # ⑩ v0.9.174:浅色下「看不见的文字」是一**类**可测的坏 —— 颜色名字没定义,
+        # 浏览器就退回调用点写的白色系回退值。这里量的是**真渲染出来的颜色**
+        # (不是读 CSS 源码):说明文字必须是深色,白/近白当场红。
+        page.evaluate('() => openShortcutsModal()')
+        page.wait_for_timeout(250)
+        colors = page.evaluate(
+            "() => [...document.querySelectorAll('#shortcutsBody div[style*=\"color\"]')]"
+            " .map(d => getComputedStyle(d).color)")
+        vals = [[int(x) for x in re.findall(r'\d+', c)[:3]] for c in colors]
+        brightest = max((sum(v) for v in vals if len(v) == 3), default=999)
+        check(len(vals) >= 6 and brightest < 460,
+              f'浅色下那一屏的文字全是深色({len(vals)} 个节点,最亮的 rgb 和 {brightest})')
+        page.evaluate('() => closeShortcutsModal()')
         page.wait_for_timeout(150)
 
         check(not errors, f"无页面错误(实际:{errors[:2] or '无'})")
