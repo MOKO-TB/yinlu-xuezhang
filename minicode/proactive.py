@@ -376,7 +376,13 @@ def calendar_alerts(today: date | None = None,
 
 # ---------------------------------------------------------------- 新版本检查
 
-RELEASE_API = "https://gitee.com/api/v5/repos/inkzero/momo/releases/latest"
+# v0.9.162+:更新通道从 gitee 换到 **GitHub Release**(用户把仓库开放了:
+# https://github.com/MOKO-TB/yinlu-xuezhang)。换的原因如实记:gitee 那个仓
+# (inkzero/momo)匿名已读不到(repo 页 403)—— 也就是说**旧检查一直是静默死的**,
+# "维护者发 release 就亮"这句承诺从来没兑现过。GitHub 公开仓匿名可读
+# (60 次/时,启动一次远远够)。
+RELEASE_API = "https://api.github.com/repos/MOKO-TB/yinlu-xuezhang/releases/latest"
+NOTES_MAX = 6000      # 更新日志的展示上限;更长在卡片里提示去发布页看全文
 
 
 def _ver_tuple(text: str) -> tuple[int, ...]:
@@ -386,13 +392,17 @@ def _ver_tuple(text: str) -> tuple[int, ...]:
 
 
 def check_update(current: str, timeout: float = 10.0) -> dict | None:
-    """查 gitee 公开仓库的最新 release,比当前版本新才返回;失败一律 None。
+    """查 GitHub 公开仓库的最新 release,比当前版本新才返回;失败一律 None。
 
-    维护者在 gitee 发 release(tag 形如 v0.9.17)后,同学那边的启动检查就会亮。
+    返回里带**整段更新日志**(body,`NOTES_MAX` 截断并标 truncated)与发布日期 ——
+    界面那张「更新日志」卡要的就是它们(用户图 p1:版本 + 日期 + 日志 + 打开)。
+    只在"真比当前新"时返回:同版本/更旧/接口失败/没有 release(404)全部 None,
+    一次网络抖动绝不该在界面上变成一句话。
     """
     import httpx
     try:
-        resp = httpx.get(RELEASE_API, timeout=timeout)
+        resp = httpx.get(RELEASE_API, timeout=timeout,
+                         headers={"Accept": "application/vnd.github+json"})
     except Exception:
         return None
     if resp.status_code != 200:
@@ -401,12 +411,18 @@ def check_update(current: str, timeout: float = 10.0) -> dict | None:
         data = resp.json()
     except Exception:
         return None
+    if not isinstance(data, dict):
+        return None
     tag = str(data.get("tag_name") or data.get("name") or "").strip()
     url = str(data.get("html_url") or "")
     if not tag or _ver_tuple(tag) <= _ver_tuple(current):
         return None
+    notes = str(data.get("body") or "").strip()
+    published = str(data.get("published_at") or "")
     return {"version": tag.lstrip("vV"), "url": url,
-            "notes": str(data.get("body") or "").strip()[:120]}
+            "notes": notes[:NOTES_MAX], "truncated": len(notes) > NOTES_MAX,
+            "date": published[:10],
+            "name": str(data.get("name") or "").strip()}
 
 
 # ---------------------------------------------------------------- 桌面通知文案
@@ -957,10 +973,13 @@ def _round(bridge) -> dict:
                    f"{'已推' if r['ui'] else '推失败'} · " + _desktop_outcome(r["desktop"]))
         out["weather"] = _push_weather(bridge)     # 明天有雨(独立于简报:简报管今天)
     from minicode import __version__
-    update = check_update(__version__)     # 内部已把断网/改版全吞成 None
-    if update:
-        out["update"] = _push_once(bridge, "update",
-                                   str(update.get("version") or ""), **update)
+    # 可关(v0.9.162+):config.json 的 `update_check: false` 就一次都不出网。
+    # 默认开 —— 分发出的 setup.exe 升不了级才是常态问题。
+    if getattr(getattr(bridge, "config", None), "update_check", True):
+        update = check_update(__version__)   # 内部已把断网/改版全吞成 None
+        if update:
+            out["update"] = _push_once(bridge, "update",
+                                       str(update.get("version") or ""), **update)
     out["jobs"] = _run_due_jobs(bridge)    # 主循环兜一遍任务表(5 分钟那路没开也到期)
     if not briefing_covered:
         out["reminders"] = _push_reminders(bridge)

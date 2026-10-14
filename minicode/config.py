@@ -312,6 +312,10 @@ class Config:
     # 每次要动文件之前把整个工作区快照进数据目录里的影子库,盖住 bash/py_script间接改过的文件。
     # **想关就置 false** —— 它要花磁盘与 git 的时间(单次快照有 20 秒上限,超了放弃)。
     shadow_git: bool = True
+    # 新版本检查(启动时问一次 GitHub 公开仓库的最新 release)。**默认开** ——
+    # 分发出的 setup.exe 升不了级才是常态问题;它只做一次匿名 GET,不外发任何
+    # 本机数据(见 SECURITY.md「数据流向」),**想关就置 false**(完全不出网)。
+    update_check: bool = True
     # 按档位分模型(v0.9.95):{"explore": "deepseek-v4-flash", "code": "..."}。
     # **只换模型名,不换供应商** —— 跨供应商要另一份 Key,那一层不在这里做
     # (会话级切供应商已有界面路径,这里要解决的是"侦察用便宜的、实现用硬的")。
@@ -641,6 +645,7 @@ def _config_from_raw(raw: dict) -> Config:
         # 全局在飞上限、以及超时**不覆盖后代**(把它当"高级开关"而不是"更多并行")。
         subagent_nesting=bool(raw.get("subagent_nesting", False)),
         shadow_git=bool(raw.get("shadow_git", True)),
+        update_check=bool(raw.get("update_check", True)),
         # 按档位分模型的原始配置:一律转成"字符串→字符串",空值丢掉。
         # 写成列表/嵌套/数字都不崩(这份要拿去查表),但不认的条目就是不生效 ——
         # 具体能不能用交给 subagents.model_choice 去对着供应商的启用模型核,那才是真相。

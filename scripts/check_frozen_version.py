@@ -67,11 +67,20 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "git_commit", "git_restore", "git_restore_snapshot",
                             "file_read", "file_write",
                             "terminal_run", "terminal_kill",
+                            # v0.9.168:跨文件调用层次分析与智能上下文提及 (清偿 HANDOFF §48(c))
+                            "call_hierarchy", "get_context_mentions",
+                            # v0.9.169:跨文件符号定义提取与实现跳转
+                            "get_symbol_definition",
+                            # v0.9.170:代码结构大纲与类/成员树
+                            "get_code_outline",
                             # v0.9.160 侧聊线程(漏 `_sidechat_resolve` =
                             # key 与留档名两种寻址少一条,冷线程唤醒就是死路)
                             "sidechat_new", "sidechat_threads",
                             "sidechat_read", "sidechat_send",
                             "_sidechat_resolve",
+                            # v0.9.162+:侧栏版本号点开手动查更新(漏收 = 那颗版本号
+                            # 点了没反应,而启动那条检查照常亮)
+                            "check_update_now",
                             # v0.9.142「智能配置」那一屏的数据源(漏收 = 前端那只开关
                             # 永远停在「正在问这台机器知道些什么…」,而界面看着正常)
                             "model_auto_info",
@@ -1100,6 +1109,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # (漏 all_specs = 新建的那几条在装好的包里根本不跑)
                            "all_specs", "_job_user",
                            "check_update", "push_briefing", "start_tick_loop",
+                           # v0.9.162+:更新通道换 GitHub Release,日志上限这个
+                           # 常量是界面「截断了要提示去发布页」那条口径的来源
+                           "NOTES_MAX", "RELEASE_API",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",

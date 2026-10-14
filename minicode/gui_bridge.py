@@ -344,6 +344,10 @@ class PublicApi:
         """数据目录 extensions/ 里的三方扩展清单(只发现,不执行)。"""
         return self._b.get_extensions()
 
+    def check_update_now(self) -> dict:
+        """手动查一次新版本(侧栏版本号可点;卡片/提示条也能再唤)。"""
+        return self._b.check_update_now()
+
     def git_overview(self) -> dict:
         """Git 页一屏:git 可用性 + 状态 + 影子快照。"""
         return self._b.git_overview()
@@ -1465,6 +1469,22 @@ class Bridge:
         """数据目录 extensions/ 里的三方扩展清单(只发现,不执行;加载在前端)。"""
         from minicode import extensions
         return extensions.discover()
+
+    def check_update_now(self) -> dict:
+        """手动查一次新版本(侧栏版本号可点)。
+
+        与启动那条走**同一个** `proactive.check_update`(一份真相:版本比较、
+        通道、日志截断都只有一处);这里只是把它变成一个可以按需唤起的口。
+        `update_check: false` 时**连手动也不出网** —— 关掉的语义是"完全不出网",
+        不该被一个按钮绕过去。
+        """
+        from minicode import __version__, proactive
+        if not getattr(self.config, "update_check", True):
+            return {"ok": False, "msg": "更新检查已在 config.json 里关掉(update_check: false)"}
+        got = proactive.check_update(__version__)
+        if not got:
+            return {"ok": True, "update": None, "current": __version__}
+        return {"ok": True, "update": got, "current": __version__}
 
     def git_overview(self) -> dict:
         """Git 页一屏数据:git 在不在 + 状态 + 影子快照。当前工作区的账。"""

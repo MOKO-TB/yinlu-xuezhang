@@ -64,6 +64,14 @@ const base = {
       {id: "j1", command: "echo hi", running: false, exit_code: 0, killed: false,
        chars: 3, dropped: 0, elapsed: 1, tail: "hi", cwd: "D:/demo/campus"}],
     buffer_chars: 4000, note: "只留尾部"}),
+  open_url: (u) => { window.__CALLS__.push(["open_url", u]);
+    return Promise.resolve({ok: true}); },
+  check_update_now: () => { window.__CALLS__.push(["check_update_now"]);
+    return Promise.resolve({ok: true, current: "0.9.162", update: {
+      version: "0.9.173", date: "2026-10-14", truncated: false,
+      name: "引路学长 v0.9.173",
+      url: "https://github.com/MOKO-TB/yinlu-xuezhang/releases/tag/v0.9.173",
+      notes: "# v0.9.173\n\n## 本次更新\n- 更新检查搬到 GitHub Release\n- 更新日志卡片"}}); },
   terminal_run: (c, cwd) => { window.__CALLS__.push(["terminal_run", c, cwd]);
     if (/^cd\s/i.test(c)) { dockCwd = "D:/demo/campus/sub";
       return Promise.resolve({ok: true, moved: true, cwd: dockCwd}); }
@@ -214,6 +222,40 @@ def main() -> int:
         check(page.evaluate("() => document.getElementById('tpPrompt')"
                             ".textContent.includes('sub')"),
               "cd 就地换提示符(桥记的当前目录落地)")
+
+        # ⑦ 新版本「更新日志」卡(用户图 p1 同款):版本号可点 → 卡片;
+        #    提示条那颗按钮也开它;「打开发布页」过 open_url
+        page.click("#ver")
+        page.wait_for_selector("#updateOverlay.show")
+        check(page.locator("#updVer").text_content() == "0.9.173",
+              "卡片抬头是版本号")
+        check("2026-10-14" in page.locator("#updDate").text_content(),
+              "日期来自 release 的 published_at")
+        body_txt = page.locator("#updBody").inner_text()
+        check("更新检查搬到 GitHub Release" in body_txt
+              and "更新日志卡片" in body_txt,
+              "整段更新日志都渲染了(不再截 60 字)")
+        page.click("#updOpen")
+        page.wait_for_timeout(150)
+        calls2 = page.evaluate("window.__CALLS__")
+        check(any(c[0] == "open_url" and "releases/tag/v0.9.173" in c[1]
+                  for c in calls2), "「打开发布页」把 release 地址交给系统浏览器")
+        page.click("#updLater")
+        page.wait_for_timeout(120)
+        check(not page.locator("#updateOverlay").is_visible(), "「以后再说」收起卡片")
+        # 提示条那条路:proactive 事件 → 看更新内容 → 同一张卡
+        page.evaluate(r"""() => window.__gcodeEvent({type: "proactive",
+          kind: "update", version: "0.9.173", date: "2026-10-14",
+          url: "https://github.com/MOKO-TB/yinlu-xuezhang/releases/tag/v0.9.173",
+          notes: "# v0.9.173\n- 又一件"})""")
+        page.wait_for_timeout(150)
+        check("0.9.173" in page.locator("#proactiveText").text_content(),
+              "提示条写着新版本号")
+        check(page.locator("#proactiveGo").text_content() == "看更新内容",
+              "那颗按钮改成「看更新内容」(不再直接跳走)")
+        page.click("#proactiveGo")
+        page.wait_for_timeout(150)
+        check(page.locator("#updateOverlay").is_visible(), "按钮开的是更新日志卡")
 
         check(not errors, f"无页面错误(实际:{errors[:2] or '无'})")
         browser.close()

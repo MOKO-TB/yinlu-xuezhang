@@ -1496,6 +1496,25 @@ try {
     padding:3px 11px; font-size:11.5px; }
   .mcf-probe:hover{ background:var(--glass-lite); }
   .mcf-probe:disabled{ opacity:.5; cursor:default; }
+  /* 更新日志卡(v0.9.162+):头部一行「vX 更新日志 · 日期」,正文可滚 —— 照
+     用户图 p1 那张 ZCode 的卡做的;正文是 GitHub release 的 markdown,
+     用聊天同一套 marked 渲染,样式收在这几个类里。 */
+  .upd-dialog{ width:640px; max-width:92vw; }
+  .upd-head{ display:flex; align-items:baseline; gap:10px; margin-bottom:4px; }
+  .upd-head h3{ margin:0; }
+  .upd-date{ font-size:11.5px; color:var(--text-3); }
+  .upd-body{ max-height:52vh; overflow-y:auto; margin:10px 0 4px; padding:12px 14px;
+             background:var(--glass-soft); border:1px solid var(--line-soft);
+             border-radius:var(--r-s); font-size:12.5px; line-height:1.7;
+             color:var(--text-1); }
+  .upd-body h1, .upd-body h2, .upd-body h3{ font-size:13.5px; margin:10px 0 6px; }
+  .upd-body h1:first-child, .upd-body h2:first-child{ margin-top:0; }
+  .upd-body ul{ margin:6px 0; padding-left:20px; }
+  .upd-body li{ margin:3px 0; }
+  .upd-body p{ margin:6px 0; }
+  .upd-body code{ font-family:Consolas,monospace; font-size:11.5px;
+                  background:var(--glass-lite); border-radius:4px; padding:1px 4px; }
+  .upd-more{ font-size:11.5px; color:var(--text-3); margin-bottom:6px; }
   .mm-note{ font-size:11px; color:var(--text-2); line-height:1.6; min-height:16px; }
   .mm-note.bad{ color:var(--danger); }
   .mm-note.good{ color:var(--ok,#2f9e6e); }
@@ -3181,6 +3200,24 @@ try {
   </div>
 </div>
 
+<!-- 新版本「更新日志」卡(v0.9.162+,用户图 p1 同款):版本 + 日期 + 可滚动的
+     更新内容 + 打开发布页。启动检查命中时提示条那颗按钮开它;侧栏版本号
+     也可以点开(手动再查一次)。 -->
+<div class="overlay" id="updateOverlay">
+  <div class="dialog upd-dialog">
+    <div class="upd-head">
+      <h3>v<span id="updVer"></span> 更新日志</h3>
+      <span class="upd-date" id="updDate"></span>
+    </div>
+    <div class="upd-body" id="updBody"></div>
+    <div class="upd-more" id="updMore" hidden>日志太长,这里只显示了前半段 —— 完整内容在发布页。</div>
+    <div class="btns">
+      <button class="b-no" id="updLater">以后再说</button>
+      <button class="b-yes" id="updOpen">打开发布页</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="usageOverlay">
   <div class="dialog">
     <div class="usage-head">
@@ -3556,11 +3593,75 @@ function showProactive(text, ask, canMute, mode) {
   proactiveAsk = ask;
   proactiveMode = mode || "fill";
   $("proactiveMute").style.display = canMute ? "inline" : "none";
-  $("proactiveGo").textContent = proactiveMode === "open" ? "去下载" : "去看看";
+  $("proactiveGo").textContent = proactiveMode === "open" ? "去下载"
+    : (proactiveMode === "update" ? "看更新内容" : "去看看");
   $("proactiveBar").style.display = "flex";
+}
+/* ---------------- 新版本更新日志卡(v0.9.162+,用户图 p1 同款) ----------------
+   启动检查命中 → 提示条那颗按钮开这张卡;侧栏版本号也可以点开(手动再查一次)。
+   卡里是**整段**更新日志(GitHub release 的 markdown,走聊天同一套 marked),
+   再给一颗「打开发布页」—— 不自动下载,装不装由用户自己决定。 */
+let lastUpdate = null;
+
+function openUpdateDlg(payload) {
+  const p = payload || {};
+  if (!p.version) { toast("没有可显示的更新内容", true); return; }
+  lastUpdate = p;
+  $("updVer").textContent = p.version;
+  $("updDate").textContent = p.date ? ("· " + p.date) : "";
+  const body = $("updBody");
+  const notes = String(p.notes || "").trim();
+  if (notes && window.marked && marked.parse) {
+    body.innerHTML = marked.parse(notes);
+  } else {
+    body.textContent = notes || "(这一版没有写更新说明)";
+  }
+  $("updMore").hidden = !p.truncated;
+  body.scrollTop = 0;
+  $("updateOverlay").classList.add("show");
+}
+
+$("updLater").addEventListener("click", () => {
+  $("updateOverlay").classList.remove("show");
+});
+$("updOpen").addEventListener("click", () => {
+  const url = (lastUpdate && lastUpdate.url) || "";
+  if (/^https?:\/\//i.test(url) && pywebview.api.open_url) {
+    pywebview.api.open_url(url).catch(() => {});
+  } else {
+    toast("这条更新没有发布页地址", true);
+  }
+});
+$("updateOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "updateOverlay") $("updateOverlay").classList.remove("show");
+});
+
+/* 侧栏版本号:点一下 = 手动查一次(与启动那条同一个后端口,一份真相) */
+function verClickable() {
+  const v = $("ver");
+  if (!v || v.dataset.clickable) return;
+  v.dataset.clickable = "1";
+  v.style.cursor = "pointer";
+  v.title = "点击检查更新";
+  v.addEventListener("click", () => {
+    if (!(window.pywebview && pywebview.api && pywebview.api.check_update_now)) return;
+    v.textContent = v.textContent.replace(/ ?·检查中$/, "") + " ·检查中";
+    pywebview.api.check_update_now().then(r => {
+      if (r && r.update) { openUpdateDlg(r.update); }
+      else if (r && r.ok) { toast("已是最新版本 v" + (r.current || "")); }
+      else { toast((r && r.msg) || "查不到更新", true); }
+    }).catch(() => toast("检查更新失败(网络不通?)", true)).finally(() => {
+      const cur = v.textContent.replace(/ ?·检查中$/, "");
+      v.textContent = cur;
+    });
+  });
 }
 $("proactiveGo").addEventListener("click", () => {
   $("proactiveBar").style.display = "none";
+  if (proactiveMode === "update") {          // 新版本:开更新日志卡(不直接跳走)
+    openUpdateDlg(lastUpdate);
+    return;
+  }
   if (proactiveMode === "open") {
     if (/^https?:\/\//i.test(proactiveAsk) && pywebview.api.open_url) {
       pywebview.api.open_url(proactiveAsk).catch(() => {});
@@ -4709,9 +4810,12 @@ window.__gcodeEvent = function (e) {
       } else if (e.kind === "class") {
         showProactive(String(e.text || "快上课了"), String(e.ask || "这节课我要提前带什么?"), false);
       } else if (e.kind === "update") {
-        showProactive(`发现新版本 v${e.version}!` + (e.notes
-          ? String(e.notes).slice(0, 60) : ""),
-          String(e.url || ""), false, "open");
+        // v0.9.162+:整段更新日志先收着,提示条那颗按钮开卡看(用户图 p1 的形状)
+        lastUpdate = {version: e.version, url: e.url, notes: e.notes,
+                      date: e.date, truncated: e.truncated, name: e.name};
+        showProactive(`发现新版本 v${e.version}!`
+          + (e.date ? " · " + e.date : "") + " · 点右边看更新内容",
+          "", false, "update");
       }
       break;
     }
@@ -12015,6 +12119,7 @@ window.addEventListener("DOMContentLoaded", () => {
     winInit();
     pywebview.api.get_info().then(info => {
     $("ver").textContent = "v" + info.version;
+    verClickable();                        // v0.9.162+:版本号点一下 = 手动查更新
     renderWorkspacePill(info);
     renderPermOptions(info);
     if (info.session_key) currentSessionKey = info.session_key;

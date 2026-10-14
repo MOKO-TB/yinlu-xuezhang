@@ -128,16 +128,42 @@ class FakeLLM:
 # ---------------------------------------------------------------- 新版本检查
 
 def test_check_update_detects_newer_release(monkeypatch):
+    """通道是 GitHub Release(v0.9.162+ 从 gitee 换过来);命中时把**整段**
+    更新日志与发布日期一起带回 —— 界面那张「更新日志」卡要的就是它们。"""
+    body = "# v0.9.173\n\n## 本次更新\n- 一件\n- 又一件"
+
     class FakeResp:
         status_code = 200
 
         def json(self):
-            return {"tag_name": "v0.9.18", "html_url": "https://gitee.com/inkzero/momo/releases/v0.9.18",
-                    "body": "新增主动推荐与提醒"}
+            return {"tag_name": "v0.9.173",
+                    "html_url": "https://github.com/MOKO-TB/yinlu-xuezhang/releases/tag/v0.9.173",
+                    "body": body, "published_at": "2026-10-14T09:00:00Z",
+                    "name": "引路学长 v0.9.173"}
 
     monkeypatch.setattr(httpx, "get", lambda *a, **k: FakeResp())
     result = proactive.check_update("0.9.17")
-    assert result["version"] == "0.9.18" and result["url"].endswith("v0.9.18")
+    assert result["version"] == "0.9.173"
+    assert result["url"].endswith("v0.9.173")
+    assert result["notes"] == body, "整段日志都要带回来(旧的只留 120 字)"
+    assert result["truncated"] is False
+    assert result["date"] == "2026-10-14"
+    assert result["name"] == "引路学长 v0.9.173"
+
+
+def test_long_notes_are_capped_and_flagged(monkeypatch):
+    """超长日志截到上限并**如实标记** truncated —— 界面据此提示去发布页看全文。"""
+    long_body = "x" * (proactive.NOTES_MAX + 500)
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"tag_name": "v0.9.999", "html_url": "u", "body": long_body}
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: FakeResp())
+    got = proactive.check_update("0.9.17")
+    assert len(got["notes"]) == proactive.NOTES_MAX and got["truncated"] is True
 
 
 def test_check_update_ignores_same_older_and_failures(monkeypatch):
@@ -165,13 +191,42 @@ def test_check_update_ignores_same_older_and_failures(monkeypatch):
         text = "no"
 
     monkeypatch.setattr(httpx, "get", lambda *a, **k: BadResp())
-    assert proactive.check_update("0.9.17") is None      # 接口失败静默
+    assert proactive.check_update("0.9.17") is None      # 仓库没有 release(404)静默
 
     def boom(*a, **k):
         raise ConnectionError("offline")
 
     monkeypatch.setattr(httpx, "get", boom)
     assert proactive.check_update("0.9.17") is None      # 断网静默
+
+    class NotDict:
+        status_code = 200
+
+        def json(self):
+            return ["不是对象"]
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: NotDict())
+    assert proactive.check_update("0.9.17") is None      # 改版成非对象也不炸
+
+
+def test_update_check_switch_off_means_no_network(monkeypatch):
+    """`update_check: false` = 一次都不出网:启动那轮跳过、手动那条也拒。"""
+    from minicode.config import Config
+    from minicode.gui_bridge import Bridge
+    from minicode.ui import TerminalUI
+    import tempfile
+    from pathlib import Path
+    calls = []
+    monkeypatch.setattr(proactive, "check_update",
+                        lambda *a, **k: calls.append(1) or None)
+    cfg = Config(providers=[], active_provider_id="", update_check=False)
+    with tempfile.TemporaryDirectory() as td:
+        bridge = Bridge(cfg, Path(td), TerminalUI(cfg, Path(td)),
+                        sessions_dir=Path(td) / "sessions")
+        got = bridge.check_update_now()
+        assert got["ok"] is False and "关掉" in got["msg"]
+    assert calls == [], "关着的时候手动那条也不许出网"
+
 
 
 # ============================================ 桌面通知正文(v0.9.25)
