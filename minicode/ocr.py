@@ -333,24 +333,23 @@ def recognize(path: Path, *, backend: str = "auto", lang: str | None = None,
 
 def ocr_image(ctx, path: str, backend: str = "auto",
               lang: str = "", max_chars: int = TEXT_LIMIT) -> str:
-    """工具出口:识别图片文字,并在结果里自述用了哪条后端、有什么坑。"""
+    """工具出口:识别图片文字,并在结果里自述用了哪条后端、有什么坑。
+
+    v0.9.172+:`.pdf` 走**同一条出口**的 PDF 分支(抽页内嵌图 → 逐页识别),
+    工具名与参数面一格没变 —— 模型那边只多认识一种"能喂的文件"。
+    """
     workspace = Path(getattr(ctx, "workspace", ".") or ".")
     p = Path(str(path)).expanduser()
     if not p.is_absolute():
         p = (workspace / p).resolve()
     if not p.is_file():
         return f"找不到这张图片:{p}(工作区是 {workspace};给个存在的 png/jpg 路径)"
+    if p.suffix.lower() == ".pdf":
+        return ocr_pdf(ctx, p, backend=backend, lang=lang, max_chars=max_chars)
     res = recognize(p, backend=backend, lang=(lang or None),
                     cfg=getattr(ctx, "config", None))
     if not res.get("ok"):
-        why = res.get("why") or "两条后端都没走通"
-        probe = ocr_probe(getattr(ctx, "config", None))
-        return ("这次没有可用的 OCR 后端。\n"
-                f"· 系统引擎:{'可用' if probe['system']['ready'] else probe['system']['why']}\n"
-                f"· 视觉模型:{'可用(' + probe['vision'].get('model','') + ')' if probe['vision']['ready'] else probe['vision']['why']}\n"
-                f"· 本次失败原因:{why}\n"
-                "下一步可选:装本机离线组件(不联网)—— " + INSTALL_HINT
-                + ";或在「设置 → 模型」里配一个能看图的模型,再用 backend=vision 重试。")
+        return _no_backend_block(ctx, res.get("why") or "两条后端都没走通")
     text = str(res.get("text") or "")
     clipped = len(text) > max_chars
     head = (f"OCR 完成｜后端:{'Windows 自带引擎 ' + res.get('engine','') if res['backend'] == 'system' else '视觉模型 ' + res.get('model','')}"
@@ -368,4 +367,136 @@ def ocr_image(ctx, path: str, backend: str = "auto",
     out.append(res.get("warn") or "")
     if res.get("note"):
         out.append(f"备注:{res['note']}")
+    return "\n".join(x for x in out if x)
+
+
+# ------------------------------------------------------------ PDF 分支(v0.9.172+)
+
+# 扫描版/图片版 PDF 的每一页通常就是**一张内嵌大图** —— pypdf 能直接抽出来,
+# 于是"PDF 页 → 图"这一环不需要任何新依赖(不引 pymupdf/poppler 那类要外部
+# 二进制的光栅化器)。抽不出图的页如实点名(矢量图/带文字层那类,请走 pdf 技能
+# 直接抽文本),**绝不跳过装看不见**。上限是"别让一份 300 页课件把一轮对话撑爆"。
+PDF_PAGE_MAX = 60
+PDF_IMAGE_MIN_BYTES = 2048      # 小于这个的多半是页眉装饰/图标,不当正文页图
+
+
+def _no_backend_block(ctx, why: str) -> str:
+    """没有可用 OCR 后端时的同一段实话(图片与 PDF 两条路共用一份文案)。"""
+    probe = ocr_probe(getattr(ctx, "config", None))
+    return ("这次没有可用的 OCR 后端。\n"
+            f"· 系统引擎:{'可用' if probe['system']['ready'] else probe['system']['why']}\n"
+            f"· 视觉模型:{'可用(' + probe['vision'].get('model','') + ')' if probe['vision']['ready'] else probe['vision']['why']}\n"
+            f"· 本次失败原因:{why}\n"
+            "下一步可选:装本机离线组件(不联网)—— " + INSTALL_HINT
+            + ";或在「设置 → 模型」里配一个能看图的模型,再用 backend=vision 重试。")
+
+
+def _pdf_page_images(p: Path, pages_max: int = PDF_PAGE_MAX):
+    """抽每页**最大的那张内嵌图**。回 (pages, skipped, total_pages, err)。
+
+    pages   = [{"page": 页号(1 起), "name": 图名, "data": bytes}]
+    skipped = 逐页的人话(没有可抽取的图 / 图太小当装饰跳过)
+    """
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return [], [], 0, ("没装 pypdf(内置运行时应该带;缺了就只能装一个,"
+                           "或把 PDF 拆成图片再喂给 ocr_image)")
+    try:
+        reader = PdfReader(str(p))
+        total = len(reader.pages)
+    except Exception as e:
+        return [], [], 0, f"这份 PDF 读不开:{type(e).__name__}: {e}"
+    pages, skipped = [], []
+    for i, page in enumerate(reader.pages[:pages_max], start=1):
+        try:
+            imgs = list(page.images)
+        except Exception as e:
+            skipped.append(f"第 {i} 页的图抽不出来({type(e).__name__})")
+            continue
+        if not imgs:
+            skipped.append(f"第 {i} 页没有可抽取的图(矢量图或带文字层 —— "
+                           "那几页请用 pdf 技能直接抽文本)")
+            continue
+        # 一页多图时取面积/体积最大的那张:扫描版整页图一定比页眉图标大得多
+        best = max(imgs, key=lambda im: len(bytes(im.data or b"")))
+        data = bytes(best.data or b"")
+        if len(data) < PDF_IMAGE_MIN_BYTES:
+            skipped.append(f"第 {i} 页只抽到很小的图({len(data)} 字节),"
+                           "当装饰跳过了")
+            continue
+        pages.append({"page": i, "name": str(getattr(best, "name", "") or ""),
+                      "data": data})
+    return pages, skipped, total, ""
+
+
+def ocr_pdf(ctx, p: Path, *, backend: str = "auto", lang: str = "",
+            max_chars: int = TEXT_LIMIT) -> str:
+    """PDF 分支:逐页抽图 → 逐页识别 → 按页锚点拼文本。
+
+    三条与图片那条**同款**的诚实口径:没有后端时说清缺什么;单页识别失败
+    只报那一页(不拖垮整份、也不假装读过);整段超 max_chars 截断并说明。
+    """
+    import tempfile
+    pages, skipped, total, err = _pdf_page_images(p)
+    if err:
+        return err
+    if not pages:
+        head = (f"这份 PDF 里没有可抽取的页图({total} 页)。\n"
+                "多半是**矢量/带文字层的 PDF** —— 那类直接用 pdf 技能抽文本即可,"
+                "不需要 OCR。")
+        if skipped:
+            head += "\n逐页情况:\n· " + "\n· ".join(skipped[:8])
+        return head
+    cfg = getattr(ctx, "config", None)
+    blocks: list[str] = []
+    used_backends: set[str] = set()
+    failures: list[str] = []
+    budget = max(200, int(max_chars))
+    for item in pages:
+        suffix = Path(item["name"]).suffix or ".png"
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+                tmp = Path(f.name)
+                f.write(item["data"])
+            res = recognize(tmp, backend=backend, lang=(lang or None), cfg=cfg)
+        except Exception as e:
+            res = {"ok": False, "why": f"{type(e).__name__}: {e}"}
+        finally:
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        if not res.get("ok"):
+            failures.append(f"第 {item['page']} 页没认出来({res.get('why') or '空结果'})")
+            continue
+        used_backends.add(str(res.get("backend") or ""))
+        text = str(res.get("text") or "").strip()
+        if not text:
+            failures.append(f"第 {item['page']} 页认出来是空的")
+            continue
+        blocks.append(f"--- 第 {item['page']} 页 ---\n{text}")
+    if not blocks:
+        why = ";".join(failures[:4]) or "每一页都没认出内容"
+        return _no_backend_block(ctx, why) if not used_backends else \
+            "抽到的页图一张都没认出内容:\n· " + "\n· ".join(failures[:8])
+    body = "\n\n".join(blocks)
+    clipped = len(body) > budget
+    out = [f"OCR 完成(PDF 扫描版)｜{len(pages)} 页有图、{len(blocks)} 页认出文字"
+           f"｜共 {total} 页｜后端:" + "/".join(sorted(x for x in used_backends if x)),
+           f"文件:{p}", "--- 识别文本(按页) ---", body[:budget]]
+    if clipped:
+        out.append(f"……(文本 {len(body)} 字,已截到 {budget} 字;要更多把 max_chars 调大)")
+    if skipped:
+        out.append("--- 跳过的页 ---")
+        out.append("· " + "\n· ".join(skipped[:12])
+                   + (f"\n(另有 {len(skipped) - 12} 条)" if len(skipped) > 12 else ""))
+    if failures:
+        out.append("--- 没认出来的页 ---")
+        out.append("· " + "\n· ".join(failures[:12]))
+    out.append("--- 告警 ---")
+    out.append(SYSTEM_WARN if "system" in used_backends else
+               "视觉模型可能夹带补全:取到的文本只当待核对草稿。")
     return "\n".join(x for x in out if x)

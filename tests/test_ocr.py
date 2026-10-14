@@ -265,3 +265,94 @@ def test_real_windows_engine_reads_the_fixture(tmp_path):
     assert "最小值" in res["text"]
     assert len(res["lines"]) >= 2
     assert "不可靠" in res["warn"], "离线引擎必须自带可靠性告警"
+
+
+# ------------------------------------------------------------------ PDF 分支(v0.9.172+)
+
+def _pdf_with_image(tmp_path, pages=1, size=(800, 1200)):
+    """造一份"扫描版"PDF:Pillow 把图排成 PDF 页(每页就是一张整页图)。
+
+    用 Pillow 生成而不是往仓库塞二进制 —— 两份依赖(Pillow/pypdf)都在,
+    fixture 自己就能长出来。
+    """
+    from PIL import Image
+    imgs = []
+    for i in range(pages):
+        im = Image.new("RGB", size, "white")
+        imgs.append(im)
+    p = tmp_path / "scan.pdf"
+    imgs[0].save(str(p), "PDF", save_all=True, append_images=imgs[1:])
+    return p
+
+
+def _blank_pdf(tmp_path):
+    from pypdf import PdfWriter
+    p = tmp_path / "vector.pdf"
+    w = PdfWriter()
+    w.add_blank_page(width=595, height=842)
+    w.write(str(p))
+    return p
+
+
+def test_pdf_pages_extract_the_page_image(tmp_path):
+    pdf = _pdf_with_image(tmp_path, pages=2)
+    pages, skipped, total, err = ocr._pdf_page_images(pdf)
+    assert err == "" and total == 2
+    assert [x["page"] for x in pages] == [1, 2], "两页各抽到一张页图"
+    assert all(len(x["data"]) > ocr.PDF_IMAGE_MIN_BYTES for x in pages)
+    assert skipped == []
+
+
+def test_pdf_without_images_is_told_apart_not_silently_skipped(tmp_path):
+    """矢量/带文字层的 PDF:没有页图就**如实说**"走 pdf 技能抽文本",
+    绝不返回一份空的"识别完成"。"""
+    pdf = _blank_pdf(tmp_path)
+    pages, skipped, total, err = ocr._pdf_page_images(pdf)
+    assert err == "" and total == 1 and pages == []
+    assert skipped and "没有可抽取的图" in skipped[0] and "pdf 技能" in skipped[0]
+    out = ocr.ocr_pdf(_Ctx(), pdf)
+    assert "没有可抽取的页图" in out and "pdf 技能" in out
+
+
+def test_ocr_pdf_marks_pages_and_reports_failures_honestly(tmp_path, monkeypatch):
+    pdf = _pdf_with_image(tmp_path, pages=2)
+
+    def fake_recognize(path, *, backend="auto", lang=None, cfg=None):
+        # 第一页成功、第二页失败:失败的**只报那一页**
+        state = getattr(fake_recognize, "n", 0) + 1
+        fake_recognize.n = state
+        if state == 1:
+            return {"ok": True, "text": "第一章 绪论", "backend": "system",
+                    "engine": "fake", "elapsed_ms": 12, "lines": 1}
+        return {"ok": False, "why": "引擎认不出"}
+
+    monkeypatch.setattr(ocr, "recognize", fake_recognize)
+    out = ocr.ocr_pdf(_Ctx(), pdf, max_chars=6000)
+    assert "--- 第 1 页 ---" in out and "第一章 绪论" in out
+    assert "没认出来的页" in out and "第 2 页" in out
+    assert "OCR 完成(PDF 扫描版)" in out and "2 页有图、1 页认出文字" in out
+
+
+def test_ocr_pdf_without_any_backend_says_what_is_missing(tmp_path, monkeypatch):
+    pdf = _pdf_with_image(tmp_path, pages=1)
+    monkeypatch.setattr(ocr, "recognize",
+                        lambda *a, **k: {"ok": False, "why": "两条都没走通"})
+    out = ocr.ocr_pdf(_Ctx(), pdf)
+    assert "没有可用的 OCR 后端" in out
+    assert "系统引擎" in out and "视觉模型" in out, "缺什么要逐条说清"
+
+
+def test_ocr_image_routes_pdf_to_the_pdf_chain(tmp_path, monkeypatch):
+    """同一个出口:`ocr_image` 收到 .pdf 就交给 PDF 链(工具名与参数面不变)。"""
+    pdf = _pdf_with_image(tmp_path, pages=1)
+    seen = {}
+
+    def fake_pdf(ctx, p, *, backend="auto", lang="", max_chars=6000):
+        seen.update({"path": str(p), "backend": backend, "lang": lang})
+        return "PDF 链的产物"
+
+    monkeypatch.setattr(ocr, "ocr_pdf", fake_pdf)
+    out = ocr.ocr_image(_Ctx(workspace=str(tmp_path)), "scan.pdf",
+                        backend="vision", lang="zh-Hans-CN")
+    assert out == "PDF 链的产物"
+    assert seen["path"].endswith("scan.pdf") and seen["backend"] == "vision"

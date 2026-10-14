@@ -918,7 +918,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.ocr": ("recognize", "ocr_image", "ocr_probe", "recognize_system",
                      "recognize_vision", "system_ready", "vision_ready",
                      "normalize_system_text", "SYSTEM_WARN", "VISION_PROMPT",
-                     "BackendMissing"),
+                     "BackendMissing",
+                     # v0.9.172+:PDF 扫描版那条链(漏 ocr_pdf = 喂 .pdf 又回到
+                     # "只认图片"的旧口径;漏 PDF_PAGE_MAX = 上限没人管)
+                     "ocr_pdf", "_pdf_page_images", "_no_backend_block",
+                     "PDF_PAGE_MAX"),
     "minicode.charts": ("chart_file", "render", "normalize_data", "nice_ticks",
                         "render_bar", "render_line", "render_pie", "ChartError",
                         "CHART_TYPES", "MAX_POINTS", "PIE_MAX_SLICES", "slugify"),
