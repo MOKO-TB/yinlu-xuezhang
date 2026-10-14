@@ -54,10 +54,16 @@ from minicode.tools.base import Tool
 
 PROTOCOL_VERSION = "2024-11-05"
 CLIENT_NAME = "yinlu-xuezhang"
-# 学长只实现了 tools 这一个原语:resources / prompts / sampling / logging 都没接。
-# 握手时客户端声明空 capabilities(不假装支持),而对端声明了什么以前**直接丢掉** ——
-# 于是"这台服务器还能给什么、学长用不上哪几样"在界面与探测结果里永远看不见。
-CLIENT_PRIMITIVES = ("tools", "resources")   # v0.9.102(B1):resources 接入(list/read)
+# 学长的客户端原语:tools(始终)/ resources(v0.9.102 B1)/ prompts(v0.9.172+ 续四)。
+# **sampling 与 elicitation 的取舍写在这里**(别处不再重复):
+# - sampling(服务端请客户端替它跑一次模型)**明确不做**:那等于让一台外部服务器
+#   替你花额度、还会把你的上下文片段送出去 —— 与 authorization_code 同一条立场,
+#   **拒绝而不是忽略**(对端真发来会收到一条说清的 JSON-RPC error,不是干等);
+# - elicitation(服务端中途要用户确认/填值)**接协议、不接表单**:按 MCP 规范回
+#   `{"action": "decline"}` 并记一条日志 —— 现状(静默丢弃)会让服务端一直等;
+#   把 schema 编成提问卡是**另一轮的设计**(卡片是选项式的,要写 schema→卡片编译器
+#   与结构化回读),不在这轮硬凑。
+CLIENT_PRIMITIVES = ("tools", "resources", "prompts")   # prompts 于 v0.9.172+ 接入(list/get)
 
 DEFAULT_START_TIMEOUT = 10.0
 DEFAULT_CALL_TIMEOUT = 60.0
@@ -256,6 +262,9 @@ class Transport:
     def __init__(self, cfg: McpServerConfig, log=None):
         self.cfg = cfg
         self._log = log
+        # 服务端主动请求(elicitation 等)的处理钩子:客户端在造出通道后装上。
+        # 装不上也**不静默丢** —— 见 `_inbound_request` 的兜底。
+        self.on_server_request = None
 
     def open(self) -> None:
         """把通道准备好(拉进程 / 开长流)。失败抛异常,由客户端记成"连接失败"。"""
@@ -401,6 +410,34 @@ class _StreamedTransport(Transport):
         with self._cv:
             self._cv.notify_all()
 
+    def _inbound_request(self, msg: dict) -> None:
+        """服务端主动发来的请求(同时有 id 与 method):处理并**回一条**。
+
+        为什么必须回:以前这类报文被当"通知"丢掉(或塞进没人等的收件箱),
+        对端会一直等它的回复 —— 用户那边什么都不知道,服务端那边干等到超时。
+        **"不支持"要说得出口**:没装钩子时回一条 JSON-RPC error(方法名带上),
+        而不是让对端干等。回包走 `notify`(同一个写通道,只是带 id)。
+        """
+        handler = getattr(self, "on_server_request", None)
+        if callable(handler):
+            try:
+                result, error = handler(msg)
+            except Exception as exc:
+                result, error = None, {"code": -32603,
+                                       "message": f"客户端处理出错:{type(exc).__name__}: {exc}"}
+        else:
+            result, error = None, {"code": -32601,
+                                   "message": f"客户端不支持 {msg.get('method')}"}
+        payload = {"jsonrpc": "2.0", "id": msg.get("id")}
+        if error is not None:
+            payload["error"] = error
+        else:
+            payload["result"] = result if result is not None else {}
+        try:
+            self.notify(payload)
+        except Exception:
+            pass            # 回不出去只影响对端这一次请求,不该带走读线程
+
 
 class StdioTransport(_StreamedTransport):
     """我们拉起子进程:一行一个 JSON-RPC 报文(日志走 stderr,不混进协议流)。"""
@@ -466,7 +503,10 @@ class StdioTransport(_StreamedTransport):
             if not isinstance(msg, dict):
                 continue
             mid = msg.get("id")
-            if mid is None:                   # 服务器主动通知/请求:本项目暂不处理
+            if mid is None:                   # 服务器主动通知:无需响应
+                continue
+            if "method" in msg:               # 服务器主动**请求**(elicitation 等)
+                self._inbound_request(msg)
                 continue
             self._deliver(msg)
 
@@ -614,6 +654,9 @@ class HttpTransport(Transport):
             if "text/event-stream" in ctype:
                 for _event, data in _iter_sse(resp):
                     obj = _json_obj(data)
+                    if obj is not None and "method" in obj and obj.get("id") is not None:
+                        self._inbound_request(obj)  # 服务端主动请求:回一条再接着等
+                        continue
                     if obj is not None and obj.get("id") == want_id:
                         self._ok = True
                         return obj
@@ -705,7 +748,9 @@ class SseTransport(_StreamedTransport):
                     self._endpoint_ready.set()
                     continue
                 obj = _json_obj(text)
-                if obj is not None and obj.get("id") is not None:
+                if obj is not None and "method" in obj and obj.get("id") is not None:
+                    self._inbound_request(obj)      # 服务端主动请求:回一条,别让对端干等
+                elif obj is not None and obj.get("id") is not None:
                     self._deliver(obj)
         except Exception as exc:
             self._last = f"{type(exc).__name__}: {exc}"
@@ -760,10 +805,15 @@ class McpTransportError(McpError):
 class McpClient:
     """单个 MCP 服务器的客户端:握手 + 拉工具清单 + 调用(通道细节在 Transport 里)。"""
 
-    def __init__(self, cfg: McpServerConfig, log=None, transport: Transport | None = None):
+    def __init__(self, cfg: McpServerConfig, log=None, transport: Transport | None = None,
+                 on_elicit=None):
         self.cfg = cfg
         self._log = log
         self.transport = transport or make_transport(cfg, log=log)
+        # 服务端要用户确认时的回调(message, requestedSchema) -> {"action": ...};
+        # 没装回调 = 一律按 decline 回(见 `_handle_server_request`)。
+        self.on_elicit = on_elicit
+        self.transport.on_server_request = self._handle_server_request
         self._lock = threading.Lock()          # 串行化请求,避免 id 交叉
         self._next_id = 0
         self._closed = False
@@ -811,6 +861,17 @@ class McpClient:
                                       if isinstance(x, dict) and x.get("uri")]
                 except Exception as exc:
                     self._warn(f"resources/list 拉取失败(工具不受影响): {exc}")
+            # prompts 同款:声明了才拉,失败不致命、也不重试第二次
+            self.prompts = []
+            if "prompts" in self.server_caps:
+                try:
+                    pl = self._request("prompts/list", {},
+                                       timeout=self.cfg.start_timeout)
+                    got = (pl or {}).get("prompts", []) if isinstance(pl, dict) else []
+                    self.prompts = [x for x in got
+                                    if isinstance(x, dict) and x.get("name")]
+                except Exception as exc:
+                    self._warn(f"prompts/list 拉取失败(工具不受影响): {exc}")
             return True
         except Exception as e:                 # 配置错/命令不存在/地址不通/握手超时
             self.error = f"{type(e).__name__}: {e}"
@@ -837,6 +898,7 @@ class McpClient:
         self._closed = False
         self.tools, self.server_info, self.error = [], {}, ""
         self.resources: "list[dict]" = []   # B1:声明了 resources 的服务器才有内容
+        self.prompts: "list[dict]" = []     # v0.9.172+ 续四:声明了 prompts 的才有内容
         self.server_caps = {}
         self.transport = make_transport(self.cfg, log=self._log)
         return self.start()
@@ -848,9 +910,11 @@ class McpClient:
     def caps_line(self) -> str:
         """对端在握手里声明了什么能力,以及学长实际接了哪几项。
 
-        这一句存在的理由是**不假装**:对端说它提供 resources/prompts,而学长只实现了
-        tools —— 不写清的话,用户在面板上看到"连上了、N 个工具",会以为那台服务器的
-        其余能力也能用。反过来对端什么都没声明时也照实说,不替它编一份能力表。
+        这一句存在的理由是**不假装**:对端说它提供 logging/sampling,而学长不接 ——
+        不写清的话,用户在面板上看到"连上了、N 个工具",会以为那台服务器的其余
+        能力也能用。反过来对端什么都没声明时也照实说,不替它编一份能力表。
+        (v0.9.172+ 起 prompts 进了 CLIENT_PRIMITIVES,"没实现"的名单由这份元组
+        自动收窄 —— 别再手写一份。)
         """
         declared = sorted(self.server_caps or {})
         if not declared:
@@ -884,6 +948,61 @@ class McpClient:
 
     def list_tools(self) -> list[dict]:
         return self.tools
+
+    def get_prompt(self, name: str, arguments: dict | None = None) -> str:
+        """取一条 prompt 模板的内容(prompts/get),拼成给模型看的文本。
+
+        与 resources/read 同一条口径:**拿不到就如实报**;内容里的图片等非文本
+        块不内联,只报类型(与 blob 那一处同一个理由:别把二进制灌进上下文)。
+        """
+        r = self._request("prompts/get",
+                          {"name": str(name or ""),
+                           "arguments": {str(k): str(v) for k, v in (arguments or {}).items()}},
+                          timeout=self.cfg.call_timeout)
+        if not isinstance(r, dict):
+            return f"(服务器对 prompt「{name}」返回了空结果)"
+        parts: list[str] = []
+        desc = str(r.get("description") or "").strip()
+        for m in (r.get("messages") or []):
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "?")
+            content = m.get("content")
+            if isinstance(content, dict):
+                ctype = str(content.get("type") or "")
+                if ctype == "text":
+                    parts.append(f"[{role}] {str(content.get('text') or '')}")
+                else:
+                    parts.append(f"[{role}] ({ctype} 内容不内联)")
+            elif isinstance(content, str):
+                parts.append(f"[{role}] {content}")
+        if not parts:
+            return f"(prompt「{name}」里没有可显示的内容)"
+        head = f"prompt「{name}」" + (f"(服务器说明:{desc})" if desc else "")
+        return head + "\n" + "\n".join(parts)
+
+    def _handle_server_request(self, msg: dict):
+        """服务端主动请求:回 (result, error)。见 CLIENT_PRIMITIVES 上的取舍说明。"""
+        method = str(msg.get("method") or "")
+        params = msg.get("params") or {}
+        if method == "elicitation/create":
+            if callable(self.on_elicit):
+                try:
+                    got = self.on_elicit(str(params.get("message") or ""),
+                                         params.get("requestedSchema") or {})
+                except Exception as exc:
+                    self._warn(f"elicitation 回调出错,按 decline 回:{type(exc).__name__}: {exc}")
+                    got = None
+                if isinstance(got, dict) and got.get("action") in ("accept", "decline", "cancel"):
+                    self._warn(f"elicitation 已回:{got.get('action')}")
+                    return got, None
+            self._warn("elicitation 已回:decline(这一版不接表单 —— 服务端要的是结构化输入)")
+            return {"action": "decline"}, None
+        if method == "sampling/createMessage":
+            return None, {"code": -32601,
+                          "message": ("本项目明确不支持 sampling(不让外部服务端替用户花额度、"
+                                      "也不把上下文片段交给它);要模型输出请在对话里说")}
+        return None, {"code": -32601, "message": f"客户端不支持 {method}"}
 
     def read_resource(self, uri: str) -> "tuple[str, str]":
         """读一个资源,返回 (给模型看的文本, mimeType)。
@@ -1168,16 +1287,17 @@ def summary_rows(config, manager=None) -> "list[dict]":
 class McpManager:
     """管理所有 MCP 服务器,并产出可直接并入注册表的 Tool 列表。"""
 
-    def __init__(self, servers: list[McpServerConfig], log=None):
+    def __init__(self, servers: list[McpServerConfig], log=None, on_elicit=None):
         self.servers = servers
         self.clients: list[McpClient] = []
         self._log = log
+        self.on_elicit = on_elicit
 
     def connect_all(self) -> None:
         for s in self.servers:
             if not s.enabled:
                 continue
-            client = McpClient(s, log=self._log)
+            client = McpClient(s, log=self._log, on_elicit=self.on_elicit)
             if client.start():
                 self.clients.append(client)
 
@@ -1257,9 +1377,13 @@ def _version() -> str:
         return "0"
 
 
-def connect_servers(servers: list[McpServerConfig], log=None) -> McpManager:
-    """按配置连接全部启用的服务器(失败的跳过),返回管理器。"""
-    mgr = McpManager(servers, log=log)
+def connect_servers(servers: list[McpServerConfig], log=None, on_elicit=None) -> McpManager:
+    """按配置连接全部启用的服务器(失败的跳过),返回管理器。
+
+    `on_elicit` 是"服务端中途要用户确认"的回调(没装 = 一律 decline,见
+    `CLIENT_PRIMITIVES` 上的取舍);谁有提问通道谁就传它进来。
+    """
+    mgr = McpManager(servers, log=log, on_elicit=on_elicit)
     mgr.connect_all()
     return mgr
 

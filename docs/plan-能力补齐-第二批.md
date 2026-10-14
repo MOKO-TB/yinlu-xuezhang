@@ -189,7 +189,7 @@
 | **S5b/S5c OS 沙箱降权** | §6 第 52 条 | 高(安全) | **等用户拍板**;fail-open 语义:做错了不是"没保护",是每条命令都跑不起来 |
 | 代码库语义索引 | 批次 2/3 | 中 | `retrieval.py`+`embed.py` 只接 KB;工作区已有 grep/符号工具兜底,**建议等真实"找不到代码"的反馈** |
 | 子代理 worktree 隔离与 steer | 批次 2/3 | 中 | 长任务不污染主工作区 + 给在跑的子代理递话 |
-| MCP prompts / sampling / elicitation | 批次 2/3 | 低-中 | 依赖具体 MCP 服务端的用法 |
+| ~~MCP prompts / sampling / elicitation~~ ✅ | 批次 2/3 | **已于 2026-10-14 交付** —— prompts 接入(list/get,能力行自动收窄);elicitation 按规范回 decline + 记日志(不再静默丢弃让对端干等);sampling **明确拒绝**并说清理由。**留后**:`mcp_prompt` 工具(等注册表精确清单恢复绿,与 `voice_input` 同批)与 elicitation→提问卡的 schema 编译器 |
 
 ---
 

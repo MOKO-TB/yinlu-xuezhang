@@ -56,13 +56,33 @@ def main() -> None:
         if rid is None:          # 通知(notifications/initialized)无需响应
             continue
         if method == "initialize":
-            # 故意声明得比学长实际支持的多(resources/prompts 学长没实现):
-            # caps_line 那句「只接了 tools、其余不会去调」要有真数据才验得到。
+            # 故意声明得比学长接的多(logging 学长不接):
+            # caps_line 那句「哪几样没实现、不会去调」要有真数据才验得到。
+            # v0.9.172+ 起 prompts 也接了,所以这里留 logging 当"没接的那一样"。
             reply(rid, {"protocolVersion": "2024-11-05",
-                        "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
+                        "capabilities": {"tools": {}, "resources": {},
+                                         "prompts": {}, "logging": {}},
                         "serverInfo": {"name": "fake-mcp", "version": "0.0.1"}})
         elif method == "tools/list":
             reply(rid, {"tools": TOOLS})
+        elif method == "prompts/list":
+            reply(rid, {"prompts": [
+                {"name": "summarize", "title": "总结",
+                 "description": "把一段文字总结成三点",
+                 "arguments": [{"name": "text", "description": "要总结的文本",
+                                "required": True}]},
+            ]})
+        elif method == "prompts/get":
+            args = (msg.get("params") or {}).get("arguments") or {}
+            reply(rid, {"description": "把一段文字总结成三点",
+                        "messages": [
+                            {"role": "user",
+                             "content": {"type": "text",
+                                         "text": "请把下面这段总结成三点:\\n"
+                                                 + str(args.get("text") or "")}},
+                            {"role": "user",
+                             "content": {"type": "image", "data": "aGk="}},
+                        ]})
         elif method == "resources/list":
             # B1(v0.9.102):一份文本资源 + 一份二进制资源 —— read 的两条路都要有真数据
             reply(rid, {"resources": [

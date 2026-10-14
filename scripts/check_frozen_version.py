@@ -1226,6 +1226,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                      # 侧栏悬停都不再讲「对端声明了什么、学长只接了 tools」,
                      # 用户又会以为接上就等于全能用)
                      "CLIENT_PRIMITIVES", "caps_line", "server_caps",
+                     # v0.9.172+ 续四:prompts 接入 + 服务端主动请求的两条诚实答复
+                     # (漏 get_prompt = 装好的包里 prompts 列得出来却取不到内容;
+                     #  漏 _inbound_request = 服务端主动请求又被静默丢弃、对端干等)
+                     "get_prompt", "_handle_server_request", "_inbound_request",
                      # v0.9.121 工具结果那一份文本的出口(漏收 = 装好的包里
                      # image/audio 又整坨 base64 灌进上下文、structuredContent
                      # 明明有数据却回「工具返回空结果」—— 两处都不报错,

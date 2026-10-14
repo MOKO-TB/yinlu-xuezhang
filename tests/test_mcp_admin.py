@@ -92,16 +92,20 @@ def test_probe_server_rejects_invalid_raw():
 # ------------------------------------------------------------ 能力如实上报
 
 def test_caps_line_says_what_the_server_declared_and_what_we_use(client):
-    """对端声明 resources/prompts,而学长只实现了 tools —— 这句必须说清。
+    """对端声明的能力要逐项摊开,并说清**哪几样学长不接** —— 不假装。
 
     不说清的表现是:用户看到「连上了、2 个工具」,就以为那台服务器的其余能力
-    也能用;而握手时客户端声明的是空 capabilities,学长从来不去调 resources。
+    也能用。v0.9.172+ 起 prompts 已接(与 tools/resources 同级),logging 仍未接
+    —— 所以"没实现"的名单里只剩 logging,而这一支针正是钉"名单要如实"。
+    ⚠ 断言写成**整串**:只写 `"学长只接了 tools" in line` 会被
+    `"学长只接了 tools、resources、prompts"` 子串蒙过去(实测踩过)。
     """
     line = client.caps_line()
     assert "对端声明" in line
-    for prim in ("tools", "resources", "prompts"):
+    for prim in ("tools", "resources", "prompts", "logging"):
         assert prim in line, prim
-    assert "学长只接了 tools" in line and "没实现" in line
+    assert "学长只接了 tools、resources、prompts" in line, line
+    assert "logging 没实现" in line and "不会去调" in line, line
 
 
 def test_caps_line_when_the_server_declared_nothing():
@@ -218,3 +222,82 @@ def test_bridge_admin_add_remove_roundtrip(config, tmp_path):
     saved2 = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     assert not any((s.get("id") or s.get("name")) == "fake2"
                    for s in saved2.get("mcp_servers") or [])
+
+
+# ------------------------------------------- prompts 与 elicitation(v0.9.172+ 续四)
+
+def test_prompts_are_listed_and_fetched(client):
+    """声明了 prompts 才拉清单;get 把模板内容拼成给模型看的文本,
+    非文本块**只报类型不内联**(与 resources 的 blob 同一条口径)。"""
+    names = [p.get("name") for p in client.prompts]
+    assert names == ["summarize"], client.prompts
+    out = client.get_prompt("summarize", {"text": "今天下雨了"})
+    assert "总结成三点" in out and "今天下雨了" in out
+    assert "[user]" in out
+    assert "(image 内容不内联)" in out, "图片块不许内联进上下文"
+
+
+def test_get_prompt_without_content_says_so():
+    """服务器给了空结果:如实说,不返回空串装成功(走同一只假客户端,改回包太绕,
+    直接对 _request 打桩)。"""
+    from minicode.mcp import McpClient
+    cfg = mcp_mod.parse_servers([_fake_config("empty-prompt")])[0]
+    c = McpClient(cfg)
+    c._request = lambda *a, **k: None          # 服务器回了空:如实说"空结果"
+    assert "空结果" in c.get_prompt("whatever")
+    c._request = lambda *a, **k: {}            # 回了对象但里面没有消息:另一句实话
+    assert "没有可显示的内容" in c.get_prompt("whatever")
+
+
+def test_elicitation_is_declined_by_default_and_sampling_is_refused(client):
+    """没装回调:elicitation 按规范回 decline(**不是**静默丢弃 —— 那会让对端干等);
+    sampling 明确拒绝并说清理由(与 authorization_code 同一条立场)。"""
+    got, err = client._handle_server_request(
+        {"id": 7, "method": "elicitation/create",
+         "params": {"message": "要删掉这 3 个文件吗?", "requestedSchema": {"type": "object"}}})
+    assert err is None and got == {"action": "decline"}
+
+    got2, err2 = client._handle_server_request({"id": 8, "method": "sampling/createMessage"})
+    assert got2 is None and err2 and "sampling" in err2["message"] and "不支持" in err2["message"]
+
+    got3, err3 = client._handle_server_request({"id": 9, "method": "别的/方法"})
+    assert got3 is None and "不支持" in err3["message"]
+
+
+def test_elicit_callback_answer_is_passed_through(client):
+    """装了回调(有提问通道的一方):用户答什么就回什么,动作原样透传。"""
+    seen = {}
+
+    def on_elicit(message, schema):
+        seen["message"] = message
+        return {"action": "accept", "content": {"ok": True}}
+
+    client.on_elicit = on_elicit
+    got, err = client._handle_server_request(
+        {"id": 10, "method": "elicitation/create",
+         "params": {"message": "允许写这个文件吗?", "requestedSchema": {}}})
+    assert err is None and got["action"] == "accept" and got["content"] == {"ok": True}
+    assert seen["message"] == "允许写这个文件吗?"
+
+    def boom(*_a):
+        raise RuntimeError("界面炸了")
+    client.on_elicit = boom
+    got2, err2 = client._handle_server_request(
+        {"id": 11, "method": "elicitation/create", "params": {"message": "x"}})
+    assert err2 is None and got2 == {"action": "decline"}, "回调炸了也要回一条,不能让对端干等"
+
+
+def test_inbound_request_always_writes_a_reply():
+    """传输层兜底:没装钩子时也要**写出一条** JSON-RPC error(方法名带上),
+    这是"不支持要说得出口"的最后一环。"""
+    from minicode.mcp import _StreamedTransport
+    sent = []
+
+    class _T(_StreamedTransport):
+        def notify(self, msg):
+            sent.append(msg)
+    cfg = mcp_mod.parse_servers([_fake_config("inbound")])[0]
+    tr = _T(cfg)
+    tr._inbound_request({"id": 42, "method": "elicitation/create", "params": {}})
+    assert len(sent) == 1 and sent[0]["id"] == 42
+    assert sent[0]["error"]["code"] == -32601 and "elicitation/create" in sent[0]["error"]["message"]
