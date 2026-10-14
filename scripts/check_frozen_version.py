@@ -1157,6 +1157,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # v0.9.162+:更新通道换 GitHub Release,日志上限这个
                            # 常量是界面「截断了要提示去发布页」那条口径的来源
                            "NOTES_MAX", "RELEASE_API",
+                           # v0.9.174:证书被加速器/代理接管时的**第二跳**(漏它 = 那些
+                           # 机器上「检查更新」永远静默:默认 certifi 失败就再也没试过
+                           # 系统证书库,而本机实测正是这一种)
+                           "_release_payload",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",
