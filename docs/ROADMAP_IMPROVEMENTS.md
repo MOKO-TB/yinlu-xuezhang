@@ -78,7 +78,7 @@
 | H | Shadow Git 检查点 | 自建 undo vs Shadow Git，后者不动仓库历史 | 改前 git add -N + git commit --no-verify；/rewind 三档 |
 | ~~I~~ | ~~跨会话消息工具（子代理 → 主会话）~~ **已于 v0.9.154 落地**（`Agent.queue_note` + `catalog_sub.notify_parent`）。⚠ **照原文那句直接做会写错**:现成的插话信箱落进留档时是 `role: user`(`_take_inbox` 里做 `session.add_user`),子代理的提醒走那条路就成了"用户说过的话" —— 所以这一条**另开了一条系统侧通道**(并进 `_pending_prior`,与三个事件钩子附话同一条),而不是复用信箱。 | 子代理没有提问通道，补齐「信箱」 | 子代理会话侧加 SendInterjection 工具 |
 | ~~J~~ | ~~@ 引用 + .cursorrules/.clinerules 兼容~~ **已于 v0.9.153 落地**（`@` 引用早在 v0.9.64 就有了，这一轮补的是后半截：`app_setup.COMPAT_RULE_FILES` + `CURSOR_RULE_DIR`）。**一处比原文更硬的形状**：根那一层从"一份文件"变成"**一组来源**"，`sha` 覆盖**拼起来的一整段正文** —— 改 `.cursorrules` 里一个字也要回到"没采纳"，否则"别人的文件改了、点头照旧有效"就是一条看不见的缝。**`.mdc` 只读没有条件的那几条**，带 `globs` 的不读但在报表里点名（本项目刻意不做规则引擎）。 | 用户定位具体规则文件时要做 | @<path> importer + .cursor/rules/*.mdc / .clinerules/*.md 读取 |
-| K | 语音输入 | Aider /voice、Codex voice_transcription、Cursor 文档 3 处、Qoder 3 处 | --voice 或输入框 🎤 → winrt ScreenCapturer → SpeechRecognizer/离线 STT → 拼消息 |
+| ~~K~~ | ~~语音输入~~ **已交付又撤下** | Aider /voice、Codex voice_transcription、Cursor 文档 3 处、Qoder 3 处 | --voice 或输入框 🎤 → winrt ScreenCapturer → SpeechRecognizer/离线 STT → 拼消息 |
 
 ## 五、当前版本自画像
 

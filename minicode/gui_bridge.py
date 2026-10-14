@@ -352,14 +352,6 @@ class PublicApi:
         """扩展中心一屏:技能/渠道/MCP/侧边栏扩展/钩子 五类现成数据。"""
         return self._b.extensions_overview()
 
-    def voice_probe(self) -> dict:
-        """语音输入:引擎在不在、缺什么(不碰麦克风)。"""
-        return self._b.voice_probe()
-
-    def voice_listen(self, seconds: float = 8.0, lang: str = "") -> dict:
-        """听一句并转文字(离线;没听到就说没听到)。"""
-        return self._b.voice_listen(seconds, lang)
-
     def git_overview(self) -> dict:
         """Git 页一屏:git 可用性 + 状态 + 影子快照。"""
         return self._b.git_overview()
@@ -1572,24 +1564,6 @@ class Bridge:
         if not got:
             return {"ok": True, "update": None, "current": __version__}
         return {"ok": True, "update": got, "current": __version__}
-
-    def voice_probe(self) -> dict:
-        """语音输入:引擎在不在、缺什么(不碰麦克风,探测不占设备)。"""
-        from minicode import voice
-        return voice.voice_probe()
-
-    def voice_listen(self, seconds: float = 8.0, lang: str = "") -> dict:
-        """听一句并转文字(离线,Windows 自带引擎;没听到就说没听到)。
-
-        **只填不发送**:结果回前端由用户自己看一遍再按发送 —— 语音识别会错,
-        自动发出去等于替用户签字。这一条写在 `voice.py` 的口径里,这里只是转发。
-        """
-        from minicode import voice
-        try:
-            secs = float(seconds)
-        except (TypeError, ValueError):
-            secs = 8.0
-        return voice.listen_once(seconds=secs, lang=str(lang or ""))
 
     def git_overview(self) -> dict:
         """Git 页一屏数据:git 在不在 + 状态 + 影子快照。当前工作区的账。"""

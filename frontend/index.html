@@ -54,6 +54,20 @@ try {
     --shadow:0 10px 30px rgba(30,60,55,.18);
     --shadow-sm:0 4px 14px rgba(30,60,55,.12);
 
+    /* 语义别名(v0.9.174 补齐)。**这几个名字此前从未定义过**,而调用点写的那点
+       回退值是**照着深色写的白色系**(`rgba(255,255,255,.7)` 之类)—— 浅色底上
+       它们等于看不见:用户图 p1 的「快捷键速查中心」说明文字与键帽就是这么坏的
+       (同一族的 `--glass-soft` 连回退值都没有,那几条 `background` 直接被丢掉)。
+       补齐之后两种主题各有一份自己的值,调用点一个字都不用改。 */
+    --glass-soft:rgba(255,255,255,.50);
+    --text-soft:rgba(28,43,40,.74);
+    --text-bright:#123B36;
+    --text:#1C2B28;
+    --kbd-bg:rgba(255,255,255,.80);
+    --border-soft:rgba(40,80,72,.20);
+    --shadow-lg:0 18px 46px rgba(20,45,40,.24);
+    --ok:#2F9E6E; --warn:#C77E12;
+
     /* 双主题各有一张全屏航拍背景,切主题即换景 */
     --hero-img:url("img/campus_day.jpg");
     /* 日景很亮,只需轻压顶部与底部,保住"白玻璃浮在照片上"的通透感 */
@@ -90,6 +104,17 @@ try {
 
     --shadow:0 12px 34px rgba(0,0,0,.42);
     --shadow-sm:0 4px 16px rgba(0,0,0,.34);
+
+    /* 语义别名:与上面浅色那份同一个名单(见浅色块里的说明)。深色下这几个值
+       基本等于原先写在调用点上的回退值 —— 补上只是为了让两种主题同源。 */
+    --glass-soft:rgba(120,180,200,.14);
+    --text-soft:rgba(234,244,243,.76);
+    --text-bright:#F4FBFA;
+    --text:#EAF4F3;
+    --kbd-bg:rgba(255,255,255,.10);
+    --border-soft:rgba(160,225,220,.20);
+    --shadow-lg:0 18px 46px rgba(0,0,0,.50);
+    --ok:#4FD8A8; --warn:#FFC46B;
 
     --hero-img:url("img/campus_dusk.jpg");
     --hero-dim:linear-gradient(180deg, rgba(7,13,20,.38) 0%,
@@ -847,13 +872,6 @@ try {
   .box .attach{ background:transparent; border:none; cursor:pointer; font-size:19px;
                 padding:2px 6px; line-height:1; color:var(--text-2); transition:.15s; }
   .box .attach:hover{ transform:scale(1.12) rotate(-6deg); }
-  /* 语音输入(v0.9.172+):与 📎 同一排;听的时候闪一下并换成"在听"的样子 ——
-     状态要看得见,否则用户不知道它到底有没有在听。 */
-  .box .mic{ background:transparent; border:none; cursor:pointer; font-size:18px;
-             padding:2px 6px; line-height:1; color:var(--text-2); transition:.15s; }
-  .box .mic:hover{ transform:scale(1.12); }
-  .box .mic.rec{ color:var(--danger,#c0392b); animation:micPulse 1s infinite; }
-  @keyframes micPulse{ 0%,100%{ opacity:1; } 50%{ opacity:.35; } }
   .topbar button.on{ border-color:var(--accent); background:var(--success-bg);
                      color:var(--success); }
 
@@ -2721,7 +2739,6 @@ try {
         <div class="at-menu" id="atMenu" style="display:none"></div>
         <div class="at-menu" id="slashMenu" style="display:none"></div>
         <button class="attach" id="btnAttach" title="上传文件或图片(会复制到工作区 uploads/)">📎</button>
-        <button class="mic" id="btnVoice" title="语音输入:点一下,说一句(离线识别,填进输入框不自动发)">🎤</button>
         <textarea id="input" rows="1" placeholder="描述任务，Enter 发送，Shift+Enter 换行"></textarea>
         <button class="send" id="btnSend">发送</button>
         <button class="stop" id="btnStop">停止</button>
@@ -3697,25 +3714,43 @@ $("updateOverlay").addEventListener("click", (e) => {
   if (e.target.id === "updateOverlay") $("updateOverlay").classList.remove("show");
 });
 
-/* 侧栏版本号:点一下 = 手动查一次(与启动那条同一个后端口,一份真相) */
+/* 检查更新(v0.9.162+;v0.9.174 起抽成具名动作):**侧栏那颗版本号**与**命令面板
+   里那条「检查更新」**共用这一个出口 —— 手动查一次,与启动时那条同一个后端口,
+   一份真相。为什么要有这个具名动作:用户反馈过"找不到这个功能在哪"(它原先只有
+   「点一下那个小版本号」这一条路,而版本号长得不像按钮)。 */
+function checkUpdateNow() {
+  const v = $("ver");
+  if (!(window.pywebview && pywebview.api && pywebview.api.check_update_now)) {
+    toast("这一屏只在桌面版能查更新", true); return;
+  }
+  if (v && !/·检查中$/.test(v.textContent)) v.textContent += " ·检查中";
+  pywebview.api.check_update_now().then(r => {
+    if (r && r.update) { openUpdateDlg(r.update); }
+    else if (r && r.ok) { toast("已是最新版本 v" + (r.current || "")); }
+    else { toast((r && r.msg) || "查不到更新", true); }
+  }).catch(() => toast("检查更新失败(网络不通?)", true)).finally(() => {
+    if (v) v.textContent = v.textContent.replace(/ ?·检查中$/, "");
+  });
+}
+
 function verClickable() {
   const v = $("ver");
   if (!v || v.dataset.clickable) return;
   v.dataset.clickable = "1";
   v.style.cursor = "pointer";
-  v.title = "点击检查更新";
-  v.addEventListener("click", () => {
-    if (!(window.pywebview && pywebview.api && pywebview.api.check_update_now)) return;
-    v.textContent = v.textContent.replace(/ ?·检查中$/, "") + " ·检查中";
-    pywebview.api.check_update_now().then(r => {
-      if (r && r.update) { openUpdateDlg(r.update); }
-      else if (r && r.ok) { toast("已是最新版本 v" + (r.current || "")); }
-      else { toast((r && r.msg) || "查不到更新", true); }
-    }).catch(() => toast("检查更新失败(网络不通?)", true)).finally(() => {
-      const cur = v.textContent.replace(/ ?·检查中$/, "");
-      v.textContent = cur;
-    });
-  });
+  v.title = "点击检查更新(也可以在命令面板里搜「检查更新」)";
+  // v0.9.174:版本号旁边挂一枚小小的 ↻,让它**看起来像个能点的东西** ——
+  // 只靠 cursor/title 那种"悬停才知道"的提示,用户是找不到的(实测反馈)。
+  if (!$("verReload")) {
+    const b = document.createElement("span");
+    b.id = "verReload";
+    b.textContent = "↻";
+    b.title = "检查更新";
+    b.style.cssText = "margin-left:4px;opacity:.75;cursor:pointer;";
+    v.after(b);
+    b.addEventListener("click", checkUpdateNow);
+  }
+  v.addEventListener("click", checkUpdateNow);
 }
 $("proactiveGo").addEventListener("click", () => {
   $("proactiveBar").style.display = "none";
@@ -4203,6 +4238,7 @@ function getBuiltinCommands() {
     { id: "act_theme", title: "切换主题", desc: "切换晨光薄荷(浅色)与暮色青辉(深色)航拍主题", category: "外观", action: "toggleTheme", key: "" },
     { id: "act_term", title: "切换终端坞", desc: "打开或收起底部终端坞", category: "终端", action: "toggleTermDock", key: "Ctrl+`" },
     { id: "act_panel", title: "切换底座面板", desc: "打开或收起右侧底座面板(Git/文件/自动化/监控)", category: "视图", action: "toggleSidePanel", key: "Ctrl+Alt+B" },
+    { id: "act_update", title: "检查更新", desc: "问一句 GitHub 有没有新版本(有新版本会打开更新日志卡)", category: "系统", action: "checkUpdateNow", key: "" },
     { id: "act_shortcuts", title: "快捷键速查", desc: "查看系统全部全局快捷键列表", category: "帮助", action: "toggleShortcutsModal", key: "Ctrl+/" },
     { id: "act_new_task", title: "新建会话", desc: "开启全新对话任务", category: "会话", action: "newTask", key: "Ctrl+N" },
     { id: "slash_def", title: "/def", desc: "跨文件精准查看符号定义与实现代码: /def <符号>", category: "代码", action: "fillPrompt", param: "/def " },
@@ -4406,6 +4442,10 @@ function executeCmdPaletteItem(it) {
   }
   if (it.action === "newTask") {
     if ($("btnNewTask")) $("btnNewTask").click();
+    return;
+  }
+  if (it.action === "checkUpdateNow") {
+    checkUpdateNow();
     return;
   }
   if (it.action === "fillPrompt") {
@@ -11088,33 +11128,6 @@ function renderAttachments() {
   });
 }
 function clearAttachments() { attachments = []; renderAttachments(); }
-
-/* 语音输入(v0.9.172+,ROADMAP §四 K):点 🎤 → 离线听一句 → **填进输入框**。
-   两条刻意:①**不自动发送** —— 语音识别会错,自动发出去等于替用户签字;
-   ②听的过程中按钮闪红,再点一次不重入(设备被占会互相打架)。 */
-let voiceBusy = false;
-$("btnVoice").addEventListener("click", () => {
-  if (voiceBusy) { toast("正在听…说一句就行", true); return; }
-  if (!(window.pywebview && pywebview.api && pywebview.api.voice_listen)) {
-    toast("这一屏只在桌面版有", true); return;
-  }
-  const btn = $("btnVoice");
-  voiceBusy = true; btn.classList.add("rec");
-  toast("在听…说一句(最多等 8 秒)");
-  pywebview.api.voice_listen(8, "").then(r => {
-    if (r && r.ok && r.text) {
-      const inp = $("input");
-      inp.value = inp.value.trim() ? (inp.value.replace(/\s+$/, "") + " " + r.text) : r.text;
-      inp.dispatchEvent(new Event("input"));
-      inp.focus();
-      toast("已填进输入框 —— 看一眼再发");
-    } else {
-      toast((r && r.why) || "没听到", true);
-    }
-  }).catch(() => toast("语音输入失败", true)).finally(() => {
-    voiceBusy = false; btn.classList.remove("rec");
-  });
-});
 
 $("btnAttach").addEventListener("click", () => {
   if (busy) { toast("有任务正在进行中", true); return; }

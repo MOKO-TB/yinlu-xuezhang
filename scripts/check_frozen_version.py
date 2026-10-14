@@ -83,8 +83,6 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "check_update_now",
                             # v0.9.172+:扩展中心一屏(漏收 = 「扩展」页永远读不出来)
                             "extensions_overview",
-                            # v0.9.172+ 续三:语音输入两个门面(漏收 = 🎤 点了没反应)
-                            "voice_probe", "voice_listen",
                             # v0.9.142「智能配置」那一屏的数据源(漏收 = 前端那只开关
                             # 永远停在「正在问这台机器知道些什么…」,而界面看着正常)
                             "model_auto_info",
@@ -943,10 +941,6 @@ TARGETS: dict[str, tuple[str, ...]] = {
                        # 漏 _session_for = 每次语义检索都重建一次 ONNX 会话(慢一个量级)。
                        "embeddings_spec", "query_vector", "_profile_tag", "_session_for",
                        "POOLINGS", "DEFAULT_POOLING", "DEFAULT_MAX_SEQ_LEN"),
-    # v0.9.172+ 续三:语音输入(与 ocr 同一族 winrt 绑定;漏 listen_once = 🎤 是死钮,
-    # 漏 VOICE_WARN = 那句"只当草稿"的口径没了)
-    "minicode.voice": ("available", "listen_once", "voice_probe",
-                       "VOICE_WARN", "INSTALL_HINT", "VoiceMissing", "VOICE_DISTS"),
     # ---- v0.9.173:递话(漏收 = 装好的包里"边跑边递一句话"那条路整个不存在,
     # 而界面上什么异常都看不到:递话那只会回一句"现在没有能递话的对象") ----
     "minicode.mailbox": ("open", "close", "post", "take", "listing", "find",
@@ -1398,8 +1392,10 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.172+ 扩展页(漏 extBody = 那一页渲染不出来;漏 extensions_overview
     # = 页在、数据不来。容器由注册表在 JS 里建,所以针挑的是注册那行的字面量)
     'id: "extensions", title: "扩展"', "extBody", "extensions_overview",
-    # v0.9.172+ 续三 语音输入(漏 btnVoice = 输入行那颗 🎤 不在包里)
-    "btnVoice", "voice_listen",
+    # v0.9.174:更新检查的入口(漏 checkUpdateNow = 那只具名动作不在包里、命令面板
+    # 那条点了没反应;漏 act_update = 面板里搜不到它;漏 verReload = 版本号旁边那枚
+    # ↻ 没了 —— 三种都**不报错**,只是"功能在、入口没了",正是这一轮要修的那件事)
+    "checkUpdateNow", "act_update", "verReload",
     # v0.9.166/167:快捷键速查面板与全局命令面板
     "btnShortcuts", "shortcutsOverlay", "btnCmdPalette", "cmdPaletteOverlay", "toggleCmdPalette",
     # v0.9.94 p3/p5:权限档位改成界面自己画的浮层菜单(原生 select 的白字在深色
