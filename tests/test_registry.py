@@ -24,7 +24,7 @@ def test_registry_contents():
                      "browser_open", "browser_eval", "browser_snapshot",
                      "browser_click", "browser_fill", "browser_screenshot",
                      "browser_close", "browser_status", "page_parse",
-                     "mcp", "mcp_resource",
+                     "mcp", "mcp_resource", "mcp_prompt",
                      "use_skill", "plan", "ask_user",
                      "search_knowledge",
                      # v0.9.173:按需加载的门(永远常驻;只读 —— 它只读注册表
@@ -152,6 +152,7 @@ def test_read_only_flags():
         "scores": False,             # action=clear 删整份存档:非只读,与 mood 同理
         "mcp": False,
         "mcp_resource": False,                # 改配置并重连外部服务:绝不是只读
+        "mcp_prompt": False,                  # 同上:取回的是外部服务器写的一段指示
         "calendar_edit": False,      # 往校历文件追加条目:非只读
         # 地图工具只改界面显示、不动文件:标只读,免得每次定位都弹确认框
         "map_find_place": True,

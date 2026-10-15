@@ -1667,3 +1667,59 @@ def mcp_resource_handler(ctx, action: str = "list", sid: str = "", uri: str = ""
         header = f"[MCP 资源 {uri} · 服务器 {c.cfg.sid}" + (f" · {mime}" if mime else "") + "]"
         return header + "\n" + text
     return f"错误: 未知 action「{action}」。可用:list(列清单)/read(读内容)。"
+
+
+def mcp_prompt_handler(ctx, action: str = "list", sid: str = "", name: str = "",
+                       arguments: "dict | None" = None, reason: str = "") -> str:
+    """mcp_prompt 工具处理器(v0.9.175):列/取已连服务器提供的 prompt 模板。
+
+    这一只补的是**半交付**:握手时早就拉过 `prompts/list`(`start()` 里那段)、
+    `get_prompt()` 也写好了,可模型这边一直没有路去用它们 —— "协议接了"推不出
+    "这一格能用"。口径逐条照 `mcp_resource_handler`:管理器走 `live_manager()` 钩子,
+    拿不到就照实说,绝不按配置猜一份在线清单;取回来的正文是**那台服务器写的指示**,
+    所以工具标 `trust=external`,进上下文照常套溯源围栏。清单只报服务器**声明过**的。
+    """
+    action = (action or "list").strip().lower()
+    mgr = live_manager()
+    clients = {c.cfg.sid: c for c in (mgr.clients if mgr is not None else [])}
+    if not clients:
+        return ("错误: 拿不到在线的 MCP 管理器(桌面版重启学长后可用;"
+                "当前也没有任何已连接的服务器)。")
+    if action == "list":
+        lines = []
+        for c in clients.values():
+            if "prompts" not in (c.server_caps or {}):
+                lines.append(f"[{c.cfg.sid}] 这台服务器没声明 prompts(不编清单)")
+                continue
+            if not c.prompts:
+                lines.append(f"[{c.cfg.sid}] 声明了 prompts 但清单为空")
+                continue
+            for x in c.prompts:
+                args = []
+                for a in (x.get("arguments") or []):
+                    if isinstance(a, dict) and a.get("name"):
+                        args.append(str(a["name"]) + ("" if a.get("required") else "(选填)"))
+                desc = str(x.get("description") or "").strip()
+                lines.append(f"[{c.cfg.sid}] {x.get('name')}"
+                             + (f" · 参数:{'、'.join(args)}" if args else " · 无参数")
+                             + (f" · {desc}" if desc else ""))
+        return "\n".join(lines) or "(没有已连接的 MCP 服务器)"
+    if action == "get":
+        c = clients.get(str(sid or "").strip())
+        if c is None:
+            return (f"错误: 没有编号为「{sid}」的在线服务器"
+                    f"(在线的有:{'、'.join(clients) or '无'})。先 action=list 看一眼。")
+        if "prompts" not in (c.server_caps or {}):
+            return (f"错误: 服务器 {c.cfg.sid} 在握手里没有声明 prompts —— "
+                    f"它不给这个能力,如实说,不要硬调。")
+        name = str(name or "").strip()
+        if not name:
+            return "错误: action=get 要带 name(action=list 的清单里每条第一个就是)。"
+        try:
+            text = c.get_prompt(name, arguments if isinstance(arguments, dict) else None)
+        except McpError as e:
+            return f"错误: 取 prompt「{name}」失败:{e}"
+        # 非文本块由 get_prompt 自己报成「(x 内容不内联)」—— 与 blob 同一个理由:
+        # 别把二进制灌进上下文。这里不再补第二套说法。
+        return f"[MCP prompt · 服务器 {c.cfg.sid}]\n{text}"
+    return f"错误: 未知 action「{action}」。可用:list(列清单)/get(取一条)。"

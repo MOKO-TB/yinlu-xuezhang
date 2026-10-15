@@ -73,6 +73,9 @@ ORDER = [
     "mcp",
     # v0.9.102:MCP resources(read 过确认框)
     "mcp_resource",
+    # v0.9.175:MCP prompts(get 过确认框)。挨着 mcp_resource —— 同一台服务器的两个
+    # 外部内容入口,拆开放会让 tools 数组里这两只的描述互相看不见。
+    "mcp_prompt",
     "use_skill", "plan", "ask_user", "search_knowledge",
     # v0.9.173:按需加载的门(tool_search)。上面那一族是"找东西"(技能/计划/提问/
     # 检索),它补上"找能力"这一格;下面 export_trace 起是"会话记录"另一族。
@@ -144,7 +147,7 @@ def test_order_pin_is_not_stale():
     v0.9.96 加 `ask_user` 时它的位置就钉在 `plan` 后面 —— 模型每轮拿到的 tools 数组
     是这个顺序,挪位置等于改行为面,所以新工具插在谁后面都要在这里写明。
     """
-    assert len(ORDER) == len(set(ORDER)) == 73      # v0.9.173:70 + view_image + session_message + tool_search
+    assert len(ORDER) == len(set(ORDER)) == 74      # v0.9.173:70+view_image+session_message+tool_search;v0.9.175:+mcp_prompt
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

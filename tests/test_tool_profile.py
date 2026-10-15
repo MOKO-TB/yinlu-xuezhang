@@ -160,8 +160,12 @@ def test_lazy_hides_the_loadable_layer_behind_the_door(tmp_path):
     assert "tool_search" in got, "门必须还在"
     assert "read_file" in got and "bash" in got
     assert "schedule" not in got and "mood" not in got
-    assert a.registry and len({t.name for t in a.registry}) == 73, \
+    # 数一个数(旧写法 `== 73`)会随每只新工具漂,而这里真正要钉的是"投影没动注册表":
+    # 直接比**名字集合**,加一只工具、删一只工具都逃不过这一条。
+    assert {t.name for t in a.registry} == {t.name for t in build_default_registry()}, \
         "**注册表一个字都不许动** —— 投影只是给模型看的那一份"
+    assert a._tools_for_request() and all(
+        t in a.registry for t in a._tools_for_request()), "投影只能从注册表里挑,不能凭空造"
 
 
 def test_searching_brings_them_in_and_it_is_irreversible(tmp_path):

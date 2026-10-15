@@ -1259,6 +1259,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                      # 连着,模型却永远读不到)
                      "mcp_resource_handler", "read_resource", "live_manager",
                      "set_manager_hook",
+                     # v0.9.175:MCP prompts 的**工具面**。这一根比上面那几根更要紧:
+                     # 漏收的表现是"协议接了、包里也有 get_prompt,可模型没有路去用"——
+                     # 界面上一切正常、`prompts/list` 白拉一次,而没有任何一处会报错。
+                     "mcp_prompt_handler",
                      # v0.9.70:预设模板库(漏收 = 包里说「没有叫 xx 的预设」,
                      # 对话里加服务器退回手编 JSON)
                      "MCP_PRESETS", "find_preset", "build_preset_config",
