@@ -250,6 +250,20 @@ def test_update_install_refuses_an_unverified_file(tmp_path):
     assert r["ok"] is False and "校验" in r["why"], "没核对过的包直接开起来就是这一路的红线"
 
 
+def test_the_local_path_never_leaves_the_backend(tmp_path):
+    """绝对路径不许出现在给界面那一份快照里(与 `undo_records` 同一条口径)。
+
+    两侧都要钉:漏了"擦掉"就是路径外流到 JS;漏了"后端还留着"就是连安装要用的那份
+    一起擦坏 —— 后者表现是"下完了点运行说找不到文件"。
+    """
+    b = _bridge(tmp_path)
+    b._upd = {"state": "done", "path": r"C:\Users\me\updates\a.exe",
+              "name": "a.exe", "verified": "ok"}
+    sent = b.update_download_state()
+    assert "path" not in sent, list(sent)
+    assert b._upd["path"].endswith("a.exe"), "后端自己那份不能被一起抹掉"
+
+
 def test_update_skip_lands_in_config_json_and_comes_back(tmp_path):
     """"跳过此版本"必须跨重启还在 —— 它落 config.json,而 config 那层刚修过白名单。"""
     b = _bridge(tmp_path)

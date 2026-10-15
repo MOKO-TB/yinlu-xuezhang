@@ -1597,6 +1597,17 @@ class Bridge:
         with lock:
             return dict(self._upd)
 
+    def _upd_public(self) -> dict:
+        """发给界面的那一份:**绝对路径不出去**。
+
+        与 `undo_records()` 同一条口径(那份清单给的是相对工作区的路径,后端拿的就是
+        那一份)。界面要的是"下完了、能不能装",装这一步由后端用自己那份 `path` 去做。
+        少一道这样的规矩,迟早有一天某个界面会把本机绝对路径印到一张分享出去的图上。
+        """
+        snap = self._upd_snapshot()
+        snap.pop("path", None)
+        return snap
+
     def update_download(self) -> dict:
         """开始下载新版本的那件安装包(后台一条线程,进度走 `update_state` 事件)。
 
@@ -1650,7 +1661,7 @@ class Bridge:
             with self._upd_lock:
                 self._upd.update(pct=info.get("pct", -1), got=info.get("got", 0),
                                  total=info.get("total") or self._upd.get("total", 0))
-            self.ui.push("update_state", **self._upd_snapshot())
+            self.ui.push("update_state", **self._upd_public())
 
         try:
             res = proactive.download_asset(asset, app_path("updates"),
@@ -1670,12 +1681,12 @@ class Bridge:
                          "verified": res.get("verified"), "sha256": res.get("sha256"),
                          "form": (asset or {}).get("form"),
                          "why": res.get("why") or ""}
-            snap = dict(self._upd)
+        snap = self._upd_public()
         self.ui.push("update_state", **snap)
 
     def update_download_state(self) -> dict:
         """界面重开时问一句"现在有没有在下的东西"——进度不能一翻页就假装没发生。"""
-        return self._upd_snapshot()
+        return self._upd_public()
 
     def update_download_cancel(self) -> dict:
         st = self._upd_snapshot()

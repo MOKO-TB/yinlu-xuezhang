@@ -72,6 +72,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "update_download", "update_download_state",
                             "update_download_cancel", "update_install",
                             "update_skip", "update_history",
+                            # 这一根钉的是"绝对路径不外流"那一道擦除:漏收 = 包里
+                            # 那份快照带着 C:\Users\... 发给界面,而源码态一切正常
+                            "_upd_public",
                             # v0.9.168:跨文件调用层次分析与智能上下文提及 (清偿 HANDOFF §48(c))
                             "call_hierarchy", "get_context_mentions",
                             # v0.9.169:跨文件符号定义提取与实现跳转
