@@ -71,17 +71,44 @@ def entries(log_lines: list[str]) -> list[tuple[tuple[int, ...], str, str]]:
     return out
 
 
+def _gap_note(newer: tuple, older: tuple) -> str:
+    """两段之间跳过的版本号 —— 给一句桥接,别让读的人以为那几版没发生过。
+
+    为什么必须有:v0.9.163~171 那九版当时只在工作树里写、一直没提交,最后由一笔
+    「v0.9.172 收编」一起落地(提交信息原话:「这一笔收的是工作树里那批已经写完但
+    一直没提交的 v0.9.163~172 工作」)。生成器只认标题里点了版本号的提交,于是那份
+    索引从 v0.9.162 **直接跳到 v0.9.172** —— 而它是给用户看的升级史,九版凭空消失
+    比标着"没有单独成段"更骗人。
+    """
+    if newer[:2] != older[:2] or newer[2] - older[2] <= 1:
+        return ""
+    missing = older[2] + 1
+    count = newer[2] - missing
+    if count <= 0:
+        return ""
+    span = (f"v{newer[0]}.{newer[1]}.{missing}~{newer[2] - 1}"
+            if count > 1 else f"v{newer[0]}.{newer[1]}.{missing}")
+    return (f"- ⚠ **{span} 这 {count} 个版本号没有单独成段** —— 生成器只收标题里点了版本号"
+            "的提交,而那几版当时写完一直没提交、最后由上面某一笔一起收编(标题里写着"
+            "「收编」)。逐版内容读 `docs/handoff/milestones.md`,那里是按轮写的。\n")
+
+
 def render(pairs: list[tuple[tuple[int, ...], str, str]]) -> str:
-    """按版本分组渲染。同组内保持传入顺序(新在前)。"""
+    """按版本分组渲染。同组内保持传入顺序(新在前);段间跳过的版本号补一句桥接。"""
     buckets: dict[tuple[int, ...], list[str]] = {}
     labels: dict[tuple[int, ...], str] = {}
     for key, label, line in pairs:
         labels.setdefault(key, label)
         buckets.setdefault(key, []).append(line)
     parts = [HEADER]
-    for key in sorted(buckets, reverse=True):
+    keys = sorted(buckets, reverse=True)
+    for i, key in enumerate(keys):
         parts.append(f"\n## {labels[key]}\n")
         parts.extend(f"- {line}\n" for line in buckets[key])
+        if i + 1 < len(keys):
+            note = _gap_note(key, keys[i + 1])
+            if note:
+                parts.append(note)
     return "".join(parts)
 
 

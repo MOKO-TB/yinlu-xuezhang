@@ -97,3 +97,39 @@ def test_render_orders_versions_new_first_and_keeps_commit_order_inside():
     assert text.index("## v0.9.39") < text.index("## v0.9.37")
     body = text.split("## v0.9.39")[1].split("## v0.9.37")[0]
     assert body.index("p3") < body.index("p1"), "同一版内被重排过了"
+
+
+# ---------------- 3. 版本号空洞必须说出来 ----------------
+
+def test_a_hole_in_the_version_numbers_gets_a_bridge_note():
+    """v0.9.163~171 那种"九版没单独成段"要写出来,不能凭空消失。
+
+    这九版当时在工作树里写完一直没提交,最后由一笔「v0.9.172 收编」带走,所以生成器
+    扫不到它们 —— 而 CHANGELOG 是给用户看的升级史,一份从 162 直接跳到 172 的索引
+    读起来像那九版没发生过。桥接句挂在**收编它们的那一段**下面(代码确实在那里)。
+    """
+    text = gen.render(gen.entries([
+        "2026-10-14\tv0.9.172 收编:工作树里那批没提交的",
+        "2026-10-11\tv0.9.162 文档税",
+    ]))
+    assert "v0.9.163~171 这 9 个版本号没有单独成段" in text
+    assert text.index("v0.9.163~171") < text.index("## v0.9.162"), \
+        "桥接句必须挂在收编那一段里,不是挂在被跳过的那一侧"
+    assert "milestones.md" in text, "要给出处:逐版内容在哪能查到"
+
+
+def test_contiguous_versions_and_minor_jumps_get_no_note():
+    """挨着的版本号不许冒这句(噪声);跨 minor 也不算洞(那是换代不是漏收)。"""
+    tight = gen.render(gen.entries([
+        "2026-10-14\tv0.9.174 三件", "2026-10-14\tv0.9.173 四条",
+        "2026-10-13\tv0.9.172 收编"]))
+    assert "没有单独成段" not in tight, "连着三段也报洞 = 这句会没人信"
+    jump = gen.render(gen.entries(["2026-09-12\tv0.9.01 起步",
+                                   "2026-09-10\tv0.3.0 初始提交"]))
+    assert "没有单独成段" not in jump, "跨 minor/跨大版本是换代,不是漏收"
+
+
+def test_the_real_changelog_says_the_nine_version_hole_out_loud():
+    """真实历史里那个洞必须被标出来 —— 这条红就说明桥接逻辑对不上真数据。"""
+    assert "v0.9.163~171 这 9 个版本号没有单独成段" in CHANGELOG, \
+        "CHANGELOG 从 v0.9.162 直接跳到 v0.9.172 而没说为什么"

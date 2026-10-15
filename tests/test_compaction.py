@@ -377,3 +377,29 @@ def test_no_candidate_adds_nothing():
     fake = FakeSummarizer(summary="这次没有值得跨会话记住的事")
     msgs, _ = compact(_three_turns(), fake)
     assert msgs[0]["content"] == "(此前对话的摘要,细节可能省略)\n这次没有值得跨会话记住的事"
+
+
+def test_compaction_does_not_erase_the_transcript_from_the_log(tmp_path):
+    """压缩只补一行 `compacted` 标记,**不许抹掉留档里的旧消息**。
+
+    为什么必须有这条:矩阵 §10D 与 ROADMAP 都把「压缩前可回滚」记成 ✖,理由是
+    "对话级回滚会被压缩吃掉"。2026-10-15 顺着 `session.replace_messages` 读到底才发现
+    那是**假缺口** —— 留档是追加式的(`_log_only` 只 append),而 `load_from` 把每一条
+    带 role 的行整份放回来。今天真实形状是:压后内存 2 条,留档里 6 条旧消息一行不少,
+    恢复放回 6 条。**代价在另一头**:压缩这件事不跨重启(恢复后同一份长历史会在下一轮
+    再压一次,多花一次摘要调用)。所以真要改的是"压一次就记住压过",不是"补一个快照"
+    —— 谁动这条,先让这里红,再写下那句历史由谁读回。
+    """
+    from minicode.session import Session
+    s = Session(system_prompt="s", log_dir=tmp_path)
+    for i in range(6):
+        s.add_user("问%d" % i)
+    s.replace_messages([s.messages[0]] + s.messages[-2:])
+    assert len([m for m in s.messages if m["role"] != "system"]) == 2, "内存里该只剩摘要那两条"
+    objs = [json.loads(ln) for ln in s._log_path.read_text(encoding="utf-8")
+            .splitlines() if ln.strip()]
+    assert any(o.get("type") == "compacted" for o in objs), "标记行得有:复盘要看这里压过一次"
+    assert len([o for o in objs if o.get("role") == "user"]) == 6, \
+        "留档里压缩前的 6 条被抹掉了 —— 那才是真的把回滚吃掉"
+    back = Session(system_prompt="s")
+    assert back.load_from(s._log_path) == 6, "恢复必须把压缩前的历史整份放回来(今天的形状)"
