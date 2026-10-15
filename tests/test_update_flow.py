@@ -48,6 +48,18 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
+        if self.path == "/sha-redirect":  # 校验清单在资产 API 上就是这形状:302 指走
+            self.send_response(302)
+            self.send_header("Location", "/sha256.txt")
+            self.end_headers()
+            return
+        if self.path == "/sha256.txt":
+            body = ("%s  %s\n" % (SHA, ASSET_NAME)).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/short":         # 接口说有一整件,实发一小截(诚实的短正文)
             self.send_response(200)
             self.send_header("Content-Length", "3")
@@ -437,7 +449,7 @@ def test_expected_sha256_asks_the_api_url_as_octet_stream(monkeypatch):
         status_code = 200
         text = "%s  %s\n" % (SHA, ASSET_NAME)
 
-    def fake_get(url, timeout=10.0, headers=None):
+    def fake_get(url, timeout=10.0, headers=None, **kw):
         seen.append((url, dict(headers or {})))
         return _R(), ""
     monkeypatch.setattr(proactive, "_http_get", fake_get)
@@ -446,6 +458,35 @@ def test_expected_sha256_asks_the_api_url_as_octet_stream(monkeypatch):
     assert got == SHA and why == ""
     assert seen[0][0].startswith("https://api.github.com/"), "该先走 api 那一跳"
     assert seen[0][1].get("Accept") == "application/octet-stream", seen[0]
+
+
+def test_the_checksum_fetch_follows_the_redirect_for_real(server):
+    """**这一支是本轮最贵的一支**:它不 monkeypatch `_http_get`,走真 HTTP 客户端。
+
+    为什么必须存在:v0.9.177 把校验清单的取法改到资产 API 那一跳,而那个接口发的是
+    **302 + Location**。`_http_get` 当时没有 `follow_redirects=True` —— 于是清单取回来
+    是空的,`verified` 永远是 `none`,界面上那颗「运行安装程序」**永远灰着**,而**下载本身
+    是好的**(那一条有跟跳转)。上面那些 `_expected_sha256` 的针全把 `_http_get` 换成假的
+    200 正文,所以这个坏法在**测试里根本不存在** —— 是出包前那次真连 GitHub 的实测把它
+    抓出来的(`校验文件 HTTP 302`,同一份文件的 sha256 本地能对上)。
+    **教训与 §7 那条同族:契约落在"真字节 / 真跳转"上时,必须有一支不替换网络出口的针。**
+    """
+    got, why = proactive._expected_sha256("9.9.9", ASSET_NAME,
+                                          sha_url=server + "/sha-redirect")
+    assert got == SHA, (got, why)
+    assert why == ""
+
+
+def test_download_verifies_end_to_end_over_real_http(server, tmp_path):
+    """整条路一次走通(不 stub 校验):下回来的字节**与发布那份对得上** ⇒ verified=ok。
+
+    上一支测"取得到清单",这一支测"取得了清单之后那颗按钮真的会变亮"。
+    """
+    a = _asset(server + "/real")
+    a["sha_url"] = server + "/sha-redirect"
+    r = proactive.download_asset(a, tmp_path)
+    assert r["ok"] and r["verified"] == "ok", r
+    assert r["sha256"] == SHA
 
 
 def test_download_without_a_url_is_refused_before_any_network(tmp_path):

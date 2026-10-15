@@ -427,7 +427,14 @@ def _http_get(url: str, timeout: float = 10.0,
     for label, ctx in _cert_variants():
         try:
             kw = {} if ctx is None else {"verify": ctx}
-            resp = httpx.get(url, timeout=timeout, headers=hd, **kw)
+            # **要跟重定向**,而且这条比 `download_asset` 那一条更容易被漏:
+            # 资产 API(`…/releases/assets/<id>`)发的是 **302 + Location**,v0.9.177 把
+            # 校验清单的取法改到那一跳之后,不跟跳转就拿到一个 302 的空正文 —— 表现是
+            # `_expected_sha256` 回空串、`verified` 永远是 `none`、界面上那颗按钮永远灰,
+            # 而**下载本身是好的**(它有 `follow_redirects=True`)。本机实测撞出来的:
+            # 元数据三条路(查最新 / 列历史)本来就直接回 200,所以这个旗标以前没人在乎过。
+            resp = httpx.get(url, timeout=timeout, headers=hd,
+                             follow_redirects=True, **kw)
             break
         except Exception as e:
             why.append(f"{label}不通({type(e).__name__})")
