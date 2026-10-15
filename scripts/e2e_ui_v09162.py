@@ -86,6 +86,14 @@ const base = {
       name: "引路学长 v0.9.173",
       url: "https://github.com/MOKO-TB/yinlu-xuezhang/releases/tag/v0.9.173",
       notes: "# v0.9.173\n\n## 本次更新\n- 更新检查搬到 GitHub Release\n- 更新日志卡片"}}); },
+  // v0.9.177:点版本号 = 看历史更新内容。这里给两版真数据(第二版的版本号等于
+  // #ver 那串),这样"正在用"标记落在哪一版是可断言的。
+  update_history: (n) => { window.__CALLS__.push(["update_history", n]);
+    return Promise.resolve({ok: true, releases: [
+      {version: "0.9.173", date: "2026-10-14", truncated: false,
+       notes: "更新检查搬到 GitHub Release"},
+      {version: "0.9.162", date: "2026-10-01", truncated: true,
+       notes: "这一版的说明很长,只回前半段"}]}); },
   terminal_run: (c, cwd) => { window.__CALLS__.push(["terminal_run", c, cwd]);
     if (/^cd\s/i.test(c)) { dockCwd = "D:/demo/campus/sub";
       return Promise.resolve({ok: true, moved: true, cwd: dockCwd}); }
@@ -293,9 +301,26 @@ def main() -> int:
         calls3 = page.evaluate("window.__CALLS__")
         check(any(c[0] == "mydata_open_dir" for c in calls3), "「打开数据目录」过桥")
 
-        # ⑨ v0.9.174:更新检查的入口(此前只有"点那个小版本号"一条路,用户找不到)
-        check(page.evaluate("() => !!document.getElementById('verReload')"),
-              "版本号旁边那枚 ↻ 在")
+        # ⑨ 更新检查的入口:命令面板那条必须还在;而 v0.9.177 起**版本号不再触发
+        # 检查**(↻ 按用户要求整个撤掉,点它 = 看历史)。所以这里两头都验:
+        # ↻ 缺席(残留 = 没删干净)+ 点版本号开出历史那一屏且有内容。
+        check(page.evaluate("() => !document.getElementById('verReload')"),
+              "版本号右边那枚 ↻ **已经没了**(用户点名要撤)")
+        page.click("#ver")
+        page.wait_for_timeout(300)
+        check(page.evaluate("() => document.getElementById('histOverlay')"
+                             ".classList.contains('show')"),
+              "点版本号 → 历史更新内容那一屏开出来了")
+        hist = page.locator("#histBody").inner_text()
+        check("v0.9.173" in hist and "v0.9.162" in hist,
+              "两版历史都在(不是开了一个空弹窗)")
+        check("正在用" in page.locator("#histBody .hist-item").nth(1).inner_text(),
+              "「正在用」标落在侧栏那串版本号对应的那一行")
+        page.click("#histClose")
+        page.wait_for_timeout(150)
+        check(page.evaluate("() => !document.getElementById('histOverlay')"
+                             ".classList.contains('show')"),
+              "关闭按钮收得掉")
         page.keyboard.press("Control+Shift+P")
         page.wait_for_timeout(250)
         page.fill("#cmdPaletteInput", "检查更新")

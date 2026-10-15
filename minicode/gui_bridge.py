@@ -367,6 +367,9 @@ class PublicApi:
     def update_history(self, limit: int = 8) -> dict:
         return self._b.update_history(limit)
 
+    def update_prune(self, keep_version: str = "") -> dict:
+        return self._b.update_prune(keep_version)
+
     def extensions_overview(self) -> dict:
         """扩展中心一屏:技能/渠道/MCP/侧边栏扩展/钩子 五类现成数据。"""
         return self._b.extensions_overview()
@@ -1660,7 +1663,9 @@ class Bridge:
         def prog(info: dict) -> None:
             with self._upd_lock:
                 self._upd.update(pct=info.get("pct", -1), got=info.get("got", 0),
-                                 total=info.get("total") or self._upd.get("total", 0))
+                                 total=info.get("total") or self._upd.get("total", 0),
+                                 resumed=bool(info.get("resumed")),
+                                 start_at=int(info.get("start_at") or 0))
             self.ui.push("update_state", **self._upd_public())
 
         try:
@@ -1680,20 +1685,44 @@ class Bridge:
                          "pct": 100 if res.get("ok") else self._upd.get("pct", 0),
                          "verified": res.get("verified"), "sha256": res.get("sha256"),
                          "form": (asset or {}).get("form"),
+                         # v0.9.177:断点续传的那两个数 —— 界面靠它把"下载没成"说成
+                         # "这一下没下完,已下的留着了"(同一个 state,两种话)。
+                         "resumable": bool(res.get("resumable")),
+                         "partial": int(res.get("partial") or 0),
+                         "resumed": bool(res.get("resumed")),
                          "why": res.get("why") or ""}
         snap = self._upd_public()
         self.ui.push("update_state", **snap)
 
     def update_download_state(self) -> dict:
-        """界面重开时问一句"现在有没有在下的东西"——进度不能一翻页就假装没发生。"""
-        return self._upd_public()
+        """界面重开时问一句"现在有没有在下的东西"——进度不能一翻页就假装没发生。
+
+        v0.9.177 补了另一半:**进程重启过**同样不该"假装没发生"。那份下了一半的包
+        还在盘上,这里在 idle 时把它报出来(只报有侧记的那种 —— 说不清是谁的半截
+        报上去,界面写着"可以接着下"而实际会从 0 重下,那是一句假话)。
+        """
+        snap = self._upd_public()
+        if str(snap.get("state") or "idle") == "idle":
+            from minicode import proactive
+            from minicode.paths import app_path
+            part = proactive.pending_part(app_path("updates"))
+            if part:
+                snap.update(state="partial", resumable=True,
+                            partial=int(part.get("bytes") or 0),
+                            total=int(part.get("total") or 0),
+                            pct=int(part.get("pct") or 0),
+                            version=part.get("version"), name=part.get("name"),
+                            why="本机有一份下了一半的更新包(" + str(part.get("size") or "")
+                                + "),点下载会接着走,不必重来")
+        return snap
 
     def update_download_cancel(self) -> dict:
         st = self._upd_snapshot()
         if st.get("state") != "downloading":
             return {"ok": False, "why": "现在没有在下载的东西"}
         self._upd_stop.set()
-        return {"ok": True, "why": "已请求取消(半截文件会被删掉,不留)"}
+        # v0.9.177:半截**留着**了(那是断点续传的本钱),所以这话不能说成"会被删掉"。
+        return {"ok": True, "why": "已请求取消(已下的那半截留着,下次点下载接着走)"}
 
     def update_install(self) -> dict:
         """把下好的东西交出去:装机版开安装程序,单文件版只能"打开所在文件夹"。
@@ -1746,9 +1775,31 @@ class Bridge:
                 "why": f"这一版(v{v})不再弹卡;下次发更新的版本照样会告诉你。"}
 
     def update_history(self, limit: int = 8) -> dict:
-        """历史更新内容(用户图 p8 那张列表):只读公开接口,失败说实话。"""
+        """历史更新内容(用户图 p8 那张列表):只读公开接口,失败说实话。
+
+        v0.9.177 起这一屏有**第二个入口**:点侧栏那串版本号(原来是手动查更新,
+        那个 ↻ 按用户要求撤了,手动查仍留在命令面板里)。两个入口共用这一个口。
+        """
         from minicode import proactive
         return proactive.list_releases(limit=limit)
+
+    def update_prune(self, keep_version: str = "") -> dict:
+        """清掉 `updates/` 里被取代的旧安装包与续传半截,回报省了多少字节。
+
+        刻意**由用户点一下**才跑,不自动:这里躺的是 920 MB 一件的 exe,而"留着
+        是给另一台机器拷安装包"是真会发生的用途 —— 替他删本机文件不是清理,是决定。
+        范围由 `proactive.prune_updates` 那道文件名形状闸兜住:不是这条更新通道
+        写下的东西,一个都不碰。
+        """
+        from minicode import proactive
+        from minicode.paths import app_path
+        keep = str(keep_version or "").strip().lstrip("vV")
+        if not keep:
+            keep = str(self._upd_snapshot().get("version") or "")
+        r = proactive.prune_updates(app_path("updates"), keep_version=keep)
+        r["freed_size"] = proactive.fmt_bytes(int(r.get("freed") or 0))
+        r["removed_count"] = len(r.get("removed") or [])
+        return r
 
     def git_overview(self) -> dict:
         """Git 页一屏数据:git 在不在 + 状态 + 影子快照。当前工作区的账。"""

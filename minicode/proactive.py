@@ -392,38 +392,45 @@ def _ver_tuple(text: str) -> tuple[int, ...]:
     return tuple(int(n) for n in nums) or (0,)
 
 
+def _cert_variants():
+    """更新通道的**证书两跳**:先是包内那份 certifi,再换系统证书库。
+
+    理由是本机实测踩出来的:有些机器(R 里的"加速器"、公司代理、安全软件)把 HTTPS
+    **接管**了 —— 它把自己那张根证书装进 **Windows 证书库**,却不会装进 Python 包里
+    那份 `certifi`。表现是"浏览器上得去、Windows 处处上得去,而 python 一调就是
+    `CERTIFICATE_VERIFY_FAILED`"(本机实测:签发者是某加速器的根,默认失败、系统库成功)。
+    只试一次的话,这一格在那些机器上会**永远静默** —— 用户点「检查更新」得到的是
+    "已是最新版本",而真相是它一次都没问出去。
+
+    v0.9.177 起它从 `_http_get` 的私有逻辑**提成公共底座**,因为查最新 / 列历史 /
+    下校验文件这三条都走 `_http_get`(本来就两跳),而**下安装包那一条是自己造
+    `httpx.Client` 的**,漏了这跳 —— 本机实测:那份 exe 在默认证书链下
+    `ConnectError`,换系统证书库才 206 出字节。元数据全通、下载全不通,是这一条
+    最容易骗过测试的坏法(测试只 stub 了元数据那条)。
+    """
+    yield "certifi", None
+    try:
+        import ssl
+        yield "系统证书库", ssl.create_default_context()
+    except Exception:      # 没有 ssl 可用 = 这台机器连不上任何 https,后面照实报
+        pass
+
+
 def _http_get(url: str, timeout: float = 10.0,
               headers: "dict | None" = None) -> "tuple[object | None, str]":
-    """取一个 HTTPS 接口,回 (响应或 None, 没拿到时的实话)。
-
-    **证书这一关要试两次**,理由是本机实测踩出来的:有些机器(R 里的"加速器"、
-    公司代理、安全软件)把 HTTPS **接管**了 —— 它把自己那张根证书装进
-    **Windows 证书库**,却不会装进 Python 包里那份 `certifi`。表现是"浏览器上得去、
-    Windows 处处上得去,而 python 一调就是 `CERTIFICATE_VERIFY_FAILED`"
-    (本机实测:签发者是某加速器的根,`httpx` 默认失败、系统证书库成功)。
-    只试一次的话,这一格在那些机器上会**永远静默** —— 用户点「检查更新」得到的是
-    "已是最新版本",而真相是它一次都没问出去。第二次用 `ssl.create_default_context()`
-    (Windows 上它会读系统证书库),两次都失败才算真的不通。
-
-    v0.9.176 起这份两跳是**这一整条更新通道的公共底座**(查最新 / 列历史 /
-    下校验文件 / 下安装包都走它)—— 只让 `_release_payload` 一家自己有的话,
-    另外三条在那些机器上会静默失败而卡面上什么都不显示,那是同一个坑重犯四次。
-    """
+    """取一个 HTTPS 接口,回 (响应或 None, 没拿到时的实话)。"""
     import httpx
     hd = {"Accept": "application/vnd.github+json"}
     hd.update(headers or {})
     why: list[str] = []
     resp = None
-    try:
-        resp = httpx.get(url, timeout=timeout, headers=hd)
-    except Exception as e:
-        why.append(f"默认证书链不通({type(e).__name__})")
+    for label, ctx in _cert_variants():
         try:
-            import ssl
-            resp = httpx.get(url, timeout=timeout, headers=hd,
-                             verify=ssl.create_default_context())
-        except Exception as e2:
-            why.append(f"换系统证书库也失败({type(e2).__name__})")
+            kw = {} if ctx is None else {"verify": ctx}
+            resp = httpx.get(url, timeout=timeout, headers=hd, **kw)
+            break
+        except Exception as e:
+            why.append(f"{label}不通({type(e).__name__})")
             resp = None
     if resp is None:
         return None, "网络或证书不通:" + "、".join(why)
@@ -501,19 +508,41 @@ def running_form() -> str:
     return "single" if "单文件" in Path(exe).name else "setup"
 
 
+def _asset_api_url(asset: dict) -> str:
+    """这只资产在 **api.github.com** 上的取件地址(拿不到就回空串)。
+
+    为什么优先用它:`browser_download_url` 的宿主是 `github.com`,本机实测过一整类
+    网络状态是 **`github.com:443` 连不上而 `api.github.com` 通**(git push 同时段也是
+    这个表现)。两条路最终都 302 到同一个 `release-assets.githubusercontent.com`,
+    所以 api 这条**少一跳坏的**,不是多一套机制。`browser_download_url` 留作兜底。
+    """
+    u = str((asset or {}).get("url") or "")
+    return u if u.startswith("https://api.github.com/") else ""
+
+
 def pick_asset(release: "dict | None", form: "str | None" = None) -> "dict | None":
     """从 release 的 assets 里挑这一台该下的那件;挑不到回 None(界面退回开网页)。"""
     use = form or running_form()
     want = ASSET_SUFFIX.get(use)
     if not want or not isinstance(release, dict):
         return None
-    for a in (release.get("assets") or []):
-        if isinstance(a, dict) and str(a.get("name") or "").endswith(want):
-            url = str(a.get("browser_download_url") or "")
-            if not url.startswith("https://"):
-                return None             # 没有可下的直链就别给按钮
-            return {"name": str(a.get("name")), "url": url,
-                    "size": int(a.get("size") or 0), "form": use}
+    assets = [a for a in (release.get("assets") or []) if isinstance(a, dict)]
+    sha_url = ""
+    for a in assets:                     # 校验清单也走 api 那一跳,理由同上
+        if str(a.get("name") or "").endswith("-sha256.txt"):
+            sha_url = _asset_api_url(a)
+            break
+    for a in assets:
+        if not str(a.get("name") or "").endswith(want):
+            continue
+        api = _asset_api_url(a)
+        browser = str(a.get("browser_download_url") or "")
+        url = api or browser
+        if not url.startswith("https://"):
+            return None             # 没有可下的直链就别给按钮
+        return {"name": str(a.get("name")), "url": url,
+                "api_url": api, "browser_url": browser, "sha_url": sha_url,
+                "size": int(a.get("size") or 0), "form": use}
     return None
 
 
@@ -552,30 +581,105 @@ def list_releases(limit: int = 8, timeout: float = 12.0) -> dict:
     return {"ok": True, "releases": out, "why": ""}
 
 
-def _expected_sha256(ver: str, asset_name: str,
+def _expected_sha256(ver: str, asset_name: str, sha_url: str = "",
                      timeout: float = 12.0) -> "tuple[str, str]":
     """去那份随包的 `*-sha256.txt` 里取这个文件的期望哈希,回 (sha 或 "", 实话)。
 
     校验文件由发布脚本一并传上去,格式是 `<64位十六进制>  <文件名>` 一行一件。
     **取不到时回空串而不是猜一个** —— 调用方必须把"没验过"如实标出来,
     不许把它混进"验过了"。
+
+    `sha_url` 是这份清单在 api.github.com 上的取件地址(v0.9.177 起由 `pick_asset`
+    带下来):优先走它,因为 `github.com` 那一跳在实测的网络状态里会整台连不上而
+    `api.github.com` 是通的。**取 api 地址时 `Accept` 必须是 `application/octet-stream`**
+    —— 这个接口按 Accept 决定给你 JSON 元数据还是给你文件正文,给错了拿到的是
+    一份元数据,里面**什么哈希都没有**,于是"校验文件里没有这一件"会说成一句假话。
     """
-    url = ("https://github.com/MOKO-TB/yinlu-xuezhang/releases/download/"
-           "v%s/yinlu-xuezhang-%s-sha256.txt" % (ver, ver))
-    resp, why = _http_get(url, timeout, headers={"Accept": "text/plain"})
-    if resp is None:
-        return "", why
-    if resp.status_code != 200:
-        return "", f"校验文件 HTTP {resp.status_code}"
-    want = str(asset_name or "").strip().lower()
-    for line in str(resp.text or "").splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and parts[1].strip().lower() == want:
-            got = parts[0].strip().lower()
-            if len(got) == 64 and all(c in "0123456789abcdef" for c in got):
-                return got, ""
-            return "", "校验文件里那一行的形状不对"
-    return "", "校验文件里没有这一件"
+    got_why: list[str] = []
+    for url, hd in ((sha_url, {"Accept": "application/octet-stream"}),
+                    ("https://github.com/MOKO-TB/yinlu-xuezhang/releases/download/"
+                     "v%s/yinlu-xuezhang-%s-sha256.txt" % (ver, ver),
+                     {"Accept": "text/plain"})):
+        if not url:
+            continue
+        resp, why = _http_get(url, timeout, headers=hd)
+        if resp is None:
+            got_why.append(why)
+            continue
+        if resp.status_code != 200:
+            got_why.append(f"校验文件 HTTP {resp.status_code}")
+            continue
+        body = str(resp.text or "")
+        want = str(asset_name or "").strip().lower()
+        for line in body.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].strip().lower() == want:
+                got = parts[0].strip().lower()
+                if len(got) == 64 and all(c in "0123456789abcdef" for c in got):
+                    return got, ""
+                return "", "校验文件里那一行的形状不对"
+        got_why.append("校验文件里没有这一件")
+        break        # 拿到了正文却没有这一行:换另一条路取同一份清单没有意义
+    return "", "、".join(got_why) or "没有可用的校验文件"
+
+
+def _host_of(url: str) -> str:
+    """实话里要说"哪一台没通",但**只说主机名** —— 那份带签名参数的临时地址不该
+    落到日志或事件里(它是一个能下载 exe 的凭证 URL,虽然短命)。"""
+    m = re.match(r"https?://([^/]+)", str(url or ""))
+    return m.group(1) if m else "那个地址"
+
+
+def _sidecar(part: Path) -> Path:
+    """半截文件的那张"我是谁的"条子。"""
+    return part.with_name(part.name + ".meta")
+
+
+def _read_sidecar(part: Path) -> dict:
+    try:
+        import json
+        d = json.loads(_sidecar(part).read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_sidecar(part: Path, data: dict) -> None:
+    try:
+        import json
+        _sidecar(part).write_text(json.dumps(data, ensure_ascii=False),
+                                  encoding="utf-8")
+    except OSError:
+        pass          # 记不下就只是不能续传,不该让下载失败
+
+
+def _drop_part(part: Path) -> None:
+    for p in (part, _sidecar(part)):
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:
+            pass      # 删不掉(占用/权限)由调用方那份字节数检查兜住
+
+
+def _hash_prefix(path: Path, n: int) -> "object":
+    """回一个已经喂进前 n 字节的 sha256 对象。
+
+    为什么必须这样:哈希对象的中间状态**序列化不了**,所以"上次算到哪了"没法存盘。
+    续传时把本机已有那一段重新喂一遍,是为了让最后那个摘要覆盖**整个文件**而不是
+    只覆盖新下来的那一段 —— 后者会把"前半截被人换过"验不出来。
+    代价实测:920 MB 约几秒(SSD),比重下一遍快两个数量级。
+    """
+    import hashlib
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        left = n
+        while left > 0:
+            chunk = f.read(min(1048576, left))
+            if not chunk:
+                raise OSError(f"半截文件只有 {n - left:,} 字节,和记下的对不上")
+            h.update(chunk)
+            left -= len(chunk)
+    return h
 
 
 def download_asset(asset: dict, dest_dir: Path, on_progress=None,
@@ -583,25 +687,38 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
                    connect_timeout: float = 20.0) -> dict:
     """把一件发布资产下到本机:流式写 `.part` → 校验 sha256 → 改名成交付名。
 
-    四条不是显然的:
-    1. **先下成 `.part` 再改名** —— 中断的半截文件不该长得像"可以安装的包";
-       取消与任何异常都先把 `.part` 删掉,不在能看见的地方留一个 900 MB 的残骸。
+    六条不是显然的:
+    1. **先下成 `.part` 再改名** —— 没验过的东西不该长得像"可以安装的包"。名字里
+       带版本号,所以上一次的半截和这一次的半截永远不会撞成同一个文件。
     2. **校验拿不到就说拿不到**(`verified="none"` + `why`),绝不静默当通过 ——
        下载回来的是用户会**双击执行**的 exe,"没验过"说成"验过了"是这一路最坏的假绿。
-    3. **GitHub 直链会 302 跳到 CDN**:httpx 默认不跟重定向,不加
-       `follow_redirects=True` 每次都会"下到 0 字节"。
-    4. 进度只在**整数百分点**变化时回调 —— 920 MB 按块发会把事件总线淹掉。
+    3. **两条直链都试**:v0.9.177 起优先 `api.github.com` 那个资产地址,再退
+       `browser_download_url`。本机实测过 `github.com:443` 整台连不上而
+       `api.github.com` 通的网络状态(同一时刻 `git push` 也是这个表现),而两条
+       最终都 302 到同一个 `release-assets.githubusercontent.com` —— 换的是第一跳,
+       不是换一套机制。
+    4. **证书两跳**:与 `_http_get` 同一份底座。v0.9.176 只在元数据那三条有它,
+       下载这一条自己造 client 漏了,于是那种机器上的表现是"卡开得出、进度条不动"。
+    5. **断点续传**:`Range: bytes=N-` 配 `If-Range: <上次的 ETag/Last-Modified>`。
+       服务器不认 Range(回 200)就**从 0 重来**,绝不把两份不同的字节接在一起。
+       取消与中断这次**留着** `.part`(这正是续传的意义),它由 `prune_updates()`
+       收掉 —— "残骸没人管"和"残骸不能留"是两件事,前一种才是 bug。
+    6. 进度只在**整数百分点**变化时回调 —— 920 MB 按块发会把事件总线淹掉。
     """
-    import hashlib
     import httpx
-    url = str((asset or {}).get("url") or "")
     name = str((asset or {}).get("name") or "update.bin")
     # 只收 https,**外加一条回环**:本地测试要有一个能真发字节的服务器,而起一套
     # 自签 TLS 不值。这不削弱安全性 —— 地址本来就来自 api.github.com 那份经过校验的
     # 响应,而"能不能装"从来不是这个前缀决定的,是下面那道 sha256 决定的
     # (对不上就删文件、界面上那颗按钮是灰的)。
-    if not (url.startswith("https://") or url.startswith("http://127.0.0.1")
-            or url.startswith("http://localhost")):
+    urls: list[str] = []
+    for key in ("url", "browser_url"):
+        u = str((asset or {}).get(key) or "")
+        if u and u not in urls and (
+                u.startswith("https://") or u.startswith("http://127.0.0.1")
+                or u.startswith("http://localhost")):
+            urls.append(u)
+    if not urls:
         return {"ok": False, "verified": "none", "why": "没有可下载的直链"}
     safe = Path(name).name                       # 资产名来自接口:只取最后一段
     m = re.search(r"-(\d+\.\d+\.\d+)-", safe)    # 校验文件按版本号取
@@ -613,60 +730,270 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
         return {"ok": False, "verified": "none", "why": f"下载目录建不出来:{e}"}
     final = dest_dir / safe
     part = dest_dir / (safe + ".part")
-    expected, vwhy = _expected_sha256(ver, safe) if (verify and ver) else ("", "")
     total = int((asset or {}).get("size") or 0)
-    h = hashlib.sha256()
-    got = 0
+    expected, vwhy = ("", "")
+    if verify and ver:
+        expected, vwhy = _expected_sha256(ver, safe, str((asset or {}).get("sha_url") or ""))
+
+    # 这一台该从第几字节接着要:半截文件 + 一张对得上的条子,才叫"可续传"。
+    # 条子对不上(说不清这半截是谁的、或它比整件还长)就删掉重来 —— 把两份不同
+    # 来源的字节接在一起,最后那个 sha256 会指向一个谁都没发布过的文件。
     last_pct = -1
-    try:
-        with httpx.Client(timeout=httpx.Timeout(connect_timeout, read=120.0),
-                          follow_redirects=True) as c:
-            with c.stream("GET", url,
-                          headers={"Accept": "application/octet-stream"}) as r:
-                if r.status_code != 200:
-                    return {"ok": False, "verified": "none",
-                            "why": f"下载接口回了 HTTP {r.status_code}"}
-                with part.open("wb") as f:
-                    for chunk in r.iter_bytes():
-                        if should_stop is not None and should_stop():
-                            f.close()
-                            part.unlink(missing_ok=True)
-                            return {"ok": False, "cancelled": True,
-                                    "verified": "none", "why": "已取消,半截文件不留"}
-                        f.write(chunk)
-                        h.update(chunk)
-                        got += len(chunk)
-                        if on_progress is not None:
-                            pct = int(got * 100 / total) if total else -1
-                            if pct != last_pct:
-                                last_pct = pct
-                                on_progress({"name": safe, "got": got,
-                                             "total": total, "pct": pct})
-    except Exception as e:
-        part.unlink(missing_ok=True)
-        return {"ok": False, "verified": "none",
-                "why": f"下载中断({type(e).__name__}: {e})"}
-    sha = h.hexdigest()
+    resumed_from = 0
+
+    def prog(got: int) -> None:
+        nonlocal last_pct
+        if on_progress is None:
+            return
+        pct = int(got * 100 / total) if total else -1
+        if pct == last_pct:                     # 只在整数百分点上说话
+            return
+        last_pct = pct
+        on_progress({"name": safe, "got": got, "total": total, "pct": pct,
+                     "resumed": resumed_from > 0, "start_at": resumed_from})
+
+    def _resumable() -> "tuple[int, str]":
+        """本机那份半截能不能接着用:名字与总大小对得上才行,对不上就删。"""
+        if not part.exists():
+            return 0, ""
+        rec = _read_sidecar(part)
+        have = part.stat().st_size
+        ok = (rec.get("name") == safe and have > 0
+              and int(rec.get("total") or 0) == total
+              and (not total or have <= total))
+        if not ok:
+            _drop_part(part)
+        return (have, str(rec.get("validator") or "")) if ok else (0, "")
+
+    def attempt(u: str, label: str, ctx, start_at: int, validator: str):
+        """一条路线一次尝试,回 (结局, 落盘字节, 摘要或 "", 服务器给的验证器, 实话)。
+
+        结局 ∈ {"done", "retry", "stop"}:每次尝试**自己重新看本机有多少字节**并重新
+        喂哈希 —— 上一次尝试可能把半截截断过(服务器不认 Range),沿用旧的那个
+        哈希对象会算出错的摘要。
+
+        第六个值是"这一次是**从第几字节接上去的**"(0 = 从 0 重写)。它比
+        "落盘多少字节"更适合当 `resumed` 的判据:被打回整件重下的那一次,
+        落盘字节照样大于旧偏移,拿落盘数说话会把"重下"报成"续传成功"。
+        """
+        import hashlib
+        kw = {} if ctx is None else {"verify": ctx}
+        hd = {"Accept": "application/octet-stream"}
+        if start_at:
+            hd["Range"] = "bytes=%d-" % start_at
+            if validator:
+                hd["If-Range"] = validator
+        try:
+            with httpx.Client(timeout=httpx.Timeout(connect_timeout, read=120.0),
+                              follow_redirects=True, **kw) as c:
+                with c.stream("GET", u, headers=hd) as r:
+                    if r.status_code == 416:
+                        # 我们要的那段偏移已经超出这件文件了:半截比整件还长,留着
+                        # 只会永远续不上,删掉从 0 重来(换一条路线再试)。
+                        _drop_part(part)
+                        return ("retry", 0, "", "", "本机那份半截比整件还长,已重来", 0)
+                    if r.status_code not in (200, 206):
+                        return ("retry", start_at, "", validator,
+                                f"{r.url.host} HTTP {r.status_code}({label})", 0)
+                    # 200 而不是 206 = 这台服务器不认我那份 Range(或没带 Range)。
+                    restart = (r.status_code == 200 and start_at > 0)
+                    if restart:
+                        base = hashlib.sha256()
+                    else:
+                        base = (_hash_prefix(part, start_at) if start_at
+                                else hashlib.sha256())
+                    pos = 0 if restart else start_at
+                    mode = "wb" if restart else ("ab" if start_at else "wb")
+                    with part.open(mode) as f:
+                        for chunk in r.iter_bytes():
+                            if should_stop is not None and should_stop():
+                                f.flush()
+                                return ("stop", pos, "", validator, "",
+                                        0 if restart else start_at)
+                            f.write(chunk)
+                            base.update(chunk)
+                            pos += len(chunk)
+                            prog(pos)
+                    return ("done", pos, base.hexdigest(),
+                            str(r.headers.get("etag")
+                                or r.headers.get("last-modified") or ""), "",
+                            0 if restart else start_at)
+        except Exception as e:
+            return ("retry", part.stat().st_size if part.exists() else 0, "",
+                    validator, f"{_host_of(u)} {type(e).__name__}({label})", 0)
+
+    last_pct = -1
+    variants = list(_cert_variants())
+    if urls[0].startswith("http://"):
+        variants = variants[:1]        # 回环测试服务器没有证书,第二跳无从可验
+    # 半截已经齐了(上次下完没来得及校验就断了):不出网,直接进校验。
+    start_at, validator = _resumable()
+    if start_at and total and start_at >= total:
+        sha, resumed = _hash_prefix(part, start_at).hexdigest(), True
+    else:
+        sha, resumed = None, False
+        attempt_why: list[str] = []
+        for u in urls:
+            for label, ctx in variants:
+                start_at, validator = _resumable()
+                resumed_from = start_at      # 进度里要说"这 N MB 是本机原有的"
+                outcome, pos, digest, v, why, joined_at = attempt(
+                    u, label, ctx, start_at, validator)
+                if outcome == "stop":
+                    _write_sidecar(part, {"name": safe, "total": total,
+                                          "validator": v or validator, "bytes": pos})
+                    return {"ok": False, "cancelled": True, "verified": "none",
+                            "partial": pos, "resumable": True,
+                            "why": "已取消,已下的 %s 留着,下次点下载接着走"
+                                   % fmt_bytes(pos)}
+                if outcome == "done":
+                    sha, validator = digest, v
+                    resumed = joined_at > 0
+                    break
+                if why:
+                    attempt_why.append(why)
+            if sha is not None:
+                break
+        if sha is None:
+            # 中断/失败的半截**留着**:记下它现在的字节数与那把验证器,下次接着下
+            have = part.stat().st_size if part.exists() else 0
+            if have:
+                _write_sidecar(part, {"name": safe, "total": total,
+                                      "validator": validator, "bytes": have})
+            return {"ok": False, "verified": "none", "resumable": bool(have),
+                    "partial": have,
+                    "why": ("下载没通:" + "；".join(attempt_why[:4])) if attempt_why
+                            else "已取消,已下的 %s 留着,下次接着走" % fmt_bytes(have)}
+
     on_disk = part.stat().st_size
     if total and on_disk != total:
-        part.unlink(missing_ok=True)
-        return {"ok": False, "verified": "none",
-                "why": f"字节数对不上:接口说 {total:,},实收 {on_disk:,}"}
+        _write_sidecar(part, {"name": safe, "total": total,
+                              "validator": validator, "bytes": on_disk})
+        return {"ok": False, "verified": "none", "resumable": True,
+                "partial": on_disk, "total": total,
+                "why": f"这一趟只拿到 {fmt_bytes(on_disk)} / {fmt_bytes(total)},"
+                       f"半截留着了,再点一次接着下"}
     verified = "none"
     if verify and ver and expected:
         verified = "ok" if sha == expected else "mismatch"
     if verified == "mismatch":
-        part.unlink(missing_ok=True)
+        # **必须删**:留着它等于下次续传时把那段坏字节继续接在新字节后面,
+        # 于是"重下一遍"永远修不好 —— 坏的前提要断根。
+        _drop_part(part)
         return {"ok": False, "verified": "mismatch", "sha256": sha, "name": safe,
-                "why": "sha256 与发布时那份不一致 —— 这份**不能装**,请到发布页重来"}
+                "why": "sha256 与发布时那份不一致 —— 这份**不能装**,已删掉重来"}
     try:
         final.unlink(missing_ok=True)            # 同名旧件先让路(覆盖是用户点出来的)
     except OSError:
         pass
     part.replace(final)
+    try:
+        _sidecar(part).unlink(missing_ok=True)
+    except OSError:
+        pass
     return {"ok": True, "path": str(final), "name": safe, "size": on_disk,
             "sha256": sha, "verified": verified, "version": ver,
+            "resumed": bool(resumed),
             "why": "" if verified != "none" else (vwhy or "没有可用的校验文件")}
+
+
+def fmt_bytes(n: int) -> str:
+    n = int(n or 0)
+    for unit, div in (("GB", 1073741824), ("MB", 1048576), ("KB", 1024)):
+        if n >= div:
+            return "%.1f %s" % (n / div, unit)
+    return "%d B" % n
+
+
+# ------------------------------------------------------- updates/ 的那些旧件(v0.9.177)
+
+# 只认**这一条更新通道自己写下**的文件名形状。凡是形状不对的一律不碰 ——
+# 这个目录是用户可写的本机目录,谁也可能往里放别的东西;"清理"的权限来自
+# "这是我写的",不来自"它在我的目录下"。
+_UPDATE_NAME = re.compile(
+    r"^yinlu-xuezhang-\d+\.\d+\.\d+-(setup\.exe|single-file\.exe|win64\.zip"
+    r"|sha256\.txt)(\.part(\.meta)?)?$")
+_VER_IN_NAME = re.compile(r"yinlu-xuezhang-(\d+\.\d+\.\d+)-")
+
+
+def _cur_version() -> str:
+    """正在跑的这一版(懒导入:`minicode/__init__` 不引 proactive,但绕一下更省心)。"""
+    from minicode import __version__
+    return str(__version__)
+
+
+def pending_part(dest_dir: Path) -> dict:
+    """本机有没有一份"下了一半、下次能接着下"的更新包(重启后界面该知道这事)。
+
+    只认**带着条子**的那半截:没有 `.part.meta` 就说不清它是谁的、总长多少,那种
+    情况报出来只会误导("还有 300 MB 可以续"然后从 0 重下)。所以那种直接不算。
+    """
+    newest: "tuple[int, Path] | None" = None
+    try:
+        for p in Path(dest_dir).glob("*.exe.part"):
+            if not _sidecar(p).exists():
+                continue
+            try:
+                mt = int(p.stat().st_mtime)
+            except OSError:
+                continue
+            if newest is None or mt > newest[0]:
+                newest = (mt, p)
+    except OSError:
+        return {}
+    if newest is None:
+        return {}
+    p = newest[1]
+    rec = _read_sidecar(p)
+    m = _VER_IN_NAME.search(p.name)
+    total = int(rec.get("total") or 0)
+    have = int(rec.get("bytes") or 0) or (p.stat().st_size if p.exists() else 0)
+    return {"name": p.name, "version": m.group(1) if m else "",
+            "bytes": have, "total": total,
+            "pct": int(have * 100 / total) if total else -1,
+            "size": fmt_bytes(have)}
+
+
+def prune_updates(dest_dir: Path, keep_version: str = "",
+                  keep_current: bool = True) -> dict:
+    """收掉 `updates/` 里**被取代的**旧安装包与续传半截,回清了什么、省了多少字节。
+
+    留下的三样:①`keep_version` 那一版(它是当前要装/在下的那一件);②正在运行的
+    这一版自己的交付件(装了它的那份包不必再留);③**名字形状不是发布件的一切**
+    (这条比前两条重要:误删别人的东西不是"清理",是事故)。
+
+    为什么值得单独写一只手:920 MB 一件,用户升级三次就是 2.7 GB,而这一路此前
+    只会往里写、从不删 —— 「我的数据」里连个影子都没有(所以是"看不见的增长")。
+    """
+    freed = 0
+    removed: list[dict] = []
+    kept: list[str] = []
+    try:
+        entries = sorted(Path(dest_dir).iterdir())
+    except OSError:
+        return {"ok": True, "removed": [], "freed": 0,
+                "why": "下载目录还没建出来(那就没有要清的)"}
+    for p in entries:
+        if not p.is_file() or not _UPDATE_NAME.match(p.name):
+            continue
+        v = _VER_IN_NAME.search(p.name)
+        v = v.group(1) if v else ""
+        if keep_current and v and v == _cur_version():
+            kept.append(p.name)
+            continue
+        if keep_version and v and v == keep_version:
+            kept.append(p.name)
+            continue
+        size = 0
+        try:
+            size = p.stat().st_size
+            p.unlink()
+        except OSError as e:
+            removed.append({"name": p.name, "bytes": size, "why": f"没删掉:{e}"})
+            continue
+        removed.append({"name": p.name, "bytes": size, "why": ""})
+        freed += size
+    return {"ok": True, "removed": removed, "freed": freed, "kept": kept, "why": ""}
 
 
 # ---------------------------------------------------------------- 桌面通知文案

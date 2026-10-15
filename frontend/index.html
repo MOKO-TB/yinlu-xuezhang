@@ -3345,6 +3345,11 @@ try {
     </div>
     <div class="upd-body" id="histBody"></div>
     <div class="btns">
+      <!-- v0.9.177:就地更新每升一版往 updates/ 里留一件 920 MB 的包,而这一屏是唯一
+           说得出"这里躺了多少"的地方。清理由人点,不自动 —— 留着拷给另一台机器是
+           真会发生的用途。 -->
+      <button class="b-no" id="histPrune">清理旧安装包</button>
+      <span class="upd-date" id="histPruneNote"></span>
       <button class="b-no" id="histClose">关闭</button>
     </div>
   </div>
@@ -3811,12 +3816,23 @@ function updRender() {
   } else if (st === "cancelled") {
     bar.style.width = "0";
     line.className = "upd-line";
-    line.textContent = String(s.why || "已取消,半截文件没留");
-    go.textContent = "下载更新"; go.disabled = !hasAsset;
+    line.textContent = String(s.why || "已取消");
+    go.textContent = s.resumable ? "接着下载" : "下载更新"; go.disabled = !hasAsset;
   } else if (st === "error") {
-    line.className = "upd-line bad";
-    line.textContent = "下载没成:" + String(s.why || "未知原因");
-    go.textContent = "再试一次"; go.disabled = !hasAsset;
+    // 半截留着的那种"错"要说成"能接着下",而不是下载没成 —— 它是进度,不是失败。
+    const part = !!s.resumable;
+    line.className = "upd-line" + (part ? "" : " bad");
+    line.textContent = (part ? "这一下没下完:" : "下载没成:") + String(s.why || "");
+    if (part) bar.style.width = Math.max(0, Math.min(100, Number(s.pct) || 0)) + "%";
+    go.textContent = part ? ("接着下载(已下 " + fmtMB(s.partial) + ")") : "再试一次";
+    go.disabled = !hasAsset;
+  } else if (st === "partial") {
+    // 重启前下了一半、盘上还留着的那份:进度条不该从 0 开始,话也不该是"下载没成"。
+    bar.style.width = Math.max(0, Math.min(100, Number(s.pct) || 0)) + "%";
+    line.className = "upd-line";
+    line.textContent = String(s.why || ("本机有一份下了一半的更新包("
+                                        + fmtMB(s.partial) + ")"));
+    go.textContent = "接着下载"; go.disabled = !hasAsset;
   } else {
     go.textContent = "下载更新";
     go.disabled = !hasAsset;
@@ -3893,7 +3909,10 @@ $("updGo").addEventListener("click", () => {
                     updRender(); });
   }
 });
-$("updHist").addEventListener("click", () => {
+/* 历史更新内容(v0.9.176 那一屏;v0.9.177 抽成具名函数):更新卡里那颗按钮和
+   **侧栏那串版本号**共用这一个出口。抽出来的原因就是这一轮的需求本身 —— 点版本号
+   不再"手动查一次",而是直接看历史,所以两处必须落进同一个弹窗,不许各写一份渲染。 */
+function openHistoryDlg() {
   const api = (window.pywebview && pywebview.api) || {};
   if (!api.update_history) { toast("这一屏只在桌面版能看历史", true); return; }
   $("histNote").textContent = "加载中…";
@@ -3906,6 +3925,7 @@ $("updHist").addEventListener("click", () => {
       return;
     }
     $("histNote").textContent = "共 " + (r.releases || []).length + " 版";
+    histReleases = r.releases || [];
     // "正在用"标在哪一版:侧栏那串版本号是唯一真相(它可能被 checkUpdateNow
     // 临时缀上" ·检查中",所以只抠 x.y.z 那一段,不整串比)
     const mv = ((($("ver") && $("ver").textContent) || "").match(/\d+\.\d+\.\d+/)
@@ -3943,6 +3963,23 @@ $("updHist").addEventListener("click", () => {
     $("histNote").textContent = "";
     $("histBody").textContent = "没拿到历史:这一路没通";
   });
+}
+$("updHist").addEventListener("click", openHistoryDlg);
+let histReleases = [];
+$("histPrune").addEventListener("click", () => {
+  const api = (window.pywebview && pywebview.api) || {};
+  const note = $("histPruneNote");
+  if (!api.update_prune) { note.textContent = "这一屏只在桌面版能清理"; return; }
+  note.textContent = "清理中…";
+  // 传"最新那一版"给它留着:清的是**被取代的**,不是"眼下还没装的那一件"。
+  api.update_prune((histReleases[0] && histReleases[0].version) || "")
+    .then(r => {
+      if (!r || !r.ok) { note.textContent = (r && r.why) || "清理没通"; return; }
+      const n = (r.removed || []).length;
+      note.textContent = n ? ("已清掉 " + n + " 件,腾出 " + (r.freed_size || "0 B"))
+                           : "没有可清的旧件(该留的都留着)";
+    })
+    .catch(() => { note.textContent = "清理没通(后端没回话)"; });
 });
 $("histClose").addEventListener("click", () => {
   $("histOverlay").classList.remove("show");
@@ -3988,19 +4025,13 @@ function verClickable() {
   if (!v || v.dataset.clickable) return;
   v.dataset.clickable = "1";
   v.style.cursor = "pointer";
-  v.title = "点击检查更新(也可以在命令面板里搜「检查更新」)";
-  // v0.9.174:版本号旁边挂一枚小小的 ↻,让它**看起来像个能点的东西** ——
-  // 只靠 cursor/title 那种"悬停才知道"的提示,用户是找不到的(实测反馈)。
-  if (!$("verReload")) {
-    const b = document.createElement("span");
-    b.id = "verReload";
-    b.textContent = "↻";
-    b.title = "检查更新";
-    b.style.cssText = "margin-left:4px;opacity:.75;cursor:pointer;";
-    v.after(b);
-    b.addEventListener("click", checkUpdateNow);
-  }
-  v.addEventListener("click", checkUpdateNow);
+  // v0.9.177:点版本号 = **看历史更新内容**,不再 = 手动查更新。
+  // 上一版这里挂了一枚 ↻ 并让版本号本身去触发检查,用户明确要求去掉:检查这件事
+  // 后端启动时自己会做(有新版自动弹「发现新版本」),手动那一路留在命令面板里就够
+  // 了,不该占掉侧栏唯一那个可点的字。而且"点版本号能查更新"这件事用户从来不知道
+  // ——它长得不像按钮;现在它像什么就干什么:一串版本号 → 点开看这些版本改了什么。
+  v.title = "点击查看历史更新内容";
+  v.addEventListener("click", openHistoryDlg);
 }
 $("proactiveGo").addEventListener("click", () => {
   $("proactiveBar").style.display = "none";
@@ -13175,7 +13206,7 @@ window.addEventListener("DOMContentLoaded", () => {
     winInit();
     pywebview.api.get_info().then(info => {
     $("ver").textContent = "v" + info.version;
-    verClickable();                        // v0.9.162+:版本号点一下 = 手动查更新
+    verClickable();                        // v0.9.177+:版本号点一下 = 看历史更新内容
     updRestore();                          // v0.9.176:在跑/下完的更新回来接着显示
     renderWorkspacePill(info);
     renderPermOptions(info);
