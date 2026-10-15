@@ -245,9 +245,14 @@ def main() -> int:
                             ".textContent.includes('sub')"),
               "cd 就地换提示符(桥记的当前目录落地)")
 
-        # ⑦ 新版本「更新日志」卡(用户图 p1 同款):版本号可点 → 卡片;
-        #    提示条那颗按钮也开它;「打开发布页」过 open_url
-        page.click("#ver")
+        # ⑦ 新版本「更新日志」卡(用户图 p1 同款):卡片由**推送**开(v0.9.177 起
+        #    点版本号开的是「历史更新内容」,见下面第 ⑨ 段 —— 这两条路必须分开验,
+        #    不然改了其中一条另一条会静默坏掉);提示条那颗按钮也开它;「打开发布页」过 open_url
+        page.evaluate(r"""() => window.__gcodeEvent({type: "update_prompt",
+          version: "0.9.173", date: "2026-10-14", truncated: false,
+          name: "引路学长 v0.9.173",
+          url: "https://github.com/MOKO-TB/yinlu-xuezhang/releases/tag/v0.9.173",
+          notes: "# v0.9.173\n\n## 本次更新\n- 更新检查搬到 GitHub Release\n- 更新日志卡片"})""")
         page.wait_for_selector("#updateOverlay.show")
         check(page.locator("#updVer").text_content() == "0.9.173",
               "卡片抬头是版本号")
