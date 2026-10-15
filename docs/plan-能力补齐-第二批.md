@@ -199,8 +199,8 @@
 | ~~**K 语音输入**~~ ❌ **已撤下(v0.9.174)** | ROADMAP §四 仅剩未收的一条 | **已于 2026-10-14 交付** —— `minicode/voice.py` + 输入行 🎤(离线 Windows 语音识别;只填不发;四种"没听到"各有实话);**工具版 `voice_input` 与 CLI `--voice` 留到注册表精确清单恢复绿之后补**(见下) | `--voice` 或输入框 🎤 → winrt `SpeechRecognizer` 离线 STT;winrt 绑定与 OCR 同一族(缺了如实说) |
 | **S5b/S5c OS 沙箱降权** | §6 第 52 条 | 高(安全) | **等用户拍板**;fail-open 语义:做错了不是"没保护",是每条命令都跑不起来 |
 | 代码库语义索引 | 批次 2/3 | 中 | `retrieval.py`+`embed.py` 只接 KB;工作区已有 grep/符号工具兜底,**建议等真实"找不到代码"的反馈** |
-| 子代理 worktree 隔离与 steer | 批次 2/3 | 中 | 长任务不污染主工作区 + 给在跑的子代理递话 |
-| ~~MCP prompts / sampling / elicitation~~ ✅ | 批次 2/3 | **已于 2026-10-14 交付** —— prompts 接入(list/get,能力行自动收窄);elicitation 按规范回 decline + 记日志(不再静默丢弃让对端干等);sampling **明确拒绝**并说清理由。**留后**:`mcp_prompt` 工具(等注册表精确清单恢复绿,与 `voice_input` 同批)与 elicitation→提问卡的 schema 编译器 |
+| 子代理 worktree 隔离与 steer | 批次 2/3 | 中 | 长任务不污染主工作区 + 给在跑的子代理递话。**→ 后半截已由 v0.9.173 兑现(本轮 2026-10-15 改口,原句未更新)**:`minicode/mailbox.py` + `session_message`(`catalog_bg.py:115`),子代理每一路开一个盒子、标签带路号,递过去的句子落进对方**下一次请求**的系统侧注记(不冒充用户说的话)。**这一行剩下的两件事**:① **worktree 隔离**没做(长任务照样污染主工作区);② **唤醒已经结束的那一路**没做 —— ZCode 的 `SendMessage` 三态 `queued` / `steered` / `resumed_background` 里第三态我们不做,摘了盒子之后再递只会得到一句实话,那是有意的。**另要说准**:`task` 里阻塞等报告的那个主代理**自己也调不了这只盒子**,所以即时的投递方是并发会话与界面上的人,不是主代理本人 |
+| ~~MCP prompts / sampling / elicitation~~ ✅ | 批次 2/3 | **已于 2026-10-14 交付** —— prompts 接入(list/get,能力行自动收窄);elicitation 按规范回 decline + 记日志(不再静默丢弃让对端干等);sampling **明确拒绝**并说清理由。**留后**:`mcp_prompt` 工具(等注册表精确清单恢复绿,与 `voice_input` 同批)与 elicitation→提问卡的 schema 编译器。**⚠ 这两个"等"今天一个前提已解除、一个作废(2026-10-15 复核)**:① 注册表精确清单**早已绿**(`tests/test_registry_split.py:147` 钉住 73 且逐字对顺序),所以 `mcp_prompt` 没有任何前置了 —— 全仓 `name="mcp_prompt"` 仍零命中,**这一件现在是池子里最便宜的一刀**(协议侧 `mcp.py:868`/`:952` 全都好了,只差一只工具让模型去用;矩阵 §10D「MCP」那一格因此是 ◐ 不是 ✅);② `voice_input` 随语音整体撤下而**作废**(v0.9.174,别再按它排批次)。schema 编译器那件仍开着。 |
 
 ---
 
