@@ -785,8 +785,23 @@ def unmanagle_slash_command(argv: list[str]) -> str:
     return " ".join(parts)
 
 
+def run_turn_interjectable(agent: Agent, ui: TerminalUI, text: str) -> None:
+    """跑一个回合,期间**允许插话**(v0.9.177)。
+
+    GUI 那条路早就有了:忙的时候输入框照样发得出,那句走
+    `Agent.queue_interjection`。终端这边以前是"回合跑在主线程上、期间没人读 stdin",
+    所以学长干活时打的字要等它跑完才现身 —— 这一只手就是给终端补那只口。
+
+    开不开由 `minicode.interject` 自己判(真控制台才开);管道 / 重定向 / 测试里
+    它就是原样跑一个回合,行为与本轮之前一字不差。
+    """
+    from minicode.interject import turn_with_interjection
+    with turn_with_interjection(agent, note=ui.info):
+        agent.run_turn(text)
+
+
 def run_once(agent: Agent, ui: TerminalUI, task: str) -> None:
-    agent.run_turn(task)
+    run_turn_interjectable(agent, ui, task)
 
 
 WORKSPACE_FLAGS = ("--workspace", "-w")
@@ -1128,13 +1143,13 @@ def _repl(config, workspace, ui, agent, session, argv=None, hui=None,
             # —— 认识就当普通输入发出去(与手打同一条链);不认识才走管理命令。
             expanded = expand_with_args(text, workspace, ui)
             if expanded is not None:
-                agent.run_turn(expanded)
+                run_turn_interjectable(agent, ui, expanded)
                 continue
             if handle_slash(text, session, config, ui, agent):
                 ui.info("再见!")
                 break
             continue
-        agent.run_turn(text)
+        run_turn_interjectable(agent, ui, text)
 
 
 if __name__ == "__main__":

@@ -72,6 +72,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "update_download", "update_download_state",
                             "update_download_cancel", "update_install",
                             "update_skip", "update_history",
+                            # v0.9.177:updates/ 那颗清理按钮的落点(漏收 = 界面上
+                            # 点了没反应,而"这里躺了 920 MB"这件事永远说不清)
+                            "update_prune",
                             # 这一根钉的是"绝对路径不外流"那一道擦除:漏收 = 包里
                             # 那份快照带着 C:\Users\... 发给界面,而源码态一切正常
                             "_upd_public",
@@ -278,6 +281,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 仍是各抄一份的旧版,新命令 /instructions 打得出前半截却不补全。
     "minicode.ui": ("confirm_destructive", "SLASH_COMMANDS", "help_text",
                     "confirm_tool", "ask_user"),
+    # v0.9.177 终端插话:漏 `turn_with_interjection` = 那只新功能没进包(装了包的
+    # 用户敲键照样要等回合跑完);漏 `_tty_ready` = 非 TTY 那道闸没了,守护线程去和
+    # prompt_toolkit 抢同一个 stdin —— 表现是"输入偶尔丢一半",而 GUI 一点事没有。
+    "minicode.interject": ("Interjection", "turn_with_interjection",
+                           "_tty_ready", "_win_key", "_take_key", "POLL_SECONDS"),
     "minicode.monitor": ("read_pref", "write_pref", "pref_path", "SECTIONS",
                          "DEFAULTS", "PREF_FILE", "_clean_folded"),
     # v0.9.37:实时耗时表(漏 live_rows = 时间线一行时刻都没有;漏 live_abandon =
@@ -1178,6 +1186,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "running_form", "pick_asset", "download_asset",
                            "list_releases", "_http_get", "_expected_sha256",
                            "RELEASES_API", "ASSET_SUFFIX",
+                           # v0.9.177 三件:①证书两跳从 `_http_get` 的私有逻辑提成
+                           # 公共底座 —— 漏收的意思是**下载那一条又只剩 certifi 一跳**,
+                           # 在那种机器上"卡开得出、进度条一动不动"(上一炉正是这个坏法);
+                           # ②断点续传与它的侧记(少 `_hash_prefix` = 续上来的摘要只算后半截);
+                           # ③旧件清理与"有没有半截可续"的可见性(少这两只 = 界面上那颗
+                           # 按钮点了没反应、重启后那份半截假装不存在)。
+                           "_cert_variants", "_hash_prefix", "pending_part",
+                           "prune_updates", "fmt_bytes",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",
@@ -1418,9 +1434,10 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # = 页在、数据不来。容器由注册表在 JS 里建,所以针挑的是注册那行的字面量)
     'id: "extensions", title: "扩展"', "extBody", "extensions_overview",
     # v0.9.174:更新检查的入口(漏 checkUpdateNow = 那只具名动作不在包里、命令面板
-    # 那条点了没反应;漏 act_update = 面板里搜不到它;漏 verReload = 版本号旁边那枚
-    # ↻ 没了 —— 三种都**不报错**,只是"功能在、入口没了",正是这一轮要修的那件事)
-    "checkUpdateNow", "act_update", "verReload",
+    # 那条点了没反应;漏 act_update = 面板里搜不到它)。
+    # v0.9.177:版本号旁边那枚 ↻ 按用户要求**撤掉了**,针换成历史那一屏的函数
+    # (`function openHistoryDlg` 在前端那组里,与「清理旧安装包」同批)。
+    "checkUpdateNow", "act_update",
     # v0.9.166/167:快捷键速查面板与全局命令面板
     "btnShortcuts", "shortcutsOverlay", "btnCmdPalette", "cmdPaletteOverlay", "toggleCmdPalette",
     # v0.9.94 p3/p5:权限档位改成界面自己画的浮层菜单(原生 select 的白字在深色
@@ -1586,6 +1603,11 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     "b.id = \"verBadge\"",
     "id=\"updSkipVer\"", "id=\"updHist\"", "id=\"histOverlay\"",
     "case \"update_prompt\"", "case \"update_state\"",
+    # v0.9.177:①点版本号 = 看历史(那只函数没了 = 版本号成了一个不能点的字);
+    # ②历史那一屏里的「清理旧安装包」(少了它 = 后端那只手在包里没人能调);
+    # ③"本机有半截可以接着下"那一档(少了它,重启后进度条归零、话还说成"下载没成")。
+    "function openHistoryDlg", "id=\"histPrune\"", "histReleases",
+    "st === \"partial\"", "接着下载",
 )
 
 
