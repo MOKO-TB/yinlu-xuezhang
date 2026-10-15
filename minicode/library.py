@@ -655,11 +655,34 @@ def health_notice(health: dict) -> str | None:
 # **1640 ms**,而它在 `library_prompt_section` 里被系统提示词调用,于是**每切一次会话、
 # 每开一个新任务都要付这 1.6 秒**(用户报的"切换停顿好几秒"里最大的一块)。
 # 缓存只存这一份小字典,最多 8 个库(换工作区才会有第二个键),不是把整库读进内存。
+#
+# **2026-10-15 又往下砍了一刀,而且砍的不是缓存**(#60 那条冷启动欠账的真根因在这里):
+# 旧写法是一条 `SELECT COUNT(*), SUM(p_count>0), SUM(p_count=0), COUNT(DISTINCT class_no)`,
+# SQLite 为了它**把 1.31 GB 那张表整个扫一遍** —— 本机实测 **1555 ms**(§6 第 60 条在冷盘上
+# 量到 **9.87 秒**,扫的正是这份)。而库里 `idx_books_pcnt` / `idx_books_class` **两个索引本来
+# 就在**(建库时就有,`EXPLAIN QUERY PLAN` 逐条核过),拆成四条各走一条覆盖索引之后实测
+# 15 + 10 + 58 + 118 ≈ **200 ms**,且**一行表数据都不读** —— 冷盘那 9.87 秒同样跟着掉。
+# 语义逐字不变:`SUM(p_count>0)` 忽略 NULL,`COUNT(*) WHERE p_count>0` 同样忽略 NULL,
+# 两者对同一份库给同一个数(本机实测 `p_count`/`class_no` 各 0 行 NULL,并逐值对过)。
+# **没有**改成 `ebook = total - paper`:那要假设"没有 NULL 行",而这一假设换的是别校
+# 换库以后的正确性,省 58 ms 不值。
+# 这四条名字与顺序就是 `catalog_stats` 读的这一份,`tests/test_session_switch_cost.py`
+# 拿它逐条去问查询计划 —— 想改回一条大查询,得先让那支针说得出为什么。
+_STATS_QUERIES = (
+    "SELECT COUNT(*) FROM books",
+    "SELECT COUNT(*) FROM books WHERE p_count>0",
+    "SELECT COUNT(*) FROM books WHERE p_count=0",
+    "SELECT COUNT(*) FROM (SELECT DISTINCT class_no FROM books)",
+)
 _STATS_CACHE: "dict[tuple, dict]" = {}
 
 
 def catalog_stats(workspace: Path | None = None) -> "dict | None":
-    """全库统计(给系统提示词/GUI 用);同一份库第二次问走缓存。"""
+    """全库统计(给系统提示词/GUI 用);同一份库第二次问走缓存。
+
+    四条查询各走一条覆盖索引(见 `_STATS_QUERIES` 上面那段),合起来约 200 ms;
+    旧的那一条大查询要 1.5 秒(冷盘 9.87 秒),因为它扫的是整张 1.31 GB 的表。
+    """
     path = db_path(workspace)
     if path is None:
         return None
@@ -672,14 +695,12 @@ def catalog_stats(workspace: Path | None = None) -> "dict | None":
         return dict(_STATS_CACHE[key])
     try:
         c = conn(path)
-        row = _read(c,
-                    "SELECT COUNT(*), SUM(p_count>0), SUM(p_count=0), COUNT(DISTINCT class_no) "
-                    "FROM books", one=True)
+        rows = [_read(c, sql, one=True) for sql in _STATS_QUERIES]
     except sqlite3.Error:
         return None
-    if row is None:          # 一条 COUNT 不可能没有结果行:出现了就是这条连接被人动过,
-        return None          # 按"读不出来"走 —— 宁可少一句馆藏统计,不报一个猜出来的数
-    total, paper, ebook, cls = row
+    if any(r is None for r in rows):   # 一条 COUNT 不可能没有结果行:出现了就是这条连接被人动过,
+        return None                    # 按"读不出来"走 —— 宁可少一句馆藏统计,不报一个猜出来的数
+    total, paper, ebook, cls = (r[0] for r in rows)
     stats = {"total": total or 0, "paper": paper or 0,
              "ebook": ebook or 0, "classes": cls or 0}
     if key is not None:

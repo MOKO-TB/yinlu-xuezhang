@@ -7,12 +7,14 @@
 
 这条文件钉的就是"不许退回去了":
   · 同一份库(路径/mtime/大小都没变)只问一次 SQL;
+  · **那四条统计查询各走一条覆盖索引**(并回一条大查询返回值不变,只有计划能抓到);
   · 库被换掉必须重新问(缓存不能把旧数字留在屏上);
   · 缩略图同理 —— 图片没换就不重压,换了就要重压;
   · 侧栏列几条,解析就必须看几条(以前列 50 找 10,排第 11 之后的会话点不开)。
 """
 import json
 import os
+import re
 import sqlite3
 import time
 
@@ -91,6 +93,49 @@ def test_cached_stats_are_handed_out_as_copies(tmp_path, monkeypatch):
     got = library.catalog_stats(tmp_path)
     got["total"] = 999999
     assert library.catalog_stats(tmp_path)["total"] == 5
+
+
+# ---------------------------------------------------------------- 统计那条查询的**计划**
+
+def test_stats_queries_never_scan_the_books_table(tmp_path, monkeypatch):
+    """四条统计查询各走一条覆盖索引 —— 全表扫那张 1.31 GB 就是冷启动那几秒。
+
+    这支针钉的是**查询计划**而不是返回值:把四条并回旧的那一条大查询
+    (`SELECT COUNT(*), SUM(p_count>0), SUM(p_count=0), COUNT(DISTINCT class_no) FROM books`),
+    返回的四个数**一个都不会变**,所以普通断言完全抓不到它 —— 而它会安静地把每次
+    冷启动从约 0.2 秒带回 1.5 秒(冷盘实测 9.87 秒,§6 第 60 条)。于是这里直接问
+    SQLite 要计划:每一条都必须出现 COVERING INDEX,且不许有不带索引的 `SCAN books`。
+    """
+    monkeypatch.setattr(library, "app_path", lambda *a: tmp_path / "none" / "x")
+    monkeypatch.setattr(library, "resource_path", lambda *a: tmp_path / "none" / "x")
+    d = tmp_path / "crawled" / library.DOMAIN
+    d.mkdir(parents=True, exist_ok=True)
+    db = d / library.DB_NAME
+    c = sqlite3.connect(db)
+    # 建的是**真库的那两个索引**(`idx_books_pcnt` / `idx_books_class`),不是凭空加的:
+    # 少了它们,这四条一样会去扫表 —— 那正是"换个学校的库就退回秒级"的路径。
+    c.executescript(
+        "CREATE TABLE books(id INTEGER PRIMARY KEY, title TEXT, class_no TEXT, "
+        "p_count INTEGER);"
+        "CREATE INDEX idx_books_pcnt ON books(p_count);"
+        "CREATE INDEX idx_books_class ON books(class_no);"
+        "INSERT INTO books(title,class_no,p_count) VALUES"
+        "('甲','TP1',3),('乙','I2',0),('丙','I2',2),('丁','I2',1);")
+    c.commit()
+    c.close()
+    st = library.catalog_stats(tmp_path)
+    # 数也要对:计划漂亮但列写错(比如把 =0 写成 IS NULL)同样是坏数字。
+    assert st == {"total": 4, "paper": 3, "ebook": 1, "classes": 2}
+    probe = sqlite3.connect(db)
+    try:
+        assert len(library._STATS_QUERIES) == 4, "这四条就是统计的全部入口,加一条要写清为什么"
+        for sql in library._STATS_QUERIES:
+            text = " | ".join(str(r[3]) for r in probe.execute("EXPLAIN QUERY PLAN " + sql))
+            assert "COVERING INDEX" in text, f"这条没走覆盖索引,会去扫 1.31 GB 的表:{sql}\n{text}"
+            assert not re.search(r"SCAN books(?! USING)", text), \
+                f"这条里出现了不带索引的全表扫描:{sql}\n{text}"
+    finally:
+        probe.close()
 
 
 # ---------------------------------------------------------------- 缩略图缓存
