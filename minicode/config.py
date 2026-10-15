@@ -316,6 +316,16 @@ class Config:
     # 分发出的 setup.exe 升不了级才是常态问题;它只做一次匿名 GET,不外发任何
     # 本机数据(见 SECURITY.md「数据流向」),**想关就置 false**(完全不出网)。
     update_check: bool = True
+    # v0.9.176 就地更新的两枚:
+    # `update_popup` = 查到新版本时**自己弹一张「发现新版本」的卡**(默认开)。
+    #   关掉不是"以后都不告诉",是退回"提示栏 + 桌面通知"那一条旧路 ——
+    #   用户点过「稍后」也**不写这里**,那只是一次性的关闭。
+    # `update_skip_version` = 「跳过此版本」记下那一串版本号(如 "0.9.176")。
+    #   只对**那一版**有效:再往上的新版本照样弹。存 config.json 而不是新开一份
+    #   本机文件,是因为"程序改自己的设置"这条路 `save_config` 早就走通了,
+    #   而新文件要交四处登记税(SHIP_NEVER / .gitignore / 我的数据 / 打包清理)。
+    update_popup: bool = True
+    update_skip_version: str = ""
     # 按档位分模型(v0.9.95):{"explore": "deepseek-v4-flash", "code": "..."}。
     # **只换模型名,不换供应商** —— 跨供应商要另一份 Key,那一层不在这里做
     # (会话级切供应商已有界面路径,这里要解决的是"侦察用便宜的、实现用硬的")。
@@ -652,6 +662,8 @@ def _config_from_raw(raw: dict) -> Config:
         subagent_nesting=bool(raw.get("subagent_nesting", False)),
         shadow_git=bool(raw.get("shadow_git", True)),
         update_check=bool(raw.get("update_check", True)),
+        update_popup=bool(raw.get("update_popup", True)),
+        update_skip_version=str(raw.get("update_skip_version") or "").strip(),
         # 按档位分模型的原始配置:一律转成"字符串→字符串",空值丢掉。
         # 写成列表/嵌套/数字都不崩(这份要拿去查表),但不认的条目就是不生效 ——
         # 具体能不能用交给 subagents.model_choice 去对着供应商的启用模型核,那才是真相。
@@ -790,6 +802,18 @@ def save_config(path: Path, cfg: Config) -> None:
         "backup_dir": cfg.backup_dir,
         "context_window": cfg.context_window,
         "compact_at_ratio": cfg.compact_at_ratio,
+        # v0.9.176:这三枚开关**以前不在这里**,而 load_config 认它们 —— 表现是
+        # "config.json 里写了 false,某次界面保存之后它悄悄没了"(不是没读到,是被人
+        # 重写掉了)。`update_check` 那条尤其坏:它的承诺是"关掉就完全不出网",
+        # 而 `hooks_apply` / 模型管理任何一次 save_config 都会把承诺抹回默认开。
+        # 同批漏的还有 `subagent_nesting`(v0.9.155)与 `shadow_git`(v0.9.157)。
+        # 现在有一份对账闸盯着"解析的键 ⊆ 写回的键"(tests/test_config_roundtrip.py),
+        # 再加开关时漏在这里会当场红,而不是等用户发现。
+        "subagent_nesting": cfg.subagent_nesting,
+        "shadow_git": cfg.shadow_git,
+        "update_check": cfg.update_check,
+        "update_popup": cfg.update_popup,
+        "update_skip_version": cfg.update_skip_version,
     }
     if cfg.mcp_servers:
         data["mcp_servers"] = cfg.mcp_servers
