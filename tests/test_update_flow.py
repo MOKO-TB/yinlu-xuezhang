@@ -561,5 +561,49 @@ def test_bridge_exposes_the_whole_surface_to_the_frontend():
     """前端只认 PublicApi 那一层:少转一个方法,界面上就是"点了没反应"。"""
     from minicode.gui_bridge import PublicApi
     for name in ("update_download", "update_download_state", "update_download_cancel",
-                 "update_install", "update_skip", "update_history", "check_update_now"):
+                 "update_install", "update_skip", "update_history", "update_prune",
+                 "check_update_now"):
         assert callable(getattr(PublicApi, name, None)), name
+
+
+def test_update_prune_reports_bytes_in_human_form(tmp_path, monkeypatch):
+    """清理那颗按钮要拿得到"腾出多少",而且**默认留着当前这版与最新那一版**。
+
+    走桥不是多余的一层:文件名闸、`keep_version` 的默认值(从下载状态里取)、
+    把字节数翻成人话,三件事都发生在桥这一层,而 `prune_updates` 自己都不知道。
+    """
+    b = _bridge(tmp_path)
+    cur = proactive._cur_version()
+    updir = tmp_path / "app" / "updates"
+    updir.mkdir(parents=True)
+    for n in (f"yinlu-xuezhang-{cur}-setup.exe",
+              "yinlu-xuezhang-0.9.100-setup.exe",
+              "yinlu-xuezhang-0.9.177-setup.exe"):
+        (updir / n).write_bytes(b"z" * 100)
+    b._upd = {"state": "error", "version": "0.9.176", "resumable": False}
+    r = b.update_prune()
+    assert r["ok"] and r["removed_count"] == 1, r        # 只删被 0.9.176 取代的那件旧件
+    assert r["freed"] == 100 and "B" in r["freed_size"] or "KB" in r["freed_size"]
+    assert (updir / f"yinlu-xuezhang-{cur}-setup.exe").exists()
+    # 界面指定 keep_version 时,那一版也留着
+    r2 = b.update_prune(keep_version="0.9.177")
+    assert r2["removed_count"] == 0, r2
+    assert (updir / "yinlu-xuezhang-0.9.177-setup.exe").exists()
+
+
+def test_download_state_surfaces_a_part_from_a_previous_run(tmp_path, monkeypatch):
+    """重启之后那句"有半截可以接着下"必须来自盘,不是内存(内存那份早没了)。"""
+    b = _bridge(tmp_path)
+    updir = tmp_path / "app" / "updates"
+    updir.mkdir(parents=True)
+    name = "yinlu-xuezhang-0.9.177-setup.exe"
+    (updir / (name + ".part")).write_bytes(b"a" * 123)
+    proactive._write_sidecar(updir / (name + ".part"),
+                             {"name": name, "total": 1000, "validator": "", "bytes": 123})
+    s = b.update_download_state()
+    assert s["state"] == "partial" and s["resumable"] is True, s
+    assert s["partial"] == 123 and s["total"] == 1000 and s["version"] == "0.9.177"
+    assert "接着走" in s["why"]
+    assert "path" not in s                                  # 与 `_upd_public` 同一条口径
+    b._upd = {"state": "downloading", "pct": 40}
+    assert b.update_download_state()["state"] == "downloading", "在跑的那一份优先于盘上的"
