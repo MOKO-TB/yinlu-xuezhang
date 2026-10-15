@@ -67,6 +67,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             "git_commit", "git_restore", "git_restore_snapshot",
                             "file_read", "file_write",
                             "terminal_run", "terminal_kill",
+                            # v0.9.176 就地更新的桥面(漏收 = 前端点了没反应:
+                            # PublicApi 只转发,真身在 Bridge 这一层)
+                            "update_download", "update_download_state",
+                            "update_download_cancel", "update_install",
+                            "update_skip", "update_history",
                             # v0.9.168:跨文件调用层次分析与智能上下文提及 (清偿 HANDOFF §48(c))
                             "call_hierarchy", "get_context_mentions",
                             # v0.9.169:跨文件符号定义提取与实现跳转
@@ -1164,6 +1169,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # 机器上「检查更新」永远静默:默认 certifi 失败就再也没试过
                            # 系统证书库,而本机实测正是这一种)
                            "_release_payload",
+                           # v0.9.176 就地更新:挑件 / 下载 / 校验 / 历史。漏收的表现
+                           # 一个比一个难看 —— 少 `download_asset` 或 `_expected_sha256`
+                           # 就是"点下载更新"静默失败,而界面上那颗按钮是亮的。
+                           "running_form", "pick_asset", "download_asset",
+                           "list_releases", "_http_get", "_expected_sha256",
+                           "RELEASES_API", "ASSET_SUFFIX",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",
@@ -1562,6 +1573,16 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.166:全局快捷键速查中心
     "btnShortcuts", "shortcutsOverlay", "btnShortcutsClose", "shortcutsBody",
     "function renderShortcutsModal", "function toggleShortcutsModal",
+    # v0.9.176 就地更新的前端那一半。这一组里**每一根都对应一种"点了没反应"**:
+    # 少 `updGo` = 那张卡上没有能下载的按钮;少 `update_prompt` = 查到新版本还是
+    # 只躺在提示栏里(用户图 p1 点的就是这件事);少 `updRestore` = 关一下窗口,
+    # 一条正在跑的下载就假装没发生过。
+    "function updRender", "function updBadge", "function updRestore",
+    "id=\"updGo\"", "id=\"updDl\"", "id=\"updLine\"",
+    # 徽章是 JS 造出来的(不在 markup 里),所以要钉那句赋值而不是一个 id 属性
+    "b.id = \"verBadge\"",
+    "id=\"updSkipVer\"", "id=\"updHist\"", "id=\"histOverlay\"",
+    "case \"update_prompt\"", "case \"update_state\"",
 )
 
 

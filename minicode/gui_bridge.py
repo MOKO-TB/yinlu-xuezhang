@@ -348,6 +348,25 @@ class PublicApi:
         """手动查一次新版本(侧栏版本号可点;卡片/提示条也能再唤)。"""
         return self._b.check_update_now()
 
+    # 就地更新(v0.9.176):前端只认这一层,判定/落盘/线程都在 Bridge 里。
+    def update_download(self) -> dict:
+        return self._b.update_download()
+
+    def update_download_state(self) -> dict:
+        return self._b.update_download_state()
+
+    def update_download_cancel(self) -> dict:
+        return self._b.update_download_cancel()
+
+    def update_install(self) -> dict:
+        return self._b.update_install()
+
+    def update_skip(self, version: str = "") -> dict:
+        return self._b.update_skip(version)
+
+    def update_history(self, limit: int = 8) -> dict:
+        return self._b.update_history(limit)
+
     def extensions_overview(self) -> dict:
         """扩展中心一屏:技能/渠道/MCP/侧边栏扩展/钩子 五类现成数据。"""
         return self._b.extensions_overview()
@@ -1568,6 +1587,157 @@ class Bridge:
         res = proactive.check_update(__version__, detail=True)
         return {"ok": bool(res.get("ok")), "update": res.get("update"),
                 "current": __version__, "why": str(res.get("why") or "")}
+
+    # ------------------------------------------------------------ 就地更新(v0.9.176)
+
+    def _upd_snapshot(self) -> dict:
+        lock = getattr(self, "_upd_lock", None)
+        if lock is None:
+            return dict(getattr(self, "_upd", {}))
+        with lock:
+            return dict(self._upd)
+
+    def update_download(self) -> dict:
+        """开始下载新版本的那件安装包(后台一条线程,进度走 `update_state` 事件)。
+
+        为什么**重查一次**而不是用界面手里那份 payload:那张卡可能是几分钟前查的,
+        期间又发新的一版的话,按旧地址下就下错件了。重查是一次匿名 GET,便宜。
+        为什么一次只允许一件在跑:下载落在同一个目录、同名文件,并发两次会互相
+        踩 `.part`,而"谁赢"看不出来 —— 最后装上去的是哪一版没人能说。
+        """
+        from minicode import __version__, proactive
+        if not getattr(self.config, "update_check", True):
+            return {"ok": False, "why": "更新检查已在 config.json 里关掉(update_check: false)"}
+        st = self._upd_snapshot()
+        if st.get("state") == "downloading":
+            return {"ok": False, "why": "已经有一份在下载了,等它下完或先取消"}
+        res = proactive.check_update(__version__, detail=True)
+        upd = res.get("update") or {}
+        asset = upd.get("asset") or {}
+        if not res.get("ok"):
+            return {"ok": False, "why": str(res.get("why") or "问不到版本")}
+        if not upd:
+            return {"ok": False, "why": "现在已经是最新版本,没有要下的东西"}
+        if not asset.get("url"):
+            return {"ok": False, "why": "这一版没找到适配本机形态的发布件,请去发布页挑",
+                    "fallback_url": str(upd.get("url") or "")}
+        import threading
+        if getattr(self, "_upd_lock", None) is None:
+            self._upd_lock = threading.Lock()
+            self._upd_stop = threading.Event()
+            self._upd = {"state": "idle"}
+        with self._upd_lock:
+            self._upd = {"state": "downloading", "version": upd.get("version"),
+                         "name": asset.get("name"), "total": int(asset.get("size") or 0),
+                         "got": 0, "pct": 0, "why": ""}
+        self._upd_stop.clear()
+        threading.Thread(target=self._upd_run, args=(asset, upd),
+                         daemon=True, name="update-download").start()
+        return {"ok": True, "started": True, "version": upd.get("version"),
+                "name": asset.get("name"), "total": int(asset.get("size") or 0)}
+
+    def _upd_run(self, asset: dict, upd: dict) -> None:
+        """下载线程的正文:任何结局都要变成一个事件发回界面,绝不静默失败。
+
+        这一条是本轮全部改动里唯一"跑在别的线程上、界面只能等它说话"的部分,
+        所以异常一律兜住转成 `state:"error"` —— 让它冒出去等于线程死了而界面上
+        那颗进度条永远停在"下载中",那是最难查的一种坏。
+        """
+        from minicode import proactive
+        from minicode.paths import app_path
+
+        def prog(info: dict) -> None:
+            with self._upd_lock:
+                self._upd.update(pct=info.get("pct", -1), got=info.get("got", 0),
+                                 total=info.get("total") or self._upd.get("total", 0))
+            self.ui.push("update_state", **self._upd_snapshot())
+
+        try:
+            res = proactive.download_asset(asset, app_path("updates"),
+                                           on_progress=prog,
+                                           should_stop=self._upd_stop.is_set)
+        except Exception as e:
+            res = {"ok": False, "verified": "none",
+                   "why": f"下载这一步炸了({type(e).__name__}: {e})"}
+        with self._upd_lock:
+            self._upd = {"state": ("done" if res.get("ok") else
+                                   ("cancelled" if res.get("cancelled") else "error")),
+                         "version": upd.get("version"), "name": res.get("name"),
+                         "path": res.get("path"), "size": res.get("size"),
+                         "total": int(asset.get("size") or 0),
+                         "got": int(res.get("size") or 0),
+                         "pct": 100 if res.get("ok") else self._upd.get("pct", 0),
+                         "verified": res.get("verified"), "sha256": res.get("sha256"),
+                         "form": (asset or {}).get("form"),
+                         "why": res.get("why") or ""}
+            snap = dict(self._upd)
+        self.ui.push("update_state", **snap)
+
+    def update_download_state(self) -> dict:
+        """界面重开时问一句"现在有没有在下的东西"——进度不能一翻页就假装没发生。"""
+        return self._upd_snapshot()
+
+    def update_download_cancel(self) -> dict:
+        st = self._upd_snapshot()
+        if st.get("state") != "downloading":
+            return {"ok": False, "why": "现在没有在下载的东西"}
+        self._upd_stop.set()
+        return {"ok": True, "why": "已请求取消(半截文件会被删掉,不留)"}
+
+    def update_install(self) -> dict:
+        """把下好的东西交出去:装机版开安装程序,单文件版只能"打开所在文件夹"。
+
+        **刻意不自动退出学长**:安装程序撞上被占用的文件会自己问,而这边可能还有
+        会话在跑、有后台任务在写盘 —— 替用户把窗口关掉是替他做决定。
+        """
+        import subprocess
+        from pathlib import Path as _P
+        st = self._upd_snapshot()
+        if st.get("state") != "done" or not st.get("path"):
+            return {"ok": False, "why": "还没有下好的更新可以装"}
+        p = _P(str(st.get("path")))
+        if not p.exists():
+            return {"ok": False, "why": "那份文件已经不在了(被清理或移动了),重新下一次"}
+        if str(st.get("verified") or "") != "ok":
+            return {"ok": False,
+                    "why": "这份**没有通过 sha256 校验**(" + str(st.get("why") or "")
+                           + " 装之前请从发布页重新下载"}
+        try:
+            if str(st.get("name") or "").endswith(".exe"):
+                subprocess.Popen([str(p)], cwd=str(p.parent))
+                return {"ok": True, "mode": "installer",
+                        "why": "安装程序已打开。若它提示文件被占用,先退出学长再继续 —— "
+                               "我没有替你关,因为可能还有会话在跑。"}
+            import os
+            os.startfile(str(p.parent))          # 单文件版:开文件夹,由本人替换
+            return {"ok": True, "mode": "folder",
+                    "why": "单文件版不能覆盖正在运行的自己 —— 已打开所在文件夹:"
+                           "退出学长后把新文件改名替换旧的即可。"}
+        except Exception as e:
+            return {"ok": False, "why": f"打不开({type(e).__name__}: {e})"}
+
+    def update_skip(self, version: str = "") -> dict:
+        """「跳过此版本」:只对那一版有效,再往上的新版本照样弹。
+
+        落 config.json(`update_skip_version`)而不是新开一份本机文件 —— 程序改自己
+        的设置这条路 `save_config` 早就走通了,而新文件要交四处登记税。
+        """
+        from minicode.config import save_config
+        v = str(version or "").strip().lstrip("vV")
+        if not v:
+            return {"ok": False, "why": "没给版本号,不知道要跳过哪一版"}
+        self.config.update_skip_version = v
+        try:
+            save_config(self.config_path, self.config)
+        except Exception as e:
+            return {"ok": False, "why": f"记不下来({type(e).__name__}: {e})"}
+        return {"ok": True, "skipped": v,
+                "why": f"这一版(v{v})不再弹卡;下次发更新的版本照样会告诉你。"}
+
+    def update_history(self, limit: int = 8) -> dict:
+        """历史更新内容(用户图 p8 那张列表):只读公开接口,失败说实话。"""
+        from minicode import proactive
+        return proactive.list_releases(limit=limit)
 
     def git_overview(self) -> dict:
         """Git 页一屏数据:git 在不在 + 状态 + 影子快照。当前工作区的账。"""

@@ -7,6 +7,7 @@ checkpoints/
 shadow-git/
 extensions/
 repo-wiki/
+updates/
 web-sessions/
 web-usage.log
 /web-daily.json

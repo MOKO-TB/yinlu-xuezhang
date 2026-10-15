@@ -52,6 +52,16 @@ def _check(path: Path) -> "dict | None":
     return {"name": path.name, "size": path.stat().st_size, "path": path}
 
 
+def _sha256(path: Path) -> str:
+    """整件文件算一遍 sha256(分块读,920 MB 也不占内存)。"""
+    import hashlib
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for blk in iter(lambda: f.read(1 << 20), b""):
+            h.update(blk)
+    return h.hexdigest()
+
+
 def _assets(ver: str) -> "list[tuple[Path, str]]":
     """按约定找齐三件;缺一件就把它列出来(不猜路径,也不许只发一部分)。"""
     want = [
@@ -65,7 +75,16 @@ def _assets(ver: str) -> "list[tuple[Path, str]]":
     missing = [str(p) for p, _n, _l in want if not p.exists()]
     if missing:
         raise SystemExit("dist/ 里缺这几件,先跑 build_exe.py:\n  " + "\n  ".join(missing))
-    return [(p, n) for p, n, _l in want]
+    out = [(p, n) for p, n, _l in want]
+    # **校验文件跟着一起发**(v0.9.176):App 里那条"下完先核 sha256,没核对就不让装"
+    # 读的就是它(`minicode/proactive.py::_expected_sha256` 按同一个名字去取)。
+    # 它防的是"下载坏了/被截了/链接被换到别处"这一类,**不防** GitHub 账号本身被接管
+    # —— 那种情况下攻击者也能重写这份清单。说清边界,别把它当签名体系用。
+    lines = "".join("%s  %s\n" % (_sha256(p), n) for p, n in out)
+    sums = ROOT / "dist" / f"yinlu-xuezhang-{ver}-sha256.txt"
+    sums.write_text(lines, encoding="utf-8", newline="\n")
+    out.append((sums, sums.name))
+    return out
 
 
 def main() -> int:

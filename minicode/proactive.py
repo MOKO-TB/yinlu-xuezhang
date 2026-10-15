@@ -382,6 +382,7 @@ def calendar_alerts(today: date | None = None,
 # "维护者发 release 就亮"这句承诺从来没兑现过。GitHub 公开仓匿名可读
 # (60 次/时,启动一次远远够)。
 RELEASE_API = "https://api.github.com/repos/MOKO-TB/yinlu-xuezhang/releases/latest"
+RELEASES_API = "https://api.github.com/repos/MOKO-TB/yinlu-xuezhang/releases"
 NOTES_MAX = 6000      # 更新日志的展示上限;更长在卡片里提示去发布页看全文
 
 
@@ -391,8 +392,9 @@ def _ver_tuple(text: str) -> tuple[int, ...]:
     return tuple(int(n) for n in nums) or (0,)
 
 
-def _release_payload(timeout: float = 10.0) -> "tuple[dict | None, str]":
-    """取最新 release 的 JSON,回 (数据或 None, 没拿到时的实话)。
+def _http_get(url: str, timeout: float = 10.0,
+              headers: "dict | None" = None) -> "tuple[object | None, str]":
+    """取一个 HTTPS 接口,回 (响应或 None, 没拿到时的实话)。
 
     **证书这一关要试两次**,理由是本机实测踩出来的:有些机器(R 里的"加速器"、
     公司代理、安全软件)把 HTTPS **接管**了 —— 它把自己那张根证书装进
@@ -402,23 +404,37 @@ def _release_payload(timeout: float = 10.0) -> "tuple[dict | None, str]":
     只试一次的话,这一格在那些机器上会**永远静默** —— 用户点「检查更新」得到的是
     "已是最新版本",而真相是它一次都没问出去。第二次用 `ssl.create_default_context()`
     (Windows 上它会读系统证书库),两次都失败才算真的不通。
+
+    v0.9.176 起这份两跳是**这一整条更新通道的公共底座**(查最新 / 列历史 /
+    下校验文件 / 下安装包都走它)—— 只让 `_release_payload` 一家自己有的话,
+    另外三条在那些机器上会静默失败而卡面上什么都不显示,那是同一个坑重犯四次。
     """
     import httpx
-    headers = {"Accept": "application/vnd.github+json"}
+    hd = {"Accept": "application/vnd.github+json"}
+    hd.update(headers or {})
     why: list[str] = []
     resp = None
     try:
-        resp = httpx.get(RELEASE_API, timeout=timeout, headers=headers)
+        resp = httpx.get(url, timeout=timeout, headers=hd)
     except Exception as e:
         why.append(f"默认证书链不通({type(e).__name__})")
         try:
             import ssl
-            resp = httpx.get(RELEASE_API, timeout=timeout, headers=headers,
+            resp = httpx.get(url, timeout=timeout, headers=hd,
                              verify=ssl.create_default_context())
         except Exception as e2:
             why.append(f"换系统证书库也失败({type(e2).__name__})")
+            resp = None
     if resp is None:
         return None, "网络或证书不通:" + "、".join(why)
+    return resp, ""
+
+
+def _release_payload(timeout: float = 10.0) -> "tuple[dict | None, str]":
+    """取最新 release 的 JSON,回 (数据或 None, 没拿到时的实话)。"""
+    resp, why = _http_get(RELEASE_API, timeout)
+    if resp is None:
+        return None, why
     if resp.status_code == 404:
         return None, "这个仓库还没有发布过 Release(所以没有可比的版本)"
     if resp.status_code != 200:
@@ -458,7 +474,199 @@ def check_update(current: str, timeout: float = 10.0, *,
            "notes": notes[:NOTES_MAX], "truncated": len(notes) > NOTES_MAX,
            "date": published[:10],
            "name": str(data.get("name") or "").strip()}
+    # v0.9.176:带上"这一台该下哪一件"。挑不出来就留空 —— 界面那颗按钮会
+    # 老实变成「打开发布页」,不假装能就地装。
+    got["asset"] = pick_asset(data)
     return {"ok": True, "update": got, "why": ""} if detail else got
+
+
+# ---------------------------------------------------------------- 就地更新(v0.9.176)
+
+# 运行形态 → 该下的那件资产的**名字后缀**。只有两件:装机/目录版吃 setup.exe,
+# 单文件版吃 single-file.exe。免安装的 zip 这里**故意不给** —— 它 1.2 GB,而
+# "解压覆盖正在运行的自己"这件事程序做不到,给一个按钮就是给一个会失败的承诺。
+ASSET_SUFFIX = {"setup": "setup.exe", "single": "single-file.exe"}
+
+
+def running_form() -> str:
+    """现在跑的是哪一版:`single`(单文件版)还是 `setup`(装机 / 目录版)。
+
+    判据用 **exe 的文件名**,不拿 `_MEIPASS` 猜临时目录 —— 打包时单文件版那个文件
+    就叫 `引路学长-单文件版.exe`(名字定死),这一条比任何运行时探测都硬。
+    挑错件的代价比挑不出来大:给单文件版下 920 MB 的安装程序,用户会以为"我装了
+    两个学长",而那个安装程序还会往 Program Files 写一份。
+    """
+    import sys
+    exe = str(getattr(sys, "executable", "") or "")
+    return "single" if "单文件" in Path(exe).name else "setup"
+
+
+def pick_asset(release: "dict | None", form: "str | None" = None) -> "dict | None":
+    """从 release 的 assets 里挑这一台该下的那件;挑不到回 None(界面退回开网页)。"""
+    use = form or running_form()
+    want = ASSET_SUFFIX.get(use)
+    if not want or not isinstance(release, dict):
+        return None
+    for a in (release.get("assets") or []):
+        if isinstance(a, dict) and str(a.get("name") or "").endswith(want):
+            url = str(a.get("browser_download_url") or "")
+            if not url.startswith("https://"):
+                return None             # 没有可下的直链就别给按钮
+            return {"name": str(a.get("name")), "url": url,
+                    "size": int(a.get("size") or 0), "form": use}
+    return None
+
+
+def list_releases(limit: int = 8, timeout: float = 12.0) -> dict:
+    """历史更新内容(用户图 p8 那张「历史更新内容」的列表)。
+
+    只读公开接口、匿名 GET,与 `_release_payload` 共用同一套两跳证书。
+    **拿不到不等于没有更新**:这一屏打不开只说明这一屏打不开,`why` 要写得 out
+    是哪一种(网络 / 证书 / 接口形状),不许在界面上留一句"暂无历史"糊过去。
+    """
+    n = max(1, min(int(limit or 8), 20))
+    resp, why = _http_get("%s?per_page=%d" % (RELEASES_API, n), timeout)
+    if resp is None:
+        return {"ok": False, "releases": [], "why": why}
+    if resp.status_code != 200:
+        return {"ok": False, "releases": [], "why": f"接口回了 HTTP {resp.status_code}"}
+    try:
+        data = resp.json()
+    except Exception:
+        return {"ok": False, "releases": [], "why": "接口回的正文不是 JSON"}
+    if not isinstance(data, list):
+        return {"ok": False, "releases": [], "why": "接口回的 JSON 不是清单"}
+    out = []
+    for r in data:
+        if not isinstance(r, dict):
+            continue
+        tag = str(r.get("tag_name") or r.get("name") or "").strip()
+        if not tag:
+            continue
+        notes = str(r.get("body") or "").strip()
+        out.append({"version": tag.lstrip("vV"), "tag": tag,
+                    "date": str(r.get("published_at") or "")[:10],
+                    "name": str(r.get("name") or "").strip(),
+                    "notes": notes[:NOTES_MAX], "truncated": len(notes) > NOTES_MAX,
+                    "url": str(r.get("html_url") or "")})
+    return {"ok": True, "releases": out, "why": ""}
+
+
+def _expected_sha256(ver: str, asset_name: str,
+                     timeout: float = 12.0) -> "tuple[str, str]":
+    """去那份随包的 `*-sha256.txt` 里取这个文件的期望哈希,回 (sha 或 "", 实话)。
+
+    校验文件由发布脚本一并传上去,格式是 `<64位十六进制>  <文件名>` 一行一件。
+    **取不到时回空串而不是猜一个** —— 调用方必须把"没验过"如实标出来,
+    不许把它混进"验过了"。
+    """
+    url = ("https://github.com/MOKO-TB/yinlu-xuezhang/releases/download/"
+           "v%s/yinlu-xuezhang-%s-sha256.txt" % (ver, ver))
+    resp, why = _http_get(url, timeout, headers={"Accept": "text/plain"})
+    if resp is None:
+        return "", why
+    if resp.status_code != 200:
+        return "", f"校验文件 HTTP {resp.status_code}"
+    want = str(asset_name or "").strip().lower()
+    for line in str(resp.text or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1].strip().lower() == want:
+            got = parts[0].strip().lower()
+            if len(got) == 64 and all(c in "0123456789abcdef" for c in got):
+                return got, ""
+            return "", "校验文件里那一行的形状不对"
+    return "", "校验文件里没有这一件"
+
+
+def download_asset(asset: dict, dest_dir: Path, on_progress=None,
+                   should_stop=None, verify: bool = True,
+                   connect_timeout: float = 20.0) -> dict:
+    """把一件发布资产下到本机:流式写 `.part` → 校验 sha256 → 改名成交付名。
+
+    四条不是显然的:
+    1. **先下成 `.part` 再改名** —— 中断的半截文件不该长得像"可以安装的包";
+       取消与任何异常都先把 `.part` 删掉,不在能看见的地方留一个 900 MB 的残骸。
+    2. **校验拿不到就说拿不到**(`verified="none"` + `why`),绝不静默当通过 ——
+       下载回来的是用户会**双击执行**的 exe,"没验过"说成"验过了"是这一路最坏的假绿。
+    3. **GitHub 直链会 302 跳到 CDN**:httpx 默认不跟重定向,不加
+       `follow_redirects=True` 每次都会"下到 0 字节"。
+    4. 进度只在**整数百分点**变化时回调 —— 920 MB 按块发会把事件总线淹掉。
+    """
+    import hashlib
+    import httpx
+    url = str((asset or {}).get("url") or "")
+    name = str((asset or {}).get("name") or "update.bin")
+    # 只收 https,**外加一条回环**:本地测试要有一个能真发字节的服务器,而起一套
+    # 自签 TLS 不值。这不削弱安全性 —— 地址本来就来自 api.github.com 那份经过校验的
+    # 响应,而"能不能装"从来不是这个前缀决定的,是下面那道 sha256 决定的
+    # (对不上就删文件、界面上那颗按钮是灰的)。
+    if not (url.startswith("https://") or url.startswith("http://127.0.0.1")
+            or url.startswith("http://localhost")):
+        return {"ok": False, "verified": "none", "why": "没有可下载的直链"}
+    safe = Path(name).name                       # 资产名来自接口:只取最后一段
+    m = re.search(r"-(\d+\.\d+\.\d+)-", safe)    # 校验文件按版本号取
+    ver = m.group(1) if m else ""
+    dest_dir = Path(dest_dir)
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return {"ok": False, "verified": "none", "why": f"下载目录建不出来:{e}"}
+    final = dest_dir / safe
+    part = dest_dir / (safe + ".part")
+    expected, vwhy = _expected_sha256(ver, safe) if (verify and ver) else ("", "")
+    total = int((asset or {}).get("size") or 0)
+    h = hashlib.sha256()
+    got = 0
+    last_pct = -1
+    try:
+        with httpx.Client(timeout=httpx.Timeout(connect_timeout, read=120.0),
+                          follow_redirects=True) as c:
+            with c.stream("GET", url,
+                          headers={"Accept": "application/octet-stream"}) as r:
+                if r.status_code != 200:
+                    return {"ok": False, "verified": "none",
+                            "why": f"下载接口回了 HTTP {r.status_code}"}
+                with part.open("wb") as f:
+                    for chunk in r.iter_bytes():
+                        if should_stop is not None and should_stop():
+                            f.close()
+                            part.unlink(missing_ok=True)
+                            return {"ok": False, "cancelled": True,
+                                    "verified": "none", "why": "已取消,半截文件不留"}
+                        f.write(chunk)
+                        h.update(chunk)
+                        got += len(chunk)
+                        if on_progress is not None:
+                            pct = int(got * 100 / total) if total else -1
+                            if pct != last_pct:
+                                last_pct = pct
+                                on_progress({"name": safe, "got": got,
+                                             "total": total, "pct": pct})
+    except Exception as e:
+        part.unlink(missing_ok=True)
+        return {"ok": False, "verified": "none",
+                "why": f"下载中断({type(e).__name__}: {e})"}
+    sha = h.hexdigest()
+    on_disk = part.stat().st_size
+    if total and on_disk != total:
+        part.unlink(missing_ok=True)
+        return {"ok": False, "verified": "none",
+                "why": f"字节数对不上:接口说 {total:,},实收 {on_disk:,}"}
+    verified = "none"
+    if verify and ver and expected:
+        verified = "ok" if sha == expected else "mismatch"
+    if verified == "mismatch":
+        part.unlink(missing_ok=True)
+        return {"ok": False, "verified": "mismatch", "sha256": sha, "name": safe,
+                "why": "sha256 与发布时那份不一致 —— 这份**不能装**,请到发布页重来"}
+    try:
+        final.unlink(missing_ok=True)            # 同名旧件先让路(覆盖是用户点出来的)
+    except OSError:
+        pass
+    part.replace(final)
+    return {"ok": True, "path": str(final), "name": safe, "size": on_disk,
+            "sha256": sha, "verified": verified, "version": ver,
+            "why": "" if verified != "none" else (vwhy or "没有可用的校验文件")}
 
 
 # ---------------------------------------------------------------- 桌面通知文案
@@ -1014,8 +1222,25 @@ def _round(bridge) -> dict:
     if getattr(getattr(bridge, "config", None), "update_check", True):
         update = check_update(__version__)   # 内部已把断网/改版全吞成 None
         if update:
-            out["update"] = _push_once(bridge, "update",
-                                       str(update.get("version") or ""), **update)
+            cfg = getattr(bridge, "config", None)
+            skipped = str(getattr(cfg, "update_skip_version", "") or "").lstrip("vV")
+            ver = str(update.get("version") or "")
+            if skipped and skipped == ver:
+                # 「跳过此版本」:这一版一个字都不提,但**下一版照样弹** ——
+                # 它跳的是那一版,不是"以后都别吵我"(那是 update_popup:false)。
+                out["update"] = "skipped:" + ver
+            else:
+                out["update"] = _push_once(bridge, "update", ver, **update)
+                # v0.9.176:除了聊天栏顶部那条提示栏(用户图 p1 说它"要用户自己
+                # 去点"才看得见),再推一个 `update_prompt` 让界面**自己弹卡**。
+                # 为什么分两条事件而不是把提示栏改成弹窗:提示栏是所有主动推送
+                # 共用的那一条路(简报/课/通知都走它),为更新一个类别改它的形状,
+                # 代价是每一类都要重新验一遍。
+                if bool(getattr(cfg, "update_popup", True)):
+                    try:
+                        bridge.ui.push("update_prompt", **update)
+                    except Exception:
+                        pass    # 弹窗失败不影响上面那条已经送到的提示栏
     out["jobs"] = _run_due_jobs(bridge)    # 主循环兜一遍任务表(5 分钟那路没开也到期)
     if not briefing_covered:
         out["reminders"] = _push_reminders(bridge)

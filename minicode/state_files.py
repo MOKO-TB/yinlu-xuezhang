@@ -54,6 +54,8 @@ SHIP_NEVER: tuple[StateFile, ...] = (
     StateFile("shadow-git", DIR, "影子 git 库(H 的整树检查点):里面是**你工作区每一份文件的原文**,绝不外发、绝不进安装包"),
     StateFile("extensions", DIR, "侧边栏三方扩展(v0.9.159):每个目录是一份别人写的页面代码,装没装、装了谁的全在这里"),
     StateFile("repo-wiki", DIR, "代码库全景百科缓存:每个工作区一份 JSON,含项目架构与文件指纹,绝不外发"),
+    StateFile("updates", DIR, "就地更新(v0.9.176)下下来的安装包:一件就 920 MB,是别人发布物的本地副本,绝不外发、绝不进安装包;"
+                              "里面没有用户数据,删掉只是要重新下一次"),
     StateFile("config.json", FILE, "用户配置:构建机这份含模型 Key,由 spec 另行注入内置 Key"),
     StateFile("model_caps.json", FILE, "能力探测缓存:里面是本机模型服务的指纹"),
     StateFile("token-usage.db", FILE, "token 用量库:装着构建机的用量记录"),

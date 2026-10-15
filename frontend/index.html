@@ -1540,6 +1540,38 @@ try {
   .upd-body code{ font-family:Consolas,monospace; font-size:11.5px;
                   background:var(--glass-lite); border-radius:4px; padding:1px 4px; }
   .upd-more{ font-size:11.5px; color:var(--text-3); margin-bottom:6px; }
+  /* 就地更新(v0.9.176):进度条 + 一行实况 + 版本号旁那枚「更新」徽章 + 历史列表。
+     只用两种主题都定义过的变量(--primary/--ok/--danger/--glass-soft/--line-soft/
+     --text-1/2/3/--r-s)—— v0.9.174 那一格「浅色下看不见的字」的根因就是写了
+     从没定义过的名字,这里不再犯第四次。 */
+  .upd-dl{ margin:8px 0 2px; }
+  /* 这张卡上有四颗按钮 + 一条"打开发布页"的小链接,而 `.dialog .btns` 是不换行的
+     flex —— 640px 宽塞不下会被挤出去。只给这一张卡放开换行,不动所有弹窗的布局。 */
+  .upd-dialog .btns{ flex-wrap:wrap; }
+  .upd-bar{ height:6px; border-radius:3px; background:var(--glass-soft);
+            border:1px solid var(--line-soft); overflow:hidden; }
+  .upd-bar i{ display:block; height:100%; width:0; background:var(--primary);
+              transition:width .25s ease; }
+  .upd-line{ font-size:11.5px; color:var(--text-2); margin-top:5px; line-height:1.6; }
+  .upd-line.bad{ color:var(--danger); }
+  .upd-line.good{ color:var(--ok); }
+  .upd-web{ font-size:11.5px; color:var(--text-3); text-decoration:underline;
+            cursor:pointer; background:none; border:0; padding:0; }
+  .upd-web:hover{ color:var(--primary-text); }
+  #verBadge{ display:none; margin-left:6px; padding:1px 7px; border-radius:9px;
+             font-size:10.5px; background:var(--ok); color:#fff; cursor:pointer;
+             vertical-align:middle; }
+  #verBadge.show{ display:inline-block; }
+  .hist-item{ border-top:1px solid var(--line-soft); padding:9px 2px; }
+  .hist-item:first-child{ border-top:0; }
+  .hist-head{ display:flex; align-items:baseline; gap:9px; cursor:pointer; }
+  .hist-ver{ font-weight:600; color:var(--text-1); }
+  .hist-date{ font-size:11px; color:var(--text-3); }
+  .hist-cur{ font-size:10.5px; color:var(--primary-text);
+             border:1px solid var(--line-soft); border-radius:var(--r-s); padding:0 5px; }
+  .hist-body{ display:none; font-size:12px; color:var(--text-2); line-height:1.75;
+              white-space:pre-wrap; margin-top:7px; max-height:34vh; overflow-y:auto; }
+  .hist-item.open .hist-body{ display:block; }
   .mm-note{ font-size:11px; color:var(--text-2); line-height:1.6; min-height:16px; }
   .mm-note.bad{ color:var(--danger); }
   .mm-note.good{ color:var(--ok,#2f9e6e); }
@@ -3284,14 +3316,36 @@ try {
 <div class="overlay" id="updateOverlay">
   <div class="dialog upd-dialog">
     <div class="upd-head">
-      <h3>v<span id="updVer"></span> 更新日志</h3>
+      <h3 id="updTitle">发现新版本 v<span id="updVer"></span></h3>
       <span class="upd-date" id="updDate"></span>
     </div>
     <div class="upd-body" id="updBody"></div>
     <div class="upd-more" id="updMore" hidden>日志太长,这里只显示了前半段 —— 完整内容在发布页。</div>
+    <div class="upd-dl" id="updDl" hidden>
+      <div class="upd-bar"><i id="updBar"></i></div>
+      <div class="upd-line" id="updLine"></div>
+    </div>
     <div class="btns">
+      <button class="b-no" id="updHist">查看历史更新</button>
+      <button class="b-no" id="updSkipVer">跳过此版本</button>
       <button class="b-no" id="updLater">以后再说</button>
-      <button class="b-yes" id="updOpen">打开发布页</button>
+      <button class="b-yes" id="updGo">下载更新</button>
+      <button class="upd-web" id="updOpen">打开发布页</button>
+    </div>
+  </div>
+</div>
+
+<!-- 历史更新内容(v0.9.176,用户图 p8 那张):一行一版,点开看正文。
+     只列接口真给的东西;拉不到就写清是哪一种失败,不留"暂无历史"这种含糊话。 -->
+<div class="overlay" id="histOverlay">
+  <div class="dialog upd-dialog">
+    <div class="upd-head">
+      <h3>历史更新内容</h3>
+      <span class="upd-date" id="histNote"></span>
+    </div>
+    <div class="upd-body" id="histBody"></div>
+    <div class="btns">
+      <button class="b-no" id="histClose">关闭</button>
     </div>
   </div>
 </div>
@@ -3681,6 +3735,95 @@ function showProactive(text, ask, canMute, mode) {
    再给一颗「打开发布页」—— 不自动下载,装不装由用户自己决定。 */
 let lastUpdate = null;
 
+/* 就地更新(v0.9.176)。三件事:主动弹、就地装、能看历史。
+   状态机只有五个值(idle/downloading/done/error/cancelled),全在后端一处维护,
+   前端只照着渲染 —— 两边各猜一份"现在能不能装"就会打架。 */
+let updState = null;              // 后端最近一次 update_state 的快照
+
+function fmtMB(n) { return ((Number(n) || 0) / 1048576).toFixed(1) + " MB"; }
+
+function updBadge(on) {
+  let b = $("verBadge");
+  if (!b) {
+    b = document.createElement("span");
+    b.id = "verBadge";
+    b.textContent = "更新";
+    b.title = "有新版本 —— 点开看更新内容";
+    const v = $("ver");
+    if (!v || !v.parentNode) return;
+    v.after(b);
+    // 徽章点开时**重查一次**:手里那份 payload 可能是上一次会话留下的(甚至没有,
+    // 比如刚恢复出一个"已经下完"的状态),而重查是一次匿名 GET,便宜且不会拿旧文案
+    // 装新卡。查回来的那份带着 asset,按钮才知道能不能就地装。
+    b.addEventListener("click", () => {
+      const api = (window.pywebview && pywebview.api) || {};
+      if (lastUpdate && lastUpdate.notes && lastUpdate.asset) {
+        openUpdateDlg(lastUpdate); return;
+      }
+      if (!api.check_update_now) { openUpdateDlg(lastUpdate); return; }
+      api.check_update_now().then(r => {
+        if (r && r.update) openUpdateDlg(r.update);
+        else toast("现在没有比 v" + (($("ver") && $("ver").textContent) || "").trim()
+                   + " 更新的版本了");
+      }).catch(() => toast("问不到版本(网络不通?)", true));
+    });
+  }
+  b.classList.toggle("show", !!on);
+}
+
+function updRestore() {
+  // 页面刚起来时问一句"有没有正在下/已经下完的东西"——进度不该一翻页就假装没发生。
+  // 后端是那份状态的唯一真相(它跑在一条线程上),这里只把状态读回来渲染徽章。
+  const api = (window.pywebview && pywebview.api) || {};
+  if (!api.update_download_state) return;
+  api.update_download_state().then(s => {
+    const st = s && s.state;
+    if (!st || st === "idle") return;
+    updState = s;
+    updBadge(st === "done" || st === "error" || st === "downloading");
+  }).catch(() => {});
+}
+
+function updRender() {
+  const s = updState || {};
+  const st = s.state || "idle";
+  const hasAsset = !!(lastUpdate && lastUpdate.asset && lastUpdate.asset.url);
+  const dl = $("updDl"), line = $("updLine"), bar = $("updBar"), go = $("updGo");
+  dl.hidden = (st === "idle");
+  if (st === "downloading") {
+    const pct = Math.max(0, Math.min(100, Number(s.pct) || 0));
+    bar.style.width = pct + "%";
+    line.className = "upd-line";
+    line.textContent = `下载中 ${pct}% · ${fmtMB(s.got)} / ${fmtMB(s.total)}`
+      + "(几百 MB,可以最小化,别关窗口)";
+    go.textContent = "取消下载"; go.disabled = false;
+  } else if (st === "done") {
+    bar.style.width = "100%";
+    const okv = s.verified === "ok";
+    line.className = "upd-line " + (okv ? "good" : "bad");
+    line.textContent = okv
+      ? ("下好了 · sha256 已核对(" + fmtMB(s.size) + ")")
+      : ("下好了 · **没做 sha256 校验**" + (s.why ? " —— " + s.why : "")
+         + ";没核对的包不替你装");
+    go.textContent = okv ? ((s.name || "").endsWith(".exe") ? "运行安装程序" : "打开所在文件夹")
+                         : "不能装(校验没过)";
+    go.disabled = !okv;
+  } else if (st === "cancelled") {
+    bar.style.width = "0";
+    line.className = "upd-line";
+    line.textContent = String(s.why || "已取消,半截文件没留");
+    go.textContent = "下载更新"; go.disabled = !hasAsset;
+  } else if (st === "error") {
+    line.className = "upd-line bad";
+    line.textContent = "下载没成:" + String(s.why || "未知原因");
+    go.textContent = "再试一次"; go.disabled = !hasAsset;
+  } else {
+    go.textContent = "下载更新";
+    go.disabled = !hasAsset;
+    go.title = hasAsset ? "" : "这一版没找到适配本机形态的发布件,只能去发布页挑";
+  }
+}
+
 function openUpdateDlg(payload) {
   const p = payload || {};
   if (!p.version) { toast("没有可显示的更新内容", true); return; }
@@ -3696,11 +3839,116 @@ function openUpdateDlg(payload) {
   }
   $("updMore").hidden = !p.truncated;
   body.scrollTop = 0;
+  updRender();
+  updBadge(true);
   $("updateOverlay").classList.add("show");
 }
 
 $("updLater").addEventListener("click", () => {
   $("updateOverlay").classList.remove("show");
+});
+$("updSkipVer").addEventListener("click", () => {
+  const v = (lastUpdate && lastUpdate.version) || "";
+  if (!(window.pywebview && pywebview.api && pywebview.api.update_skip)) {
+    toast("这一屏只在桌面版能跳过版本", true); return;
+  }
+  pywebview.api.update_skip(v).then(r => {
+    $("updateOverlay").classList.remove("show");
+    if (r && r.ok) { updBadge(false); toast(String(r.why || "已跳过这一版")); }
+    else toast((r && r.why) || "跳不过去", true);
+  }).catch(() => toast("跳过此版本失败", true));
+});
+$("updGo").addEventListener("click", () => {
+  const st = (updState && updState.state) || "idle";
+  const api = (window.pywebview && pywebview.api) || {};
+  if (st === "downloading") {
+    if (api.update_download_cancel) {
+      api.update_download_cancel().then(r => {
+        if (!r || !r.ok) toast((r && r.why) || "取消失败", true);
+      });
+    }
+    return;
+  }
+  if (st === "done") {
+    if (api.update_install) {
+      api.update_install().then(r => {
+        if (r && r.ok) toast(String(r.why || "已交出去"), false);
+        else toast((r && r.why) || "装不了", true);
+      }).catch(() => toast("启动安装程序失败", true));
+    }
+    return;
+  }
+  if (api.update_download) {
+    updState = { state: "downloading", pct: 0, got: 0,
+                 total: (lastUpdate.asset && lastUpdate.asset.size) || 0 };
+    updRender();
+    api.update_download().then(r => {
+      if (r && !r.ok) { updState = { state: "error", why: r.why }; updRender(); }
+      else if (r && r.started) {
+        updState = { state: "downloading", pct: 0, got: 0, total: r.total || 0,
+                     name: r.name, version: r.version };
+        updRender();
+      }
+    }).catch(() => { updState = { state: "error", why: "发起下载失败(网络不通?)" };
+                    updRender(); });
+  }
+});
+$("updHist").addEventListener("click", () => {
+  const api = (window.pywebview && pywebview.api) || {};
+  if (!api.update_history) { toast("这一屏只在桌面版能看历史", true); return; }
+  $("histNote").textContent = "加载中…";
+  $("histBody").textContent = "";
+  $("histOverlay").classList.add("show");
+  api.update_history(8).then(r => {
+    if (!r || !r.ok) {
+      $("histNote").textContent = "";
+      $("histBody").textContent = "没拿到历史:" + String((r && r.why) || "接口不通");
+      return;
+    }
+    $("histNote").textContent = "共 " + (r.releases || []).length + " 版";
+    // "正在用"标在哪一版:侧栏那串版本号是唯一真相(它可能被 checkUpdateNow
+    // 临时缀上" ·检查中",所以只抠 x.y.z 那一段,不整串比)
+    const mv = ((($("ver") && $("ver").textContent) || "").match(/\d+\.\d+\.\d+/)
+                || [""])[0];
+    const cur = mv ? ("v" + mv) : "";
+    const box = $("histBody");
+    box.textContent = "";
+    (r.releases || []).forEach(it => {
+      const row = document.createElement("div");
+      row.className = "hist-item";
+      const head = document.createElement("div");
+      head.className = "hist-head";
+      const ver = document.createElement("span");
+      ver.className = "hist-ver";
+      ver.textContent = "v" + (it.version || "");
+      const date = document.createElement("span");
+      date.className = "hist-date";
+      date.textContent = it.date || "";
+      head.appendChild(ver); head.appendChild(date);
+      if (cur && it.version && ("v" + it.version) === cur) {
+        const mark = document.createElement("span");
+        mark.className = "hist-cur"; mark.textContent = "正在用";
+        head.appendChild(mark);
+      }
+      const body = document.createElement("div");
+      body.className = "hist-body";
+      // 正文一律 textContent:发布说明是**远端字符串**,这里不第二次走 innerHTML
+      body.textContent = String(it.notes || "(这一版没写说明)").trim()
+        + (it.truncated ? "\n\n(日志太长,这里只显示了前半段)" : "");
+      head.addEventListener("click", () => row.classList.toggle("open"));
+      row.appendChild(head); row.appendChild(body);
+      box.appendChild(row);
+    });
+  }).catch(() => {
+    $("histNote").textContent = "";
+    $("histBody").textContent = "没拿到历史:这一路没通";
+  });
+});
+$("histClose").addEventListener("click", () => {
+  $("histOverlay").classList.remove("show");
+});
+$("histOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "histOverlay") $("histOverlay").classList.remove("show");
 });
 $("updOpen").addEventListener("click", () => {
   const url = (lastUpdate && lastUpdate.url) || "";
@@ -5298,6 +5546,26 @@ window.__gcodeEvent = function (e) {
     case "info":
       toast(e.text);
       break;
+    case "update_prompt": {
+      // 看门狗查到新版本时**自己弹一张卡**(v0.9.176)。用户图 p1 点的就是这件事:
+      // 光有聊天栏顶部那条提示栏不算"推给他了"——那条会被别的推送挤掉、也容易被
+      // 当成界面装饰。payload 与手动查那一条同形,所以复用同一个 openUpdateDlg。
+      lastUpdate = {version: e.version, url: e.url, notes: e.notes, date: e.date,
+                    truncated: e.truncated, name: e.name, asset: e.asset};
+      openUpdateDlg(lastUpdate);
+      break;
+    }
+    case "update_state": {
+      updState = e;
+      if ($("updateOverlay").classList.contains("show")) { updRender(); break; }
+      if (e.state === "done" || e.state === "error") {
+        updBadge(true);   // 徽章留着:窗口关着的时候下完了,得有个地方能再唤出来
+        toast(e.state === "done"
+          ? "新版本下好了 —— 点版本号旁那枚「更新」继续装"
+          : ("更新下载没成:" + String(e.why || "")), e.state !== "done");
+      }
+      break;
+    }
     case "proactive": {
       // 看门狗推送(不带 session 键,全局可见):新通知/校历/待办/新版本
       if (e.kind === "notices") {
@@ -12908,6 +13176,7 @@ window.addEventListener("DOMContentLoaded", () => {
     pywebview.api.get_info().then(info => {
     $("ver").textContent = "v" + info.version;
     verClickable();                        // v0.9.162+:版本号点一下 = 手动查更新
+    updRestore();                          // v0.9.176:在跑/下完的更新回来接着显示
     renderWorkspacePill(info);
     renderPermOptions(info);
     if (info.session_key) currentSessionKey = info.session_key;
