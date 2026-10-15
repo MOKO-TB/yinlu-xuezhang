@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import threading
 import time
 
@@ -22,6 +23,23 @@ CHILD_CAP = 40            # 一路子代理最多往父行下挂几步(超了丢
 COALESCED_EVENTS = ("text_delta", "reasoning_delta")
 FLUSH_MS = 80.0           # 与前端 renderAssistant 那 90 ms 的渲染节流同一档:再攒就是白等
 FLUSH_CHARS = 400         # 一次吐得多的大段不必等满 80 ms:攒够字数立刻送
+
+
+def _panel_arg(args: dict) -> str:
+    """这一步的参数里有没有一份"可以就地显示的产物",有就回**工作区相对路径**。
+
+    绝对路径一律不回(`C:\\...` 或 `/x/y.html`):事件是要发给界面、也会被写进留档的,
+    与本仓库"给界面的快照不带绝对路径"那条口径(`_upd_public` / `undo_records`)一致。
+    带绝对路径来写文件的那一步就**不挂预览卡** —— 不是坏了,是这一格不给它显。
+    """
+    from minicode import panel
+    for key in ("path", "file_path", "file", "target"):
+        cand = str((args or {}).get(key) or "").strip().replace("\\", "/")
+        if not cand or cand.startswith("/") or re.match(r"^[A-Za-z]:", cand):
+            continue
+        if panel.looks_like_panel(cand):
+            return cand
+    return ""
 
 
 class GuiUI:
@@ -196,8 +214,14 @@ class GuiUI:
         # 先记账再推事件:窗口正关着的时候 push 会被吞掉,但那一步真的在跑,
         # 监控栏下一次自己扫表就该看得见它。
         self._live_begin(tool.name, summary)
+        # v0.9.177 可交互产物:这一步**写出了**一份 html/svg 时,把路径一并带出去,
+        # 界面据此在那一步下面挂一张就地预览的卡。为什么带路径而不是带正文:正文
+        # 要走事件总线序列化,一份 500 KB 的表能把整条流式打字机卡住;而"读哪一份"
+        # 这件事界面只需要一个字符串,内容由 `panel_preview` 按需取(那道闸顺便管
+        # 工作区边界与净化)。绝对路径不进事件 —— 取的时候由后端自己按工作区解析。
         self.push("tool_start", name=tool.name, summary=summary,
-                  trust=getattr(tool, "trust", "local"))
+                  trust=getattr(tool, "trust", "local"),
+                  artifact=_panel_arg(args))
 
     def tool_progress(self, text: str) -> None:
         """长命令的实时进度:**只改"此刻"那一行**,不往聊天里叠新消息。

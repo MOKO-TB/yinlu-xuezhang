@@ -286,6 +286,13 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # prompt_toolkit 抢同一个 stdin —— 表现是"输入偶尔丢一半",而 GUI 一点事没有。
     "minicode.interject": ("Interjection", "turn_with_interjection",
                            "_tty_ready", "_win_key", "_take_key", "POLL_SECONDS"),
+    # v0.9.177 可交互产物的后端那半:漏 `sanitize` = 预览卡直接把原样的网页交给
+    # 浏览器(界面那道沙箱还在,但"我们自己也删一遍"那句承诺就没了);漏 `CSP_META`
+    # = 外联没人管(实测过:沙箱拦得住脚本与攀宿主,**拦不住一张普通 <img> 出网**,
+    # 那一格靠的是这条 CSP);漏 `_panel_arg` = 卡永远不出现,而什么都不报错。
+    "minicode.panel": ("sanitize", "read_and_sanitize", "wrap_document",
+                       "CSP_META", "looks_like_panel", "PANEL_MAX_BYTES",
+                       "stripped_note"),
     "minicode.monitor": ("read_pref", "write_pref", "pref_path", "SECTIONS",
                          "DEFAULTS", "PREF_FILE", "_clean_folded"),
     # v0.9.37:实时耗时表(漏 live_rows = 时间线一行时刻都没有;漏 live_abandon =
@@ -296,6 +303,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "plan_review", "plan_review_handler",
                         "live_rows", "live_now", "live_abandon", "_live_begin",
                         "_live_end", "LIVE_CAP",
+                        # v0.9.177 可交互产物:这一步要不要挂预览卡的那道闸
+                        # (漏收 = 事件里永远不带 artifact,界面上永远不显形,
+                        #  而后端 `panel_preview` 好得很 —— 又是"功能在、入口没了")
+                        "_panel_arg",
                         # v0.9.139 流式增量攒批(漏收 = 包里还是"每个增量一次
                         # evaluate_js"那一版:往返占掉 100% 的时间,用户点开的
                         # 装好的包继续卡,而开发态跑得动 —— 这类坏法不报错)
@@ -1608,6 +1619,12 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # ③"本机有半截可以接着下"那一档(少了它,重启后进度条归零、话还说成"下载没成")。
     "function openHistoryDlg", "id=\"histPrune\"", "histReleases",
     "st === \"partial\"", "接着下载",
+    # v0.9.177 可交互产物(Gen UI):少 `addPanelCard` = 工具写出了 html 而界面上
+    # 永远不显形(后端一切正常、事件也发出来了,只是没人接,而这一类不报错);
+    # 少 `setAttribute("sandbox", "")` = 那张预览卡变成"把学长写的网页当代码执行"
+    # —— 这一根钉的不是形状,是这一格**唯一的红线**。
+    "function addPanelCard", "e.artifact", "setAttribute(\"sandbox\", \"\")",
+    "f.srcdoc", "gen-frame",
 )
 
 

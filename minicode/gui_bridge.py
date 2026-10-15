@@ -320,6 +320,10 @@ class PublicApi:
     def get_asset(self, rel_path: str) -> dict:
         return self._b.get_asset(rel_path)
 
+    def panel_preview(self, rel_path: str) -> dict:
+        # v0.9.177 可交互产物:界面拿到的每一份都在这里过净化 + CSP(见 Bridge 那条)
+        return self._b.panel_preview(rel_path)
+
     def open_url(self, url: str) -> dict:
         return self._b.open_url(url)
 
@@ -4126,6 +4130,53 @@ class Bridge:
         # /select, 对文件和目录都适用(目录会被它在上一级里选中),不必分两支
         subprocess.Popen(["explorer", "/select,", str(p)])
         return {"ok": True, "msg": f"已在文件管理器里定位:{p.name}"}
+
+    def panel_preview(self, rel_path: str) -> dict:
+        """把一份**工作区里**的 html/svg 净化后交给界面就地显示(v0.9.177 可交互产物)。
+
+        四条不是显然的:
+        1. 只在工作区里解析,`..` 直接拒 —— 与 `get_asset` 同一条 `_within` 口径,
+           这一格不给工作区外面开门(它能渲染就等于给任意本地文件一个显形口)。
+        2. 交出去之前先删一遍可执行结构(`minicode.panel`),界面那侧还要再套一层
+           `<iframe sandbox="">`。**同一件事两处都立闸**:沙箱是浏览器的承诺,净化是
+           我们自己的承诺,少一道都会在某台机器上变成"以为还有另一道"。
+        3. 删了几处要**说给用户**(`stripped` + `note`),不静默改内容 —— 那张表少了一列
+           和"我拆了两处脚本"是两种完全不同的信任问题。
+        4. 回里没有绝对路径(与 `_upd_public`、`undo_records` 同一条口径)。
+        """
+        from minicode import panel
+        raw = str(rel_path or "").strip().replace("\\", "/")
+        rel = raw.lstrip("/")
+        if raw.startswith("//"):
+            # `\\fileserver\share\x.html` 归一后就是这种形状:它**指的是另一台机器**,
+            # 不能被当成"工作区里的某个文件"悄悄重根(那样连不上时只会说"没这个文件",
+            # 而真相是这条路根本不该开)。带盘符的那种由下面的 `_within` 拦。
+            return {"ok": False, "why": "网络路径(UNC)不在这里显示"}
+        if not rel or ".." in rel.split("/"):
+            return {"ok": False, "why": "这个路径我不能开(含 .. 或为空)"}
+        if not panel.looks_like_panel(rel):
+            return {"ok": False, "why": "只就地显示 .html / .htm / .svg 这几类"}
+        root = Path(self.workspace).resolve()
+        try:
+            rp = (root / rel).resolve()
+        except Exception:
+            return {"ok": False, "why": "这个路径拼不出来"}
+        if not _within(rp, root):
+            return {"ok": False, "why": "工作区外面的东西不在这里显示"}
+        if not rp.is_file():
+            return {"ok": False, "why": "工作区里没有这一份(也许还没写出来)"}
+        try:
+            raw = rp.read_bytes()
+        except OSError as e:
+            return {"ok": False, "why": f"读不出来({type(e).__name__})"}
+        body, counts, why = panel.read_and_sanitize(raw)
+        if why:
+            return {"ok": False, "why": why, "bytes": len(raw)}
+        kind = "svg" if rel.lower().endswith(".svg") else "html"
+        return {"ok": True, "html": panel.wrap_document(body, kind),
+                "name": rel, "bytes": len(raw),
+                "stripped": counts, "note": panel.stripped_note(counts),
+                "kind": kind}
 
     def get_asset(self, rel_path: str) -> dict:
         """把工作区 skills/ 下的图片等静态资产转成 data URL,供聊天里的图片显示

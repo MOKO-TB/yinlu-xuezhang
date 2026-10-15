@@ -941,6 +941,22 @@ try {
   /* `.shotcard img.zoom` 这条规则随行内放大一起撤了(v0.9.147 之后):
      现在点对话里任何一张图都由 `#chat` 那条委托开灯箱,没有谁再切 `.zoom`。 */
 
+  /* 可交互产物(Gen UI,v0.9.177):工具写下的 html/svg 就地显形那一张卡。
+     底色固定成白是**故意的**:那张卡里是产物自己的配色(表、图、复盘页各有一套),
+     界面不插手 —— 深浅色都按它自己的来,不然一张白底的表在深色下就是一块黑斑。 */
+  .gencard{ margin:8px 0 4px; background:rgba(247,250,249,.96);
+            border:1px solid var(--line-soft); border-left:3px solid var(--accent);
+            border-radius:10px; overflow:hidden; }
+  html.dark .gencard{ background:rgba(12,21,32,.94); }
+  .gen-head{ display:flex; justify-content:space-between; gap:10px;
+             padding:8px 10px; cursor:pointer; }
+  .gen-name{ font-size:11.5px; color:var(--text-2); white-space:nowrap;
+             overflow:hidden; text-overflow:ellipsis; }
+  .gen-note{ font-size:11px; color:var(--text-3); white-space:nowrap; }
+  .gen-body{ border-top:1px solid var(--line-soft); background:#fff; }
+  .gen-frame{ display:block; width:100%; height:360px; border:0;
+              color-scheme:light; }
+
   /* ---------------- 输入区 ---------------- */
   .composer{ border-top:1px solid var(--line-soft); background:var(--glass);
              padding:12px 16px;
@@ -5258,6 +5274,63 @@ function renderAssistant(force) {
   toBottom();
 }
 
+/* 可交互产物(Gen UI,v0.9.177):工具**写进工作区**的那份 html/svg 就地显形。
+   点开才取内容 —— 一份几百 KB 的表不该在流式打字机那条路上被读一遍。
+
+   `<iframe sandbox="">` 里那个**空字符串是刻意的**:不给脚本执行、不给同源、
+   不给顶栏跳转、不给表单提交。所以这张卡既跑不了模型写的代码,也碰不到
+   `pywebview.api`(整个文档那份 ~200 只方法的门面)!扩展页那一侧没有这层
+   (`loadExtensions` 直接往 document.head 挂 <script>),那是另一件事、另要另议;
+   **这一格是新写的,所以从第一行起就不该有回写通道。**
+   后端还另有两道:`minicode/panel.py` 删可执行结构 + 注入 CSP,`panel_preview`
+   只在工作区里解析路径。四处都不报错也都不出声 —— 少任何一处,这张卡都会变成
+   "看起来正常但把网页/模型写的内容当代码执行了"。 */
+function addPanelCard(rel) {
+  const c = ensureAssistant();
+  const card = document.createElement("div");
+  card.className = "gencard";
+  const head = document.createElement("div");
+  head.className = "gen-head";
+  const name = document.createElement("span");
+  name.className = "gen-name";
+  name.textContent = "🧩 可交互产物 · " + rel;
+  const note = document.createElement("span");
+  note.className = "gen-note";
+  note.textContent = "点开就地显示";
+  head.appendChild(name); head.appendChild(note);
+  const body = document.createElement("div");
+  body.className = "gen-body";
+  body.hidden = true;
+  let loading = false;
+  head.addEventListener("click", () => {
+    body.hidden = !body.hidden;
+    if (body.hidden || loading || body.firstChild) return;
+    const api = (window.pywebview && pywebview.api) || {};
+    if (!api.panel_preview) { note.textContent = "这一屏只在桌面版能预览"; return; }
+    loading = true;
+    note.textContent = "取过来…";
+    api.panel_preview(rel).then(r => {
+      loading = false;
+      if (!r || !r.ok) {
+        note.textContent = (r && r.why) || "这份开不出来";
+        return;                       // 失败**不留着空 iframe**,也允许再点开重试
+      }
+      note.textContent = r.note || ("就地显示 · " + (r.kind || "html"));
+      const f = document.createElement("iframe");
+      f.className = "gen-frame";
+      f.setAttribute("sandbox", "");
+      f.setAttribute("referrerpolicy", "no-referrer");
+      f.setAttribute("title", rel);
+      f.srcdoc = String(r.html || "");   // 走属性而不是拼字符串:内容永远进不了解析器外的位置
+      body.appendChild(f);
+    }).catch(() => { loading = false; note.textContent = "预览没通(后端没回话)"; });
+  });
+  card.appendChild(head); card.appendChild(body);
+  c.wrap.insertBefore(card, c.wrap.querySelector(".acts"));
+  toBottom();
+  return card;
+}
+
 function addToolCard(name, summary, folded, trust) {
   removePlaceholder();
   const el = document.createElement("div");
@@ -5407,6 +5480,10 @@ window.__gcodeEvent = function (e) {
     case "tool_start":
       cur = null;
       lastTool = addToolCard(e.name, e.summary, false, e.trust);
+      // v0.9.177:这一步**写出了**一份 html/svg 时,紧跟一张就地预览的卡。
+      // 判定在后端(`gui_ui._panel_arg`:只认工作区相对路径 + 那几个扩展名),
+      // 这里只看有没有带过来 —— 两份判据会漂,一份不会。
+      if (e.artifact) addPanelCard(e.artifact);
       break;
     case "tool_done": {
       const el = findRunningTool();
