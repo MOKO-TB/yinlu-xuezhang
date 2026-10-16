@@ -145,6 +145,7 @@ def assets_manifest(dist: Path, built: dict, lib_stamp: "Path | None",
     """
     from minicode import library
     from minicode.proactive import identity_of
+    from publish_release import published_names   # 发布页上的名字**只有那边说得出**
 
     def _identity(sp: "Path | None", kind: str) -> dict:
         """**从 App 端那个同一个函数取** —— 两侧各写一份投影,曾经差出一个 `schema`
@@ -159,10 +160,14 @@ def assets_manifest(dist: Path, built: dict, lib_stamp: "Path | None",
     db = dist / "crawled" / "mfindgzyykj.libsp.cn" / "library.db"
     lib = _identity(lib_stamp or library.stamp_path_for(db), "library")
     ker = _identity(kernel_stamp, "browser_kernel")
+    nm = published_names(__version__)
     payload = {
         "schema": 1, "version": __version__,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "assets": {k: {"name": Path(v).name, "size": Path(v).stat().st_size,
+        # `name` 必须是**发布页上那个名字**,不是本机文件名 —— App 端 `pick_asset`
+        # 拿它逐字比(v0.9.179 实测:本机名与发布名对不上,"该下哪一件"退化成"找不到")。
+        "assets": {k: {"name": nm.get(k) or Path(v).name,
+                       "size": Path(v).stat().st_size,
                        "sha256": _sha256(Path(v))}
                    for k, v in built.items() if Path(v).is_file()},
         "identity": {"library": lib, "browser_kernel": ker},

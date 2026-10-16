@@ -62,15 +62,33 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def published_names(ver: str) -> dict:
+    """发布页上那六件**叫什么名字**,只有这一处说得出。
+
+    构建端写清单(`build_exe.assets_manifest`)与发布端上传(`_assets`)都必须从这里取。
+    v0.9.179 实测的破法:清单里记的是**本机文件名**(`引路学长-…-setup.exe`),发布页上是
+    英文名,而 App 端 `pick_asset` 拿清单里的名字与发布资产**逐字比** —— 两边永远对不上,
+    "该下哪一件"就退化成"找不到那件"(界面上是「打开发布页」,或按整包下并说清单在说谎)。
+    与 §7 (o) 同族:一件事两处各写一份,各自都被测对,合起来是坏的。
+    """
+    return {
+        "setup": f"yinlu-xuezhang-{ver}-setup.exe",
+        "zip": f"yinlu-xuezhang-{ver}-win64.zip",
+        "single_file": f"yinlu-xuezhang-{ver}-single-file.exe",
+        "app_setup": f"yinlu-xuezhang-{ver}-app-setup.exe",
+        "assets": f"yinlu-xuezhang-{ver}-assets.json",
+        "sha256": f"yinlu-xuezhang-{ver}-sha256.txt",
+    }
+
+
 def _assets(ver: str) -> "list[tuple[Path, str]]":
     """按约定找齐三件;缺一件就把它列出来(不猜路径,也不许只发一部分)。"""
+    nm = published_names(ver)
     want = [
-        (ROOT / "dist" / f"引路学长-{ver}-setup.exe",
-         f"yinlu-xuezhang-{ver}-setup.exe", "安装版(推荐)"),
-        (ROOT / "dist" / f"引路学长-{ver}-win64.zip",
-         f"yinlu-xuezhang-{ver}-win64.zip", "免安装版,解压即用"),
+        (ROOT / "dist" / f"引路学长-{ver}-setup.exe", nm["setup"], "安装版(推荐)"),
+        (ROOT / "dist" / f"引路学长-{ver}-win64.zip", nm["zip"], "免安装版,解压即用"),
         (ROOT / "dist" / "引路学长-单文件版.exe",
-         f"yinlu-xuezhang-{ver}-single-file.exe", "单文件版,双击直接打开"),
+         nm["single_file"], "单文件版,双击直接打开"),
     ]
     missing = [str(p) for p, _n, _l in want if not p.exists()]
     if missing:
@@ -81,9 +99,9 @@ def _assets(ver: str) -> "list[tuple[Path, str]]":
     # 但少了 sha256.txt 里那一行就要命:下载回来"没核对过",那颗按钮是灰的。
     # 所以这两件**必须一起出现**,只传一件比两件都不传更坏。
     extra = [(ROOT / "dist" / f"引路学长-{ver}-app-setup.exe",
-              f"yinlu-xuezhang-{ver}-app-setup.exe", "仅 app 更新包(不含馆藏库与内核)"),
-             (ROOT / "dist" / f"yinlu-xuezhang-{ver}-assets.json",
-              f"yinlu-xuezhang-{ver}-assets.json", "发布清单:各件哈希与两块数据的身份")]
+              nm["app_setup"], "仅 app 更新包(不含馆藏库与内核)"),
+             (ROOT / "dist" / nm["assets"],
+              nm["assets"], "发布清单:各件哈希与两块数据的身份")]
     have_extra = [(p, n) for p, n, _l in extra if p.exists()]
     for p, n, l in extra:
         if not p.exists():

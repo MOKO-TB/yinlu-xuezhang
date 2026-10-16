@@ -632,6 +632,47 @@ def _fake_release(with_app=True):
             "published_at": "2026-10-16T00:00:00Z", "body": "改一行", "assets": assets}
 
 
+def test_the_manifest_names_are_the_names_we_publish(tmp_path, monkeypatch):
+    """清单里的 `name` = 发布端真正上传的那个名字 = App 挑得到那件的名字(**三方同源**)。
+
+    v0.9.179 实测抓到:清单记的是**本机文件名** `引路学长-…-setup.exe`,而发布页上叫
+    `yinlu-xuezhang-…-setup.exe`(上传时改名),App 端 `pick_asset` 拿清单里的名字逐字比 ——
+    永远挑不到,于是"该下哪一件"退化成"找不到那件"(界面变成「打开发布页」,或按整包下
+    并告诉用户"清单说可以只下小包但发布里没有那件")。反证:把 build_exe 改回 `Path(v).name`
+    → 这一支红。
+    """
+    import json as _json
+    import sys
+    root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(root / "scripts"))
+    import build_exe
+    from publish_release import published_names
+
+    dist = tmp_path / "dist" / "引路学长"
+    dist.mkdir(parents=True)
+    v = build_exe.__version__
+    files = {}
+    for key, local in (("setup", f"引路学长-{v}-setup.exe"),
+                       ("zip", f"引路学长-{v}-win64.zip"),
+                       ("single_file", "引路学长-单文件版.exe"),
+                       ("app_setup", f"引路学长-{v}-app-setup.exe")):
+        p = dist / local
+        p.write_bytes(b"z" * 8)
+        files[key] = p
+    monkeypatch.setattr(build_exe, "ROOT", tmp_path)
+    man_path = build_exe.assets_manifest(dist, files, None, None)
+    man = _json.loads(man_path.read_text(encoding="utf-8"))
+    want = published_names(build_exe.__version__)
+    rel = {"assets": [{"name": want[k], "size": 8,
+                       "url": "https://api.github.com/repos/o/r/releases/assets/%d" % i}
+                      for i, k in enumerate(files)]}
+    for k in files:
+        assert man["assets"][k]["name"] == want[k], (k, man["assets"][k], want[k])
+        # App 那一头:按清单里的名字去真发布页挑,必须挑得着、且就是这一件
+        got = proactive.pick_asset(rel, "setup", man["assets"][k]["name"])
+        assert got and got["name"] == want[k], (k, got)
+
+
 def test_the_suffix_fallback_never_hands_out_the_app_only_package():
     """**没给名字**时按后缀兜底,也绝不许把 `…-app-setup.exe` 当整包递出去。
 
