@@ -673,6 +673,83 @@ def test_the_manifest_names_are_the_names_we_publish(tmp_path, monkeypatch):
         assert got and got["name"] == want[k], (k, got)
 
 
+def test_a_machine_without_the_credential_computes_it_once_then_reads(tmp_path, monkeypatch):
+    """老包(0.9.178 及更早)没有那份凭证 —— 更新判定那一次允许**现算并补写**。
+
+    为什么允许:实测 697 MB / 603 个文件 1.0 秒算完,而它换来的是少下 743 MB;
+    不补写的话每次检查都要重算,所以算完要落盘,第二次只读几十个字节的 JSON。
+    """
+    from minicode import library, paths
+    exe = tmp_path / "exe"
+    (exe / "ms-playwright" / "chromium-1").mkdir(parents=True)
+    (exe / "ms-playwright" / "chromium-1" / "chrome.exe").write_bytes(b"abc")
+    (exe / "ms-playwright" / "chromium-1" / "note.txt").write_bytes(b"de")
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr(library, "db_path", lambda workspace=None: None)
+    monkeypatch.setattr(paths, "RESOURCE_DIR", exe)
+    monkeypatch.setattr(paths, "APP_DIR", data)
+
+    assert proactive.local_identities()["browser_kernel"] == {}, \
+        "默认(启动那条路)不付这笔计算"
+    assert not (exe / "browser-kernel.stamp.json").exists(), "没让算就不许写盘"
+    got = proactive.local_identities(allow_compute=True)["browser_kernel"]
+    assert got == {"files": 2, "bytes": 5, "digest": got["digest"]}, got
+    stamp = exe / "browser-kernel.stamp.json"
+    assert stamp.is_file(), "算过就要落盘,否则每次检查都重算 731 MB"
+    assert "computed_by" in stamp.read_text(encoding="utf-8"), "凭证要说清它是本机现算的"
+    assert proactive.local_identities()["browser_kernel"] == got, "第二次走读凭证那条路"
+
+
+def test_the_credential_is_read_from_next_to_the_exe(tmp_path, monkeypatch):
+    """装进 `Program Files` 时 `APP_DIR` 会搬到 `%LOCALAPPDATA%`,而凭证是**随包装在 exe 旁**的。
+
+    只认 APP_DIR 的那版代码在这类机器上永远读不到凭证 → 永远下整包(安全,但一分没省)。
+    """
+    import json as _json
+    from minicode import library, paths
+    exe = tmp_path / "ProgramFiles"
+    (exe / "ms-playwright").mkdir(parents=True)
+    (exe / "ms-playwright" / "a").write_bytes(b"x")
+    exe.joinpath("browser-kernel.stamp.json").write_text(_json.dumps(
+        {"schema": 1, "files": 1, "bytes": 1, "digest": "d" * 64,
+         "built_at": "构建时写的"}), encoding="utf-8")
+    data = tmp_path / "LocalAppData"      # 只读装的机器上数据搬到这里,那里没有凭证
+    data.mkdir()
+    monkeypatch.setattr(library, "db_path", lambda workspace=None: None)
+    monkeypatch.setattr(paths, "RESOURCE_DIR", exe)
+    monkeypatch.setattr(paths, "APP_DIR", data)
+    assert proactive.local_identities()["browser_kernel"] == {
+        "files": 1, "bytes": 1, "digest": "d" * 64}
+
+
+def test_the_build_and_the_app_share_one_kernel_digest(tmp_path, monkeypatch):
+    """构建端写的那份摘要必须与 App 端算的**出自同一份代码**(§7 (o) 的第三次现身)。"""
+    import sys
+    root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(root / "scripts"))
+    import build_exe
+    from minicode import paths
+
+    exe = tmp_path / "exe"
+    (exe / "ms-playwright" / "sub").mkdir(parents=True)
+    (exe / "ms-playwright" / "sub" / "a.bin").write_bytes(b"hello")
+    (exe / "ms-playwright" / "b.bin").write_bytes(b"world!!")
+    monkeypatch.setattr(paths, "RESOURCE_DIR", exe)
+    monkeypatch.setattr(paths, "APP_DIR", exe)
+    out = build_exe.stamp_kernel(exe)
+    assert out and out.name == proactive.KERNEL_STAMP_NAME
+    written = json.loads(out.read_text(encoding="utf-8"))
+    assert proactive.kernel_identity(exe / "ms-playwright") == {
+        "files": written["files"], "bytes": written["bytes"],
+        "digest": written["digest"]}, "两侧算出了两个摘要 ⇒ 这台机器永远跳不过内核"
+    # 拷贝一遍(时间戳全变)身份不许变 —— 这是"按目录字节流哈希"会坏掉的地方
+    import shutil
+    copy = tmp_path / "copy" / "ms-playwright"
+    shutil.copytree(exe / "ms-playwright", copy)
+    assert proactive.kernel_identity(copy)["digest"] == written["digest"]
+
+
 def test_the_suffix_fallback_never_hands_out_the_app_only_package():
     """**没给名字**时按后缀兜底,也绝不许把 `…-app-setup.exe` 当整包递出去。
 
@@ -698,7 +775,8 @@ def test_check_update_names_the_full_package_when_it_falls_back(monkeypatch):
     monkeypatch.setattr(proactive, "fetch_release_manifest",
                         lambda rel, ver, timeout=12.0: (MAN, ""))
     empty = {"library": {}, "browser_kernel": {}}      # 老包:证明不了一致
-    monkeypatch.setattr(proactive, "local_identities", lambda: dict(empty))
+    monkeypatch.setattr(proactive, "local_identities",
+                        lambda allow_compute=False: dict(empty))
     u = proactive.check_update("0.9.177", detail=True)["update"]
     assert u["plan"]["choice"] == "setup" and "没有凭证" in u["plan"]["reason"]
     assert u["asset"]["name"] == "yinlu-xuezhang-9.9.9-setup.exe", \
@@ -713,7 +791,8 @@ def test_check_update_end_to_end_selects_the_small_asset(monkeypatch):
     monkeypatch.setattr(proactive, "running_form", lambda: "setup")
     monkeypatch.setattr(proactive, "fetch_release_manifest",
                         lambda rel, ver, timeout=12.0: (MAN, ""))
-    monkeypatch.setattr(proactive, "local_identities", lambda: dict(SAME))
+    monkeypatch.setattr(proactive, "local_identities",
+                        lambda allow_compute=False: dict(SAME))
     r = proactive.check_update("0.9.177", detail=True)
     u = r["update"]
     assert u["asset"]["name"] == "yinlu-xuezhang-9.9.9-app-setup.exe", u["asset"]
@@ -732,7 +811,8 @@ def test_check_update_falls_back_when_the_manifest_lies(monkeypatch):
     monkeypatch.setattr(proactive, "running_form", lambda: "setup")
     monkeypatch.setattr(proactive, "fetch_release_manifest",
                         lambda rel, ver, timeout=12.0: (MAN, ""))
-    monkeypatch.setattr(proactive, "local_identities", lambda: dict(SAME))
+    monkeypatch.setattr(proactive, "local_identities",
+                        lambda allow_compute=False: dict(SAME))
     u = proactive.check_update("0.9.177", detail=True)["update"]
     assert u["asset"]["name"] == "yinlu-xuezhang-9.9.9-setup.exe", u["asset"]
     assert u["plan"]["choice"] == "setup" and "但发布里没有那件" in u["plan"]["reason"]

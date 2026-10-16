@@ -1219,6 +1219,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # 卡上那句"跳过多少"的口径单独一根:漏收的表现是包内又退回
                            # 按内容字节报数(实测会说成"跳过 1946 MB")。
                            "_skip_phrase",
+                           # v0.9.180:老包没有内核凭证,更新判定那一次允许现算并补写
+                           # (实测 1.0 秒换少下 743 MB)。漏 `read_kernel_identity` 的表现
+                           # 是"这台机器永远读不到凭证 ⇒ 永远下整包",而源码态全绿。
+                           "kernel_dir", "kernel_identity", "read_kernel_identity",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",

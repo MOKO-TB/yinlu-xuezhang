@@ -495,7 +495,9 @@ def check_update(current: str, timeout: float = 10.0, *,
     # 的那件" —— 那还不如没有判定。
     form = running_form()
     man, man_why = fetch_release_manifest(data, str(got["version"]))
-    plan = plan_update(form, man)
+    # allow_compute:老包(0.9.178 及更早)的安装目录里没有内核凭证,不现算就只能
+    # "第一次照旧下 878 MB"。实测现算是 1.0 秒的事,而它换回 743 MB。
+    plan = plan_update(form, man, local_identities(allow_compute=True))
     if man_why:
         plan.setdefault("manifest_why", man_why)
     # v0.9.179:**有清单时两件的名字都从清单取**,不只取"小件"那一个。原来只在
@@ -647,12 +649,105 @@ def identity_of(raw: "dict | None", kind: str) -> dict:
     return {k: raw[k] for k in IDENTITY_KEYS.get(kind, ()) if k in raw}
 
 
-def local_identities() -> dict:
-    """本机那两块大数据的身份(馆藏库 / 浏览器内核)——**读凭证文件,不重算哈希**。
+KERNEL_DIR_NAME = "ms-playwright"
+KERNEL_STAMP_NAME = "browser-kernel.stamp.json"
 
-    为什么不能现算:馆藏库 1.3 GB、内核 731 MB,一次 sha256 十几秒,而这件事发生在
-    "检查更新"那条路上(启动时也会走)。凭证文件是构建时算好、随包一起装到本机的,
-    读它就是读几十个字节的 JSON。
+
+def kernel_roots() -> "list[Path]":
+    """内核与它的凭证可能躺在的**两处**根:exe 旁(随包装过去的那份)、用户数据目录。
+
+    为什么两处:装进 `Program Files` 时 exe 目录只读,`paths.APP_DIR` 会整体搬到
+    `%LOCALAPPDATA%`(v0.9.22 那条),而凭证是安装包写在 **exe 旁**的 —— 只认 APP_DIR
+    的那版代码在这类机器上永远读不到凭证、于是永远下整包(安全,但一分钱都没省)。
+    """
+    from minicode.paths import APP_DIR, RESOURCE_DIR
+    out = [Path(RESOURCE_DIR), Path(APP_DIR)]
+    return [p for i, p in enumerate(out) if p not in out[:i]]
+
+
+def kernel_dir() -> "Path | None":
+    """真正装着内核的那个目录(两处的第一个非空 `ms-playwright/`),没有就回 None。"""
+    for root in kernel_roots():
+        d = root / KERNEL_DIR_NAME
+        if d.is_dir() and next(d.iterdir(), None) is not None:
+            return d
+    return None
+
+
+def kernel_identity(kdir: Path) -> dict:
+    """**构建端与 App 端共用这一份算法**:身份 = 排序后的「相对路径 | 每文件 sha256」再摘要。
+
+    为什么不能按目录字节流哈希:几百个文件拷贝一次时间戳就全变,同一份内核在两次构建里
+    会得到两个身份 → "跳过没变的那件"永远跳不过去。所以身份只由**内容与名字**决定。
+    放在这里(而不是留在 `scripts/build_exe.py`)是因为现在有两边要用它 —— 一件事两处各写
+    一份就一定会漂,这一格今天已经付过两次学费(§7 (o)(r))。
+    """
+    import hashlib
+    rows = []
+    total = 0
+    for f in sorted(kdir.rglob("*")):
+        if not f.is_file():
+            continue
+        h = hashlib.sha256()
+        with f.open("rb") as fh:
+            for blk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(blk)
+        rows.append("%s|%s" % (f.relative_to(kdir).as_posix(), h.hexdigest()))
+        total += f.stat().st_size
+    return {"files": len(rows), "bytes": total,
+            "digest": hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()}
+
+
+def read_kernel_identity(allow_compute: bool = False) -> dict:
+    """本机内核的身份:先读凭证(几十个字节的 JSON);读不到而**内核本体在场**时,
+    按 `allow_compute` 决定要不要现算一次并落盘。
+
+    为什么要允许现算(实测,不是我猜的):697 MB / 603 个文件在这台机器上 **1.0 秒**算完,
+    而它换来的是一次 743 MB 的下载省下来 —— 老包(0.9.178 及更早)的安装目录里本来就没有
+    这份凭证,不现算就只能"第一次照旧下整包"。三条边界:①**只在更新判定这条路上开**
+    (`check_update`),启动路径不开;②算一次就写盘,以后只读那几十个字;③慢机器上
+    这是十秒级的事,所以界面那句理由会写"本机现算"而不是假装它一直是凭证。
+    """
+    import json
+    kdir = kernel_dir()
+    if kdir is None:
+        return {}          # 没有内核本体 —— 有凭证也不算(§6 第 80 条⑥:凭证要配得上本体)
+    for root in kernel_roots():
+        p = root / KERNEL_STAMP_NAME
+        if not p.is_file():
+            continue
+        try:
+            got = identity_of(json.loads(p.read_text(encoding="utf-8")), "browser_kernel")
+        except Exception:
+            continue
+        if got:
+            return got
+    if not allow_compute:
+        return {}
+    try:
+        ident = kernel_identity(kdir)
+    except Exception:
+        return {}
+    for root in kernel_roots():        # exe 旁能写就写那儿(与安装包同一个位置),否则退到数据目录
+        try:
+            (root / KERNEL_STAMP_NAME).write_text(json.dumps(
+                dict(ident, schema=1, kind="browser-kernel", computed_at=time.strftime(
+                    "%Y-%m-%d %H:%M:%S"), computed_by="本机现算"),
+                ensure_ascii=False, indent=1), encoding="utf-8")
+            break
+        except Exception:
+            continue
+    return ident
+
+
+def local_identities(allow_compute: bool = False) -> dict:
+    """本机那两块大数据的身份(馆藏库 / 浏览器内核)——**读凭证文件**,内核那份缺了可现算。
+
+    为什么默认不现算:馆藏库 1.3 GB、内核 731 MB,而这件事也发生在启动那条路上;凭证是
+    构建时算好、随包一起装到本机的,读它就是读几十个字节的 JSON。
+    `allow_compute=True` 只给更新判定那条路用(见 `read_kernel_identity`:实测 1.0 秒,
+    换的是少下 743 MB)。**馆藏库那一半不在现算之列** —— 它的凭证从 0.9.177 就往包里带、
+    实测与这一版要的一致,现场没有这台机器需要,不去动它。
 
     少了凭证文件(老包、或用户自己动过目录)就回缺项 —— 调用方**必须**因此退回整包:
     "证明不了一致"和"不一致"在处理上是一回事,但在**说给用户听**上是两回事。
@@ -671,13 +766,7 @@ def local_identities() -> dict:
     except Exception:
         pass
     try:
-        import json
-        from minicode.paths import APP_DIR
-        kdir = Path(APP_DIR) / "ms-playwright"
-        p = Path(APP_DIR) / "browser-kernel.stamp.json"
-        if p.is_file() and kdir.is_dir() and next(kdir.iterdir(), None) is not None:
-            out["browser_kernel"] = identity_of(
-                json.loads(p.read_text(encoding="utf-8")), "browser_kernel")
+        out["browser_kernel"] = read_kernel_identity(allow_compute)
     except Exception:
         pass
     return out
