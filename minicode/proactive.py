@@ -713,10 +713,25 @@ def plan_update(form: str, manifest: dict, local: "dict | None" = None,
     if blockers:
         return {"choice": "setup", "name": "", "reason": "；".join(blockers),
                 "skipped": []}
+    app_bytes = int(app.get("size") or 0)
+    full = int(full_size or 0) or int((assets.get("setup") or {}).get("size") or 0)
     return {"choice": "app_setup", "name": str(app.get("name") or ""),
-            "reason": "馆藏库与浏览器内核你机器上已有,这次跳过 "
-                      + _fmt_mb(sum(s["bytes"] for s in skipped)),
+            "reason": "馆藏库与浏览器内核你机器上已有," + _skip_phrase(
+                sum(int(s.get("bytes") or 0) for s in skipped), app_bytes, full),
             "skipped": skipped}
+
+
+def _skip_phrase(skip_bytes: int, app_bytes: int, full_bytes: int) -> str:
+    """卡上那句"跳过多少"要说**少下的下载量**,不能说那两块数据的字节数。
+
+    这两个数是不同的东西(包内探针实测):那两件解压后合计 **1946 MB**,
+    而整包 setup 与小件 app-setup 的差是 **743 MB** —— 后者才是用户少付的流量。
+    把 1946 写在卡上、旁边再配一句"这次要下 135 MB",两个数字就各说各话了。
+    """
+    if full_bytes and app_bytes and full_bytes > app_bytes:
+        return "这次跳过它们能少下 %s(整包 %s)" % (
+            _fmt_mb(full_bytes - app_bytes), _fmt_mb(full_bytes))
+    return "这次跳过它们(那两件解压后共 %s,小包里没有)" % _fmt_mb(skip_bytes)
 
 
 def _fmt_mb(n: int) -> str:

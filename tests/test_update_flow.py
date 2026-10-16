@@ -413,6 +413,26 @@ def test_plan_update_picks_and_explains(form, man, local, choice, needle):
         assert sum(s["bytes"] for s in p["skipped"]) == 1331774 + 4
 
 
+def test_the_skip_line_quotes_the_download_saving_not_content_bytes():
+    """卡上那句"跳过多少"必须是**少下的下载量** —— 包内探针替我抓出来的第二个口径。
+
+    实测:那两块数据解压后合计 1946 MB,而整包(878 MB)与小件(135 MB)的差是 743 MB。
+    原实现报的是前者,于是卡上写"这次跳过 1946 MB · 这次要下 135 MB",两个数字各说
+    各话(发布说明里写的却是 743 MB)。没有整包大小可报时,退回说内容字节并把话说清。
+    """
+    p = proactive.plan_update("setup", MAN, dict(SAME), full_size=920614741)
+    assert "少下 743 MB" in p["reason"], p["reason"]
+    assert "1946 MB" not in p["reason"] and "1249 MB" not in p["reason"], p["reason"]
+    # 清单里本来就带整包大小,调用方不传也应该报得出(这是 `check_update` 的实际形状)
+    q = proactive.plan_update("setup", MAN, dict(SAME))
+    assert "少下 743 MB" in q["reason"], q["reason"]
+    # 两者都不肯说谎:宁可改口说"那两件有多大",也不编一个少下的数
+    no_full = {"identity": MAN["identity"], "assets": dict(MAN["assets"])}
+    no_full["assets"].pop("setup")
+    r = proactive.plan_update("setup", no_full, dict(SAME))
+    assert "跳过" in r["reason"] and "解压后" in r["reason"], r["reason"]
+
+
 def test_an_absent_credential_is_never_a_match():
     """`_same_identity` 里"本机没凭证"必须算**不等**。
 

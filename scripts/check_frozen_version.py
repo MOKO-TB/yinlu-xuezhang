@@ -1213,6 +1213,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # 一份投影"(§7 (o)),包里少这根就等于两侧又分家了。
                            "fetch_release_manifest", "local_identities",
                            "plan_update", "_same_identity", "identity_of",
+                           # 卡上那句"跳过多少"的口径单独一根:漏收的表现是包内又退回
+                           # 按内容字节报数(实测会说成"跳过 1946 MB")。
+                           "_skip_phrase",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",
