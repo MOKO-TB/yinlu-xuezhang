@@ -751,24 +751,30 @@ def test_update_prune_reports_bytes_in_human_form(tmp_path, monkeypatch):
 
     走桥不是多余的一层:文件名闸、`keep_version` 的默认值(从下载状态里取)、
     把字节数翻成人话,三件事都发生在桥这一层,而 `prune_updates` 自己都不知道。
+
+    ⚠ 版本号一律**算出来**(`_cur_version()` 与一个明显的"未来版"),不写死:
+    上一版这条测试里写死了 `0.9.177`,抬到 0.9.178 之后它自己变成"该被清掉的旧件",
+    于是红在**测试的假设**上而不是代码上 —— 那种红最费时间。
     """
     b = _bridge(tmp_path)
     cur = proactive._cur_version()
+    newer = "99.0.0"
     updir = tmp_path / "app" / "updates"
     updir.mkdir(parents=True)
     for n in (f"yinlu-xuezhang-{cur}-setup.exe",
               "yinlu-xuezhang-0.9.100-setup.exe",
-              "yinlu-xuezhang-0.9.177-setup.exe"):
+              f"yinlu-xuezhang-{newer}-setup.exe"):
         (updir / n).write_bytes(b"z" * 100)
-    b._upd = {"state": "error", "version": "0.9.176", "resumable": False}
+    b._upd = {"state": "error", "version": newer, "resumable": False}
     r = b.update_prune()
-    assert r["ok"] and r["removed_count"] == 1, r        # 只删被 0.9.176 取代的那件旧件
-    assert r["freed"] == 100 and "B" in r["freed_size"] or "KB" in r["freed_size"]
+    assert r["ok"] and r["removed_count"] == 1, r      # 只删被取代的那件旧件
+    assert r["removed"][0]["name"] == "yinlu-xuezhang-0.9.100-setup.exe", r
+    assert r["freed"] == 100 and r["freed_size"].endswith(("B", "KB", "MB"))
     assert (updir / f"yinlu-xuezhang-{cur}-setup.exe").exists()
+    assert (updir / f"yinlu-xuezhang-{newer}-setup.exe").exists(), "下载状态里那一版要留"
     # 界面指定 keep_version 时,那一版也留着
-    r2 = b.update_prune(keep_version="0.9.177")
+    r2 = b.update_prune(keep_version=newer)
     assert r2["removed_count"] == 0, r2
-    assert (updir / "yinlu-xuezhang-0.9.177-setup.exe").exists()
 
 
 def test_download_state_surfaces_a_part_from_a_previous_run(tmp_path, monkeypatch):

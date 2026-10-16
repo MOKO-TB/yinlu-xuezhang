@@ -1329,18 +1329,30 @@ def main() -> None:
     else:
         print("未找到 Inno Setup,跳过安装包编译(pip install -r requirements-dev 后"
               "运行 scripts/setup_inno.py 可补装)")
-    # 发布清单:App 端"这次该下哪一件"读的就是它(产物哈希 + 两块数据的身份)
-    if built:
+    def emit_manifest():
+        """发布清单:App 端"这次该下哪一件"读的就是它(产物哈希 + 两块数据的身份)。
+
+        为什么在两个出口各调一次而不是放在最后:清单里要含 zip,而 zip 是**最后一步**;
+        带 `--no-zip` 的那条路又根本不会走到最后。两处各发一次,比"记得两个地方都要改"
+        可靠 —— 这条链上已经栽过不止一次"某条分支忘了交登记税"。
+        """
+        if not built:
+            return
+        zpath = ROOT / "dist" / f"引路学长-{__version__}-win64.zip"
+        if zpath.is_file():
+            built["zip"] = zpath
         lib_stamp = dist / "crawled" / "mfindgzyykj.libsp.cn" / "library.db.stamp.json"
         assets_manifest(dist, built, lib_stamp if lib_stamp.is_file() else None,
                         kernel_stamp)
 
     if "--no-zip" in sys.argv:
+        emit_manifest()
         print(f"完成(未打包 zip): {dist}")
         return
 
     zip_base = str(ROOT / "dist" / f"引路学长-{__version__}-win64")
     shutil.make_archive(zip_base, "zip", root_dir=ROOT / "dist", base_dir="引路学长")
+    emit_manifest()
     print(f"完成: {zip_base}.zip")
     print(f"    {dist / '引路学长.exe'}")
     print(f"    {onefile}(免解压单文件版,双击直接打开)")
