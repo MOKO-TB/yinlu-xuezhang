@@ -496,6 +496,9 @@ def test_the_two_sides_of_the_identity_use_one_projection(tmp_path, monkeypatch)
          "sha256": "b" * 64, "built_at": "2026-10-16 12:00:00",
          "app_version": "0.9.178"}), encoding="utf-8")
     (dist / "ms-playwright").mkdir()
+    # 内核目录要**真的有东西**才算有内核(见 test_a_credential_without_its_kernel…)
+    (dist / "ms-playwright" / "chromium-1234").mkdir()
+    (dist / "ms-playwright" / "chromium-1234" / "chrome.exe").write_bytes(b"y")
     ker_stamp = dist / "browser-kernel.stamp.json"
     ker_stamp.write_text(_json.dumps(
         {"schema": 1, "kind": "browser-kernel", "files": 603, "bytes": 731426653,
@@ -541,11 +544,61 @@ def test_local_identities_reads_stamps_without_rehashing(tmp_path, monkeypatch):
     (tmp_path / "browser-kernel.stamp.json").write_text(_json.dumps(
         {"files": 3, "bytes": 4, "digest": "d" * 64, "built_at": "很久以前"}),
         encoding="utf-8")
+    # 凭证要**配得上本体**:内核目录得真的在(见下面那支"空头凭证"的针)
+    (tmp_path / "ms-playwright" / "chromium-1234").mkdir(parents=True)
+    (tmp_path / "ms-playwright" / "chromium-1234" / "chrome.exe").write_bytes(b"x")
     monkeypatch.setattr(paths, "APP_DIR", tmp_path)
     got = proactive.local_identities()
     assert got["library"] == {"size": 1331774, "count": 9, "sha256": "a" * 64}, got
     assert got["browser_kernel"] == {"files": 3, "bytes": 4, "digest": "d" * 64}, got
     assert "built_at" not in got["library"], "时间噪声不能进身份比对"
+
+
+def test_a_credential_without_its_kernel_is_not_a_credential(tmp_path, monkeypatch):
+    """躺在根目录的那份内核凭证,**不能替一台没有内核的机器作证**。
+
+    两条真会发生的来路:①用户为了腾磁盘把 `ms-playwright/` 删了(凭证还在);
+    ②有人拿"仅 app"包去新机器上装 —— 那份凭证在包的**根目录**,不在被排除的
+    `ms-playwright/` 底下,漏排就等于把"我有一整套内核"这句话装过去,以后每次更新
+    都会跳过内核而**永远补不回来**。iss 那边已经把它一起排除了(下面那支针),这一支
+    管的是运行时这一半:证明不了就当不一致,这是这一格唯一不许犯的错。
+    """
+    import json as _json
+    from minicode import library, paths
+    monkeypatch.setattr(library, "db_path", lambda workspace=None: None)
+    (tmp_path / "browser-kernel.stamp.json").write_text(_json.dumps(
+        {"files": 3, "bytes": 4, "digest": "d" * 64}), encoding="utf-8")
+    monkeypatch.setattr(paths, "APP_DIR", tmp_path)
+    assert proactive.local_identities()["browser_kernel"] == {}, \
+        "凭证在、内核不在 —— 这不是'对上了'"
+    (tmp_path / "ms-playwright").mkdir()          # 空目录也不算有内核
+    assert proactive.local_identities()["browser_kernel"] == {}
+    plan = proactive.plan_update("setup", MAN, proactive.local_identities())
+    assert plan["choice"] == "setup" and "内核目录不在了" in plan["reason"], plan
+
+
+def test_the_app_only_installer_excludes_the_kernel_credential_too():
+    """`gcode.iss` 的"仅 app"那一支必须把 `browser-kernel.stamp.json` 一起排掉。
+
+    这是对**构建脚本**的针,不是对源码的:漏了它不会有任何测试变红,表现是上面那支
+    运行时针救不了的形状(新机器装完自带一张空头凭证)。
+    """
+    iss = (Path(__file__).resolve().parent.parent / "packaging" / "gcode.iss")
+    ls = iss.read_text(encoding="utf-8").splitlines()
+    # 按**整行**切段:那份 .iss 里 "[Files]" 与 "#ifdef AppOnly" 都在注释里出现过,
+    # 拿 str.split 切会切到注释那一截,表现是"针找不到 Source 行"。
+    a = ls.index("[Files]")
+    b = next(i for i, l in enumerate(ls) if i > a and l == "[Icons]")
+    files = ls[a:b]
+    i_app = next(i for i, l in enumerate(files) if l.startswith("#ifdef AppOnly"))
+    i_else = next(i for i, l in enumerate(files) if l.startswith("#else"))
+    src = [l for l in files[i_app:i_else] if l.startswith("Source:")]
+    assert len(src) == 1, src
+    for name in ("crawled\\*", "ms-playwright\\*", "browser-kernel.stamp.json"):
+        assert name in src[0], (name, src[0])
+    tail = [l for l in files[i_else:] if l.startswith("Source:")]
+    assert len(tail) == 1 and "Excludes" not in tail[0], \
+        "整包那一支不该排任何东西:" + str(tail)
 
 
 def test_local_identities_on_an_old_package_is_empty_not_an_error(tmp_path, monkeypatch):

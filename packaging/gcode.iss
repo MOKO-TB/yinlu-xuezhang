@@ -55,7 +55,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; 仅 app 包:排掉馆藏库(crawled/)与浏览器内核(ms-playwright/)——实测这两块占整包
 ; 84.6%(馆藏 59.7% + 内核 24.9%)。只有当**本机那两块的凭证与发布清单一致**时,
 ; App 才会选这一件(判定在 `minicode/proactive.py:plan_update`,不在安装包里)。
-Source: "..\dist\引路学长\*"; DestDir: "{app}"; Excludes: "crawled\*,ms-playwright\*"; Flags: recursesubdirs createallsubdirs ignoreversion
+; 内核凭证(browser-kernel.stamp.json)也一起排掉:它是**根目录**的文件,不在
+; ms-playwright\ 底下,漏排的话会把"我有一整套内核"这句话装到一台根本没有内核的机器上
+; (有人手动拿这一件去新机器装),那以后每次更新都会跳过内核而永远补不回来。
+Source: "..\dist\引路学长\*"; DestDir: "{app}"; Excludes: "crawled\*,ms-playwright\*,browser-kernel.stamp.json"; Flags: recursesubdirs createallsubdirs ignoreversion
 #else
 Source: "..\dist\引路学长\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 #endif

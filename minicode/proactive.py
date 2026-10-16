@@ -639,20 +639,26 @@ def local_identities() -> dict:
 
     少了凭证文件(老包、或用户自己动过目录)就回缺项 —— 调用方**必须**因此退回整包:
     "证明不了一致"和"不一致"在处理上是一回事,但在**说给用户听**上是两回事。
+
+    ⚠ **凭证还要配得上本体**:光有 `browser-kernel.stamp.json` 而 `ms-playwright/` 已经
+    不在(用户为了腾磁盘删的,或有人拿"仅 app"包去新机器上装),按"证明不了"处理。
+    不然表现是"每次更新都开心地说跳过了内核,而抓取功能悄悄是坏的" —— 那正是这一格
+    唯一不许犯的错(把证明不了一致当一致)。
     """
     out: dict = {"library": {}, "browser_kernel": {}}
     try:
         from minicode import library
         db = library.db_path(None)
-        if db is not None:
+        if db is not None and db.is_file():
             out["library"] = identity_of(library.read_stamp(db), "library")
     except Exception:
         pass
     try:
         import json
         from minicode.paths import APP_DIR
+        kdir = Path(APP_DIR) / "ms-playwright"
         p = Path(APP_DIR) / "browser-kernel.stamp.json"
-        if p.is_file():
+        if p.is_file() and kdir.is_dir() and next(kdir.iterdir(), None) is not None:
             out["browser_kernel"] = identity_of(
                 json.loads(p.read_text(encoding="utf-8")), "browser_kernel")
     except Exception:
@@ -705,8 +711,8 @@ def plan_update(form: str, manifest: dict, local: "dict | None" = None,
         if not want_ker:
             blockers.append("发布清单里没有浏览器内核身份")
         elif not _same_identity(local.get("browser_kernel") or {}, want_ker):
-            blockers.append("本机浏览器内核与这一版要的不一致(或本机没有凭证),"
-                            "这一件里带着新内核")
+            blockers.append("本机浏览器内核与这一版要的不一致(或本机没有凭证、"
+                            "内核目录不在了),这一件里带着新内核")
         else:
             skipped.append({"kind": "browser_kernel",
                             "bytes": int(want_ker.get("bytes") or 0)})
