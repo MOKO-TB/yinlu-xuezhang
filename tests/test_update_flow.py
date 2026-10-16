@@ -451,6 +451,63 @@ def test_pick_asset_by_name_beats_the_suffix():
     assert proactive.pick_asset(rel, "setup", "不存在的名字.exe") is None
 
 
+def test_the_two_sides_of_the_identity_use_one_projection(tmp_path, monkeypatch):
+    """构建端写的身份与 App 端读的身份**必须是同一套字段** —— 这一条是包内实测替我补的。
+
+    真实经过:路 1 在源码态 45 支测试全绿,拿装好的包跑端到端才发现"永远退回整包"。
+    根因是清单里的身份多带了一个 `schema` 字段(构建端自己从凭证里整份抄),而本机
+    投影只有三个字段 —— `_same_identity` 按"要比对的全部键"逐项比,永远差一个键,
+    于是**永远判不一致**。两侧各写一份投影,就一定会漂;所以两边都改成调
+    `proactive.identity_of`,而这一支针钉的就是"两侧对同一份凭证得到同一份身份"。
+    """
+    import json as _json
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import build_exe
+    from minicode import library, paths
+
+    dist = tmp_path / "dist" / "引路学长"
+    (dist / "crawled" / "mfindgzyykj.libsp.cn").mkdir(parents=True)
+    db = dist / "crawled" / "mfindgzyykj.libsp.cn" / "library.db"
+    db.write_bytes(b"fake db")
+    lib_stamp = db.with_name(db.name + library.STAMP_SUFFIX)
+    lib_stamp.write_text(_json.dumps(
+        {"schema": 1, "file": db.name, "size": 1309589504, "count": 1331774,
+         "sha256": "b" * 64, "built_at": "2026-10-16 12:00:00",
+         "app_version": "0.9.178"}), encoding="utf-8")
+    (dist / "ms-playwright").mkdir()
+    ker_stamp = dist / "browser-kernel.stamp.json"
+    ker_stamp.write_text(_json.dumps(
+        {"schema": 1, "kind": "browser-kernel", "files": 603, "bytes": 731426653,
+         "digest": "d" * 64, "built_at": "2026-10-16 12:00:00"}), encoding="utf-8")
+    # 构建端:写清单
+    monkeypatch.setattr(build_exe, "ROOT", tmp_path)
+    fake = tmp_path / "dist" / "fake-setup.exe"
+    fake.parent.mkdir(exist_ok=True)
+    fake.write_bytes(b"z" * 10)
+    man_path = build_exe.assets_manifest(dist, {"setup": fake}, lib_stamp, ker_stamp)
+    man = _json.loads(man_path.read_text(encoding="utf-8"))
+    # App 端:读本机凭证
+    monkeypatch.setattr(library, "db_path", lambda workspace=None: db)
+    monkeypatch.setattr(paths, "APP_DIR", dist)
+    local = proactive.local_identities()
+    for kind in ("library", "browser_kernel"):
+        want, got = man["identity"][kind], local[kind]
+        assert "schema" not in want and "built_at" not in want, (kind, want)
+        assert set(want) == set(got), (kind, want, got)
+        assert proactive._same_identity(got, want) is True, \
+            f"{kind}:两侧对同一份凭证算出了不同身份 ⇒ 路 1 永远退回整包"
+
+
+def test_identity_of_drops_everything_but_content_fields():
+    """投影只留内容字段:`schema`(文档格式版本)与 `built_at`(时间)都不是身份。"""
+    raw = {"schema": 1, "size": 5, "count": 6, "sha256": "a", "built_at": "x",
+           "app_version": "0.9.178", "file": "library.db"}
+    assert proactive.identity_of(raw, "library") == {"size": 5, "count": 6, "sha256": "a"}
+    assert proactive.identity_of(None, "library") == {}
+    assert proactive.identity_of(raw, "没有这一类") == {}
+
+
 def test_local_identities_reads_stamps_without_rehashing(tmp_path, monkeypatch):
     """本机身份是**读凭证文件**,不是现算 1.3 GB 的哈希(那会让"检查更新"贵十几秒)。"""
     import json as _json

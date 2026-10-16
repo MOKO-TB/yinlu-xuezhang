@@ -612,6 +612,24 @@ def fetch_release_manifest(release: "dict | None", version: str,
     return {}, f"这一版的发布里没有 {name}(旧版发布,按整包下)"
 
 
+# 两份身份的**唯一投影口径**:构建端(scripts/build_exe.py)与 App 端(本文件)必须
+# 走同一个函数。曾经各写一份:清单里多带了 `schema` 字段,而本机投影只有三个字段,
+# 于是 `_same_identity` 永远判"不一致"—— 路 1 在源码态 45 支测试全绿,在装好的包里
+# 一个字节都省不了(是包内端到端探针抓到的,不是测试)。
+IDENTITY_KEYS = {"library": ("size", "count", "sha256"),
+                 "browser_kernel": ("files", "bytes", "digest")}
+
+
+def identity_of(raw: "dict | None", kind: str) -> dict:
+    """从一份凭证 JSON 里取出"身份"——只留内容字段,**时间戳与 schema 都不进**。
+
+    `built_at` 每次构建都变(进了就永远不一致);`schema` 是**文档格式版本**不是内容身份,
+    两侧各自决定带不带,一旦不对称比对就永久失败 —— 所以两边都从这里取。
+    """
+    raw = raw or {}
+    return {k: raw[k] for k in IDENTITY_KEYS.get(kind, ()) if k in raw}
+
+
 def local_identities() -> dict:
     """本机那两块大数据的身份(馆藏库 / 浏览器内核)——**读凭证文件,不重算哈希**。
 
@@ -627,8 +645,7 @@ def local_identities() -> dict:
         from minicode import library
         db = library.db_path(None)
         if db is not None:
-            st = library.read_stamp(db)
-            out["library"] = {k: st[k] for k in ("size", "count", "sha256") if k in st}
+            out["library"] = identity_of(library.read_stamp(db), "library")
     except Exception:
         pass
     try:
@@ -636,10 +653,8 @@ def local_identities() -> dict:
         from minicode.paths import APP_DIR
         p = Path(APP_DIR) / "browser-kernel.stamp.json"
         if p.is_file():
-            d = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(d, dict):
-                out["browser_kernel"] = {k: d[k] for k in ("files", "bytes", "digest")
-                                         if k in d}
+            out["browser_kernel"] = identity_of(
+                json.loads(p.read_text(encoding="utf-8")), "browser_kernel")
     except Exception:
         pass
     return out

@@ -1209,8 +1209,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # 包里,用户照样下 878 MB 而源码态一切正常;漏 `local_identities`
                            # = 读不到本机凭证,永远"证明不了一致"→ 永远退回整包(功能静默
                            # 不生效,且界面上那句理由还写着"没有凭证",最难查的一种坏法)。
+                           # `identity_of` 单独列一根:这一炉的 bug 正是"构建端与 App 端各写
+                           # 一份投影"(§7 (o)),包里少这根就等于两侧又分家了。
                            "fetch_release_manifest", "local_identities",
-                           "plan_update", "_same_identity",
+                           "plan_update", "_same_identity", "identity_of",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",

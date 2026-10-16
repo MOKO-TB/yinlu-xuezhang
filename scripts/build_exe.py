@@ -144,20 +144,21 @@ def assets_manifest(dist: Path, built: dict, lib_stamp: "Path | None",
     没有 ② 就只能永远下整包 —— 那正是这一版要解决的问题。
     """
     from minicode import library
+    from minicode.proactive import identity_of
 
-    def _identity(sp: "Path | None", keys: tuple) -> dict:
+    def _identity(sp: "Path | None", kind: str) -> dict:
+        """**从 App 端那个同一个函数取** —— 两侧各写一份投影,曾经差出一个 `schema`
+        字段,结果路 1 在装好的包里永远判"不一致"(源码态测试全绿)。见 §6 第 80 条⑤。"""
         if not sp or not Path(sp).is_file():
             return {}
         try:
-            d = json.loads(Path(sp).read_text(encoding="utf-8"))
+            return identity_of(json.loads(Path(sp).read_text(encoding="utf-8")), kind)
         except Exception:
             return {}
-        return {k: d[k] for k in keys if k in d}
 
     db = dist / "crawled" / "mfindgzyykj.libsp.cn" / "library.db"
-    lib = _identity(lib_stamp or library.stamp_path_for(db),
-                    ("schema", "size", "count", "sha256"))
-    ker = _identity(kernel_stamp, ("schema", "files", "bytes", "digest"))
+    lib = _identity(lib_stamp or library.stamp_path_for(db), "library")
+    ker = _identity(kernel_stamp, "browser_kernel")
     payload = {
         "schema": 1, "version": __version__,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
