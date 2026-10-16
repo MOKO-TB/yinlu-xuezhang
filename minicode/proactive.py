@@ -656,12 +656,20 @@ KERNEL_STAMP_NAME = "browser-kernel.stamp.json"
 def kernel_roots() -> "list[Path]":
     """内核与它的凭证可能躺在的**两处**根:exe 旁(随包装过去的那份)、用户数据目录。
 
+    ⚠ 这里刻意**不用 `paths.RESOURCE_DIR`** —— 打包态它是 `_MEIPASS`(dir 版就是
+    `exe 旁/_internal`),而安装包把 `ms-playwright/` 与那份凭证放在 **exe 旁**,差一层目录。
+    包内探针第⑦段实测到的正是这个:写盘写进了 `_internal`,而 Program Files 那类机器上
+    内核在本机却"找不到"(exe 旁没查、数据目录里又没有)⇒ 照样永远下整包。
+
     为什么两处:装进 `Program Files` 时 exe 目录只读,`paths.APP_DIR` 会整体搬到
     `%LOCALAPPDATA%`(v0.9.22 那条),而凭证是安装包写在 **exe 旁**的 —— 只认 APP_DIR
     的那版代码在这类机器上永远读不到凭证、于是永远下整包(安全,但一分钱都没省)。
     """
-    from minicode.paths import APP_DIR, RESOURCE_DIR
-    out = [Path(RESOURCE_DIR), Path(APP_DIR)]
+    import sys
+    from minicode.paths import APP_DIR, FROZEN
+    here = (Path(sys.executable).resolve().parent if FROZEN
+            else Path(__file__).resolve().parent.parent)
+    out = [Path(here), Path(APP_DIR)]
     return [p for i, p in enumerate(out) if p not in out[:i]]
 
 

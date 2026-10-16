@@ -12,6 +12,7 @@ import hashlib
 import http.server
 import json
 import re
+import sys
 import threading
 from pathlib import Path
 
@@ -687,7 +688,8 @@ def test_a_machine_without_the_credential_computes_it_once_then_reads(tmp_path, 
     data = tmp_path / "data"
     data.mkdir()
     monkeypatch.setattr(library, "db_path", lambda workspace=None: None)
-    monkeypatch.setattr(paths, "RESOURCE_DIR", exe)
+    monkeypatch.setattr(paths, "FROZEN", True)
+    monkeypatch.setattr(sys, "executable", str(exe / "引路学长.exe"))
     monkeypatch.setattr(paths, "APP_DIR", data)
 
     assert proactive.local_identities()["browser_kernel"] == {}, \
@@ -717,10 +719,30 @@ def test_the_credential_is_read_from_next_to_the_exe(tmp_path, monkeypatch):
     data = tmp_path / "LocalAppData"      # 只读装的机器上数据搬到这里,那里没有凭证
     data.mkdir()
     monkeypatch.setattr(library, "db_path", lambda workspace=None: None)
-    monkeypatch.setattr(paths, "RESOURCE_DIR", exe)
+    monkeypatch.setattr(paths, "FROZEN", True)
+    monkeypatch.setattr(sys, "executable", str(exe / "引路学长.exe"))
     monkeypatch.setattr(paths, "APP_DIR", data)
     assert proactive.local_identities()["browser_kernel"] == {
         "files": 1, "bytes": 1, "digest": "d" * 64}
+
+
+def test_kernel_roots_point_at_the_exe_dir_not_the_internal_dir(tmp_path, monkeypatch):
+    """包内 `paths.RESOURCE_DIR` 是 `_internal`(= `_MEIPASS`),而内核与凭证在 **exe 旁**。
+
+    这一条是包内探针第⑦段实测抓到的:用 RESOURCE_DIR 当第一根时,现算的凭证被写进
+    `_internal/browser-kernel.stamp.json`,而装进 `Program Files` 的机器上 exe 旁那份读不到、
+    数据目录里又没有 ⇒ 永远下整包,这一版等于白做。
+    """
+    from minicode import paths
+    exe = tmp_path / "app"
+    exe.mkdir(exist_ok=True)
+    monkeypatch.setattr(paths, "FROZEN", True)
+    monkeypatch.setattr(paths, "RESOURCE_DIR", exe / "_internal")
+    monkeypatch.setattr(paths, "APP_DIR", tmp_path / "LocalAppData")
+    monkeypatch.setattr(sys, "executable", str(exe / "引路学长.exe"))
+    roots = proactive.kernel_roots()
+    assert roots[0] == exe, roots
+    assert exe / "_internal" not in roots, "不许把运行时算出来的凭证写进 _MEIPASS"
 
 
 def test_the_build_and_the_app_share_one_kernel_digest(tmp_path, monkeypatch):
@@ -729,14 +751,11 @@ def test_the_build_and_the_app_share_one_kernel_digest(tmp_path, monkeypatch):
     root = Path(__file__).resolve().parent.parent
     sys.path.insert(0, str(root / "scripts"))
     import build_exe
-    from minicode import paths
 
     exe = tmp_path / "exe"
     (exe / "ms-playwright" / "sub").mkdir(parents=True)
     (exe / "ms-playwright" / "sub" / "a.bin").write_bytes(b"hello")
     (exe / "ms-playwright" / "b.bin").write_bytes(b"world!!")
-    monkeypatch.setattr(paths, "RESOURCE_DIR", exe)
-    monkeypatch.setattr(paths, "APP_DIR", exe)
     out = build_exe.stamp_kernel(exe)
     assert out and out.name == proactive.KERNEL_STAMP_NAME
     written = json.loads(out.read_text(encoding="utf-8"))
