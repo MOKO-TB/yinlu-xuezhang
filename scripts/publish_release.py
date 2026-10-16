@@ -76,6 +76,19 @@ def _assets(ver: str) -> "list[tuple[Path, str]]":
     if missing:
         raise SystemExit("dist/ 里缺这几件,先跑 build_exe.py:\n  " + "\n  ".join(missing))
     out = [(p, n) for p, n, _l in want]
+    # v0.9.178 的两件新产物:**有就必带,没有就说一句为什么**(不静默少发)。
+    # 少了 app-setup 不要命 —— App 的 `plan_update` 会因为清单里没这件而退回整包;
+    # 但少了 sha256.txt 里那一行就要命:下载回来"没核对过",那颗按钮是灰的。
+    # 所以这两件**必须一起出现**,只传一件比两件都不传更坏。
+    extra = [(ROOT / "dist" / f"引路学长-{ver}-app-setup.exe",
+              f"yinlu-xuezhang-{ver}-app-setup.exe", "仅 app 更新包(不含馆藏库与内核)"),
+             (ROOT / "dist" / f"yinlu-xuezhang-{ver}-assets.json",
+              f"yinlu-xuezhang-{ver}-assets.json", "发布清单:各件哈希与两块数据的身份")]
+    have_extra = [(p, n) for p, n, _l in extra if p.exists()]
+    for p, n, l in extra:
+        if not p.exists():
+            print(f"注意:没有 {n}({l})—— 这一版的更新会一律走整包,不会跳过那 84.6%")
+    out += have_extra
     # **校验文件跟着一起发**(v0.9.176):App 里那条"下完先核 sha256,没核对就不让装"
     # 读的就是它(`minicode/proactive.py::_expected_sha256` 按同一个名字去取)。
     # 它防的是"下载坏了/被截了/链接被换到别处"这一类,**不防** GitHub 账号本身被接管

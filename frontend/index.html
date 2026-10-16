@@ -1556,6 +1556,12 @@ try {
   .upd-body code{ font-family:Consolas,monospace; font-size:11.5px;
                   background:var(--glass-lite); border-radius:4px; padding:1px 4px; }
   .upd-more{ font-size:11.5px; color:var(--text-3); margin-bottom:6px; }
+  /* v0.9.178:「这次要下哪一件、为什么是这件」那一行。跳过 743 MB 与退回整包是两种
+     完全不同的体验,不能等用户点了下载再从进度条长度里猜。 */
+  .upd-plan{ font-size:11.5px; line-height:1.6; margin-bottom:6px; padding:6px 9px;
+             border-radius:var(--r-s); border:1px solid var(--line-soft);
+             background:var(--glass-lite); color:var(--text-2); }
+  .upd-plan.skip{ color:var(--text-bright,#123B36); border-color:rgba(47,158,110,.45); }
   /* 就地更新(v0.9.176):进度条 + 一行实况 + 版本号旁那枚「更新」徽章 + 历史列表。
      只用两种主题都定义过的变量(--primary/--ok/--danger/--glass-soft/--line-soft/
      --text-1/2/3/--r-s)—— v0.9.174 那一格「浅色下看不见的字」的根因就是写了
@@ -3337,6 +3343,9 @@ try {
     </div>
     <div class="upd-body" id="updBody"></div>
     <div class="upd-more" id="updMore" hidden>日志太长,这里只显示了前半段 —— 完整内容在发布页。</div>
+    <!-- v0.9.178:这一版**该下哪一件**说在下载之前。句子来自后端 plan.reason
+         (远端清单算出来的),所以只走 textContent,不再第二次进 innerHTML。 -->
+    <div class="upd-plan" id="updPlan" hidden></div>
     <div class="upd-dl" id="updDl" hidden>
       <div class="upd-bar"><i id="updBar"></i></div>
       <div class="upd-line" id="updLine"></div>
@@ -3870,6 +3879,18 @@ function openUpdateDlg(payload) {
     body.textContent = notes || "(这一版没有写更新说明)";
   }
   $("updMore").hidden = !p.truncated;
+  // v0.9.178:「这次要下哪一件」那一行。跳过成功与退回整包要说**不同的话** ——
+  // 把退回说成"正在优化下载"就是这一格最容易被原谅掉的一种含糊。
+  const pl = $("updPlan"), plan = p.plan || null;
+  const bytes = (p.asset && p.asset.size) || 0;
+  if (!plan || !plan.reason || !bytes) {
+    pl.hidden = true; pl.textContent = ""; pl.className = "upd-plan";
+  } else {
+    pl.hidden = false;
+    const skip = plan.choice === "app_setup";
+    pl.className = "upd-plan" + (skip ? " skip" : "");
+    pl.textContent = (skip ? "⚡ " : "") + plan.reason + " · 这次要下 " + fmtMB(bytes);
+  }
   body.scrollTop = 0;
   updRender();
   updBadge(true);

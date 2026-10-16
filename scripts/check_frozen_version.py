@@ -1205,6 +1205,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # 按钮点了没反应、重启后那份半截假装不存在)。
                            "_cert_variants", "_hash_prefix", "pending_part",
                            "prune_updates", "fmt_bytes",
+                           # v0.9.178 路 1(该下哪一件):漏 `plan_update` = 判定整个不在
+                           # 包里,用户照样下 878 MB 而源码态一切正常;漏 `local_identities`
+                           # = 读不到本机凭证,永远"证明不了一致"→ 永远退回整包(功能静默
+                           # 不生效,且界面上那句理由还写着"没有凭证",最难查的一种坏法)。
+                           "fetch_release_manifest", "local_identities",
+                           "plan_update", "_same_identity",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",
@@ -1625,6 +1631,10 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # —— 这一根钉的不是形状,是这一格**唯一的红线**。
     "function addPanelCard", "e.artifact", "setAttribute(\"sandbox\", \"\")",
     "f.srcdoc", "gen-frame",
+    # v0.9.178:「这次要下哪一件、为什么是这件」那一行。少 `id="updPlan"` = 后端算完
+    # 判定没人显示它(下载照旧,只是用户永远不知道为什么是 135 MB 或为什么退回 878 MB);
+    # 少 `plan.choice === "app_setup"` = 跳过与退回被涂成同一句话,那正是这一格不许的含糊。
+    'id="updPlan"', 'p.plan || null', 'plan.choice === "app_setup"', "这次要下",
 )
 
 

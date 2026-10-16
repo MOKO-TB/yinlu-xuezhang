@@ -490,7 +490,24 @@ def check_update(current: str, timeout: float = 10.0, *,
            "name": str(data.get("name") or "").strip()}
     # v0.9.176:带上"这一台该下哪一件"。挑不出来就留空 —— 界面那颗按钮会
     # 老实变成「打开发布页」,不假装能就地装。
-    got["asset"] = pick_asset(data)
+    # v0.9.178:先问"该下哪一件"(整包 / 仅 app / 单文件),再按那个名字去取资产。
+    # 顺序很重要:先按后缀挑、再决定,会出现"判定说下 135 MB 的那件、手里拿着 878 MB
+    # 的那件" —— 那还不如没有判定。
+    form = running_form()
+    man, man_why = fetch_release_manifest(data, str(got["version"]))
+    plan = plan_update(form, man)
+    if man_why:
+        plan.setdefault("manifest_why", man_why)
+    want_name = ((man.get("assets") or {}).get("app_setup") or {}).get("name") \
+        if plan.get("choice") == "app_setup" else ""
+    got["asset"] = pick_asset(data, form, want_name or "")
+    if plan.get("choice") == "app_setup" and not got["asset"]:
+        # 清单说可以下小件、Release 里却没这件:以**实际能下的**为准,并把矛盾说出来
+        got["asset"] = pick_asset(data, form)
+        plan = {"choice": "setup", "name": "",
+                "reason": "清单说可以只下「仅 app」包,但发布里没有那件 —— 已按整包下",
+                "skipped": []}
+    got["plan"] = plan
     return {"ok": True, "update": got, "why": ""} if detail else got
 
 
@@ -527,11 +544,16 @@ def _asset_api_url(asset: dict) -> str:
     return u if u.startswith("https://api.github.com/") else ""
 
 
-def pick_asset(release: "dict | None", form: "str | None" = None) -> "dict | None":
-    """从 release 的 assets 里挑这一台该下的那件;挑不到回 None(界面退回开网页)。"""
+def pick_asset(release: "dict | None", form: "str | None" = None,
+               want_name: str = "") -> "dict | None":
+    """从 release 的 assets 里挑这一台该下的那件;挑不到回 None(界面退回开网页)。
+
+    `want_name` 是 `plan_update` 定下来的那一件的名字(仅 app 包 / 整包 / 单文件)。
+    给了它就必须**按名字取** —— 按后缀取会把"仅 app 包"和"整包"混成一件事
+    (两件都以 `setup.exe` 结尾!),那等于精心算出来的判定被最后一行代码抹掉。
+    """
     use = form or running_form()
-    want = ASSET_SUFFIX.get(use)
-    if not want or not isinstance(release, dict):
+    if not isinstance(release, dict):
         return None
     assets = [a for a in (release.get("assets") or []) if isinstance(a, dict)]
     sha_url = ""
@@ -539,18 +561,152 @@ def pick_asset(release: "dict | None", form: "str | None" = None) -> "dict | Non
         if str(a.get("name") or "").endswith("-sha256.txt"):
             sha_url = _asset_api_url(a)
             break
+    want = ASSET_SUFFIX.get(use)
     for a in assets:
-        if not str(a.get("name") or "").endswith(want):
+        nm = str(a.get("name") or "")
+        if want_name:
+            if nm != want_name:
+                continue
+        elif not (want and nm.endswith(want)):
             continue
         api = _asset_api_url(a)
         browser = str(a.get("browser_download_url") or "")
         url = api or browser
         if not url.startswith("https://"):
             return None             # 没有可下的直链就别给按钮
-        return {"name": str(a.get("name")), "url": url,
+        return {"name": nm, "url": url,
                 "api_url": api, "browser_url": browser, "sha_url": sha_url,
                 "size": int(a.get("size") or 0), "form": use}
     return None
+
+
+def fetch_release_manifest(release: "dict | None", version: str,
+                           timeout: float = 12.0) -> "tuple[dict, str]":
+    """取那份 `yinlu-xuezhang-<版本>-assets.json`(发布清单),回 (内容或 {}, 实话)。
+
+    为什么要有这份清单而不直接用 Release 的资产表:资产表只说"有哪些文件",**说不出
+    "馆藏库与内核是哪一版"** —— 而"能不能跳过那 84.6%"要的就是后一句。
+    取不到不是错误:旧版本(≤v0.9.177)的发布里根本没有这份文件,那种情况照旧下整包,
+    但要把"为什么没跳过"说清,不能让用户以为是坏了。
+    """
+    if not isinstance(release, dict):
+        return {}, "没有 release 数据"
+    name = "yinlu-xuezhang-%s-assets.json" % version
+    for a in (release.get("assets") or []):
+        if isinstance(a, dict) and str(a.get("name") or "") == name:
+            u = _asset_api_url(a) or str(a.get("browser_download_url") or "")
+            if not u.startswith("https://"):
+                return {}, "清单那件没有可下的地址"
+            resp, why = _http_get(u, timeout,
+                                  headers={"Accept": "application/octet-stream"})
+            if resp is None:
+                return {}, why
+            if resp.status_code != 200:
+                return {}, f"清单 HTTP {resp.status_code}"
+            try:
+                import json
+                d = json.loads(resp.text)
+            except Exception:
+                return {}, "清单不是合法 JSON"
+            return (d, "") if isinstance(d, dict) else ({}, "清单形状不对")
+    return {}, f"这一版的发布里没有 {name}(旧版发布,按整包下)"
+
+
+def local_identities() -> dict:
+    """本机那两块大数据的身份(馆藏库 / 浏览器内核)——**读凭证文件,不重算哈希**。
+
+    为什么不能现算:馆藏库 1.3 GB、内核 731 MB,一次 sha256 十几秒,而这件事发生在
+    "检查更新"那条路上(启动时也会走)。凭证文件是构建时算好、随包一起装到本机的,
+    读它就是读几十个字节的 JSON。
+
+    少了凭证文件(老包、或用户自己动过目录)就回缺项 —— 调用方**必须**因此退回整包:
+    "证明不了一致"和"不一致"在处理上是一回事,但在**说给用户听**上是两回事。
+    """
+    out: dict = {"library": {}, "browser_kernel": {}}
+    try:
+        from minicode import library
+        db = library.db_path(None)
+        if db is not None:
+            st = library.read_stamp(db)
+            out["library"] = {k: st[k] for k in ("size", "count", "sha256") if k in st}
+    except Exception:
+        pass
+    try:
+        import json
+        from minicode.paths import APP_DIR
+        p = Path(APP_DIR) / "browser-kernel.stamp.json"
+        if p.is_file():
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                out["browser_kernel"] = {k: d[k] for k in ("files", "bytes", "digest")
+                                         if k in d}
+    except Exception:
+        pass
+    return out
+
+
+def _same_identity(local: dict, want: dict) -> bool:
+    """两份身份是否逐字段相等。**空 dict 一律算不等** —— "没凭证"不能当"对上了"。"""
+    if not local or not want:
+        return False
+    keys = set(want)
+    return bool(keys) and all(local.get(k) == want.get(k) for k in keys)
+
+
+def plan_update(form: str, manifest: dict, local: "dict | None" = None,
+                full_size: int = 0) -> dict:
+    """这一台该下哪一件,以及**为什么是这件**。回 {choice, name, reason, skipped}。
+
+    三条判据按最"贵"的失败排:①清单缺失/旧版发布 → 整包;②本机证明不了一致 → 整包;
+    ③两块都证明一致 → 仅 app 包(实测 878 MiB → 135 MiB)。
+
+    `reason` 不是日志,是**要显示给用户看的那一句**:跳过就说跳过了多少,退回就说
+    为什么退 —— "悄悄下了整包"是这一格最容易被误会成坏法的地方。
+    """
+    local = local if local is not None else local_identities()
+    ident = (manifest or {}).get("identity") or {}
+    assets = (manifest or {}).get("assets") or {}
+    if form == "single":
+        return {"choice": "single_file", "name": "",
+                "reason": "单文件版本来就不带馆藏库与浏览器内核,这一件没有可跳过的部分",
+                "skipped": []}
+    want_lib = ident.get("library") or {}
+    want_ker = ident.get("browser_kernel") or {}
+    app = assets.get("app_setup") or {}
+    skipped: list[dict] = []
+    blockers: list[str] = []
+    if not manifest:
+        blockers.append("这一版的发布里没有清单文件(旧版发布),按整包下")
+    else:
+        if not app.get("name"):
+            blockers.append("这一版没产出「仅 app」安装包,按整包下")
+        if not want_lib:
+            blockers.append("发布清单里没有馆藏库身份")
+        elif not _same_identity(local.get("library") or {}, want_lib):
+            blockers.append("本机馆藏库与这一版要的不一致(或本机没有凭证),"
+                            "这一件里带着新库")
+        else:
+            skipped.append({"kind": "library", "bytes": int(want_lib.get("size") or 0)})
+        if not want_ker:
+            blockers.append("发布清单里没有浏览器内核身份")
+        elif not _same_identity(local.get("browser_kernel") or {}, want_ker):
+            blockers.append("本机浏览器内核与这一版要的不一致(或本机没有凭证),"
+                            "这一件里带着新内核")
+        else:
+            skipped.append({"kind": "browser_kernel",
+                            "bytes": int(want_ker.get("bytes") or 0)})
+    if blockers:
+        return {"choice": "setup", "name": "", "reason": "；".join(blockers),
+                "skipped": []}
+    return {"choice": "app_setup", "name": str(app.get("name") or ""),
+            "reason": "馆藏库与浏览器内核你机器上已有,这次跳过 "
+                      + _fmt_mb(sum(s["bytes"] for s in skipped)),
+            "skipped": skipped}
+
+
+def _fmt_mb(n: int) -> str:
+    n = int(n or 0)
+    return f"{n / 1048576:.0f} MB" if n >= 1048576 else f"{n // 1024} KB"
 
 
 def list_releases(limit: int = 8, timeout: float = 12.0) -> dict:
@@ -918,8 +1074,8 @@ def fmt_bytes(n: int) -> str:
 # 这个目录是用户可写的本机目录,谁也可能往里放别的东西;"清理"的权限来自
 # "这是我写的",不来自"它在我的目录下"。
 _UPDATE_NAME = re.compile(
-    r"^yinlu-xuezhang-\d+\.\d+\.\d+-(setup\.exe|single-file\.exe|win64\.zip"
-    r"|sha256\.txt)(\.part(\.meta)?)?$")
+    r"^yinlu-xuezhang-\d+\.\d+\.\d+-(setup\.exe|app-setup\.exe|single-file\.exe"
+    r"|win64\.zip|sha256\.txt|assets\.json)(\.part(\.meta)?)?$")
 _VER_IN_NAME = re.compile(r"yinlu-xuezhang-(\d+\.\d+\.\d+)-")
 
 

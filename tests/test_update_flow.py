@@ -383,9 +383,189 @@ def test_prune_only_touches_its_own_files(tmp_path):
         assert (tmp_path / n).exists(), "误删了不是这条通道写的东西:" + n
 
 
-def test_prune_on_a_missing_directory_is_silence_not_error(tmp_path):
-    r = proactive.prune_updates(tmp_path / "没建出来", keep_version="1.1.1")
-    assert r["ok"] and r["removed"] == [] and r["freed"] == 0
+# ------------------------------------------------- 该下哪一件(v0.9.178 路 1)
+
+MAN = {"identity": {"library": {"size": 1331774, "count": 9, "sha256": "a" * 64},
+                    "browser_kernel": {"files": 3, "bytes": 4, "digest": "d" * 64}},
+       "assets": {"app_setup": {"name": "yinlu-xuezhang-9.9.9-app-setup.exe",
+                                "size": 141962981},
+                  "setup": {"name": "yinlu-xuezhang-9.9.9-setup.exe",
+                            "size": 920614741}}}
+SAME = {"library": {"size": 1331774, "count": 9, "sha256": "a" * 64},
+        "browser_kernel": {"files": 3, "bytes": 4, "digest": "d" * 64}}
+
+
+@pytest.mark.parametrize("form,man,local,choice,needle", [
+    ("single", MAN, SAME, "single_file", "单文件"),
+    ("setup", {}, SAME, "setup", "没有清单文件"),
+    ("setup", MAN, SAME, "app_setup", "跳过"),
+    ("setup", MAN, {"library": {}, "browser_kernel": {}}, "setup", "没有凭证"),
+    ("setup", MAN, {"library": {"size": 1, "count": 1, "sha256": "b" * 64},
+                    "browser_kernel": SAME["browser_kernel"]}, "setup", "不一致"),
+])
+def test_plan_update_picks_and_explains(form, man, local, choice, needle):
+    """五种形状各说一句实话。**退回整包却不给理由**是这一格最讨厌的坏法。"""
+    p = proactive.plan_update(form, man, dict(local))
+    assert p["choice"] == choice, p
+    assert needle in p["reason"], p["reason"]
+    assert p["reason"].strip(), "退回/跳过都得有一句话给用户"
+    if choice == "app_setup":
+        assert sum(s["bytes"] for s in p["skipped"]) == 1331774 + 4
+
+
+def test_an_absent_credential_is_never_a_match():
+    """`_same_identity` 里"本机没凭证"必须算**不等**。
+
+    这一条是整个跳过机制的安全边界:把"证明不了一致"当成"一致",用户就会在
+    馆藏库其实被删过/被换过的机器上装出一个没有图书馆的包,而界面还说"已跳过"。
+    """
+    assert proactive._same_identity({}, SAME["library"]) is False
+    assert proactive._same_identity(SAME["library"], {}) is False
+    assert proactive._same_identity({}, {}) is False
+    assert proactive._same_identity(SAME["library"], SAME["library"]) is True
+    # 只对上两个字段里的一个也不行(逐字段比,不是"看起来差不多")
+    assert proactive._same_identity({"size": 1331774, "count": 8, "sha256": "a" * 64},
+                                    SAME["library"]) is False
+
+
+def test_pick_asset_by_name_beats_the_suffix():
+    """两件都以 `setup.exe` 结尾时,**必须按名字取**。
+
+    这是这一版最容易写错的一处:按后缀挑会挑到整包(920,614,741 B),于是
+    "判定说下 135 MiB、手里拿着 878 MiB" —— 前面所有身份比对白做,而界面上一切正常。
+    """
+    rel = {"assets": [
+        {"name": "yinlu-xuezhang-9.9.9-setup.exe", "size": 920614741,
+         "url": "https://api.github.com/repos/o/r/releases/assets/1",
+         "browser_download_url": "https://github.com/o/r/x/setup.exe"},
+        {"name": "yinlu-xuezhang-9.9.9-app-setup.exe", "size": 141962981,
+         "url": "https://api.github.com/repos/o/r/releases/assets/2",
+         "browser_download_url": "https://github.com/o/r/x/app-setup.exe"},
+    ]}
+    a = proactive.pick_asset(rel, "setup", "yinlu-xuezhang-9.9.9-app-setup.exe")
+    assert a["name"].endswith("app-setup.exe") and a["size"] == 141962981, a
+    assert a["url"].endswith("/assets/2"), "别挑错那件的地址"
+    b = proactive.pick_asset(rel, "setup", "yinlu-xuezhang-9.9.9-setup.exe")
+    assert b["size"] == 920614741, b
+    # 名字给了但发布里没这件 ⇒ 回 None,让调用方去退回整包(不是"随便挑一件像的")
+    assert proactive.pick_asset(rel, "setup", "不存在的名字.exe") is None
+
+
+def test_local_identities_reads_stamps_without_rehashing(tmp_path, monkeypatch):
+    """本机身份是**读凭证文件**,不是现算 1.3 GB 的哈希(那会让"检查更新"贵十几秒)。"""
+    import json as _json
+    from minicode import library, paths
+    db = tmp_path / "library.db"
+    db.write_bytes(b"not really a db")            # 内容完全不参与:只读旁边那份 json
+    (tmp_path / (db.name + library.STAMP_SUFFIX)).write_text(_json.dumps(
+        {"size": 1331774, "count": 9, "sha256": "a" * 64, "built_at": "很久以前"}),
+        encoding="utf-8")
+    monkeypatch.setattr(library, "db_path", lambda workspace=None: db)
+    (tmp_path / "browser-kernel.stamp.json").write_text(_json.dumps(
+        {"files": 3, "bytes": 4, "digest": "d" * 64, "built_at": "很久以前"}),
+        encoding="utf-8")
+    monkeypatch.setattr(paths, "APP_DIR", tmp_path)
+    got = proactive.local_identities()
+    assert got["library"] == {"size": 1331774, "count": 9, "sha256": "a" * 64}, got
+    assert got["browser_kernel"] == {"files": 3, "bytes": 4, "digest": "d" * 64}, got
+    assert "built_at" not in got["library"], "时间噪声不能进身份比对"
+
+
+def test_local_identities_on_an_old_package_is_empty_not_an_error(tmp_path, monkeypatch):
+    """老包(没有这两份凭证)要回**空**,让上层退回整包并说清 —— 不许抛。"""
+    from minicode import library, paths
+    monkeypatch.setattr(library, "db_path", lambda workspace=None: None)
+    monkeypatch.setattr(paths, "APP_DIR", tmp_path)
+    got = proactive.local_identities()
+    assert got == {"library": {}, "browser_kernel": {}}, got
+
+
+def _fake_release(with_app=True):
+    assets = [{"name": "yinlu-xuezhang-9.9.9-setup.exe", "size": 920614741,
+               "url": "https://api.github.com/repos/o/r/releases/assets/1",
+               "browser_download_url": "https://github.com/x/setup.exe"},
+              {"name": "yinlu-xuezhang-9.9.9-sha256.txt", "size": 400,
+               "url": "https://api.github.com/repos/o/r/releases/assets/3",
+               "browser_download_url": "https://github.com/x/s.txt"},
+              {"name": "yinlu-xuezhang-9.9.9-assets.json", "size": 900,
+               "url": "https://api.github.com/repos/o/r/releases/assets/4",
+               "browser_download_url": "https://github.com/x/a.json"}]
+    if with_app:
+        assets.insert(1, {"name": "yinlu-xuezhang-9.9.9-app-setup.exe",
+                          "size": 141962981,
+                          "url": "https://api.github.com/repos/o/r/releases/assets/2",
+                          "browser_download_url": "https://github.com/x/app.exe"})
+    return {"tag_name": "v9.9.9", "name": "引路学长 v9.9.9", "html_url": "https://x",
+            "published_at": "2026-10-16T00:00:00Z", "body": "改一行", "assets": assets}
+
+
+def test_check_update_end_to_end_selects_the_small_asset(monkeypatch):
+    """整条判定链走一遍(假 release + 假清单,**真** `plan_update`/`pick_asset`)。"""
+    monkeypatch.setattr(proactive, "_release_payload",
+                        lambda timeout=10.0: (_fake_release(), ""))
+    monkeypatch.setattr(proactive, "running_form", lambda: "setup")
+    monkeypatch.setattr(proactive, "fetch_release_manifest",
+                        lambda rel, ver, timeout=12.0: (MAN, ""))
+    monkeypatch.setattr(proactive, "local_identities", lambda: dict(SAME))
+    r = proactive.check_update("0.9.177", detail=True)
+    u = r["update"]
+    assert u["asset"]["name"] == "yinlu-xuezhang-9.9.9-app-setup.exe", u["asset"]
+    assert u["asset"]["size"] == 141962981
+    assert u["plan"]["choice"] == "app_setup" and "跳过" in u["plan"]["reason"]
+
+
+def test_check_update_falls_back_when_the_manifest_lies(monkeypatch):
+    """清单说"可以下小件"而 Release 里**没有那件** ⇒ 退回整包,并把矛盾说出来。
+
+    不这样做的话表现是"下载了 878 MB 却告诉用户跳过了 743 MB" —— 那是这一格里
+    最伤信任的一种不一致(两处各说各话)。
+    """
+    monkeypatch.setattr(proactive, "_release_payload",
+                        lambda timeout=10.0: (_fake_release(with_app=False), ""))
+    monkeypatch.setattr(proactive, "running_form", lambda: "setup")
+    monkeypatch.setattr(proactive, "fetch_release_manifest",
+                        lambda rel, ver, timeout=12.0: (MAN, ""))
+    monkeypatch.setattr(proactive, "local_identities", lambda: dict(SAME))
+    u = proactive.check_update("0.9.177", detail=True)["update"]
+    assert u["asset"]["name"] == "yinlu-xuezhang-9.9.9-setup.exe", u["asset"]
+    assert u["plan"]["choice"] == "setup" and "但发布里没有那件" in u["plan"]["reason"]
+
+
+def test_fetch_release_manifest_reads_the_named_asset_and_says_why(monkeypatch):
+    """清单那件的取法:按名字找、走 api 那一跳、Accept 是 octet-stream;取不到说实话。"""
+    seen = []
+
+    class _R:
+        status_code = 200
+        text = '{"schema": 1, "identity": {"library": {"size": 1}}}'
+
+    def fake_get(url, timeout=10.0, headers=None):
+        seen.append((url, dict(headers or {})))
+        return _R(), ""
+    monkeypatch.setattr(proactive, "_http_get", fake_get)
+    man, why = proactive.fetch_release_manifest(_fake_release(), "9.9.9")
+    assert why == "" and man["identity"]["library"]["size"] == 1, man
+    assert seen[0][0].endswith("/releases/assets/4"), seen
+    assert seen[0][1]["Accept"] == "application/octet-stream", seen
+    m2, w2 = proactive.fetch_release_manifest(_fake_release(), "8.8.8")
+    assert m2 == {} and "没有" in w2 and "8.8.8" in w2, w2
+
+
+def test_prune_recognises_the_two_new_file_names(tmp_path):
+    """v0.9.178 多了两件产物名:`app-setup.exe` 与 `assets.json`。
+
+    它们**必须**进那道文件名形状闸,否则清理永远不认识它们 —— 表现是"用户按了清理,
+    腾出 0 字节,而盘上躺着三件旧的小包"。这条针钉的就是"新产物有没有交登记税"。
+    """
+    cur = proactive._cur_version()
+    for n in ("yinlu-xuezhang-0.9.50-app-setup.exe",
+              "yinlu-xuezhang-0.9.50-assets.json",
+              f"yinlu-xuezhang-{cur}-app-setup.exe"):
+        (tmp_path / n).write_bytes(b"z" * 7)
+    r = proactive.prune_updates(tmp_path, keep_version="")
+    assert [x["name"] for x in r["removed"]] == [
+        "yinlu-xuezhang-0.9.50-app-setup.exe", "yinlu-xuezhang-0.9.50-assets.json"], r
+    assert (tmp_path / f"yinlu-xuezhang-{cur}-app-setup.exe").exists(), "当前版要留"
 
 
 def test_pending_part_needs_the_sidecar(tmp_path):

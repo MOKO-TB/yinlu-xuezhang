@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -95,6 +96,81 @@ def stamp_library_db(dist: Path) -> Path | None:
     sp = library.write_stamp(db, total, extra={"app_version": __version__})
     print(f"已写馆藏库凭证 {sp.name}({total} 条,{db.stat().st_size/1e9:.2f} GB)")
     return sp
+
+
+KERNEL_STAMP_NAME = "browser-kernel.stamp.json"
+
+
+def stamp_kernel(dist: Path) -> Path | None:
+    """给包内浏览器内核写一份"我是哪一版"的凭证(件数 / 总字节 / 清单摘要)。
+
+    为什么摘要算在「相对路径 | 每个文件的 sha256」排序串上,而不是"整个目录的哈希":
+    目录里几百个文件,拷贝一次时间戳就全变,任何按字节流扫目录的做法都会让**同一份
+    内核在两次构建里得到两个身份** —— 那"跳过没变的那件"就永远跳不过去,这一整个
+    功能等于没做。所以身份只由内容与名字决定。
+
+    运行时**不重算**这个摘要(731 MB 现算要十几秒,更新检查不该那么贵):装好的包里
+    就躺着这份凭证,启动时读它、与发布清单比一眼就完 —— 见 `proactive.local_identities`。
+    """
+    kdir = dist / "ms-playwright"
+    if not kdir.is_dir():
+        print("!! 包内没有浏览器内核,跳过写内核凭证(更新时会因此拿不到「可以跳过」这一档)")
+        return None
+    rows = []
+    total = 0
+    for p in sorted(kdir.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(kdir).as_posix()
+        rows.append(f"{rel}|{_sha256(p)}")
+        total += p.stat().st_size
+    digest = hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
+    out = dist / KERNEL_STAMP_NAME
+    out.write_text(json.dumps({
+        "schema": 1, "kind": "browser-kernel", "files": len(rows), "bytes": total,
+        "digest": digest, "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "app_version": __version__,
+    }, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"已写内核凭证 {out.name}({len(rows)} 个文件,{total / 1e6:.0f} MB)")
+    return out
+
+
+def assets_manifest(dist: Path, built: dict, lib_stamp: "Path | None",
+                    kernel_stamp: "Path | None") -> Path:
+    """发布清单 `yinlu-xuezhang-<版本>-assets.json`:App 靠它决定"这次该下哪一件"。
+
+    里面**两类东西**都要有,缺一不可:①每件产物的大小与 sha256(下载完要核对);
+    ②馆藏库与内核的**身份**(从各自的凭证里取"内容字段",不带 built_at 这种时间噪声)。
+    没有 ② 就只能永远下整包 —— 那正是这一版要解决的问题。
+    """
+    from minicode import library
+
+    def _identity(sp: "Path | None", keys: tuple) -> dict:
+        if not sp or not Path(sp).is_file():
+            return {}
+        try:
+            d = json.loads(Path(sp).read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return {k: d[k] for k in keys if k in d}
+
+    db = dist / "crawled" / "mfindgzyykj.libsp.cn" / "library.db"
+    lib = _identity(lib_stamp or library.stamp_path_for(db),
+                    ("schema", "size", "count", "sha256"))
+    ker = _identity(kernel_stamp, ("schema", "files", "bytes", "digest"))
+    payload = {
+        "schema": 1, "version": __version__,
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "assets": {k: {"name": Path(v).name, "size": Path(v).stat().st_size,
+                       "sha256": _sha256(Path(v))}
+                   for k, v in built.items() if Path(v).is_file()},
+        "identity": {"library": lib, "browser_kernel": ker},
+    }
+    out = ROOT / "dist" / f"yinlu-xuezhang-{__version__}-assets.json"
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"已写发布清单 {out.name}(产物 {len(payload['assets'])} 件;"
+          f"馆藏身份 {'有' if lib else '缺'},内核身份 {'有' if ker else '缺'})")
+    return out
 
 
 def bundle_playwright_browsers(dist: Path) -> None:
@@ -990,7 +1066,8 @@ def write_user_files(dist: Path) -> None:
         "153. 两件小事(v0.9.174):①**浅色模式下有些字看不清,修好了** —— 快捷键速查中心(顶栏那一颗,或 Ctrl+/)的快捷键说明与键帽在浅色下几乎看不见,根因是那批颜色名字在代码里**从来就没定义过**,程序退回的是照着深色写的白色,放在浅色底上等于没有;现在两种主题各有一套,深色下也顺便统一了。②**「检查更新」现在找得到了** —— 以前只能点侧栏那个小版本号(它长得不像按钮,你说找不到);现在它旁边多了一枚 **↻**(点哪个都行),**Ctrl+Shift+P 的命令面板里也有一条「检查更新」**;启动时那条提示条照旧(只有真有新版本才出现)。另外:**语音输入按你的要求撤掉了** —— 输入框左边那颗 🎤 不在了,相关的离线识别模块也一并删了。\n"
         "154. 两件小事(v0.9.175):①**启动那一下不再卡好几秒了** —— 系统提示词里那句「共 133 万条书目、纸本多少种、电子书多少种」原先是让数据库把 1.31 GB 的馆藏库整个扫一遍算出来的,而库里那两个索引本来就在;改成各走索引之后,本机实测从约 1.5 秒降到约 0.2 秒,**报的四个数一个都没变**(也没往你机器上多存一个缓存文件)。②**MCP 服务器的「提示模板」现在能用了** —— 你说「看看那台 MCP 服务器给了哪些提示」,学长列给你(名字、要填什么参数、它自己写的说明);说「用它那个 xx」,它把内容取回来。⚠ 那种模板是**那台服务器写的指示**,不是学长自己的规矩:所以每次取都会问你一句,引用时也会注明来源,里面叫你去做的事仍然由你点头。\n"
         "155. 有更新会自己来说,下载也能就地装好(v0.9.176):①查到新版本时不再只有聊天栏顶部那一条 —— 版本号旁边会出现一枚绿色「更新」徽章,并自动弹一张「发现新版本」的卡(版本、日期、整段更新日志,还能点「查看历史更新内容」一版一版展开看)。②卡上那颗「下载更新」直接把安装包下到本机:有进度条、可以取消,下完会跟发布时那份 sha256 核对,**核对不过就当场删掉、不让你装**;对上了才会出现「运行安装程序」。③要点两次(下载、运行),不会替你静默安装,也不会趁你不在的时候自己升级。④不想被打扰:`update_check:false` 整条通道关掉(连手动那颗也拒);只想安静这一版就点「跳过此版本」,下一版照样告诉你。⑤一句实话:那份校验清单和安装包来自同一个发布页,它防的是下载坏掉、被截断、链接被换,不防发布账号本身被人接管 —— 这个项目没有代码签名证书。\n"
-        "156. 四件手感上的事(v0.9.177):①**升级这一路真的能点了** —— 上一版「下载更新」在某些网络里没反应(根因是下载那一条没走查版本那条同样的证书兜底,而现在四条共用一份),并且下载**优先走另一个域名**,`github.com` 不通时照样能下。②**下一半不用重来**:取消或断网都留着那半截,下次点「下载更新」接着往下走,进度条从原位往上;旧的安装包可以在「历史更新内容」里一键清理(只清这一条路自己下载的那几个文件,别的不动),「我的数据」面板里也能看见这个目录占了多少。③**版本号那串字可以点了** = 看历史更新内容(旁边那枚 ↻ 按要求撤掉;手动「检查更新」仍在命令面板 Ctrl+Shift+P 里)。④**终端里学长正跑着的时候可以直接打字**,回车就传进这一条会话,它会在下一步接上 —— 与桌面版那个输入框同一入口、同一份留档;管道和重定向里的输入一个字都不动。⑤还有一件新的:学长写下的网页或 SVG 图会在对话里显成一张**可点开的卡**,点开就地显示。**它显示的是内容,不当代码执行**:可执行的结构在交给你看之前就被删掉(删了几处会写在卡上),显示时还锁在一个碰不到别的窗口里 —— 所以它既改不了学长,也上不了网。",
+        "156. 四件手感上的事(v0.9.177):①**升级这一路真的能点了** —— 上一版「下载更新」在某些网络里没反应(根因是下载那一条没走查版本那条同样的证书兜底,而现在四条共用一份),并且下载**优先走另一个域名**,`github.com` 不通时照样能下。②**下一半不用重来**:取消或断网都留着那半截,下次点「下载更新」接着往下走,进度条从原位往上;旧的安装包可以在「历史更新内容」里一键清理(只清这一条路自己下载的那几个文件,别的不动),「我的数据」面板里也能看见这个目录占了多少。③**版本号那串字可以点了** = 看历史更新内容(旁边那枚 ↻ 按要求撤掉;手动「检查更新」仍在命令面板 Ctrl+Shift+P 里)。④**终端里学长正跑着的时候可以直接打字**,回车就传进这一条会话,它会在下一步接上 —— 与桌面版那个输入框同一入口、同一份留档;管道和重定向里的输入一个字都不动。⑤还有一件新的:学长写下的网页或 SVG 图会在对话里显成一张**可点开的卡**,点开就地显示。**它显示的是内容,不当代码执行**:可执行的结构在交给你看之前就被删掉(删了几处会写在卡上),显示时还锁在一个碰不到别的窗口里 —— 所以它既改不了学长,也上不了网。"
+        "157. 升级不用再把整个产品下一遍(v0.9.178):有同学反馈'改一行为什么要下 878 MB'。量了一下 —— 那 878 MB 里 **84.6% 是内置的馆藏库与浏览器内核**,它们跨版本基本不变,而程序自己的代码只有约 1.7 MB。现在更新会先比一眼本机那两块数据凭证与发布清单:**一致就跳过它们,只下 135 MB 的那一件**;不一致、或者你机器上还没有凭证(从旧版升上来的第一次一定是这样),就照旧下整包,并且卡上会写清楚**这次要下多少、为什么没跳过**。下载、运行仍然各点一次,sha256 没核对过照样不给装。",
         encoding="utf-8",
     )
 
@@ -1210,6 +1287,8 @@ def main() -> None:
     stamp_library_db(dist)
     # 浏览器内核(crawl4ai)必须在编译安装包之前到位:安装包递归收 dist/引路学长/*
     bundle_playwright_browsers(dist)
+    # 内核凭证同理要在打包之前:它是"更新时能不能跳过这 731 MB"的判据之一
+    kernel_stamp = stamp_kernel(dist)
     # 用户可见文件也要在编译安装包之前写好(安装包递归收 dist/引路学长/*)
     write_user_files(dist)
     lib_db = dist / "crawled" / "mfindgzyykj.libsp.cn" / "library.db"
@@ -1221,6 +1300,9 @@ def main() -> None:
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe"),
         r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
         r"C:\Program Files\Inno Setup 6\ISCC.exe"] if os.path.exists(p)), None)
+    built: dict = {}
+    if onefile.is_file():
+        built["single_file"] = onefile
     if iscc:
         subprocess.run([iscc, f"/DAppVersion={__version__}",
                         f"/DLibDbBytes={lib_db_bytes}",
@@ -1228,10 +1310,30 @@ def main() -> None:
                        check=True, cwd=str(ROOT))
         setup_exe = ROOT / "dist" / f"引路学长-{__version__}-setup.exe"
         assert setup_exe.exists(), "安装包构建失败"
+        built["setup"] = setup_exe
         print(f"安装包: {setup_exe}")
+        # 第二件:**同一份 .iss、同一套压缩参数**,只多传一个 /DAppOnly=1 ——
+        # 它排掉馆藏库与内核(实测 878 MiB → 135 MiB),给"本地已有那两块"的用户更新用。
+        # 为什么不在这里再写一份 .iss:两份脚本的 Compression 参数一旦漂了,
+        # 两件产物就不可比,而"能不能跳过"的判断恰恰建立在它们出自同一棵树这件事上。
+        subprocess.run([iscc, f"/DAppVersion={__version__}",
+                        f"/DLibDbBytes={lib_db_bytes}", "/DAppOnly=1",
+                        str(ROOT / "packaging" / "gcode.iss")],
+                       check=True, cwd=str(ROOT))
+        app_exe = ROOT / "dist" / f"引路学长-{__version__}-app-setup.exe"
+        assert app_exe.exists(), "仅 app 安装包构建失败"
+        built["app_setup"] = app_exe
+        s, a = setup_exe.stat().st_size, app_exe.stat().st_size
+        print(f"仅 app 安装包: {app_exe}({a:,} B = {a / 1048576:.0f} MiB,"
+              f"是整包 {s:,} B 的 {a / s * 100:.1f}%)")
     else:
         print("未找到 Inno Setup,跳过安装包编译(pip install -r requirements-dev 后"
               "运行 scripts/setup_inno.py 可补装)")
+    # 发布清单:App 端"这次该下哪一件"读的就是它(产物哈希 + 两块数据的身份)
+    if built:
+        lib_stamp = dist / "crawled" / "mfindgzyykj.libsp.cn" / "library.db.stamp.json"
+        assets_manifest(dist, built, lib_stamp if lib_stamp.is_file() else None,
+                        kernel_stamp)
 
     if "--no-zip" in sys.argv:
         print(f"完成(未打包 zip): {dist}")
