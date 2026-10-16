@@ -1197,6 +1197,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            "running_form", "pick_asset", "download_asset",
                            "list_releases", "_http_get", "_expected_sha256",
                            "RELEASES_API", "ASSET_SUFFIX",
+                           # v0.9.179:后缀兜底那一路靠它排除"仅 app"包(漏收 = 老用户
+                           # 又会拿到少两块数据的那件)
+                           "APP_ONLY_SUFFIX",
                            # v0.9.177 三件:①证书两跳从 `_http_get` 的私有逻辑提成
                            # 公共底座 —— 漏收的意思是**下载那一条又只剩 certifi 一跳**,
                            # 在那种机器上"卡开得出、进度条一动不动"(上一炉正是这个坏法);

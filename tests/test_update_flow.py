@@ -621,12 +621,48 @@ def _fake_release(with_app=True):
                "url": "https://api.github.com/repos/o/r/releases/assets/4",
                "browser_download_url": "https://github.com/x/a.json"}]
     if with_app:
-        assets.insert(1, {"name": "yinlu-xuezhang-9.9.9-app-setup.exe",
+        # **排在整包之前** —— 这是 GitHub 的真实形状(资产按名字字母序返回,
+        # `…-app-setup.exe` 字母序就在 `…-setup.exe` 前面)。上一版这份 fixture 把
+        # 整包写在第一位,于是"后缀兜底会选中哪件"这件事从来没被测对过。
+        assets.insert(0, {"name": "yinlu-xuezhang-9.9.9-app-setup.exe",
                           "size": 141962981,
                           "url": "https://api.github.com/repos/o/r/releases/assets/2",
                           "browser_download_url": "https://github.com/x/app.exe"})
     return {"tag_name": "v9.9.9", "name": "引路学长 v9.9.9", "html_url": "https://x",
             "published_at": "2026-10-16T00:00:00Z", "body": "改一行", "assets": assets}
+
+
+def test_the_suffix_fallback_never_hands_out_the_app_only_package():
+    """**没给名字**时按后缀兜底,也绝不许把 `…-app-setup.exe` 当整包递出去。
+
+    这是 v0.9.178 上炉刚发出去的那个形状:老机器(没有内核凭证)判成"下整包",
+    `want_name` 留空走后缀,而 `-app-setup.exe` 也以 `-setup.exe` 结尾、字母序又排在
+    前面 → 用户装回一台**没有馆藏库也没有内核**的机器,卡上却写着"按整包下"。
+    """
+    rel = _fake_release()
+    assert [a["name"] for a in rel["assets"]][0].endswith(proactive.APP_ONLY_SUFFIX)
+    got = proactive.pick_asset(rel, "setup", "")
+    assert got and got["name"] == "yinlu-xuezhang-9.9.9-setup.exe", got
+    assert got["size"] == 920614741, "选中的必须是整包那一件"
+    # 按名字取那一路照旧赢(清单里写了哪件就是哪件),这条针不许把它一起"修"回去
+    small = proactive.pick_asset(rel, "setup", "yinlu-xuezhang-9.9.9-app-setup.exe")
+    assert small and small["size"] == 141962981, small
+
+
+def test_check_update_names_the_full_package_when_it_falls_back(monkeypatch):
+    """清单在场时**两件的名字都从清单取** —— 判定与手里那件必须是同一件事。"""
+    monkeypatch.setattr(proactive, "_release_payload",
+                        lambda timeout=10.0: (_fake_release(), ""))
+    monkeypatch.setattr(proactive, "running_form", lambda: "setup")
+    monkeypatch.setattr(proactive, "fetch_release_manifest",
+                        lambda rel, ver, timeout=12.0: (MAN, ""))
+    empty = {"library": {}, "browser_kernel": {}}      # 老包:证明不了一致
+    monkeypatch.setattr(proactive, "local_identities", lambda: dict(empty))
+    u = proactive.check_update("0.9.177", detail=True)["update"]
+    assert u["plan"]["choice"] == "setup" and "没有凭证" in u["plan"]["reason"]
+    assert u["asset"]["name"] == "yinlu-xuezhang-9.9.9-setup.exe", \
+        "说下整包却递出小包 = 用户装回一台没有馆藏库的机器"
+    assert u["asset"]["size"] == 920614741
 
 
 def test_check_update_end_to_end_selects_the_small_asset(monkeypatch):

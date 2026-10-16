@@ -498,9 +498,15 @@ def check_update(current: str, timeout: float = 10.0, *,
     plan = plan_update(form, man)
     if man_why:
         plan.setdefault("manifest_why", man_why)
-    want_name = ((man.get("assets") or {}).get("app_setup") or {}).get("name") \
-        if plan.get("choice") == "app_setup" else ""
-    got["asset"] = pick_asset(data, form, want_name or "")
+    # v0.9.179:**有清单时两件的名字都从清单取**,不只取"小件"那一个。原来只在
+    # `choice == "app_setup"` 时才给名字,退回整包那一路留空走后缀兜底 —— 而后缀兜底
+    # 会把 `…-app-setup.exe` 当成 `…-setup.exe`(GitHub 资产按字母序,app-setup 在前),
+    # 于是"判定说整包、递出来是小包"。清单在场就没有理由靠猜名字。
+    choice = str(plan.get("choice") or "")
+    want_name = ""
+    if choice in ("app_setup", "setup") and form != "single":
+        want_name = str(((man.get("assets") or {}).get(choice) or {}).get("name") or "")
+    got["asset"] = pick_asset(data, form, want_name)
     if plan.get("choice") == "app_setup" and not got["asset"]:
         # 清单说可以下小件、Release 里却没这件:以**实际能下的**为准,并把矛盾说出来
         got["asset"] = pick_asset(data, form)
@@ -516,7 +522,10 @@ def check_update(current: str, timeout: float = 10.0, *,
 # 运行形态 → 该下的那件资产的**名字后缀**。只有两件:装机/目录版吃 setup.exe,
 # 单文件版吃 single-file.exe。免安装的 zip 这里**故意不给** —— 它 1.2 GB,而
 # "解压覆盖正在运行的自己"这件事程序做不到,给一个按钮就是给一个会失败的承诺。
-ASSET_SUFFIX = {"setup": "setup.exe", "single": "single-file.exe"}
+ASSET_SUFFIX = {"setup": "-setup.exe", "single": "-single-file.exe"}
+# 「仅 app」包的名字**以 `-setup.exe` 结尾**(`…-app-setup.exe`),所以按后缀兜底那一路
+# 必须把它明确排除掉 —— 见 `pick_asset` 里那段。
+APP_ONLY_SUFFIX = "-app-setup.exe"
 
 
 def running_form() -> str:
@@ -567,8 +576,16 @@ def pick_asset(release: "dict | None", form: "str | None" = None,
         if want_name:
             if nm != want_name:
                 continue
-        elif not (want and nm.endswith(want)):
-            continue
+        else:
+            # **没给名字才按后缀**(旧版发布没有清单)。这一路以前会选中
+            # `…-app-setup.exe` —— 它的后缀兜底也是 `-setup.exe`,而 GitHub 按字母序
+            # 把 app-setup 排在 setup 前面,于是"判定说下整包、递出来是 135 MB 那件":
+            # 老用户(本机没有内核凭证,必然走这条)装完没有馆藏库与内核,而卡上写着
+            # "按整包下"。v0.9.179 实测抓到,包内端到端那一段。
+            if not (want and nm.endswith(want)):
+                continue
+            if nm.endswith(APP_ONLY_SUFFIX):
+                continue
         api = _asset_api_url(a)
         browser = str(a.get("browser_download_url") or "")
         url = api or browser
