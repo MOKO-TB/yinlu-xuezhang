@@ -1325,8 +1325,22 @@ class Agent:
         # 提问连模型都没见到,报的还不是"模型调用失败"这句人话。失败这一轮
         # 不压、原样继续,阈值逻辑还在,下一轮会再试。
         self.ui.info("上下文接近窗口上限,先把早期对话整理成摘要(可能要几秒)…")
+        pre = self._fire_compact_hook("pre_compact", {
+            "event": "pre_compact",
+            "messages": len(self.session.messages),
+            "estimated_tokens": self.context_tokens(),
+            "force": bool(force),
+        })
+        pre_context = str((pre or {}).get("context") or "").strip()
+        if pre is not None and not pre.get("ok") and not pre.get("suppressed"):
+            text = str(pre.get("output") or "").strip()
+            if text:
+                self._pending_prior = (
+                    self._pending_prior + "\n〔pre_compact 钩子〕" + text
+                ).strip()
         try:
-            new_msgs, before = compact(self.session.messages, self.llm)
+            new_msgs, before = compact(
+                self.session.messages, self.llm, extra_context=pre_context)
         except Exception:
             self.ui.info("这次上下文整理没做成(模型暂时连不上?),先直接回答;之后还会再试。")
             return False
@@ -1338,6 +1352,23 @@ class Agent:
         # 前面的用户消息被折进摘要了 —— 快照上记的"第几问"从此对不上,别再拿它回退。
         self._epoch += 1
         self.ui.compacted(before, len(new_msgs))
+        post = self._fire_compact_hook("post_compact", {
+            "event": "post_compact",
+            "messages_before": before,
+            "messages_after": len(new_msgs),
+            "removed": before - len(new_msgs),
+            "estimated_tokens": self.context_tokens(),
+            "force": bool(force),
+        })
+        if post is not None:
+            bits = [str(post.get("context") or "").strip()]
+            if not post.get("ok") and not post.get("suppressed"):
+                bits.append(str(post.get("output") or "").strip())
+            text = " / ".join(b for b in bits if b)
+            if text:
+                self._pending_prior = (
+                    self._pending_prior + "\n〔post_compact 钩子〕" + text
+                ).strip()
         return True
 
     # ------------------------------------------------------------------
@@ -2175,6 +2206,30 @@ class Agent:
         # **追加**而不是赋值:`_pending_prior` 另有住户(差评避让那条线在
         # `_note_low_rated_prior` 里写它),谁覆盖谁就有一句会静默消失。
         self._pending_prior = (self._pending_prior + "\n" + line).strip()
+
+    def _fire_compact_hook(self, kind: str, payload: dict) -> dict | None:
+        """压缩生命周期钩子：只返回结构化结论，异常一律收敛为“没跑成”。
+
+        `pre_compact` 的 context 交给摘要提示；`post_compact` 的 context/失败说明
+        留给下一轮，不写进刚生成的摘要。钩子永远不能否决压缩。
+        """
+        if self._is_sub:
+            return None
+        cfg = getattr(getattr(self, "ctx", None), "config", None)
+        cfg_hooks = getattr(cfg, "hooks", None)
+        if not isinstance(cfg_hooks, dict) or not cfg_hooks:
+            return None
+        from minicode import hooks
+        try:
+            got = hooks.run_hook(
+                kind, cfg_hooks, "", args=payload,
+                workspace=str(getattr(self.ctx, "workspace", "") or ""))
+        except Exception as e:
+            return {"ok": False, "context": "", "suppressed": False,
+                    "output": f"{type(e).__name__}: {e}"}
+        if got is not None:
+            self._note_hook_health(kind, "", got)
+        return got
 
     def _fire_stop_hooks(self, user_input: str) -> None:
         """一轮**结束**时发一次 `stop`(H4 的最后一点,v0.9.151)。

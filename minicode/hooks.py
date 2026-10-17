@@ -20,13 +20,12 @@
   还是该改做法。**注意 `failure_mode` 只在闸类(`pre_tool`/`permission_request`)
   上决定拦不拦** —— 其余各类本来就不拦东西,写 `open` 在那几类上的含义是
   "钩子坏掉这件事别往模型那边说"(审计里照旧留着)。
-- **事件面**(v0.9.173 起九类):有工具维度的 `pre_tool` / `post_tool` /
+- **事件面**(当前起十一类):有工具维度的 `pre_tool` / `post_tool` /
   `post_tool_failure`(失败那半边,与 post_tool 同载荷同档,一次调用只命中一个)/
   `permission_request`;无工具维度的 `session_start` / `user_prompt_submit` /
-  `stop` / `subagent_start` / `subagent_stop`(见 `TOOL_EVENT_KINDS` /
-  `EVENT_KINDS` 上面的注释)。**刻意没做的**:`pre_compact` / `post_compact`
-  (压缩那条路最脆 —— KV Cache 前缀 + 配对修复 + 协议合法,不在这一轮往上面
-  插管子)、`file_changed` / `config_change` / `cwd_changed`(前两个已有更贴的
+  `stop` / `subagent_start` / `subagent_stop` / `pre_compact` / `post_compact`
+  (见 `TOOL_EVENT_KINDS` / `EVENT_KINDS` 上面的注释)。
+  **刻意没做的**:`file_changed` / `config_change` / `cwd_changed`(前两个已有更贴的
   机制:改动可见性走 `_mark_after_mutation` + 时间线,配置改动走 `config.json`
   本身;后一个每次 `cd` 都发一条,噪声远大于信息)。
 - 结构化决策可带的字段:`decision`(allow|deny|continue)、pre 的 `updated_input`
@@ -83,7 +82,7 @@ TOOL_EVENT_KINDS = ("pre_tool", "post_tool", "post_tool_failure", "permission_re
 # session_start 附在这次请求里对称),`subagent_stop` 那句附在**回主代理的报告**上
 # (与 stop 留给下一轮对称)。两处都只加一句话,不改派活内容、不改结论。
 EVENT_KINDS = ("session_start", "user_prompt_submit", "stop",
-               "subagent_start", "subagent_stop")
+               "subagent_start", "subagent_stop", "pre_compact", "post_compact")
 
 ALL_KINDS = TOOL_EVENT_KINDS + EVENT_KINDS
 
@@ -202,11 +201,12 @@ def run_hook(kind: str, hooks_cfg: dict | None, tool: str = "",
              workspace: str = "") -> "dict | None":
     """跑一条钩子;没配置该类返回 None(调用方直接跳过,零开销)。
 
-    五类钩子共用这一份形状:`pre_tool`(拦/改写这一步)、`post_tool`(回灌正文)、
+    各类钩子共用这一份形状:`pre_tool`(拦/改写这一步)、`post_tool`(回灌正文)、
     `post_tool_failure`(v0.9.173:同一次调用**失败**时走它,载荷与 post_tool 一样)、
     `permission_request`(H3,v0.9.115:替用户在确认框之前答一句 allow/deny)、
     `session_start` / `user_prompt_submit` / `stop` / `subagent_start` /
-    `subagent_stop`(H4 起:只能附一句话 —— 前两个附在**这一次请求**,`stop` 附在
+    `subagent_stop` / `pre_compact` / `post_compact`(H4 起:只能附一句话 ——
+    前两个附在**这一次请求**,`stop` 附在
     **下一轮的第一条请求**,子代理那两只一进一出各附一句,见 `EVENT_KINDS` 上面那段)。
     `updated_input` 只在 pre 上成立 —— 门已经对 permission_request 判过 ASK 了,
     这时候再改参数就是"对 A 点头、执行 B";`updated_output` 只在两个 post 上成立;

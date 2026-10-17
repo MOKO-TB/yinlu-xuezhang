@@ -154,6 +154,16 @@ def test_compact_small_history_has_no_ellipsis():
     assert HISTORY_ELLIPSIS not in fake.prompts[0]
 
 
+def test_compact_extra_context_reaches_the_summary_prompt_only():
+    fake = FakeSummarizer()
+    msgs = ([{"role": "system", "content": "sys"}]
+            + _user_text_turn("一") + _user_text_turn("二")
+            + _user_text_turn("三"))
+    new_msgs, _ = compact(msgs, fake, extra_context="PRE-COMPACT-NOTE")
+    assert "PRE-COMPACT-NOTE" in fake.prompts[0]
+    assert "PRE-COMPACT-NOTE" not in new_msgs[1]["content"]
+
+
 def test_summary_prompt_keeps_what_a_campus_agent_must_not_lose():
     """保留清单钉住:日期/课名/地点/待办/来源网址是这位同学的命根子,漏一项就是丢东西。"""
     for needle in ("任务目标", "文件路径", "日期", "课名", "地点",
@@ -380,15 +390,14 @@ def test_no_candidate_adds_nothing():
 
 
 def test_compaction_does_not_erase_the_transcript_from_the_log(tmp_path):
-    """压缩只补一行 `compacted` 标记,**不许抹掉留档里的旧消息**。
+    """压缩只补一行带有效上下文的 `compacted` 标记,**不许抹掉旧消息**。
 
     为什么必须有这条:矩阵 §10D 与 ROADMAP 都把「压缩前可回滚」记成 ✖,理由是
     "对话级回滚会被压缩吃掉"。2026-10-15 顺着 `session.replace_messages` 读到底才发现
-    那是**假缺口** —— 留档是追加式的(`_log_only` 只 append),而 `load_from` 把每一条
-    带 role 的行整份放回来。今天真实形状是:压后内存 2 条,留档里 6 条旧消息一行不少,
-    恢复放回 6 条。**代价在另一头**:压缩这件事不跨重启(恢复后同一份长历史会在下一轮
-    再压一次,多花一次摘要调用)。所以真要改的是"压一次就记住压过",不是"补一个快照"
-    —— 谁动这条,先让这里红,再写下那句历史由谁读回。
+    留档本身是追加式的(`_log_only` 只 append),缺的是"恢复时该重放哪一份上下文"。
+    现在标记里存压后的有效 body:审计仍保留压缩前 6 条原文,恢复只重建压后的 2 条。
+    旧版没有 body 的 compacted 标记继续按旧行为读回全部消息 —— 没有快照就不能假装
+    知道当时压成了什么。
     """
     from minicode.session import Session
     s = Session(system_prompt="s", log_dir=tmp_path)
@@ -401,5 +410,26 @@ def test_compaction_does_not_erase_the_transcript_from_the_log(tmp_path):
     assert any(o.get("type") == "compacted" for o in objs), "标记行得有:复盘要看这里压过一次"
     assert len([o for o in objs if o.get("role") == "user"]) == 6, \
         "留档里压缩前的 6 条被抹掉了 —— 那才是真的把回滚吃掉"
+    marker = next(o for o in objs if o.get("type") == "compacted")
+    assert len(marker["body"]) == 2
     back = Session(system_prompt="s")
-    assert back.load_from(s._log_path) == 6, "恢复必须把压缩前的历史整份放回来(今天的形状)"
+    assert back.load_from(s._log_path) == 2, "恢复必须重建压缩后的有效上下文"
+    assert [m["content"] for m in back.messages[1:]] == ["问4", "问5"]
+
+
+def test_legacy_compacted_marker_without_body_keeps_old_recovery_shape(tmp_path):
+    """旧日志没有 body:审计行仍认得,但恢复只能按旧行为保留全部历史。"""
+    from minicode.session import Session
+    log = tmp_path / "session_legacy.jsonl"
+    rows = [
+        {"type": "session_start", "schema": 2},
+        {"role": "user", "content": "旧一"},
+        {"role": "assistant", "content": "旧答"},
+        {"type": "compacted", "messages": 2},
+        {"role": "user", "content": "压后新增"},
+    ]
+    log.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+                   encoding="utf-8")
+    s = Session(system_prompt="s")
+    assert s.load_from(log) == 3
+    assert [m["content"] for m in s.messages[1:]] == ["旧一", "旧答", "压后新增"]

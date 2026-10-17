@@ -264,6 +264,7 @@ class _RecUI:
         self.started = []
         self.dones = []
         self.hard_rejected = []
+        self.compacted_calls = []
         self.infos = []
         self.confirms = []      # 弹过几次确认框 —— H3 的"到底问没问人"就看这个
 
@@ -275,6 +276,9 @@ class _RecUI:
 
     def tool_rejected_hard(self, tool, args):
         self.hard_rejected.append(tool.name)
+
+    def compacted(self, before, after):
+        self.compacted_calls.append((before, after))
 
     def confirm_tool(self, *a, **k):
         self.confirms.append(a)
@@ -1046,11 +1050,38 @@ def test_open_swallows_the_broken_hook_line_only_on_non_gate_kinds(tmp_path):
 
 def test_event_kinds_now_cover_the_subagent_lifecycle():
     assert hooks.EVENT_KINDS == ("session_start", "user_prompt_submit", "stop",
-                                 "subagent_start", "subagent_stop")
+                                 "subagent_start", "subagent_stop",
+                                 "pre_compact", "post_compact")
     assert "post_tool_failure" in hooks.TOOL_EVENT_KINDS
-    assert len(hooks.ALL_KINDS) == len(set(hooks.ALL_KINDS)) == 9
+    assert len(hooks.ALL_KINDS) == len(set(hooks.ALL_KINDS)) == 11
     # 非工具类事件照样不被 tools/paths 筛成永不触发(老口径不许被新类型破坏)
     assert hooks._matches({"tools": ["bash"]}, "", None) is True
+
+
+def test_compact_hooks_add_prompt_context_and_next_turn_note(tmp_path):
+    """pre 只影响摘要提示,post 只影响下一轮;钩子不能否压缩。"""
+    pre = _json_hook(tmp_path, {"context": "PRE-COMPACT-NOTE"}, "pre_compact.py")
+    post = _json_hook(tmp_path, {"context": "POST-COMPACT-NOTE"}, "post_compact.py")
+    agent, s, _ = _hook_agent(tmp_path, {
+        "pre_compact": {"command": pre},
+        "post_compact": {"command": post},
+    })
+    for text in ("第一问", "第二问", "第三问"):
+        s.add_user(text)
+        s.add_assistant(AssistantTurn(text="答"))
+
+    seen = {}
+
+    class _SummaryLLM:
+        def stream_chat(self, messages, tools=None, **kwargs):
+            seen["prompt"] = messages[0]["content"]
+            return AssistantTurn(text="压后摘要")
+
+    agent.llm = _SummaryLLM()
+    assert agent._maybe_compact(force=True) is True
+    assert "PRE-COMPACT-NOTE" in seen["prompt"]
+    assert "POST-COMPACT-NOTE" in agent._pending_prior
+    assert "POST-COMPACT-NOTE" not in s.messages[1]["content"]
 
 
 def test_hooks_list_shows_the_global_key_as_a_setting_not_a_hook(tmp_path):
