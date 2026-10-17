@@ -19,7 +19,7 @@ def test_registry_contents():
                      "symbol_search", "find_references", "rename_symbol",
                      "call_hierarchy", "symbol_definition", "code_outline",
                      "permissions", "permissions_trust",
-                     "hooks", "hooks_apply", "worktree",
+                     "hooks", "hooks_apply", "worktree", "worktree_apply",
                      "web_crawl", "web_search",
                      "browser_open", "browser_eval", "browser_snapshot",
                      "browser_click", "browser_fill", "browser_screenshot",
@@ -81,6 +81,7 @@ def test_read_only_flags():
         # git 命令,零写入;建副本是它"建议"的命令,走 bash 确认框(见
         # catalog_files.worktree_tools 的注释)。"写盘免确认"的疑案就此销案。
         "worktree": True,
+        "worktree_apply": False,
         "py_script": False,          # 内置运行时执行脚本:能读写文件,要确认
         "glob": True,
         "grep": True,

@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from minicode import hook_packs, patch, permspec, worktree as wt
+from minicode import hook_packs, patch, permspec, subagent_worktree, worktree as wt
 from minicode.tools import fs, search, shell
 from minicode.tools.base import Tool
 
@@ -369,5 +369,27 @@ def worktree_tools() -> list[Tool]:
             # 这也是它该进只读子代理工具集的原因:audit 档查"现在有几份副本、
             # 各自干净不干净"是正经的只读侦察。
             read_only=True,
+        ),
+        Tool(
+            name="worktree_apply",
+            description=(
+                "审阅或应用子代理隔离副本:action=diff 看状态/统计/完整 diff;"
+                "action=apply 用 git apply --check + git apply 应用回当前仓库,"
+                "不提交、不删除副本。默认拒绝覆盖目标工作区已改的同一路径;"
+                "dry_run 只预检,allow_dirty 才允许脏路径。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["diff", "apply"]},
+                    "path": {"type": "string",
+                             "description": "子代理报告里的 isolated 路径"},
+                    "allow_dirty": {"type": "boolean", "description": "允许覆盖脏路径"},
+                    "dry_run": {"type": "boolean", "description": "只预检不落盘"},
+                },
+                "required": ["path"],
+            },
+            handler=subagent_worktree.worktree_apply_tool,
+            read_only=False,
         ),
     ]
