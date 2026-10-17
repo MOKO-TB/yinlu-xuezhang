@@ -118,6 +118,122 @@ def test_the_root_layer_keeps_its_old_home(tmp_path, monkeypatch):
     assert permspec.agents_adopted_layers(tmp_path) == {}, "根那一层不该顺手写进新表"
 
 
+# --------------------------------------------------------------- @import
+def test_agents_import_expands_recursively_and_marks_cycles(tmp_path):
+    (tmp_path / "rules").mkdir()
+    (tmp_path / "rules" / "a.md").write_text(
+        "A-MARKER\n@import b.md\n", encoding="utf-8")
+    (tmp_path / "rules" / "b.md").write_text(
+        "B-MARKER\n@import a.md\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text(
+        "@import rules/a.md\nTOP-MARKER\n", encoding="utf-8")
+    got = app_setup._read_instruction(tmp_path / "AGENTS.md", tmp_path)
+    assert "TOP-MARKER" in got["text"]
+    assert "A-MARKER" in got["text"] and "B-MARKER" in got["text"]
+    assert "循环导入" in got["text"]
+    assert any(x["path"].endswith("rules/a.md") for x in got["imports"])
+
+
+def test_agents_import_cannot_escape_root_or_read_credentials(tmp_path):
+    outside = tmp_path.parent / "outside-rules.md"
+    outside.write_text("OUTSIDE-MARKER", encoding="utf-8")
+    (tmp_path / ".env").write_text("SECRET-MARKER", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text(
+        "@import ../outside-rules.md\n@import .env\nSAFE", encoding="utf-8")
+    got = app_setup._read_instruction(tmp_path / "AGENTS.md", tmp_path)
+    assert "OUTSIDE-MARKER" not in got["text"]
+    assert "SECRET-MARKER" not in got["text"]
+    assert "工作区外" in got["text"] and "凭据文件" in got["text"]
+
+
+def test_user_level_import_cannot_read_app_state(tmp_path):
+    """用户级 AGENTS 的导入根就是应用数据目录:运行数据不能借 @import 进提示词。"""
+    (tmp_path / "config.json").write_text("CONFIG-MARKER", encoding="utf-8")
+    (tmp_path / "config.json.tmp").write_text("CONFIG-TMP-MARKER", encoding="utf-8")
+    (tmp_path / "config.example.json").write_text(
+        "EXAMPLE-MARKER", encoding="utf-8")
+    for rel, marker in (
+            ("sessions/chat.jsonl", "SESSION-MARKER"),
+            ("checkpoints/edit.json", "CHECKPOINT-MARKER"),
+            ("shadow-git/objects/blob", "SHADOW-MARKER"),
+            ("browser-profile/Cookies", "COOKIE-MARKER")):
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(marker, encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text(
+        "@import config.json\n"
+        "@import config.json.tmp\n"
+        "@import config.example.json\n"
+        "@import sessions/chat.jsonl\n"
+        "@import checkpoints/edit.json\n"
+        "@import shadow-git/objects/blob\n"
+        "@import browser-profile/Cookies\n"
+        "SAFE",
+        encoding="utf-8")
+
+    got = app_setup._read_instruction(
+        tmp_path / "AGENTS.md", tmp_path, app_private=True)
+
+    for marker in ("CONFIG-MARKER", "CONFIG-TMP-MARKER", "EXAMPLE-MARKER",
+                   "SESSION-MARKER", "CHECKPOINT-MARKER", "SHADOW-MARKER",
+                   "COOKIE-MARKER"):
+        assert marker not in got["text"]
+    assert got["text"].count("本机数据文件") == 7
+    assert all(item["why"] == "本机数据文件" for item in got["imports"])
+
+
+def test_project_imports_keep_ordinary_directories(tmp_path):
+    """用户级才套应用数据禁区;仓库里一个普通 `sessions/` 不该被误伤。"""
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "sessions" / "rule.md").write_text(
+        "PROJECT-RULE-MARKER", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text(
+        "@import sessions/rule.md\n", encoding="utf-8")
+
+    got = app_setup._read_instruction(tmp_path / "AGENTS.md", tmp_path)
+
+    assert "PROJECT-RULE-MARKER" in got["text"]
+    assert got["imports"][0]["ok"] is True
+
+
+def test_changing_a_user_level_import_changes_the_signature(tmp_path, monkeypatch):
+    app_root = tmp_path / "app"
+    app_root.mkdir(exist_ok=True)
+    rules = app_root / "rules"
+    rules.mkdir(exist_ok=True)
+    imported = rules / "shared.md"
+    imported.write_text("V1", encoding="utf-8")
+    (app_root / "AGENTS.md").write_text(
+        "@import rules/shared.md\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    monkeypatch.setattr(app_setup, "app_path",
+                        lambda *parts: app_root.joinpath(*parts))
+    monkeypatch.setattr(permspec, "trust_path",
+                        lambda: app_root / "perms-trust.json")
+
+    before = app_setup.instruction_signature(workspace)
+    imported.write_text("V2", encoding="utf-8")
+
+    assert app_setup.instruction_signature(workspace) != before
+
+
+def test_changing_an_imported_rule_goes_back_to_unadopted(tmp_path, monkeypatch):
+    monkeypatch.setattr(permspec, "trust_path",
+                        lambda: tmp_path / "app" / "perms-trust.json")
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    imported = rules / "shared.md"
+    imported.write_text("V1", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("@import rules/shared.md\n", encoding="utf-8")
+    assert app_setup.adopt_agents(tmp_path)
+    assert app_setup.agents_adoption(tmp_path)["adopted"] is True
+    before_sig = app_setup.instruction_signature(tmp_path)
+    imported.write_text("V2", encoding="utf-8")
+    assert app_setup.agents_adoption(tmp_path)["adopted"] is False
+    assert app_setup.instruction_signature(tmp_path) != before_sig
+
+
 # --------------------------------------------------------------- 注入块
 def test_the_layer_block_names_its_directory_and_keeps_the_guard(tmp_path):
     target = _tree(tmp_path, {"sub": "SUB-MARKER"})

@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import platform
+import re
 import sys
 import time
 from pathlib import Path
 
+from minicode import state_files
 from minicode.agent import Agent
 from minicode.browser import browser_prompt_section
 from minicode.calendar import calendar_prompt_section
@@ -23,7 +25,10 @@ from minicode.llm import LLMClient
 from minicode.paths import SESSIONS_DIR, SYSTEM_PROMPT_PATH, app_path
 from minicode.permission import PermissionGate
 from minicode import permspec
-from minicode.sandbox import SandboxState, policy_from_raw
+from minicode.sandbox import (
+    CREDENTIAL_DIRS, CREDENTIAL_FILENAMES, CREDENTIAL_SUFFIXES,
+    SandboxState, policy_from_raw,
+)
 from minicode.session import Session
 from minicode.skills import load_skills, skill_dirs, skills_prompt_section
 from minicode.skills import _parse_frontmatter
@@ -33,6 +38,9 @@ from minicode.tools.registry import build_default_registry
 
 
 AGENTS_CHAR_LIMIT = 4000   # 一份指令文件的注入截断(与 memory 4000 同量级)
+AGENTS_IMPORT_LIMIT = 16000  # 递归导入的展开总量上限
+AGENTS_IMPORT_DEPTH = 8      # 防止 @import 链无限套娃
+AGENTS_IMPORT_COUNT = 32     # 单份指令最多展开多少份导入
 AGENTS_FILES = ("AGENTS.md", ".agents.md")   # Codex/ZCode/Claude Code 同款约定
 USER_AGENTS_NAME = "AGENTS.md"   # 用户级与项目级**同名不同位**:一个词,两个位置
 
@@ -57,7 +65,158 @@ INSTRUCTION_GUARD = ("这些是风格与流程上的规矩;沙箱边界、敏感
                      "「没答当没同意」不在其列,任何指令文件都改不动它们。")
 
 
-def _read_instruction(path: Path) -> dict:
+_IMPORT_RE = re.compile(r"^\s*@import\s+(.+?)\s*$", re.IGNORECASE)
+
+
+def _import_token(raw: str) -> str:
+    """取 @import 后的路径；支持整行引号包裹，空/注释回空串。"""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if text[0] in ("'", '"'):
+        quote = text[0]
+        end = text.find(quote, 1)
+        return text[1:end].strip() if end > 0 else ""
+    return text.split()[0]
+
+
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        p = path.resolve()
+        r = root.resolve()
+        return p == r or r in p.parents
+    except (OSError, ValueError):
+        return False
+
+
+def _contains_path_parts(parts: tuple[str, ...], wanted: tuple[str, ...]) -> bool:
+    """`wanted` 是否连续出现在路径段里(大小写不敏感,给 `.config/gcloud` 这类条目用)。"""
+    if not wanted or len(wanted) > len(parts):
+        return False
+    return any(parts[i:i + len(wanted)] == wanted
+               for i in range(len(parts) - len(wanted) + 1))
+
+
+def _credential_import(path: Path) -> bool:
+    name = path.name.lower()
+    if name in {x.lower() for x in CREDENTIAL_FILENAMES}:
+        return True
+    parts = tuple(part.lower() for part in path.parts)
+    for raw in CREDENTIAL_DIRS:
+        wanted = tuple(x for x in raw.replace("\\", "/").lower().split("/") if x)
+        if _contains_path_parts(parts, wanted):
+            return True
+    return any(name.endswith(s.lower()) for s in CREDENTIAL_SUFFIXES)
+
+
+def _app_state_import(path: Path, root: Path) -> bool:
+    """用户级导入不能把应用自己的运行数据当成规则读进提示词。"""
+    try:
+        rel = path.resolve().relative_to(root.resolve()).as_posix().lower()
+    except (OSError, ValueError):
+        return False
+    if rel == "config.example.json":
+        return True
+    for entry in state_files.SHIP_NEVER:
+        name = entry.name.lower()
+        if rel == name:
+            return True
+        # 文件也拦常见原子写/备份伴生名;目录则拦整棵子树。
+        if entry.kind == state_files.DIR and rel.startswith(name + "/"):
+            return True
+        if entry.kind == state_files.FILE and (
+                rel.startswith(name + ".") or rel.startswith(name + "-")):
+            return True
+    return False
+
+
+def _sensitive_import(path: Path, root: Path, *, app_private: bool) -> str:
+    """返回拒绝理由;空串表示可以导入。"""
+    if _credential_import(path):
+        return "凭据文件"
+    if app_private and _app_state_import(path, root):
+        return "本机数据文件"
+    return ""
+
+
+def _import_marker(text: str) -> str:
+    return f"(未导入: {text})"
+
+
+def _expand_imports(path: Path, root: Path, seen: set[Path],
+                    depth: int, budget: dict, *,
+                    app_private: bool = False) -> tuple[str, list[dict]]:
+    """展开一份指令文件中的 @import；返回正文与导入轨迹。"""
+    if depth > AGENTS_IMPORT_DEPTH:
+        return _import_marker(f"{path.name} 超过 {AGENTS_IMPORT_DEPTH} 层"), []
+    if budget["count"] >= AGENTS_IMPORT_COUNT:
+        return _import_marker(f"{path.name} 达到导入份数上限"), []
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return _import_marker(f"{path.name} 读不出来"), []
+    lines: list[str] = []
+    imports: list[dict] = []
+    in_fence = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            lines.append(line)
+            continue
+        match = _IMPORT_RE.match(line)
+        if in_fence or match is None:
+            lines.append(line)
+            continue
+        token = _import_token(match.group(1))
+        if not token:
+            lines.append(_import_marker("空的 @import 路径"))
+            continue
+        p = Path(token)
+        target = (path.parent / p) if not p.is_absolute() else p
+        try:
+            target = target.resolve()
+        except (OSError, ValueError):
+            lines.append(_import_marker(f"{token} 路径解析不了"))
+            continue
+        rel = str(target.relative_to(root.resolve())).replace("\\", "/") \
+            if _inside(target, root) else token
+        if not _inside(target, root):
+            lines.append(_import_marker(f"{rel} 在工作区外"))
+            imports.append({"path": rel, "ok": False, "why": "工作区外"})
+            continue
+        blocked = _sensitive_import(target, root, app_private=app_private)
+        if blocked:
+            lines.append(_import_marker(f"{rel} 是{blocked}"))
+            imports.append({"path": rel, "ok": False, "why": blocked})
+            continue
+        if not target.is_file():
+            lines.append(_import_marker(f"{rel} 不存在"))
+            imports.append({"path": rel, "ok": False, "why": "不存在"})
+            continue
+        if target in seen:
+            lines.append(_import_marker(f"{rel} 循环导入"))
+            imports.append({"path": rel, "ok": False, "why": "循环导入"})
+            continue
+        budget["count"] += 1
+        child, child_imports = _expand_imports(
+            target, root, seen | {target}, depth + 1, budget,
+            app_private=app_private)
+        imports.append({"path": rel, "ok": True, "why": ""})
+        imports.extend(child_imports)
+        lines.append(f"## 来自 {rel}\n{child}")
+        if budget["chars"] + sum(len(x) for x in lines) >= AGENTS_IMPORT_LIMIT:
+            lines.append(_import_marker(f"导入总量超过 {AGENTS_IMPORT_LIMIT} 字"))
+            break
+    body = "\n".join(lines).strip()
+    budget["chars"] = len(body)
+    if len(body) > AGENTS_IMPORT_LIMIT:
+        body = body[:AGENTS_IMPORT_LIMIT] + "\n(导入内容超过总量上限,已截断)"
+    return body, imports
+
+
+def _read_instruction(path: Path, import_root: Path | None = None, *,
+                      app_private: bool = False) -> dict:
     """读一份指令文件,返回 {exists, lines, chars, truncated, sha}。
 
     读不动(不存在/二进制/半截)一律回 exists=False:这一屏宁可少报一层,
@@ -74,11 +233,19 @@ def _read_instruction(path: Path) -> dict:
                 "truncated": False, "text": "", "sha": ""}
     if not text:
         return {"exists": False, "path": path, "lines": 0, "chars": 0,
-                "truncated": False, "text": "", "sha": ""}
+                "truncated": False, "text": "", "sha": "", "imports": []}
+    root = Path(import_root) if import_root is not None else path.parent
+    text, imports = _expand_imports(
+        path, root, {path.resolve()}, 0, {"count": 0, "chars": 0},
+        app_private=app_private)
+    if not text:
+        return {"exists": False, "path": path, "lines": 0, "chars": 0,
+                "truncated": False, "text": "", "sha": "", "imports": imports}
     return {"exists": True, "path": path, "text": text,
             "lines": len(text.splitlines()), "chars": len(text),
             "truncated": len(text) > AGENTS_CHAR_LIMIT,
-            "sha": hashlib.sha256(text.encode("utf-8")).hexdigest()}
+            "sha": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "imports": imports}
 
 
 def _instruction_body(found: dict) -> str:
@@ -105,7 +272,7 @@ def _root_sources(workspace) -> tuple[list[dict], list[dict]]:
     for name in AGENTS_FILES:
         p = ws / name
         if p.is_file():
-            found = _read_instruction(p)
+            found = _read_instruction(p, ws)
             if found["exists"]:
                 used.append({"name": name, "path": p, "found": found})
             break
@@ -114,7 +281,7 @@ def _root_sources(workspace) -> tuple[list[dict], list[dict]]:
         p = ws / name
         if not p.is_file():
             continue
-        found = _read_instruction(p)
+        found = _read_instruction(p, ws)
         if found["exists"]:
             used.append({"name": name, "path": p, "found": found})
     # ③ Cursor 的规则目录:只读**没有条件**的那几条;带 `globs` 的进 `skipped` 并写明理由。
@@ -127,7 +294,7 @@ def _root_sources(workspace) -> tuple[list[dict], list[dict]]:
         for p in entries:
             if not p.is_file() or p.suffix.lower() not in CURSOR_RULE_SUFFIXES:
                 continue
-            found = _read_instruction(p)
+            found = _read_instruction(p, ws)
             if not found["exists"]:
                 continue
             rel = f"{CURSOR_RULE_DIR}/{p.name}"
@@ -169,7 +336,8 @@ def _combined_root_found(workspace) -> tuple[dict | None, list[dict]]:
             "lines": len(text.splitlines()), "chars": len(text),
             "truncated": len(text) > AGENTS_CHAR_LIMIT,
             "sha": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "sources": [it["name"] for it in used]}, skipped
+            "sources": [it["name"] for it in used],
+            "imports": [imp for it in used for imp in it["found"].get("imports", [])]}, skipped
 
 
 def _rel_dir(workspace: Path, d: Path) -> str:
@@ -222,7 +390,7 @@ def subdir_agents_layers(workspace, target) -> list[dict]:
     chain.reverse()                      # 根 → 最近
     out = []
     for rel, p in chain:
-        found = _read_instruction(p)
+        found = _read_instruction(p, ws)
         if found["exists"]:
             out.append({"rel": rel, "path": p, "found": found})
     return out
@@ -286,7 +454,7 @@ def layer_at(workspace, rel: str) -> dict | None:
     for name in AGENTS_FILES:
         p = d / name
         if p.is_file():
-            found = _read_instruction(p)
+            found = _read_instruction(p, Path(workspace))
             return {"rel": rel, "path": p, "found": found} if found["exists"] else None
     return None
 
@@ -308,17 +476,20 @@ def instruction_layers(workspace, extra_rels=()) -> list[dict]:
     就是"它到底读了没有",多报一层假的比少报一层坏得多。
     """
     out = []
-    user = _read_instruction(app_path(USER_AGENTS_NAME))
+    user = _read_instruction(app_path(USER_AGENTS_NAME), app_path(),
+                             app_private=True)
     if user["exists"]:
         out.append({"scope": "用户级", "name": USER_AGENTS_NAME,
                     "lines": user["lines"], "chars": user["chars"],
-                    "truncated": user["truncated"]})
+                    "truncated": user["truncated"],
+                    "imports": len(user.get("imports", []))})
     found, skipped = _combined_root_found(workspace)
     if found is not None:
         out.append({"scope": "项目级", "name": " + ".join(found["sources"]),
                     "sources": found["sources"],
                     "lines": found["lines"], "chars": found["chars"],
                     "truncated": found["truncated"],
+                    "imports": len(found.get("imports", [])),
                     "adopted": (permspec.agents_adopted_sha(workspace)
                                 == found["sha"])})
     for item in skipped:
@@ -337,6 +508,7 @@ def instruction_layers(workspace, extra_rels=()) -> list[dict]:
         out.append({"scope": "目录级", "rel": rel, "name": layer["path"].name,
                     "lines": layer["found"]["lines"], "chars": layer["found"]["chars"],
                     "truncated": layer["found"]["truncated"],
+                    "imports": len(layer["found"].get("imports", [])),
                     "adopted": layer_adopted(workspace, layer)})
     return out
 
@@ -361,6 +533,8 @@ def instructions_line(workspace, extra_rels=()) -> str:
             skipped.append(it)
             continue
         tail = "、已截断" if it["truncated"] else ""
+        if it.get("imports"):
+            tail += f"、导入 {it['imports']} 份"
         if it["scope"] in ("项目级", "目录级") and not it.get("adopted", True):
             tail += "、未采纳"
         label = f"目录级 {it['rel']}/" if it["scope"] == "目录级" else it["scope"]
@@ -380,7 +554,8 @@ def user_agents_prompt_section() -> str:
     存在才注入,不存在就什么都不做 —— **不创建、也不提示"你应该写一份"**,
     那是把工程习惯塞给非技术的同学。它是主人自己写的,换机器靠「我的数据」带走。
     """
-    found = _read_instruction(app_path(USER_AGENTS_NAME))
+    found = _read_instruction(app_path(USER_AGENTS_NAME), app_path(),
+                              app_private=True)
     if not found["exists"]:
         return ""
     head = (f"# 工程规矩(用户级 {USER_AGENTS_NAME},你本人写的)\n"
@@ -451,10 +626,9 @@ def instruction_signature(workspace) -> str:
     """
     import hashlib
     h = hashlib.sha1()
-    try:
-        h.update(app_path(USER_AGENTS_NAME).read_bytes())
-    except OSError:
-        h.update(b"<missing>")
+    user = _read_instruction(app_path(USER_AGENTS_NAME), app_path(),
+                             app_private=True)
+    h.update((user["sha"] or "<missing>").encode("ascii"))
     # **折的是合并后的正文**,不是"第一份文件的字节":根上现在可能有好几份来源
     # (`AGENTS.md` + `.cursorrules` + `.cursor/rules/*.mdc`),只折第一份的话,
     # 改 `.cursorrules` 不会触发重建 —— 表现是"我改了规矩它还是老样子"。
