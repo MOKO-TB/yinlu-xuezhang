@@ -32,13 +32,15 @@ def test_clear_keeps_system(tmp_path):
     assert [m["role"] for m in s.messages] == ["system"]
 
 
-def test_load_skips_marker_lines(tmp_path):
+def test_load_replays_clear_then_later_messages(tmp_path):
     s1 = Session(system_prompt="sys", log_dir=tmp_path)
     s1.add_user("hi")
     s1.clear()
+    s1.add_user("清空后的新问题")
     s2 = Session(system_prompt="sys", log_dir=tmp_path)
     n = s2.load_from(s1.log_path)
-    assert n == 1  # cleared 标记行不计入消息
+    assert n == 1
+    assert s2.messages[-1]["content"] == "清空后的新问题"
 
 
 def test_list_sessions(tmp_path):
@@ -284,7 +286,7 @@ def test_list_sessions_captures_first_user_text(tmp_path):
 # ------------------------------------------- 留档 schema 版本(F4,v0.9.100)
 
 def test_session_start_carries_schema_version(tmp_path):
-    """session_start 行带 schema=2:留档格式从此有版本记账,格式再变时有
+    """session_start 行带当前 schema:留档格式从此有版本记账,格式再变时有
     一条明确的迁移路径,而不是各消费方自己猜形状。"""
     import glob as _glob
     import json as _json
@@ -325,7 +327,8 @@ def test_fork_log_file_copies_prefix_and_marks_origin(tmp_path):
     new_path, kept = got
     assert kept == 2
     data = json.loads(new_path.read_text(encoding="utf-8").splitlines()[0])
-    assert data["forked_from"] == real_src.name and data["schema"] == 2
+    assert data["forked_from"] == real_src.name \
+        and data["schema"] == session_mod.LOG_SCHEMA_VERSION
     lines = new_path.read_text(encoding="utf-8").splitlines()
     roles = [json.loads(l).get("role") for l in lines[1:]]
     assert roles == ["user", "assistant"], "分叉只保留前两**条消息**"

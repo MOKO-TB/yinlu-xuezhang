@@ -11,10 +11,11 @@ from minicode.llm import AssistantTurn
 from minicode.paths import SESSIONS_DIR
 
 
-# F4(v0.9.100):留档格式版本。当前格式 = 2(消息带 ts,session_start 带 schema);
+# F4(v0.9.100):留档格式版本。当前格式 = 3(消息带 ts;cleared/compacted/
+# regenerated 标记可带当时有效上下文 body);2 = 只有消息 ts 与标记计数;
 # 1 = v0.9.66 之前(无 ts / 无 schema)。加载侧按这个数**迁移**而不是各处猜形状
 # —— 留档格式再变时,新增一个迁移函数、把版本号 +1,消费方只认迁移后的形状。
-LOG_SCHEMA_VERSION = 2
+LOG_SCHEMA_VERSION = 3
 
 # W7:思考摘要进留档的截断上限。全文不落(思考动辄几十 KB,留档会撑爆),
 # 截断存 + 真总字数单独带 —— 时间线那句「思考 N 字」说的是真数,不是截后的残数。
@@ -160,6 +161,25 @@ def set_archived(path: Path, flag: bool) -> str:
             if flag else "已取消归档,回到原来的位置")
 
 
+def _snapshot_body(marker: dict) -> list[dict] | None:
+    """读标记里的有效上下文快照；没有/形状坏 = None(走旧日志兼容路径)。"""
+    raw = marker.get("body")
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for msg in raw:
+        if isinstance(msg, dict) and msg.get("role") in ("user", "assistant", "tool"):
+            out.append(msg)
+    return out
+
+
+def _drop_after_last_user(messages: list[dict]) -> list[dict]:
+    """旧 regenerated 标记的兼容重放：保留最后一句用户消息及其之前的内容。"""
+    last_user = max((i for i, m in enumerate(messages)
+                     if m.get("role") == "user"), default=-1)
+    return list(messages) if last_user < 0 else list(messages[:last_user + 1])
+
+
 class Session:
     def __init__(self, system_prompt: str, log_dir: Path | None = None,
                  workspace: Path | None = None, origin: str = ""):
@@ -253,10 +273,15 @@ class Session:
 
     def clear(self) -> None:
         """清空对话上下文,保留 system prompt。"""
-        self._replace_messages([], log_marker="cleared")
+        self._replace_messages([], log_marker="cleared", snapshot=True)
 
     def load_from(self, path: Path) -> int:
-        """从 JSONL 留档恢复历史(替换当前上下文),返回恢复的消息条数。"""
+        """按追加日志重放有效上下文,返回恢复的消息条数。
+
+        新日志里的 cleared/compacted/regenerated 标记带 `body` 快照,恢复时以它
+        为准;旧日志没有快照时保持兼容:compacted 只能读回旧历史,cleared 清空,
+        regenerated 按"最后一条用户消息之后全丢"重放。完整审计行始终留在盘上。
+        """
         loaded: list[dict] = []
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -266,8 +291,23 @@ class Session:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(obj, dict):
+                continue
             if obj.get("role") in ("user", "assistant", "tool"):
                 loaded.append(obj)
+                continue
+            kind = str(obj.get("type") or "")
+            body = _snapshot_body(obj)
+            if kind == "cleared":
+                loaded = body if body is not None else []
+            elif kind == "compacted":
+                # 旧标记没有 body:当时确实压过,但没有可重放的快照,只能保留旧行为。
+                if body is not None:
+                    loaded = body
+            elif kind == "regenerated":
+                loaded = body if body is not None else _drop_after_last_user(loaded)
+            elif kind == "resumed" and body is not None:
+                loaded = body
         loaded, fixed = repair_tool_pairs(loaded)
         self._log_path = path  # 后续对话继续写入该文件(标记也得落进这同一份留档)
         self._replace_messages(loaded, log_marker="resumed")
@@ -294,6 +334,7 @@ class Session:
         self._replace_messages(
             [m for m in msgs if m.get("role") != "system"],
             log_marker="compacted",
+            snapshot=True,
         )
 
     def drop_last_answer(self) -> int:
@@ -310,7 +351,8 @@ class Session:
         if last_user < 0 or last_user == len(msgs) - 1:
             return 0                    # 没提问过,或提问后一个字都还没答
         dropped = len(msgs) - last_user - 1
-        self._replace_messages(msgs[:last_user + 1], log_marker="regenerated")
+        self._replace_messages(msgs[:last_user + 1], log_marker="regenerated",
+                               snapshot=True)
         return dropped
 
     def last_user_message(self) -> dict | None:
@@ -322,12 +364,16 @@ class Session:
 
     # ------------------------------------------------------------------
 
-    def _replace_messages(self, body: list[dict], log_marker: str) -> None:
+    def _replace_messages(self, body: list[dict], log_marker: str,
+                          snapshot: bool = False) -> None:
         system = [m for m in self.messages if m.get("role") == "system"][:1]
         self.messages = system + list(body)
-        self._log_only({"type": log_marker,
-                        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "messages": len(self.messages)})
+        entry = {"type": log_marker,
+                 "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                 "messages": len(self.messages)}
+        if snapshot:
+            entry["body"] = list(body)
+        self._log_only(entry)
 
     def _append(self, msg: dict) -> None:
         self._ensure_log()   # 只有真实消息才创建留档文件;标记类写入不创建
