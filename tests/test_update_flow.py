@@ -36,6 +36,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     ranges_seen: list = []
     full_when_ranged = False      # /norange 用它:带着 Range 来也只给整件
     fail_nonzero_first = 0        # 前 N 个"从第 N 字节起"的请求直接 503(抖一下)
+    bytes_sent = 0                # 服务器一共被要走多少字节 —— "同一件下两遍"的判据
+    _lock = threading.Lock()      # 并发下载下 `+=` 会丢计数,丢了针就假绿
+
+    @classmethod
+    def _tally(cls, n: int) -> None:
+        with cls._lock:
+            cls.bytes_sent += n
 
     def log_message(self, *a):            # 测试里不往 stderr 打字
         pass
@@ -91,6 +98,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("ETag", '"abc123"')
             self.end_headers()
+            _Handler._tally(len(body))
             self.wfile.write(body)
             return
         # /real、/short 之外与 /norange:整件、200、不认 Range
@@ -100,6 +108,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("ETag", '"abc123"')
             self.end_headers()
+            _Handler._tally(len(body))
             self.wfile.write(body)
             return
         body = PAYLOAD
@@ -107,6 +116,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
+        _Handler._tally(len(body))
         for i in range(0, len(body), 4096):
             self.wfile.write(body[i:i + 4096])
 
@@ -119,6 +129,7 @@ def server():
     _Handler.ranges_seen = []
     _Handler.full_when_ranged = False
     _Handler.fail_nonzero_first = 0
+    _Handler.bytes_sent = 0
     yield "http://127.0.0.1:%d" % srv.server_address[1]
     srv.shutdown()
     srv.server_close()
@@ -323,14 +334,23 @@ def test_a_partial_records_its_measured_rate(server, tmp_path, monkeypatch):
     assert all("bps" in ev for ev in seen) or not seen, "进度事件里要带速率"
 
 
+def _route_stub(url):
+    """替掉择快路线那一步,只留"分段下载"本身 —— 探测自己也要发几个 Range 请求,
+    不替掉它,下面几支针里"服务器被要了几个起点"就分不清是探测还是下载了。"""
+    return lambda *a, **k: ({"url": url, "ctx": None, "label": "stub",
+                             "bps": 1.0, "honored": True}, [])
+
+
 def test_a_big_asset_goes_out_as_parallel_ranges_and_still_verifies(server, tmp_path,
                                                                     monkeypatch):
     """A:够大的一件**分几条连接各要一段**,而最后仍按整件 sha256 才算装得。
 
     判据不是"文件对上了"(从 0 单连接下也能对上),而是**服务器被要求从好几个不同
-    偏移开始发** —— 那才是并发。
+    偏移开始发** —— 那才是并发。第二条判据同样要紧:**服务器一共被要走 100 KB,
+    一件不多**(并发下完之后不许再来一遍,见下面那支针)。
     """
     monkeypatch.setattr(proactive, "PARALLEL_MIN", 1024)
+    monkeypatch.setattr(proactive, "_pick_route", _route_stub(server + "/ranged"))
     monkeypatch.setattr(proactive, "_expected_sha256", lambda *a, **k: (SHA, ""))
     _Handler.ranges_seen = []
     r = proactive.download_asset(_asset(server + "/ranged"), tmp_path)
@@ -343,19 +363,88 @@ def test_a_big_asset_goes_out_as_parallel_ranges_and_still_verifies(server, tmp_
         % _Handler.ranges_seen
     assert len(starts) >= proactive.PARALLEL_SEGS, \
         "只看到一个起点 = 并发没开(或它被静默降级了):%s" % _Handler.ranges_seen
+    assert _Handler.bytes_sent == len(PAYLOAD), \
+        "服务器被要走 %d 字节而这一件只有 %d —— 并发那一趟的结果没被当数" \
+        % (_Handler.bytes_sent, len(PAYLOAD))
+
+
+def test_the_parallel_pass_is_never_followed_by_a_second_full_download(
+        server, tmp_path, monkeypatch):
+    """v0.9.181 的真缺陷:并发把 135 MB 下完之后,代码又走了一遍顺序那条路。
+
+    顺序那条路从 0 重写(`_resumable()` 把 mode=parallel 的半截判为不可用 —— 那是对的),
+    于是**已经下好的整件被截断重下**;那一遍再一失败,完成品已经被 `_drop_part` 删了,
+    最后 `part.stat()` 直接抛异常 —— 用户看到的是进度条走到 100% 然后"下载这一步炸了",
+    盘上一个文件都没有。判据不是"最后有没有文件",而是**服务器被要走多少字节**:
+    一次探测(几条连接各一小段)+ 一趟整件,不许再来一整件。
+    """
+    monkeypatch.setattr(proactive, "PARALLEL_MIN", 1024)
+    monkeypatch.setattr(proactive, "PROBE_BYTES", 1024)     # 探测只许试一小截,别让它顶一件
+    monkeypatch.setattr(proactive, "_expected_sha256", lambda *a, **k: (SHA, ""))
+    r = proactive.download_asset(_asset(server + "/ranged"), tmp_path)
+    assert r["ok"] is True and r["verified"] == "ok", r
+    budget = len(PAYLOAD) + 1024 * proactive.PROBE_SEGS
+    assert _Handler.bytes_sent <= budget, \
+        "整件被下了两遍:一趟 %d + 探测 %d = %d,实测 %d —— 并发那趟的结果又被顺序那条路重下" \
+        % (len(PAYLOAD), 1024 * proactive.PROBE_SEGS, budget, _Handler.bytes_sent)
+
+
+def test_a_big_file_is_cut_into_more_chunks_than_connections(server):
+    """块数要**比连接数多**,否则"空闲的连接去领下一块"这句话没有对象。
+
+    142 MB 按连接数均分 = 每块 8.9 MB:实测那种情况下最后 10% 走了两分半(其余
+    十五条早空了,只剩一条 0.09 MB/s 的在收尾)。按 4 MB 切就有 36 块可领,尾巴最多
+    一块。反证:把 `_chunk_ranges` 换成 `_byte_ranges(total, PARALLEL_SEGS)` 这一支就红。
+    """
+    total = 141988826                       # v0.9.181 那件"仅 app"的真实尺寸
+    ch = proactive._chunk_ranges(total)
+    assert len(ch) > proactive.PARALLEL_SEGS, \
+        "块数 %d ≤ 连接数 %d = 每根连接一块跟到底,慢的那块就是整件的剩余时间" \
+        % (len(ch), proactive.PARALLEL_SEGS)
+    assert all(e - s + 1 <= proactive.SEG_CHUNK for s, e in ch), ch[:3]
+    assert [s for s, _e in ch] == sorted({s for s, _e in ch}), "块与块不许重叠或有缝"
+    assert sum(e - s + 1 for s, e in ch) == total, "拼起来必须正好是整件"
+    # 小文件反过来:不该切出比连接数还多的碎块(握手成本),也不该一块都凑不齐
+    assert len(proactive._chunk_ranges(1000)) == min(proactive.PARALLEL_SEGS, 1000)
+    assert proactive._chunk_ranges(0) == []
+
+
+def test_the_route_probe_measures_the_condition_it_will_be_used_under(server):
+    """择快路线必须**按并发**探,不能按单连接探。
+
+    为什么(2026-10-17 实测):这台机器 `api.github.com` 一条 0.056 / 八条 0.105 MB/s,
+    CDN 那条一条 0.038 / 八条 0.423 MB/s —— 单连接探会把首选投给 api,而真下载开多条
+    时它恰恰是最慢的那条。判据不是"探到了速率",而是**服务器看到好几个不同的起点**:
+    只有一个起点 = 又是单连接探测。顺带钉"服务器不认 Range"这条要如实报不可用。
+    """
+    _Handler.ranges_seen = []
+    bps, honored, why = proactive._probe_route(server + "/ranged", None, 10.0,
+                                               proactive.PROBE_SEGS, 4096)
+    starts = {s.split("=")[1].split("-")[0] for _v, s in _Handler.ranges_seen}
+    assert honored is True and bps > 0, (bps, honored, why)
+    assert len(starts) >= proactive.PROBE_SEGS, \
+        "探测只发了 %d 个起点 = 单连接探测,选出来的路线不代表并发时的快慢:%s" \
+        % (len(starts), _Handler.ranges_seen)
+    _Handler.ranges_seen = []
+    bps, honored, why = proactive._probe_route(server + "/norange", None, 10.0,
+                                               proactive.PROBE_SEGS, 4096)
+    assert honored is False and bps == 0.0 and "不认 Range" in why, (bps, honored, why)
 
 
 def test_one_flaky_segment_costs_a_resume_not_a_full_restart(server, tmp_path,
                                                              monkeypatch):
-    """四连接里"有一段抖一下"的概率本来就比单连接高 —— 一轮失败**不许把已下的全扔**。
+    """十几条连接里"有一块抖一下"的概率本来就比单连接高 —— 一次失败**不许把已下的全扔**。
 
     判据不是"最后文件对上了"(重来也能对上),而是**同一个起点被要了两次**:
-    第一段先 503,第二轮必须从它自己的偏移再要一次,而不是整件从 0 重来。
+    那块先 503,补领与第二轮都必须从它自己的偏移再要一次,而不是整件从 0 重来。
+    这里故意让前**两**个"从第 N 字节起"的请求都失败:第一次是本轮内的补领,
+    第二次才逼出第二轮 —— 少设一个,第二轮根本没被走到(针就空了)。
     """
     monkeypatch.setattr(proactive, "PARALLEL_MIN", 1024)
     monkeypatch.setattr(proactive, "PARALLEL_SEGS", 2)
+    monkeypatch.setattr(proactive, "_pick_route", _route_stub(server + "/ranged"))
     monkeypatch.setattr(proactive, "_expected_sha256", lambda *a, **k: (SHA, ""))
-    _Handler.fail_nonzero_first = 1
+    _Handler.fail_nonzero_first = 2
     r = proactive.download_asset(_asset(server + "/ranged"), tmp_path)
     assert r["ok"] is True and r["verified"] == "ok", r
     assert (tmp_path / ASSET_NAME).read_bytes() == PAYLOAD
@@ -364,7 +453,7 @@ def test_one_flaky_segment_costs_a_resume_not_a_full_restart(server, tmp_path,
     assert len([s for s in starts if s > 0]) >= 2, \
         "503 之后没有再从那一段的起点要过一次 = 整件重来了:%s" % _Handler.ranges_seen
     # 真正区分新旧行为的判据:**第一轮已经下完的那一段,第二轮不许再要一遍**。
-    # 起点 0 只允许出现两次:一次是择快路线的探测,一次是那段真下载。
+    # 这里探测被替掉了,所以起点 0 只允许出现两次:一次是第一段下完、一次是第二轮续。
     assert starts.count(0) <= 2, \
         "第一轮下完的段被重下了(轮间没记住各自到哪儿):%s" % _Handler.ranges_seen
 

@@ -1230,6 +1230,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # 是"包内又退回单连接,用户还是慢",而源码态全绿
                            "_byte_ranges", "_probe_route", "_pick_route",
                            "_download_segments", "_file_sha256",
+                           # v0.9.182 三样:①`_chunk_ranges` —— 块比连接数多,空闲连接才
+                           # 有下一块可领(漏收 = 包里还是"一条连接跟到底的一块 8.9 MB",
+                           # 一根慢线拖住整件,而源码态全绿);②三个常量各钉一根,因为
+                           # "抬到 16 条"这件事本身就是这一版要交付的东西,包里悄悄退回
+                           # 4 条是最难发现的一种没生效。
+                           "_chunk_ranges", "PARALLEL_SEGS", "SEG_CHUNK", "PROBE_SEGS",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",

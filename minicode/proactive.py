@@ -1023,8 +1023,10 @@ def _hash_prefix(path: Path, n: int) -> "object":
 
 
 PARALLEL_MIN = 8 * 1024 * 1024      # 小于这个数不值得开多条连接(握手成本 > 收益)
-PARALLEL_SEGS = 4                   # 保守取 4:家用路由的会话数、CDN 的每 IP 上限都吃得消
-PROBE_BYTES = 256 * 1024            # 每条路线试这么多字节来比分快慢
+PARALLEL_SEGS = 16                  # 连接数上限,2026-10-17 按实测从 4 抬到这里
+SEG_CHUNK = 4 * 1024 * 1024         # 一条连接一次领这么多;小文件按件数均分,见 `_chunk_ranges`
+PROBE_BYTES = 256 * 1024            # 每条探测连接试这么多字节来比分快慢
+PROBE_SEGS = 4                      # 探测按几条连接试 —— 为什么不能是 1,见 `_probe_route`
 
 
 def _byte_ranges(total: int, n: int) -> list:
@@ -1032,6 +1034,18 @@ def _byte_ranges(total: int, n: int) -> list:
     step = -(-total // n)
     return [(i * step, min(total, (i + 1) * step) - 1)
             for i in range(n) if i * step < total]
+
+
+def _chunk_ranges(total: int) -> list:
+    """整件切成"每块至多 SEG_CHUNK、且至少够 PARALLEL_SEGS 块"的若干块。
+
+    为什么不直接按连接数均分(v0.9.181 是 `_byte_ranges(total, 4)`):均分之下**一根
+    慢线就是整件的剩余时间** —— 142 MB 开 16 条,每块 8.9 MB,有一条只有 0.09 MB/s
+    时其余 15 条早空了(2026-10-17 实测:90% 之前 0.72 MB/s,最后那 10% 走了两分半)。
+    块切小 + 空闲的连接去领下一块,尾巴最多一块,快连接不必陪着等。
+    """
+    step = min(SEG_CHUNK, max(1, -(-int(total or 0) // PARALLEL_SEGS)))
+    return [(i, min(total, i + step) - 1) for i in range(0, int(total or 0), step)]
 
 
 def _open_client(u: str, ctx, connect_timeout: float):
@@ -1050,48 +1064,76 @@ def _file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _probe_route(u: str, ctx, connect_timeout: float):
-    """拉一小段给这条路线计时。回 `(bps, 认不认 Range, 实话)`;不通就回 0。
+def _probe_route(u: str, ctx, connect_timeout: float,
+                 segs: int = PROBE_SEGS, per: int = PROBE_BYTES):
+    """**按并发**给一条路线计时:同时开 `segs` 条连接各拉 `per` 字节,比聚合速率。
 
-    为什么要有这一步(而不是"失败才退下一条"):v0.9.177 把 `api.github.com` 排成首选
-    是对的 —— 有些机器 `github.com:443` 整台连不通而 API 通。但**慢不是失败**:
-    2026-10-17 这台机器上实测单连接 0.03 MB/s vs 0.28 MB/s(慢 9 倍),按"失败才退"
-    那条永远退不过去。
+    为什么不能单连接探(v0.9.181 原来那样,2026-10-17 实测撞出来的第三个坑):这台机器
+    `api.github.com` 一条 0.056 / 八条 0.105 MB/s,而 CDN 那条(`browser_download_url`
+    302 过去的 `release-assets.githubusercontent.com`)一条 0.038 / 八条 0.423 MB/s。
+    单连接探会把首选投给 api —— 那一刻它确实更快 —— 而真下载开多条时它恰恰是最慢的那条。
+    **探测的条件必须和使用它的条件一致**,否则选出来的不是要用的那个东西。
     """
-    got = 0
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    lock = threading.Lock()
+    got = [0]
+    bad: list[str] = []
+    ignored = [False]
+
+    def one(i):
+        lo = i * per
+        hd = {"Accept": "application/octet-stream",
+              "Range": "bytes=%d-%d" % (lo, lo + per - 1)}
+        n = 0
+        try:
+            with _open_client(u, ctx, connect_timeout) as c:
+                with c.stream("GET", u, headers=hd) as r:
+                    if r.status_code == 200:
+                        with lock:
+                            ignored[0] = True        # 并发在它身上是假的
+                        return
+                    if r.status_code != 206:
+                        with lock:
+                            bad.append("%s HTTP %s" % (_host_of(u), r.status_code))
+                        return
+                    for chunk in r.iter_bytes():
+                        n += len(chunk)
+                        if n >= per:
+                            break
+        except Exception as e:
+            with lock:
+                bad.append("%s %s" % (_host_of(u), type(e).__name__))
+            return
+        with lock:
+            got[0] += n
+
+    k = max(1, int(segs or 1))
     t0 = time.monotonic()
-    honored = False
-    try:
-        with _open_client(u, ctx, connect_timeout) as c:
-            with c.stream("GET", u, headers={
-                    "Accept": "application/octet-stream",
-                    "Range": "bytes=0-%d" % (PROBE_BYTES - 1)}) as r:
-                if r.status_code not in (200, 206):
-                    return 0.0, False, "%s HTTP %s" % (_host_of(u), r.status_code)
-                honored = r.status_code == 206
-                for chunk in r.iter_bytes():
-                    got += len(chunk)
-                    if not honored or got >= PROBE_BYTES:
-                        break
-    except Exception as e:
-        return 0.0, False, "%s %s" % (_host_of(u), type(e).__name__)
+    with ThreadPoolExecutor(max_workers=k) as ex:
+        list(ex.map(one, range(k)))
     dt = max(time.monotonic() - t0, 1e-6)
-    return (got / dt) if honored else 0.0, honored, (
-        "" if honored else "%s 不认 Range" % _host_of(u))
+    if ignored[0]:
+        return 0.0, False, "%s 不认 Range" % _host_of(u)
+    if not got[0]:
+        return 0.0, False, "；".join(bad[:2]) or "%s 一个字节没拿到" % _host_of(u)
+    return got[0] / dt, True, ""
 
 
-def _pick_route(urls: list, variants: list, connect_timeout: float):
-    """两条路线各试一小段,**谁快用谁**。回 `(路线或 None, 试过的实话列表)`。"""
+def _pick_route(urls: list, variants: list, connect_timeout: float,
+                total: int = 0, segs: int = PROBE_SEGS):
+    """两条路线各**按并发**试一小段,谁快用谁。回 `(路线或 None, 试过的实话列表)`。"""
     best = None
     notes: list[str] = []
+    per = min(PROBE_BYTES, max(1, int(total or 0) // max(1, segs)))
     for u in urls:
         for label, ctx in variants:
-            bps, honored, why = _probe_route(u, ctx, connect_timeout)
+            bps, honored, why = _probe_route(u, ctx, connect_timeout, segs, per)
             if why:
                 notes.append("%s:%s" % (label, why))
                 continue
-            cand = {"url": u, "ctx": ctx, "label": label, "bps": bps,
-                    "honored": honored}
+            cand = {"url": u, "ctx": ctx, "label": "%s@%s" % (label, _host_of(u)),
+                    "bps": bps, "honored": honored}
             if best is None or bps > best["bps"]:
                 best = cand
             break                       # 这一跳的证书链通了,不必再试第二跳
@@ -1100,69 +1142,95 @@ def _pick_route(urls: list, variants: list, connect_timeout: float):
 
 def _download_segments(part: Path, ranges: list, url: str, ctx, connect_timeout,
                        should_stop, on_got, validator: str, resume: dict):
-    """A:一条连接只给它自己那一段,写进同一个 `.part` 的各自偏移。
+    """A:一条连接只领一块,写进同一个 `.part` 的各自偏移;领完一块再领下一块。
 
-    为什么敢让四个线程碰同一个文件:每段只写**互不重叠**的区间,且各自 `seek` 之后
+    为什么敢让十几条线程碰同一个文件:每块只写**互不重叠**的区间,且各自 `seek` 之后
     顺序写 —— 没有交叉覆盖可言。代价是这半截文件**中间可能有洞**,所以:
     ①续传只认这张条子里的 `segs`(顺序那条路看见 `mode=parallel` 就当它不可用、删掉重来,
     绝不把两份不同的字节接在一起);②摘要**最后整件算一次**,不边下边喂 —— 分段顺序
     喂出来的哈希根本不是这个文件的。
+
+    为什么要"领下一块"而不是一块跟到底:见 `_chunk_ranges` —— 一块 8.9 MB 的慢连接
+    能把整件拖住几分钟,而块小了空闲的连接会自己补上。同一块在本轮内**最多补领一次**,
+    再不行就留给下一轮从它自己的偏移续(两轮是既有代码的形状,没换)。
     """
     import threading
     from concurrent.futures import ThreadPoolExecutor
     lock = threading.Lock()
     state = {"stop": False, "unsupported": False, "why": []}
-    offs = {}
+    offs = {i: int(resume.get(i) or s) for i, (s, _e) in enumerate(ranges)}
+    todo = list(range(len(ranges)))
+    retried: set = set()
 
-    def one(i):
-        start, end = ranges[i]
-        off = max(int(resume.get(i) or 0), start)
-        if off > end:
-            offs[i] = end + 1
-            return
-        hd = {"Accept": "application/octet-stream", "Range": "bytes=%d-%d" % (off, end)}
-        if validator:
-            hd["If-Range"] = validator
-        try:
-            with _open_client(url, ctx, connect_timeout) as c:
-                with c.stream("GET", url, headers=hd) as r:
-                    if r.status_code == 416:
-                        offs[i] = end + 1
-                        return
-                    if r.status_code == 200 and off > start:
-                        with lock:
-                            state["unsupported"] = True
-                        return
-                    if r.status_code not in (200, 206):
-                        with lock:
-                            state["why"].append("%s HTTP %s(第 %d 段)"
-                                                % (_host_of(url), r.status_code, i))
-                        return
-                    with part.open("r+b") as f:
-                        f.seek(off)
-                        for chunk in r.iter_bytes():
-                            with lock:
-                                if state["stop"]:
-                                    return
-                                if should_stop is not None and should_stop():
-                                    state["stop"] = True
-                                    return
-                            f.write(chunk)
-                            off += len(chunk)
-                            offs[i] = off
-                            if on_got is not None:
-                                on_got(sum(offs.get(k, v[0]) - v[0]
-                                           for k, v in enumerate(ranges)))
-            offs[i] = off
-        except Exception as e:
+    def got_now():
+        return sum(max(0, offs.get(k, v[0]) - v[0])
+                   for k, v in enumerate(ranges))
+
+    def give_back(i, why):
+        """这块本轮没成:记一句实话,并允许它在本轮内再被领走一次。"""
+        with lock:
+            state["why"].append(why)
+            if i not in retried:
+                retried.add(i)
+                todo.insert(0, i)
+
+    def one():
+        while True:
             with lock:
-                state["why"].append("%s %s(第 %d 段)" % (_host_of(url),
-                                                        type(e).__name__, i))
+                if state["stop"] or state["unsupported"] or not todo:
+                    return
+                i = todo.pop(0)
+            start, end = ranges[i]
+            off = max(int(resume.get(i) or 0), offs.get(i, start), start)
+            if off > end:
+                with lock:
+                    offs[i] = end + 1
+                continue
+            hd = {"Accept": "application/octet-stream",
+                  "Range": "bytes=%d-%d" % (off, end)}
+            if validator:
+                hd["If-Range"] = validator
+            try:
+                with _open_client(url, ctx, connect_timeout) as c:
+                    with c.stream("GET", url, headers=hd) as r:
+                        if r.status_code == 416:
+                            with lock:
+                                offs[i] = end + 1
+                            continue
+                        if r.status_code == 200 and off > start:
+                            with lock:
+                                state["unsupported"] = True
+                            return
+                        if r.status_code not in (200, 206):
+                            give_back(i, "%s HTTP %s(第 %d 块)"
+                                      % (_host_of(url), r.status_code, i))
+                            continue
+                        with part.open("r+b") as f:
+                            f.seek(off)
+                            for chunk in r.iter_bytes():
+                                with lock:
+                                    if state["stop"]:
+                                        return
+                                    if should_stop is not None and should_stop():
+                                        state["stop"] = True
+                                        return
+                                f.write(chunk)
+                                with lock:
+                                    off += len(chunk)
+                                    offs[i] = off
+                                    seen = got_now()
+                                if on_got is not None:
+                                    on_got(seen)
+                with lock:
+                    offs[i] = off
+            except Exception as e:
+                with lock:
+                    offs[i] = off
+                give_back(i, "%s %s(第 %d 块)" % (_host_of(url),
+                                                  type(e).__name__, i))
 
-    for i, (s, _e) in enumerate(ranges):
-        offs[i] = int(resume.get(i) or s)
-    with ThreadPoolExecutor(max_workers=len(ranges)) as ex:
-        list(ex.map(one, range(len(ranges))))
+    with ThreadPoolExecutor(max_workers=min(PARALLEL_SEGS, len(ranges))) as ex:
+        list(ex.map(lambda _k: one(), range(min(PARALLEL_SEGS, len(ranges)))))
     if state["unsupported"]:
         return "unsupported", offs, "服务器把带 Range 的请求当整件回,退回单连接"
     if state["stop"]:
@@ -1336,10 +1404,11 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
         # ---- A + B:大件先"两条路线各试一小段,谁快用谁",再一条连接给一段 ----
         # 任何一步不成就照原样走下面那条单连接的路 —— 并发是优化,不是新前提。
         if total >= PARALLEL_MIN:
-            route, rnotes = _pick_route(urls, variants, connect_timeout)
+            route, rnotes = _pick_route(urls, variants, connect_timeout, total,
+                                        min(PARALLEL_SEGS, PROBE_SEGS))
             attempt_why.extend(rnotes)
             if route is not None and route["honored"]:
-                ranges = _byte_ranges(total, PARALLEL_SEGS)
+                ranges = _chunk_ranges(total)
                 # 两**轮**,不是一次:四连接里"至少一段抖一下"的概率本来就比单连接高,
                 # 一次抖动就把已下的全扔了重下,在慢网络上是净亏。第一轮把每段偏移写进
                 # 条子,第二轮从各自偏移接着走 —— 洞只挡顺序那条路,不挡分段自己续传。
@@ -1391,28 +1460,34 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
                     # 两轮都不行:这半截**中间有洞**,顺序那条路不能拿它续传 → 删掉重来,
                     # 绝不把两份不同来源的字节接成一个谁都没发布过的文件。
                     _drop_part(part)
-        for u in urls:
-            for label, ctx in variants:
-                start_at, validator = _resumable()
-                resumed_from = start_at      # 进度里要说"这 N MB 是本机原有的"
-                outcome, pos, digest, v, why, joined_at = attempt(
-                    u, label, ctx, start_at, validator)
-                if outcome == "stop":
-                    _write_sidecar(part, {"name": safe, "total": total,
-                                          "validator": v or validator, "bytes": pos,
-                                          "bps": meter.read()})
-                    return {"ok": False, "cancelled": True, "verified": "none",
-                            "partial": pos, "resumable": True,
-                            "why": "已取消,已下的 %s 留着,下次点下载接着走"
-                                   % fmt_bytes(pos)}
-                if outcome == "done":
-                    sha, validator = digest, v
-                    resumed = joined_at > 0
+        # ⚠ 并发那趟**已经拿到整件字节**时,绝不能再走下面这条顺序的路。顺序那条路
+        # 从 0 重写(`_resumable()` 把 mode=parallel 的半截判为不可用,这是对的),
+        # 于是刚下好的 135 MB 被截断重下一遍;而这一遍一旦失败,完成品已经被
+        # `_drop_part` 删掉,最后连"半截留着"都谈不上 —— v0.9.181 就是这么把一次成功
+        # 的并发下载变成界面上一句"下载这一步炸了"的(2026-10-17 实测撞出来)。
+        if sha is None:
+            for u in urls:
+                for label, ctx in variants:
+                    start_at, validator = _resumable()
+                    resumed_from = start_at  # 进度里要说"这 N MB 是本机原有的"
+                    outcome, pos, digest, v, why, joined_at = attempt(
+                        u, label, ctx, start_at, validator)
+                    if outcome == "stop":
+                        _write_sidecar(part, {"name": safe, "total": total,
+                                              "validator": v or validator,
+                                              "bytes": pos, "bps": meter.read()})
+                        return {"ok": False, "cancelled": True, "verified": "none",
+                                "partial": pos, "resumable": True,
+                                "why": "已取消,已下的 %s 留着,下次点下载接着走"
+                                       % fmt_bytes(pos)}
+                    if outcome == "done":
+                        sha, validator = digest, v
+                        resumed = joined_at > 0
+                        break
+                    if why:
+                        attempt_why.append(why)
+                if sha is not None:
                     break
-                if why:
-                    attempt_why.append(why)
-            if sha is not None:
-                break
         if sha is None:
             # 中断/失败的半截**留着**:记下它现在的字节数与那把验证器,下次接着下
             have = part.stat().st_size if part.exists() else 0
