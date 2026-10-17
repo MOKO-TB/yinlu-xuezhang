@@ -1026,7 +1026,7 @@ PARALLEL_MIN = 8 * 1024 * 1024      # 小于这个数不值得开多条连接(�
 PARALLEL_SEGS = 16                  # 连接数上限,2026-10-17 按实测从 4 抬到这里
 SEG_CHUNK = 4 * 1024 * 1024         # 一条连接一次领这么多;小文件按件数均分,见 `_chunk_ranges`
 PROBE_BYTES = 256 * 1024            # 每条探测连接试这么多字节来比分快慢
-PROBE_SEGS = 4                      # 探测按几条连接试 —— 为什么不能是 1,见 `_probe_route`
+PROBE_SEGS = 4                      # 探测按几条连接试 —— 为什么不是 1、也不是 16,见下两条
 
 
 def _byte_ranges(total: int, n: int) -> list:
@@ -1072,7 +1072,9 @@ def _probe_route(u: str, ctx, connect_timeout: float,
     `api.github.com` 一条 0.056 / 八条 0.105 MB/s,而 CDN 那条(`browser_download_url`
     302 过去的 `release-assets.githubusercontent.com`)一条 0.038 / 八条 0.423 MB/s。
     单连接探会把首选投给 api —— 那一刻它确实更快 —— 而真下载开多条时它恰恰是最慢的那条。
-    **探测的条件必须和使用它的条件一致**,否则选出来的不是要用的那个东西。
+    但**探测也别开太多**:2026-10-17 按 8/16 条探,三轮就把匿名配额(60/小时)烧到 `403`,
+    而 403 时这里回 `None`、整条下载退回单连接;64 KB × N 的预算测的其实是握手不是吞吐,
+    两条路根本分不开。所以并发那条路不赌探测结果 —— 顺序见 `_parallel_urls`。
     """
     import threading
     from concurrent.futures import ThreadPoolExecutor
@@ -1138,6 +1140,19 @@ def _pick_route(urls: list, variants: list, connect_timeout: float,
                 best = cand
             break                       # 这一跳的证书链通了,不必再试第二跳
     return best, notes
+
+
+def _parallel_urls(urls: list) -> list:
+    """并发那条路上把 CDN 直链(`browser_download_url`)排到 api 资产地址前面。
+
+    为什么顺序要反过来(v0.9.182 实测):`api.github.com` 那个资产地址**按 IP 限得更死**
+    —— 八条连接 0.045–0.105 MB/s,而 CDN 那条同条件 0.26–0.42;小预算探测分不开它们,
+    多开几条去探又会把匿名配额烧穿。api 排首选的理由(有些机器 `github.com:443` 整台不通、
+    只有 API 通)**仍然成立**,但那是**可达性**的理由,不是速度的理由 —— 所以它现在是
+    兜底那一条:CDN 不通、或不认 Range,才轮到它。顺序探测照旧处理这两种失败。
+    """
+    return ([u for u in urls if "api.github.com" not in u]
+            + [u for u in urls if "api.github.com" in u])
 
 
 def _download_segments(part: Path, ranges: list, url: str, ctx, connect_timeout,
@@ -1404,8 +1419,8 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
         # ---- A + B:大件先"两条路线各试一小段,谁快用谁",再一条连接给一段 ----
         # 任何一步不成就照原样走下面那条单连接的路 —— 并发是优化,不是新前提。
         if total >= PARALLEL_MIN:
-            route, rnotes = _pick_route(urls, variants, connect_timeout, total,
-                                        min(PARALLEL_SEGS, PROBE_SEGS))
+            route, rnotes = _pick_route(_parallel_urls(urls), variants,
+                                        connect_timeout, total, PROBE_SEGS)
             attempt_why.extend(rnotes)
             if route is not None and route["honored"]:
                 ranges = _chunk_ranges(total)

@@ -1236,6 +1236,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # "抬到 16 条"这件事本身就是这一版要交付的东西,包里悄悄退回
                            # 4 条是最难发现的一种没生效。
                            "_chunk_ranges", "PARALLEL_SEGS", "SEG_CHUNK", "PROBE_SEGS",
+                           # 并发那条路的路线顺序(先 CDN、api 兜底)是这一档速度收益的
+                           # 来源;漏收 = 包里又回到"赌一次小探测",而实测它赌不准。
+                           "_parallel_urls",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",

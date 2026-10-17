@@ -389,6 +389,23 @@ def test_the_parallel_pass_is_never_followed_by_a_second_full_download(
         % (len(PAYLOAD), 1024 * proactive.PROBE_SEGS, budget, _Handler.bytes_sent)
 
 
+def test_the_parallel_path_prefers_the_cdn_link_and_keeps_api_as_the_fallback():
+    """并发那条路先试 CDN,api 退回兜底;顺序那条路照旧 api 优先。
+
+    判据是**顺序**本身而不是速率:小预算探测分不开两条路(2026-10-17 三轮里 api 赢八次,
+    其中一次还是 api 自己回 403 才让 CDN 赢),而把探测开到 8/16 条会在一小时内把匿名
+    配额(60 次)烧穿 —— 403 时 `_pick_route` 回 None,整条下载反而退回单连接。
+    api 排首选的理由(有些机器 `github.com:443` 整台不通)是**可达性**,兜底那条正好用它。
+    """
+    api = "https://api.github.com/repos/x/releases/assets/1"
+    cdn = "https://github.com/x/releases/download/v1/appupdate.exe"
+    assert proactive._parallel_urls([api, cdn]) == [cdn, api]
+    assert proactive._parallel_urls([api]) == [api], "只有一条时无序可排,别把它排没了"
+    assert proactive._parallel_urls([cdn]) == [cdn]
+    loop = ["http://127.0.0.1:1/a", "http://127.0.0.1:1/b"]
+    assert proactive._parallel_urls(loop) == loop, "本地测试服务器不该被这条规则动到"
+
+
 def test_a_big_file_is_cut_into_more_chunks_than_connections(server):
     """块数要**比连接数多**,否则"空闲的连接去领下一块"这句话没有对象。
 
