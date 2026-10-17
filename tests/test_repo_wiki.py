@@ -9,6 +9,8 @@
 6. 工具调用(repo_wiki_tool)正常回执与容错。
 """
 
+import os
+
 from minicode import repo_wiki
 from minicode.config import Config
 from minicode.tools.base import ToolContext
@@ -154,3 +156,73 @@ def test_repo_wiki_tool_execution(tmp_path):
     wiki_file = repo_wiki.get_wiki_file(tmp_path)
     if wiki_file.is_file():
         wiki_file.unlink()
+
+
+def test_wiki_refreshes_changed_module_and_tracks_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(repo_wiki, "APP_DIR", tmp_path / "state")
+    ws = tmp_path / "project"
+    ws.mkdir()
+    (ws / "README.md").write_text("# Demo\n\nActual description", encoding="utf-8")
+    a = ws / "alpha"
+    b = ws / "beta"
+    a.mkdir()
+    b.mkdir()
+    (a / "main.py").write_text("def start():\n    pass\n", encoding="utf-8")
+    (b / "other.py").write_text("def old():\n    pass\n", encoding="utf-8")
+    first = repo_wiki.get_or_build_wiki(ws)
+    assert first["overview_source"] == "README.md:1"
+    assert first["languages"][0] == "Python"
+    assert "alpha/main.py:1" in repo_wiki.format_wiki_view(first, "module", "alpha")
+
+    (a / "main.py").write_text("\n\ndef changed():\n    pass\n", encoding="utf-8")
+    second = repo_wiki.get_or_build_wiki(ws)
+    assert "alpha/main.py:3" in repo_wiki.format_wiki_view(second, "module", "alpha")
+    assert second["modules"][1] == first["modules"][1]
+    (a / "main.py").unlink()
+    third = repo_wiki.get_or_build_wiki(ws)
+    assert third["total_files"] == second["total_files"] - 1
+
+
+def test_wiki_detects_content_change_even_when_size_and_mtime_are_unchanged(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(repo_wiki, "APP_DIR", tmp_path / "state")
+    ws = tmp_path / "project"
+    src = ws / "src"
+    src.mkdir(parents=True)
+    target = src / "main.py"
+    target.write_text("def first(): pass\n", encoding="utf-8")
+    stat = target.stat()
+    first = repo_wiki.get_or_build_wiki(ws)
+
+    target.write_text("def other(): pass\n", encoding="utf-8")
+    os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    second = repo_wiki.get_or_build_wiki(ws)
+
+    assert target.stat().st_size == stat.st_size
+    assert "src/main.py:1" in repo_wiki.format_wiki_view(second, "module", "src")
+    assert second["modules"] != first["modules"]
+
+
+def test_wiki_excludes_credentials_and_symlinked_dirs(tmp_path):
+    ws = tmp_path / "project"
+    ws.mkdir()
+    src = ws / "src"
+    src.mkdir()
+    (src / "real.py").write_text("def public(): pass\n", encoding="utf-8")
+    (src / ".env").write_text("SECRET=abc", encoding="utf-8")
+    (src / "private.pem").write_text("SECRET=def", encoding="utf-8")
+    (src / "credentials.json").write_text("SECRET=ghi", encoding="utf-8")
+    (src / "config.json").write_text("SECRET=jkl", encoding="utf-8")
+    (ws / ".ssh").mkdir()
+    (ws / ".ssh" / "id_rsa").write_text("SECRET=key", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "leak.py").write_text("def secret(): pass", encoding="utf-8")
+    try:
+        (ws / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pass
+    result = repo_wiki.scan_workspace(ws)
+    assert result["total_files"] == 1
+    assert result["modules"][0]["sources"][0]["location"] == "src/real.py:1"
+    assert "linked" not in [m["name"] for m in result["modules"]]

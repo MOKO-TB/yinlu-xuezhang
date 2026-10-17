@@ -12,12 +12,20 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from minicode.paths import APP_DIR
+from minicode import symbol_search
+from minicode.sandbox import CREDENTIAL_DIRS, CREDENTIAL_FILENAMES, CREDENTIAL_SUFFIXES
 from minicode.tools.base import ToolContext
+
+WIKI_SCHEMA = 3
+_SOURCE_EXTS = frozenset(symbol_search.SUPPORTED_EXTS)
+_SKIP_FILES = frozenset(CREDENTIAL_FILENAMES) | {"config.json", "config.example.json"}
+_HASH_MAX_BYTES = 512 * 1024
 
 # 扫描时忽略的目录与隐藏项(与 repo_outline 同一哲学)
 _IGNORE_DIRS = {
@@ -26,6 +34,7 @@ _IGNORE_DIRS = {
     ".yinluxs", "checkpoints", "sessions", "uploads", "crawled",
     "browser-profile", "_pwtest", "_pwtest_empty", "repo-wiki", "repo_wiki",
 }
+_IGNORE_DIRS.update(CREDENTIAL_DIRS)
 
 # 常见顶层目录用途推断表
 _DIR_PURPOSES = {
@@ -69,28 +78,31 @@ def get_wiki_file(workspace: Path) -> Path:
     return d / f"{_workspace_hash(workspace)}.json"
 
 
-def _extract_readme_overview(workspace: Path) -> str:
+def _extract_readme_overview(workspace: Path) -> tuple[str, str]:
     """提取 README 开头的核心介绍(过滤掉徽标和纯标题)。"""
     for name in ("README.md", "README.rst", "README.txt", "readme.md"):
         p = workspace / name
-        if p.is_file():
+        if p.is_file() and not p.is_symlink():
             try:
                 content = p.read_text(encoding="utf-8", errors="replace")
                 lines = []
-                for line in content.splitlines()[:50]:
+                first = 0
+                for number, line in enumerate(content.splitlines()[:50], 1):
                     s = line.strip()
                     if not s or s.startswith(("[![", "[!", "<!--", "```")):
                         continue
                     if s.startswith("#"):
                         s = s.lstrip("#").strip()
+                    if not first:
+                        first = number
                     lines.append(s)
                     if len(lines) >= 3:
                         break
                 if lines:
-                    return "；".join(lines)
+                    return "；".join(lines), f"{name}:{first}"
             except Exception:
                 pass
-    return "暂无 README 概括"
+    return "暂无 README 概括", ""
 
 
 def _extract_commands(workspace: Path) -> dict[str, str]:
@@ -157,28 +169,109 @@ def _extract_commands(workspace: Path) -> dict[str, str]:
     return cmds
 
 
-def _extract_conventions(workspace: Path) -> str:
+def _extract_conventions(workspace: Path) -> tuple[str, str]:
     """从 AGENTS.md / CLAUDE.md / .cursorrules 提取工程约定要点。"""
     for name in ("AGENTS.md", "CLAUDE.md", ".cursorrules", "CONTRIBUTING.md"):
         p = workspace / name
-        if p.is_file():
+        if p.is_file() and not p.is_symlink():
             try:
                 txt = p.read_text(encoding="utf-8", errors="replace")
                 key_lines = []
-                for line in txt.splitlines():
+                first = 0
+                for number, line in enumerate(txt.splitlines(), 1):
                     s = line.strip()
                     if s.startswith(("- ", "* ", "1. ", "2. ", "3. ", "4. ", "5. ")):
+                        if not first:
+                            first = number
                         key_lines.append(s[:80])
                     if len(key_lines) >= 5:
                         break
                 if key_lines:
-                    return f"来自 {name}:\n" + "\n".join(f"  {line}" for line in key_lines)
+                    return (f"来自 {name}:\n" + "\n".join(f"  {line}" for line in key_lines),
+                            f"{name}:{first}")
             except Exception:
                 pass
-    return "遵循常规开源工程规范(保持代码清晰、单测完备)"
+    return "未从项目约定文件提取到规则", ""
 
 
-def scan_workspace(workspace: Path) -> dict[str, Any]:
+def _eligible(path: Path) -> bool:
+    """不跟随目录链接,也不读取凭据类文件；Wiki 缓存可能进入模型上下文。"""
+    name = path.name.lower()
+    return (not path.is_symlink() and not name.startswith(".")
+            and name not in _SKIP_FILES
+            and path.suffix.lower() not in CREDENTIAL_SUFFIXES)
+
+
+def _fingerprint(path: Path, size: int) -> str:
+    """小文件用内容指纹兜住 size+mtime 都没变的修改；大文件只记元信息。"""
+    if size > _HASH_MAX_BYTES:
+        return ""
+    h = hashlib.sha256()
+    try:
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(64 * 1024), b""):
+                h.update(chunk)
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
+def _inventory(
+    workspace: Path,
+) -> tuple[dict[str, list[tuple[str, int, int, str]]],
+           list[tuple[str, int, int, str]]]:
+    """仅取文件元信息；按目录分指纹,未变化的模块复用之前的索引。"""
+    groups: dict[str, list[tuple[str, int, int, str]]] = {}
+    root_files: list[tuple[str, int, int, str]] = []
+    for root, dirs, files in os.walk(workspace, followlinks=False):
+        parent = Path(root)
+        dirs[:] = sorted(d for d in dirs if not d.startswith((".", "_"))
+                         and d not in _IGNORE_DIRS and _eligible(parent / d))
+        rel_parent = parent.relative_to(workspace)
+        if rel_parent.parts and rel_parent.parts[0].startswith("_"):
+            dirs[:] = []
+            continue
+        for name in sorted(files):
+            path = parent / name
+            if not _eligible(path):
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            entry = (path.relative_to(workspace).as_posix(), stat.st_size,
+                     stat.st_mtime_ns, _fingerprint(path, stat.st_size))
+            if rel_parent.parts:
+                groups.setdefault(rel_parent.parts[0], []).append(entry)
+            else:
+                root_files.append(entry)
+    return groups, root_files
+
+
+def _module_from_inventory(workspace: Path, name: str,
+                           entries: list[tuple[str, int, int, str]]) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    key_files: list[str] = []
+    sources: list[dict[str, Any]] = []
+    for rel, _size, _mtime, _digest in entries:
+        ext = Path(rel).suffix.lower()
+        counts[ext] = counts.get(ext, 0) + 1
+        if ext in _SOURCE_EXTS and len(key_files) < 4:
+            key_files.append(rel)
+            # 引用的是实际定义位置,不是对模块职责的模型推断。
+            for symbol in symbol_search.extract_file_symbols(workspace / rel, rel):
+                if symbol.get("kind") in ("class", "function", "interface"):
+                    sources.append({"name": symbol["name"], "location":
+                                    f"{rel}:{symbol['line']}"})
+                if len(sources) >= 8:
+                    break
+    top_exts = sorted((e for e in counts if e), key=lambda e: (-counts[e], e))[:3]
+    return {"name": name, "path": name, "file_count": len(entries),
+            "extensions": top_exts, "purpose": _DIR_PURPOSES.get(name.lower(),
+            f"模块包({name});职责未验证"), "key_files": key_files, "sources": sources}
+
+
+def scan_workspace(workspace: Path, previous: dict[str, Any] | None = None) -> dict[str, Any]:
     """全自动轻量启发式扫描当前工作区,生成结构化百科。"""
     ws = Path(workspace)
     name = ws.name
@@ -203,56 +296,23 @@ def scan_workspace(workspace: Path) -> dict[str, Any]:
 
     # 2. 统计技术栈与语言分布
     ext_counts: dict[str, int] = {}
-    total_files = 0
     modules: list[dict[str, Any]] = []
-
-    try:
-        children = sorted(ws.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-    except OSError:
-        children = []
-
-    for item in children:
-        if item.name.startswith((".", "_")) or item.name in _IGNORE_DIRS:
-            continue
-
-        if item.is_dir():
-            # 扫描模块目录
-            mod_files = 0
-            mod_exts: dict[str, int] = {}
-            key_files: list[str] = []
-            try:
-                for root, dirs, files in os.walk(item):
-                    # 就地剪枝忽略项
-                    dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _IGNORE_DIRS]
-                    for f in files:
-                        if f.startswith("."):
-                            continue
-                        mod_files += 1
-                        ext = Path(f).suffix.lower()
-                        if ext:
-                            mod_exts[ext] = mod_exts.get(ext, 0)
-                            ext_counts[ext] = ext_counts.get(ext, 0)
-                        if len(key_files) < 4 and ext in (".py", ".ts", ".js", ".go", ".rs", ".html"):
-                            key_files.append(f)
-            except OSError:
-                pass
-
-            total_files += mod_files
-            purpose = _DIR_PURPOSES.get(item.name.lower()) or (f"模块包({item.name})")
-            top_exts = sorted(mod_exts.keys(), key=lambda k: mod_exts[k], reverse=True)[:3]
-            modules.append({
-                "name": item.name,
-                "path": item.name,
-                "file_count": mod_files,
-                "extensions": top_exts,
-                "purpose": purpose,
-                "key_files": key_files,
-            })
-        elif item.is_file():
-            total_files += 1
-            ext = item.suffix.lower()
-            if ext:
-                ext_counts[ext] = ext_counts.get(ext, 0)
+    groups, root_files = _inventory(ws)
+    old_modules = {m["name"]: m for m in (previous or {}).get("modules", [])}
+    old_inventory = (previous or {}).get("inventory", {}).get("groups", {})
+    for group_name, entries in sorted(groups.items()):
+        modules.append(old_modules[group_name] if old_inventory.get(group_name) == entries
+                       and group_name in old_modules else _module_from_inventory(ws, group_name, entries))
+    # 空目录也保留在结构里。
+    for item in sorted(ws.iterdir()):
+        if item.is_dir() and _eligible(item) and item.name not in _IGNORE_DIRS \
+                and not item.name.startswith("_") and item.name not in groups:
+            modules.append(_module_from_inventory(ws, item.name, []))
+    for rel, _size, _mtime, _digest in [
+            *root_files, *(entry for rows in groups.values() for entry in rows)]:
+        ext = Path(rel).suffix.lower()
+        ext_counts[ext] = ext_counts.get(ext, 0) + 1
+    total_files = len(root_files) + sum(map(len, groups.values()))
 
     # 判定主要语言
     top_languages = []
@@ -262,22 +322,28 @@ def scan_workspace(workspace: Path) -> dict[str, Any]:
         ".go": "Go", ".html": "HTML", ".css": "CSS", ".java": "Java",
         ".cpp": "C++", ".c": "C", ".vue": "Vue",
     }
-    for ext, count in sorted(ext_counts.items(), key=lambda x: x[1], reverse=True):
+    for ext, count in sorted(ext_counts.items(), key=lambda x: (-x[1], x[0])):
         lang = lang_map.get(ext)
         if lang and lang not in top_languages:
             top_languages.append(lang)
         if len(top_languages) >= 4:
             break
 
+    overview, overview_source = _extract_readme_overview(ws)
+    conventions, conventions_source = _extract_conventions(ws)
     wiki_data = {
+        "schema": WIKI_SCHEMA,
+        "inventory": {"groups": groups, "root": root_files},
         "name": name,
         "workspace": str(ws.resolve()).replace("\\", "/"),
         "languages": top_languages or ["通用"],
         "total_files": total_files,
-        "overview": _extract_readme_overview(ws),
+        "overview": overview,
+        "overview_source": overview_source,
         "commands": _extract_commands(ws),
         "modules": modules,
-        "conventions": _extract_conventions(ws),
+        "conventions": conventions,
+        "conventions_source": conventions_source,
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     return wiki_data
@@ -286,10 +352,22 @@ def scan_workspace(workspace: Path) -> dict[str, Any]:
 def save_wiki(workspace: Path, data: dict[str, Any]) -> bool:
     """将百科持久化到本地数据目录。"""
     target = get_wiki_file(workspace)
+    tmp_name = ""
     try:
-        target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        fd, tmp_name = tempfile.mkstemp(prefix=target.name + ".", suffix=".tmp",
+                                        dir=target.parent)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, target)
         return True
     except OSError:
+        if tmp_name:
+            try:
+                Path(tmp_name).unlink(missing_ok=True)
+            except OSError:
+                pass
         return False
 
 
@@ -306,11 +384,13 @@ def load_wiki(workspace: Path) -> dict[str, Any] | None:
 
 def get_or_build_wiki(workspace: Path, force_refresh: bool = False) -> dict[str, Any]:
     """获取工作区百科(若未生成或强制刷新则实时扫描并落盘)。"""
-    if not force_refresh:
-        cached = load_wiki(workspace)
-        if cached and cached.get("modules") is not None:
+    cached = None if force_refresh else load_wiki(workspace)
+    if cached and cached.get("schema") == WIKI_SCHEMA:
+        groups, root = _inventory(Path(workspace))
+        if cached.get("inventory") == {"groups": groups, "root": root}:
             return cached
-    data = scan_workspace(workspace)
+    data = scan_workspace(workspace, previous=cached if cached and
+                          cached.get("schema") == WIKI_SCHEMA else None)
     save_wiki(workspace, data)
     return data
 
@@ -334,7 +414,8 @@ def format_wiki_view(data: dict[str, Any], action: str = "summary", target: str 
         return "\n".join(lines)
 
     if action == "conventions":
-        return f"【{name}】代码库工程与编码约定:\n{conventions}"
+        src = data.get("conventions_source", "")
+        return f"【{name}】代码库工程与编码约定:\n{conventions}" + (f"\n来源: {src}" if src else "")
 
     if action == "module":
         tgt = str(target or "").strip().lower()
@@ -347,26 +428,28 @@ def format_wiki_view(data: dict[str, Any], action: str = "summary", target: str 
         m = matched[0]
         exts = ", ".join(m.get("extensions", []))
         key_files = ", ".join(m.get("key_files", [])) or "无主要源文件"
+        sources = ", ".join(f"{s['name']} ({s['location']})" for s in m.get("sources", []))
         return (
             f"### 模块详情: `{m.get('name')}`\n"
             f"- **职责用途**: {m.get('purpose')}\n"
             f"- **文件数量**: 约 {m.get('file_count')} 个文件\n"
             f"- **主要语言/后缀**: {exts or '无'}\n"
             f"- **代表性文件**: {key_files}\n"
+            f"- **源码定义**: {sources or '未检出'}\n"
         )
 
     # 默认 summary
     lines = [
         f"## 📚 代码库全景百科: {name}",
         f"- **技术栈**: {langs} (收录约 {data.get('total_files', 0)} 个源码文件)",
-        f"- **项目定位**: {overview}",
+        f"- **项目定位**: {overview}" + (f" (来源: {data['overview_source']})" if data.get("overview_source") else ""),
         f"- **更新时间**: {updated}",
         "",
         "### 📁 核心模块分工",
     ]
     if modules:
         for m in modules[:12]:
-            kf = f" (核心: {', '.join(m.get('key_files', [])[:2])})" if m.get("key_files") else ""
+            kf = f" (样例文件: {', '.join(m.get('key_files', [])[:2])})" if m.get("key_files") else ""
             lines.append(f"- **`{m.get('name')}/`** ({m.get('file_count')} 文件): {m.get('purpose')}{kf}")
     else:
         lines.append("- (根目录下暂无分层子模块)")
@@ -381,6 +464,8 @@ def format_wiki_view(data: dict[str, Any], action: str = "summary", target: str 
         lines.append("")
         lines.append("### 📋 工程约定摘要")
         lines.append(conventions)
+        if data.get("conventions_source"):
+            lines.append(f"来源: {data['conventions_source']}")
 
     return "\n".join(lines)
 
