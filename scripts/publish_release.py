@@ -81,6 +81,7 @@ def published_names(ver: str) -> dict:
         "setup": f"yinlu-xuezhang-{ver}-setup.exe",
         "zip": f"yinlu-xuezhang-{ver}-win64.zip",
         "single_file": f"yinlu-xuezhang-{ver}-single-file.exe",
+        "files": f"yinlu-xuezhang-{ver}-files.json",
         "app_setup": f"yinlu-xuezhang-{ver}-appupdate.exe",
         "assets": f"yinlu-xuezhang-{ver}-assets.json",
         "sha256": f"yinlu-xuezhang-{ver}-sha256.txt",
@@ -106,13 +107,23 @@ def _assets(ver: str) -> "list[tuple[Path, str]]":
     # 所以这两件**必须一起出现**,只传一件比两件都不传更坏。
     extra = [(ROOT / "dist" / f"引路学长-{ver}-app-setup.exe",
               nm["app_setup"], "仅 app 更新包(不含馆藏库与内核)"),
-             (ROOT / "dist" / nm["assets"],
+             (ROOT / "dist" / nm["assets" (ROOT / "dist" / nm["files"],
+              nm["files"], "路 2 文件级清单:安装树逐件的相对路径/大小/sha256")],
               nm["assets"], "发布清单:各件哈希与两块数据的身份")]
     have_extra = [(p, n) for p, n, _l in extra if p.exists()]
     for p, n, l in extra:
         if not p.exists():
             print(f"注意:没有 {n}({l})—— 这一版的更新会一律走整包,不会跳过那 84.6%")
     out += have_extra
+    # 补丁 zip(路 2):构建期按"来源版本"算出来的,有几件发几件。
+    # 一件都没有时**说一句**而不是静默少发:那一版的客户端会退回 appupdate/整包,
+    # 路 2 是优化不是前提,缺它不许让更新这条路变窄。
+    patches = sorted((ROOT / "dist").glob(f"yinlu-xuezhang-{ver}-patch-from-*.zip"))
+    for pz in patches:
+        out.append((pz, pz.name))
+    if not patches:
+        print(f"注意:没有 v{ver} 的补丁 zip(上一版没有文件级清单,或构建时取不到)"
+              " —— 路 2 这一版用不上,客户端照旧走 appupdate/整包")
     # **校验文件跟着一起发**(v0.9.176):App 里那条"下完先核 sha256,没核对就不让装"
     # 读的就是它(`minicode/proactive.py::_expected_sha256` 按同一个名字去取)。
     # 它防的是"下载坏了/被截了/链接被换到别处"这一类,**不防** GitHub 账号本身被接管

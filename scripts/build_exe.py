@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -197,6 +198,91 @@ def bundle_playwright_browsers(dist: Path) -> None:
             continue
         print(f"拷贝浏览器内核 {name} …")
         shutil.copytree(src, dst)
+
+
+def files_manifest(dist: Path) -> "tuple[Path, list]":
+    """路 2 的文件级清单 `yinlu-xuezhang-<版本>-files.json`:安装树逐件登记。
+
+    只登记**随包发的那些文件**:数据目录与用户数据(`fileupdate.EXCLUDE_*`)不在内 ——
+    它们归路 1 的身份管,清单能指挥删除,边界就是爆炸半径。
+    回 (清单路径, files 列表),补丁那一步要用同一份列表,不许再走一遍树。
+    """
+    from minicode import fileupdate as fu
+    files = []
+    for loc in sorted(dist.rglob("*")):
+        if not loc.is_file():
+            continue
+        rel = loc.relative_to(dist).as_posix()
+        if rel.split("/")[0] in fu.EXCLUDE_DIRS or rel in fu.EXCLUDE_FILES:
+            continue
+        files.append({"p": rel, "s": loc.stat().st_size, "h": fu.hash_file(loc)})
+    out = dist.parent / f"yinlu-xuezhang-{__version__}-files.json"
+    out.write_text(json.dumps({"schema": 1, "version": __version__,
+                               "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                               "files": files, "patches": {}},
+                              ensure_ascii=False, indent=1), encoding="utf-8")
+    return out, files
+
+
+def build_patches(dist: Path, files: list) -> dict:
+    """对**已发布的前两版**各算一件补丁 zip:只装哈希对不上的那些文件。
+
+    取不到上一版的清单(断网、那一版还没这份清单)就**不出补丁**,客户端退回
+    appupdate/整包 —— 路 2 是优化不是前提,缺它不能让更新这条路变窄。
+    回 {来源版本: {asset, sha256, size}},写进 files.json 的 patches 表。
+    """
+    import urllib.request
+    import zipfile
+    from minicode import fileupdate as fu
+    try:
+        import certifi
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        ctx = ssl.create_default_context(cafile=None)
+    req = urllib.request.Request(
+        "https://api.github.com/repos/MOKO-TB/yinlu-xuezhang/releases?per_page=6",
+        headers={"Accept": "application/vnd.github+json"})
+    try:
+        rels = json.loads(urllib.request.urlopen(req, timeout=20, context=ctx).read())
+    except Exception as e:
+        print(f"取已发布清单失败,本轮不出补丁(客户端会退回整件):{type(e).__name__}")
+        return {}
+    mine = {f["p"]: f for f in files}
+    patches: dict = {}
+    for rel in rels:
+        ver = str(rel.get("tag_name") or "").lstrip("vV")
+        if not ver or ver == __version__ or len(patches) >= 2:
+            continue
+        fj = next((a for a in rel.get("assets") or []
+                   if str(a.get("name") or "").endswith("-files.json")), None)
+        if fj is None:
+            continue
+        try:
+            old = json.loads(urllib.request.urlopen(
+                urllib.request.Request(fj["browser_download_url"]),
+                timeout=30, context=ctx).read())
+        except Exception as e:
+            print(f"取 v{ver} 的文件清单失败,跳过这一版补丁:{type(e).__name__}")
+            continue
+        oldf = {f["p"]: f for f in (old.get("files") or [])}
+        changed = [f for f in files if oldf.get(f["p"]) is None
+                   or oldf[f["p"]]["h"] != f["h"]]
+        drop = [p for p in oldf if p not in mine]
+        zp = dist.parent / f"yinlu-xuezhang-{__version__}-patch-from-{ver}.zip"
+        with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in changed:
+                z.write(dist / f["p"], f["p"])
+        h = fu.hash_file(zp)
+        patches[ver] = {"asset": zp.name, "sha256": h, "size": zp.stat().st_size,
+                        "files": len(changed), "drop": drop}
+        print(f"补丁 v{ver} → v{__version__}:{len(changed)} 件变化 / {len(drop)} 件撤,"
+              f"{zp.stat().st_size:,} B")
+    if patches:
+        mf = dist.parent / f"yinlu-xuezhang-{__version__}-files.json"
+        data = json.loads(mf.read_text(encoding="utf-8"))
+        data["patches"] = patches
+        mf.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    return patches
 
 
 def write_user_files(dist: Path) -> None:
@@ -1345,6 +1431,9 @@ def main() -> None:
         lib_stamp = dist / "crawled" / "mfindgzyykj.libsp.cn" / "library.db.stamp.json"
         assets_manifest(dist, built, lib_stamp if lib_stamp.is_file() else None,
                         kernel_stamp)
+        # 路 2:文件级清单 + 对已发布前两版的补丁 zip(取不到上一版就不出,客户端退回整件)
+        _mf, _mfiles = files_manifest(dist)
+        build_patches(dist, _mfiles)
 
     if "--no-zip" in sys.argv:
         emit_manifest()

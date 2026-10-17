@@ -1179,6 +1179,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
     "minicode.explain": ("risk_notes", "permission_why", "action_reason"),
     # ---- v0.9.16/17/20:主动推荐 + 新版本检查 + 今日简报(合并成一个键,
     #      避免 dict 重复键 last-wins 让早先的 needle 悄悄漏检) ----
+    # v0.9.183 路 2 第一笔:文件级清单 + 补丁 zip + 暂存校验 + 退出后应用/整体回滚。
+    # 漏 `write_apply_script`/`_PS1` 的表现是"暂存验完了却没有应用器",界面只能退回整包
+    # 而没人知道;漏 `validate_manifest` 更坏 —— 清单的边界就是这次更新的爆炸半径。
+    "minicode.fileupdate": ("validate_manifest", "diff_install", "hash_file",
+                            "staged_root", "state_path", "read_state",
+                            "write_apply_script", "apply_command", "_PS1",
+                            "pick_patch", "verify_staged", "unpack_patch",
+                            "stage_update", "apply_update", "install_root",
+                            "updates_dir", "EXCLUDE_DIRS", "EXCLUDE_FILES"),
     "minicode.proactive": ("check_once", "fetch_latest", "start_loop", "clean_title",
                            # v0.9.114:任务表 = 代码登记的 + 同学自己加的
                            # (漏 all_specs = 新建的那几条在装好的包里根本不跑)

@@ -943,6 +943,22 @@ def main() -> None:
         web_main_entry([a for a in sys.argv[1:] if a != "--web"])
         return
 
+    # --stage-update <版本> / --apply-update <版本>:增量更新·路 2 的无头入口(v0.9.183)。
+    # 界面那张卡下一笔接(要真浏览器 e2e);这一笔先把整条路在无头态跑通 ——
+    # 计划书的硬门槛:更新类功能必须能真跑,不能只验源码。
+    for _flag in ("--stage-update", "--apply-update"):
+        if _flag in sys.argv:
+            _rest = sys.argv[sys.argv.index(_flag) + 1:]
+            if not _rest:
+                print(f"错误: {_flag} 需要一个版本号", file=sys.stderr)
+                raise SystemExit(2)
+            from minicode import fileupdate as _fu
+            import json as _json
+            _res = (_fu.stage_update(_rest[0]) if _flag == "--stage-update"
+                    else _fu.apply_update(_rest[0]))
+            print(_json.dumps(_res, ensure_ascii=False))
+            raise SystemExit(0 if _res.get("ok") else 3)
+
     # --py <脚本>:用内置解释器执行一个 Python 脚本后退出。
     # py_script 工具在打包版里靠它拿到带 pptx/docx/openpyxl/pypdf 的运行时
     # (学生机器上没有裸 Python,这是转换类技能的执行底座)。
