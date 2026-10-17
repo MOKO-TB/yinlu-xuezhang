@@ -35,6 +35,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     """
     ranges_seen: list = []
     full_when_ranged = False      # /norange 用它:带着 Range 来也只给整件
+    fail_nonzero_first = 0        # 前 N 个"从第 N 字节起"的请求直接 503(抖一下)
 
     def log_message(self, *a):            # 测试里不往 stderr 打字
         pass
@@ -73,6 +74,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self.path.startswith("/ranged") and rng and not _Handler.full_when_ranged:
             m = re.match(r"bytes=(\d+)-(\d*)$", rng)
             lo = int(m.group(1)) if m else 0
+            if lo > 0 and _Handler.fail_nonzero_first > 0:
+                _Handler.fail_nonzero_first -= 1
+                self.send_response(503)
+                self.end_headers()
+                return
             hi = int(m.group(2)) if (m and m.group(2)) else len(PAYLOAD) - 1
             if lo >= len(PAYLOAD):
                 self.send_response(416)
@@ -112,6 +118,7 @@ def server():
     t.start()
     _Handler.ranges_seen = []
     _Handler.full_when_ranged = False
+    _Handler.fail_nonzero_first = 0
     yield "http://127.0.0.1:%d" % srv.server_address[1]
     srv.shutdown()
     srv.server_close()
@@ -336,6 +343,30 @@ def test_a_big_asset_goes_out_as_parallel_ranges_and_still_verifies(server, tmp_
         % _Handler.ranges_seen
     assert len(starts) >= proactive.PARALLEL_SEGS, \
         "只看到一个起点 = 并发没开(或它被静默降级了):%s" % _Handler.ranges_seen
+
+
+def test_one_flaky_segment_costs_a_resume_not_a_full_restart(server, tmp_path,
+                                                             monkeypatch):
+    """四连接里"有一段抖一下"的概率本来就比单连接高 —— 一轮失败**不许把已下的全扔**。
+
+    判据不是"最后文件对上了"(重来也能对上),而是**同一个起点被要了两次**:
+    第一段先 503,第二轮必须从它自己的偏移再要一次,而不是整件从 0 重来。
+    """
+    monkeypatch.setattr(proactive, "PARALLEL_MIN", 1024)
+    monkeypatch.setattr(proactive, "PARALLEL_SEGS", 2)
+    monkeypatch.setattr(proactive, "_expected_sha256", lambda *a, **k: (SHA, ""))
+    _Handler.fail_nonzero_first = 1
+    r = proactive.download_asset(_asset(server + "/ranged"), tmp_path)
+    assert r["ok"] is True and r["verified"] == "ok", r
+    assert (tmp_path / ASSET_NAME).read_bytes() == PAYLOAD
+    starts = [int(s.split("=")[1].split("-")[0]) for _v, s in _Handler.ranges_seen
+              if s.startswith("bytes=")]
+    assert len([s for s in starts if s > 0]) >= 2, \
+        "503 之后没有再从那一段的起点要过一次 = 整件重来了:%s" % _Handler.ranges_seen
+    # 真正区分新旧行为的判据:**第一轮已经下完的那一段,第二轮不许再要一遍**。
+    # 起点 0 只允许出现两次:一次是择快路线的探测,一次是那段真下载。
+    assert starts.count(0) <= 2, \
+        "第一轮下完的段被重下了(轮间没记住各自到哪儿):%s" % _Handler.ranges_seen
 
 
 def test_parallel_steps_down_when_the_server_ignores_range(server, tmp_path,

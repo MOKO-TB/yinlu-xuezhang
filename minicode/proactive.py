@@ -1340,43 +1340,56 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
             attempt_why.extend(rnotes)
             if route is not None and route["honored"]:
                 ranges = _byte_ranges(total, PARALLEL_SEGS)
-                rec0 = _read_sidecar(part) if part.exists() else {}
-                resumable = (rec0.get("mode") == "parallel"
-                             and rec0.get("name") == safe
-                             and int(rec0.get("total") or 0) == total
-                             and len(rec0.get("segs") or []) == len(ranges))
-                if not resumable:
-                    with part.open("wb") as f:
-                        f.truncate(total)        # 预分配:每段只写自己那块偏移
-                resume = ({i: int(v) for i, v in enumerate(rec0.get("segs") or [])}
-                          if resumable else {})
-                resumed_from = sum(max(0, resume.get(i, ranges[i][0]) - ranges[i][0])
-                                   for i in range(len(ranges)))
-                outcome, offs, why = _download_segments(
-                    part, ranges, route["url"], route["ctx"], connect_timeout,
-                    should_stop, prog, validator, resume)
-                got = sum(max(0, offs.get(i, ranges[i][0]) - ranges[i][0])
-                          for i in range(len(ranges)))
-                if outcome == "done":
-                    sha, validator = _file_sha256(part), validator
-                    resumed = resumable and any(
-                        offs.get(i, ranges[i][0]) > ranges[i][0]
-                        for i in range(len(ranges)))
-                elif outcome == "stop":
+                # 两**轮**,不是一次:四连接里"至少一段抖一下"的概率本来就比单连接高,
+                # 一次抖动就把已下的全扔了重下,在慢网络上是净亏。第一轮把每段偏移写进
+                # 条子,第二轮从各自偏移接着走 —— 洞只挡顺序那条路,不挡分段自己续传。
+                for _round in range(2):
+                    rec0 = _read_sidecar(part) if part.exists() else {}
+                    resumable = (rec0.get("mode") == "parallel"
+                                 and rec0.get("name") == safe
+                                 and int(rec0.get("total") or 0) == total
+                                 and len(rec0.get("segs") or []) == len(ranges))
+                    if not resumable:
+                        with part.open("wb") as f:
+                            f.truncate(total)    # 预分配:每段只写自己那块偏移
+                    resume = ({i: int(v) for i, v in enumerate(rec0.get("segs") or [])}
+                              if resumable else {})
+                    resumed_from = sum(max(0, resume.get(i, ranges[i][0]) - ranges[i][0])
+                                       for i in range(len(ranges)))
+                    outcome, offs, why = _download_segments(
+                        part, ranges, route["url"], route["ctx"], connect_timeout,
+                        should_stop, prog, validator, resume)
+                    got = sum(max(0, offs.get(i, ranges[i][0]) - ranges[i][0])
+                              for i in range(len(ranges)))
+                    if outcome == "done":
+                        sha, validator = _file_sha256(part), validator
+                        resumed = resumable and any(
+                            offs.get(i, ranges[i][0]) > ranges[i][0]
+                            for i in range(len(ranges)))
+                        break
+                    if outcome == "stop":
+                        _write_sidecar(part, {"name": safe, "total": total,
+                                              "validator": validator, "bytes": got,
+                                              "bps": meter.read(), "mode": "parallel",
+                                              "segs": [offs.get(i, ranges[i][0])
+                                                       for i in range(len(ranges))]})
+                        return {"ok": False, "cancelled": True, "verified": "none",
+                                "partial": got, "resumable": True,
+                                "why": "已取消,已下的 %s 留着,下次点下载接着走"
+                                       % fmt_bytes(got)}
+                    # 这一轮没下齐:把已到哪儿记下来,好让下一轮续(或下次进来续)
                     _write_sidecar(part, {"name": safe, "total": total,
                                           "validator": validator, "bytes": got,
                                           "bps": meter.read(), "mode": "parallel",
                                           "segs": [offs.get(i, ranges[i][0])
                                                    for i in range(len(ranges))]})
-                    return {"ok": False, "cancelled": True, "verified": "none",
-                            "partial": got, "resumable": True,
-                            "why": "已取消,已下的 %s 留着,下次点下载接着走"
-                                   % fmt_bytes(got)}
-                else:
-                    # 没下齐:这半截**中间有洞**,顺序那条路不能拿它续传 → 删掉重来,
-                    # 绝不把两份不同来源的字节接成一个谁都没发布过的文件。
                     if why:
-                        attempt_why.append(why)
+                        attempt_why.append("第 %d 轮:%s" % (_round + 1, why))
+                    if got <= resumed_from:
+                        break                    # 一点没前进,再试也是白试
+                if sha is None:
+                    # 两轮都不行:这半截**中间有洞**,顺序那条路不能拿它续传 → 删掉重来,
+                    # 绝不把两份不同来源的字节接成一个谁都没发布过的文件。
                     _drop_part(part)
         for u in urls:
             for label, ctx in variants:
