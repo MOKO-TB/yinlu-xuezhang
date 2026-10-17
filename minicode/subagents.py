@@ -507,13 +507,38 @@ def _fire_subagent_hook(kind: str, config, *, type_key: str, task: str,
     return " / ".join(bits)
 
 
+def _sandbox_for_workspace(parent, workspace: Path):
+    """为隔离副本建独立沙箱状态，只继承规划锁，不继承工作区外路径授权。"""
+    if parent is None:
+        return None
+    from minicode.sandbox import SandboxState
+    state = SandboxState(parent.policy, workspace)
+    state.plan_lock = bool(getattr(parent, "plan_lock", False))
+    state.plan_lock_goal = str(getattr(parent, "plan_lock_goal", "") or "")
+    return state
+
+
+def _timeout_worktree_note(box: dict | None, type_key: str) -> str:
+    """超时只看准备盒里的事实：有副本就报路径，没有就报创建失败。"""
+    if not box:
+        return ""
+    info = box.get("info")
+    if info is not None:
+        from minicode import subagent_worktree
+        return subagent_worktree.pending_note(info, type_key)
+    error = str(box.get("error") or "")
+    return f"\n[worktree|{type_key}] 隔离副本没有建成：{error}" if error else ""
+
+
 def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
                  llm, ui, config: Config, registry: list[Tool],
                  undo_stack: list | None = None,
                  file_locks: "_BatchFileLocks | None" = None,
                  batch_locks: "_BatchFileLocks | None" = None,
                  route_label: str = "",
-                 notify: dict | None = None) -> str:
+                 notify: dict | None = None,
+                 isolation: str = "",
+                 isolation_box: dict | None = None) -> str:
     """跑一个子代理,返回它的最终文字报告(不含前缀)。异常收敛成报告文本。
 
     `undo_stack` 是**主代理的回滚栈**(v0.9.53):implement 子代理写坏文件时,
@@ -529,13 +554,39 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
     `undo_stack` 同一个理由:`task` 工具是**装配时**造的,那时主 Agent 还没建,
     所以只能先递容器、等 Agent 建好再往里放。容器还空着(或没传)时子代理的
     `notify_parent` 会如实回一句"这里没有可以转达的对象"。
+
+    `isolation="worktree"` 时，这一路改在独立 Git 副本里：不共享父 undo 栈、
+    文件占用表和批准路径；规划锁仍从父 sandbox 复制。副本不自动合并或删除。
     """
     from minicode.app_setup import build_system_prompt  # 延迟导入避免循环
+    run_ctx = ctx
+    worktree_info = None
+    worktree_head = ""
+    if isolation == "worktree":
+        from minicode import subagent_worktree
+        try:
+            worktree_info = subagent_worktree.create(ctx.workspace)
+        except Exception as e:
+            text = f"隔离副本创建失败：{type(e).__name__}: {e}"
+            if isolation_box is not None:
+                isolation_box["error"] = text
+            return f"[worktree|{spec.type}] {text}"
+        if isolation_box is not None:
+            isolation_box["info"] = worktree_info
+        worktree_head = subagent_worktree.header(worktree_info, spec.type)
+        run_ctx = dc_replace(
+            ctx,
+            workspace=worktree_info.workspace,
+            sandbox=_sandbox_for_workspace(ctx.sandbox, worktree_info.workspace),
+        )
+        undo_stack = None
+        file_locks = None
+        batch_locks = None
     # 子代理不参与跨天重建:`_refresh_clock` 只在 `run_turn` 开头查一次,而子代理
     # 生命周期以分钟计、建会话当天就跑完了。将来要"统一"到别处请先想清楚这点。
     try:
         sub_session = Session(
-            system_prompt=build_system_prompt(ctx.workspace, for_subagent=True)
+            system_prompt=build_system_prompt(run_ctx.workspace, for_subagent=True)
             + spec.extra_prompt,
             log_dir=None)
         # 权限门必须带沙箱(v0.9.51):主代理在 app_setup 里就是
@@ -554,10 +605,10 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
         enqueue = (notify or {}).get("enqueue")
         # 深度 +1 并随 ctx 继承(L,v0.9.155):`task` 那只工具读的就是它。主会话是 0,
         # 所以子代理是 1、孙辈是 2 —— 它同时也是"到顶了没有"的唯一依据。
-        depth = int(getattr(ctx, "subagent_depth", 0) or 0) + 1
+        depth = int(getattr(run_ctx, "subagent_depth", 0) or 0) + 1
         # 文件占用表跨层带下去:子代理自己再派一批时,那一批用的是**同一张**表 ——
         # 不然父批与子批各一张,同一个文件可以跨层同时被写而两边都不报错(§6 63 ①)。
-        sub_ctx = dc_replace(ctx, ui=ui, subagent_depth=depth,
+        sub_ctx = dc_replace(run_ctx, ui=ui, subagent_depth=depth,
                              batch_locks=batch_locks,
                              notify_parent=enqueue if callable(enqueue) else None)
         # 嵌套开关(L,v0.9.155)**默认关**。开着时 `task` 才留给子代理,而且深度到
@@ -574,8 +625,8 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
                 if file_locks is not None
                 else sub_registry),
             session=sub_session,
-            gate=PermissionGate(config, sandbox=ctx.sandbox,
-                                workspace=getattr(ctx, "workspace", None),
+            gate=PermissionGate(config, sandbox=run_ctx.sandbox,
+                                workspace=getattr(run_ctx, "workspace", None),
                                 tool_names={t.name.rsplit("·", 1)[-1]
                                             for t in registry}),
             ui=ui,
@@ -616,7 +667,13 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
         stop_note = _fire_subagent_hook("subagent_stop", config, type_key=spec.type,
                                         task=task_text, ok=False)
         text = f"子代理执行出错: {type(e).__name__}: {e}"
-        return text + (f"\n〔subagent_stop 钩子〕{stop_note}" if stop_note else "")
+        diff = ""
+        if worktree_info is not None:
+            from minicode import subagent_worktree
+            diff = subagent_worktree.summarize(worktree_info, spec.type)
+        return (worktree_head + text
+                + (f"\n〔subagent_stop 钩子〕{stop_note}" if stop_note else "")
+                + diff)
 
     report = next((m.get("content") for m in reversed(sub_session.messages)
                    if m.get("role") == "assistant" and m.get("content")),
@@ -631,7 +688,12 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
     stop_note = _fire_subagent_hook("subagent_stop", config, type_key=spec.type,
                                     task=task_text, ok=has_report)
     tail = f"\n〔subagent_stop 钩子〕{stop_note}" if stop_note else ""
-    return _files_note(spec, sub_session) + _web_note(spec, sub_session) + report + tail
+    diff = ""
+    if worktree_info is not None:
+        from minicode import subagent_worktree
+        diff = subagent_worktree.summarize(worktree_info, spec.type)
+    return (worktree_head + _files_note(spec, sub_session)
+            + _web_note(spec, sub_session) + report + tail + diff)
 
 
 def _files_note(spec: SubAgentSpec, sub_session) -> str:
@@ -900,7 +962,7 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                                  f"({type(e).__name__}: {e}),这一档仍用当前模型")
         return got, model, note
 
-    def task(ctx: ToolContext, type, task, step=None) -> str:
+    def task(ctx: ToolContext, type, task, step=None, isolation="shared") -> str:
         types = _as_list(type, "type")
         if isinstance(types, str):
             return types
@@ -913,6 +975,9 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
         if len(types) > MAX_PARALLEL_TASKS:
             return (f"错误: 一次最多并行 {MAX_PARALLEL_TASKS} 个子代理"
                     f"(收到 {len(types)} 个)。请拆成多轮。")
+        isolation = str(isolation or "shared").strip().lower()
+        if isolation not in ("shared", "worktree"):
+            return "错误: isolation 只能是 shared 或 worktree。"
 
         limit = max(0, int(getattr(config, "subagent_time_limit_seconds", 0) or 0))
         workspace = getattr(ctx, "workspace", None)
@@ -934,6 +999,8 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                         f"可用: {', '.join(type_keys(workspace))}")
             specs.append((spec, text.strip(), note))
         pfx = notes_prefix(dispatch_notes(pnotes, specs, registry))
+        isolation_boxes = ([{} for _ in specs] if isolation == "worktree"
+                           else [None for _ in specs])
 
         # ---- 挂在计划的哪一步(可选):校验在派活之前,不合法就不白花一路 ----
         use_step = step not in (None, "", 0, "0")
@@ -959,10 +1026,13 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             report = _await([_gated(lambda: run_subagent(
                 ctx, spec, text, sub_llm, ui, config, registry,
                 undo_stack=parent_undo, notify=parent_inbox,
-                batch_locks=getattr(ctx, "batch_locks", None)))], limit)[0]
+                batch_locks=getattr(ctx, "batch_locks", None),
+                isolation=isolation,
+                isolation_box=isolation_boxes[0]))], limit)[0]
             timed_out = report is None
             if timed_out:
-                report = _timeout_note(limit)
+                report = (_timeout_note(limit)
+                          + _timeout_worktree_note(isolation_boxes[0], spec.type))
             head = (f"[{spec.label}子代理完成]" + (f" · {mnote}" if mnote else "")
                     + (f"\n{note}" if note else ""))
             body = head + "\n" + report
@@ -1020,10 +1090,16 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                 file_locks=file_locks,
                 notify=parent_inbox,
                 batch_locks=file_locks,
-                route_label=f"第{i + 1}路[{s.type}]"))
+                route_label=f"第{i + 1}路[{s.type}]",
+                isolation=isolation,
+                isolation_box=isolation_boxes[i]))
             for idx, (spec, text, _note) in enumerate(specs)], limit)
-        pairs = [(spec, text, rep if rep is not None else _timeout_note(limit))
-                 for (spec, text, _note), rep in zip(specs, reports)]
+        pairs = [
+            (spec, text, rep if rep is not None
+             else _timeout_note(limit) + _timeout_worktree_note(isolation_boxes[i],
+                                                                 spec.type))
+            for i, ((spec, text, _note), rep) in enumerate(zip(specs, reports))
+        ]
         notes = [note for _s, _t, note in specs if note]
         # 换成功的那路在小标题里写「模型 X」;换失败的那路一句都不吞 ——
         # 「为什么这一路的结论明显比另一路粗」通常就是这里,静默退回最难查。
@@ -1073,6 +1149,11 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             "bash/py_script 里间接写的文件闸管不住,划地盘的规矩对它们仍然适用)。"
             "每一路最多等 config.subagent_time_limit_seconds 秒,超时会如实标成"
             "「未返回」而不是失败。"
+            "isolation=worktree 时,每路先从当前 Git HEAD 建一份独立工作副本,"
+            "并把已跟踪的未提交改动带入(未跟踪/ignored 文件不复制);子代理只在"
+            "副本里改,完成后返回副本路径与改动清单,**不自动合并、不自动删除**。"
+            "这解决同仓库并行写文件互相覆盖,不是 OS 文件/网络安全隔离。"
+            "非 Git 仓库或没有 HEAD 提交时会明确失败,不会退化成复制目录。"
             "这一批是在做计划里的某一步时,带上 step=编号:那一步会被标成进行中、"
             "备注记下派了哪几路,跑完把每路的报告字数与超时如实写回计划;"
             "**它不会替你标 done** —— 子代理回来的是转述不是证据,成没成仍由你"
@@ -1103,6 +1184,13 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
                                    "传了就把那步标 in_progress 并在备注里记下派了哪几路,"
                                    "跑完写回每路报告字数与超时;不传则计划文件一动不动。",
                     "anyOf": [{"type": "integer"}, {"type": "string"}],
+                },
+                "isolation": {
+                    "type": "string",
+                    "enum": ["shared", "worktree"],
+                    "description": "默认 shared(沿用父工作区)。worktree = 每路一份"
+                                   "独立 Git 工作副本,不自动合并或删除;未跟踪/ignored"
+                                   "文件不复制,且这不是 OS 级安全沙箱。",
                 },
             },
             "required": ["type", "task"],

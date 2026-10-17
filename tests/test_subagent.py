@@ -1,4 +1,9 @@
 """子代理(task 工具)测试:派发、只读隔离、递归拒绝、步数上限、只读并行。"""
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 import json
 import threading
@@ -384,6 +389,57 @@ def test_task_batch_runs_mixed_readers_and_writer(config, tmp_path):
     assert "[并行子代理完成 · 2 个]" in result
     assert "out.txt" in result                       # 写子代理的报告进了合并
     assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "done"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="本机没有 git(显式跳过,不是静默)")
+def test_task_worktree_isolation_keeps_parent_clean_and_returns_copy_path(config, tmp_path):
+    """显式 isolation=worktree:子代理只写副本,父工作区不动,路径与 diff 回填。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=str(repo), check=True,
+                       capture_output=True, text=True)
+
+    git("init", "-b", "main")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-m", "init")
+    _accept_all(config)
+
+    def route(messages):
+        if _is_subagent(messages):
+            if any(m.get("role") == "tool" for m in messages):
+                return _final("已在隔离副本创建 out.txt")
+            return AssistantTurn(tool_calls=[_call(
+                "implement·write_file",
+                {"path": "out.txt", "content": "isolated"}, "w1")])
+        if any(m.get("role") == "tool" for m in messages):
+            return _final("主代理收尾")
+        return AssistantTurn(tool_calls=[_call("task", {
+            "type": "implement", "task": "创建 out.txt",
+            "isolation": "worktree"}, "b1")])
+
+    bridge, window, session = make(config, repo, RoutingLLM(route))
+    bridge.send_task("隔离写入")
+    assert wait_until(lambda: not bridge._busy, timeout=25)
+    result = _tool_result(session)
+    match = re.search(r'isolated=("(?:\\.|[^"])*")', result)
+    assert match, result
+    isolated_workspace = Path(json.loads(match.group(1)))
+    try:
+        assert "[worktree|implement]" in result
+        assert "[worktree-diff|implement]" in result
+        assert not (repo / "out.txt").exists()
+        assert (repo / "base.txt").read_text(encoding="utf-8") == "base\n"
+        assert (isolated_workspace / "out.txt").read_text(encoding="utf-8") == "isolated"
+    finally:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force",
+             str(isolated_workspace)],
+            cwd=str(repo), capture_output=True, text=True)
 
 
 def test_task_batch_validation(config, tmp_path):
