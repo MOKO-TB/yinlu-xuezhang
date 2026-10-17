@@ -63,7 +63,8 @@ CLIENT_NAME = "yinlu-xuezhang"
 #   `{"action": "decline"}` 并记一条日志 —— 现状(静默丢弃)会让服务端一直等;
 #   把 schema 编成提问卡是**另一轮的设计**(卡片是选项式的,要写 schema→卡片编译器
 #   与结构化回读),不在这轮硬凑。
-CLIENT_PRIMITIVES = ("tools", "resources", "prompts")   # prompts 于 v0.9.172+ 接入(list/get)
+CLIENT_PRIMITIVES = ("tools", "resources", "prompts", "logging")
+EVENT_KEEP = 100
 
 DEFAULT_START_TIMEOUT = 10.0
 DEFAULT_CALL_TIMEOUT = 60.0
@@ -265,6 +266,9 @@ class Transport:
         # 服务端主动请求(elicitation 等)的处理钩子:客户端在造出通道后装上。
         # 装不上也**不静默丢** —— 见 `_inbound_request` 的兜底。
         self.on_server_request = None
+        # 服务端主动通知(progress/logging 等)的处理钩子。通知无需回包,
+        # 但不能像以前那样在传输层直接丢掉。
+        self.on_notification = None
 
     def open(self) -> None:
         """把通道准备好(拉进程 / 开长流)。失败抛异常,由客户端记成"连接失败"。"""
@@ -438,6 +442,16 @@ class _StreamedTransport(Transport):
         except Exception:
             pass            # 回不出去只影响对端这一次请求,不该带走读线程
 
+    def _inbound_notification(self, msg: dict) -> None:
+        """服务端通知：转给客户端记录；钩子坏了也不带走读线程。"""
+        handler = getattr(self, "on_notification", None)
+        if not callable(handler):
+            return
+        try:
+            handler(msg)
+        except Exception:
+            pass
+
 
 class StdioTransport(_StreamedTransport):
     """我们拉起子进程:一行一个 JSON-RPC 报文(日志走 stderr,不混进协议流)。"""
@@ -503,7 +517,9 @@ class StdioTransport(_StreamedTransport):
             if not isinstance(msg, dict):
                 continue
             mid = msg.get("id")
-            if mid is None:                   # 服务器主动通知:无需响应
+            if mid is None:                   # 服务器主动通知:无需响应,但要可见
+                if "method" in msg:
+                    self._inbound_notification(msg)
                 continue
             if "method" in msg:               # 服务器主动**请求**(elicitation 等)
                 self._inbound_request(msg)
@@ -654,8 +670,11 @@ class HttpTransport(Transport):
             if "text/event-stream" in ctype:
                 for _event, data in _iter_sse(resp):
                     obj = _json_obj(data)
-                    if obj is not None and "method" in obj and obj.get("id") is not None:
-                        self._inbound_request(obj)  # 服务端主动请求:回一条再接着等
+                    if obj is not None and "method" in obj:
+                        if obj.get("id") is not None:
+                            self._inbound_request(obj)  # 服务端主动请求:回一条再接着等
+                        else:
+                            self._inbound_notification(obj)
                         continue
                     if obj is not None and obj.get("id") == want_id:
                         self._ok = True
@@ -748,8 +767,11 @@ class SseTransport(_StreamedTransport):
                     self._endpoint_ready.set()
                     continue
                 obj = _json_obj(text)
-                if obj is not None and "method" in obj and obj.get("id") is not None:
-                    self._inbound_request(obj)      # 服务端主动请求:回一条,别让对端干等
+                if obj is not None and "method" in obj:
+                    if obj.get("id") is not None:
+                        self._inbound_request(obj)  # 服务端主动请求:回一条,别让对端干等
+                    else:
+                        self._inbound_notification(obj)
                 elif obj is not None and obj.get("id") is not None:
                     self._deliver(obj)
         except Exception as exc:
@@ -806,17 +828,21 @@ class McpClient:
     """单个 MCP 服务器的客户端:握手 + 拉工具清单 + 调用(通道细节在 Transport 里)。"""
 
     def __init__(self, cfg: McpServerConfig, log=None, transport: Transport | None = None,
-                 on_elicit=None):
+                 on_elicit=None, on_event=None):
         self.cfg = cfg
         self._log = log
         self.transport = transport or make_transport(cfg, log=log)
         # 服务端要用户确认时的回调(message, requestedSchema) -> {"action": ...};
         # 没装回调 = 一律按 decline 回(见 `_handle_server_request`)。
         self.on_elicit = on_elicit
+        # 进度/日志等服务器通知的回调；不装也会保留在 events 环里。
+        self.on_event = on_event
         self.transport.on_server_request = self._handle_server_request
+        self.transport.on_notification = self._handle_notification
         self._lock = threading.Lock()          # 串行化请求,避免 id 交叉
         self._next_id = 0
         self._closed = False
+        self.events: deque[dict] = deque(maxlen=EVENT_KEEP)
         self.tools: list[dict] = []            # tools/list 原始结果
         self.server_info: dict = {}
         self.server_caps: dict = {}            # 对端在握手里声明的能力(原样留着)
@@ -846,6 +872,12 @@ class McpClient:
             caps = (info or {}).get("capabilities") if isinstance(info, dict) else None
             self.server_caps = caps if isinstance(caps, dict) else {}
             self._notify("notifications/initialized", {})
+            if "logging" in self.server_caps:
+                try:
+                    self._request("logging/setLevel", {"level": "info"},
+                                  timeout=self.cfg.start_timeout)
+                except Exception as exc:
+                    self._warn(f"logging/setLevel 未生效(服务器仍可主动发日志): {exc}")
             listed = self._request("tools/list", {}, timeout=self.cfg.start_timeout)
             tools = (listed or {}).get("tools", []) if isinstance(listed, dict) else []
             self.tools = [t for t in tools if isinstance(t, dict) and t.get("name")]
@@ -936,6 +968,11 @@ class McpClient:
             if self._closed:
                 raise McpError(f"服务器 {self.cfg.sid} 已关闭")
             self._next_id += 1
+            params = dict(params or {})
+            if method in ("tools/call", "resources/read", "prompts/get"):
+                meta = dict(params.get("_meta") or {})
+                meta.setdefault("progressToken", f"{self.cfg.sid}-{self._next_id}")
+                params["_meta"] = meta
             msg = self.transport.request(
                 {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params},
                 timeout)
@@ -1003,6 +1040,61 @@ class McpClient:
                           "message": ("本项目明确不支持 sampling(不让外部服务端替用户花额度、"
                                       "也不把上下文片段交给它);要模型输出请在对话里说")}
         return None, {"code": -32601, "message": f"客户端不支持 {method}"}
+
+    def _handle_notification(self, msg: dict) -> None:
+        """把 MCP 通知归一成有界事件，保留给诊断/界面；不改变工具结果。"""
+        method = str(msg.get("method") or "")
+        params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        event: dict = {"server": self.cfg.sid, "method": method}
+        if method == "notifications/progress":
+            event.update({
+                "kind": "progress",
+                "token": params.get("progressToken"),
+                "progress": params.get("progress"),
+                "total": params.get("total"),
+                "message": _clip(params.get("message") or "", 300),
+            })
+        elif method == "notifications/message":
+            data = params.get("data")
+            if not isinstance(data, str):
+                with contextlib.suppress(TypeError, ValueError):
+                    data = json.dumps(data, ensure_ascii=False)
+            event.update({
+                "kind": "log",
+                "level": str(params.get("level") or "info"),
+                "logger": str(params.get("logger") or ""),
+                "data": _clip(data or "", 500),
+            })
+        else:
+            event.update({"kind": "notification", "params": params})
+        self.events.append(event)
+        if callable(self.on_event):
+            try:
+                self.on_event(dict(event))
+            except Exception as exc:
+                self._warn(f"on_event 回调出错: {type(exc).__name__}: {exc}")
+        elif event["kind"] == "log" and event.get("level") in {
+                "warning", "error", "alert", "emergency", "critical", "notice"}:
+            # info/debug 只进事件环，避免每条调试日志都往聊天区冒一张卡。
+            self._warn(f"MCP 日志[{event['level']}] {event.get('logger') or self.cfg.sid}: "
+                       f"{event.get('data') or ''}")
+
+    def event_snapshot(self) -> list[dict]:
+        return [dict(e) for e in self.events]
+
+    def last_event_line(self) -> str:
+        if not self.events:
+            return ""
+        e = self.events[-1]
+        if e.get("kind") == "progress":
+            total = e.get("total")
+            amount = f"{e.get('progress')}" + (f"/{total}" if total is not None else "")
+            msg = f" {e.get('message')}" if e.get("message") else ""
+            return f"进度 {amount}{msg}"
+        if e.get("kind") == "log":
+            logger = f" {e.get('logger')}:" if e.get("logger") else ""
+            return f"日志[{e.get('level')}]{logger} {e.get('data')}"
+        return f"通知 {e.get('method')}"
 
     def read_resource(self, uri: str) -> "tuple[str, str]":
         """读一个资源,返回 (给模型看的文本, mimeType)。
@@ -1280,6 +1372,8 @@ def summary_rows(config, manager=None) -> "list[dict]":
             "hidden_line": mount_line(hidden, unused),
             # 对端声明的能力与学长实际接了哪几项(没连上就没这句可说)
             "caps": c.caps_line() if c else "",
+            "last_event": (getattr(c, "last_event_line", lambda: "")()
+                           if c else ""),
         })
     return out
 
@@ -1287,17 +1381,20 @@ def summary_rows(config, manager=None) -> "list[dict]":
 class McpManager:
     """管理所有 MCP 服务器,并产出可直接并入注册表的 Tool 列表。"""
 
-    def __init__(self, servers: list[McpServerConfig], log=None, on_elicit=None):
+    def __init__(self, servers: list[McpServerConfig], log=None, on_elicit=None,
+                 on_event=None):
         self.servers = servers
         self.clients: list[McpClient] = []
         self._log = log
         self.on_elicit = on_elicit
+        self.on_event = on_event
 
     def connect_all(self) -> None:
         for s in self.servers:
             if not s.enabled:
                 continue
-            client = McpClient(s, log=self._log, on_elicit=self.on_elicit)
+            client = McpClient(s, log=self._log, on_elicit=self.on_elicit,
+                               on_event=self.on_event)
             if client.start():
                 self.clients.append(client)
 
@@ -1338,8 +1435,19 @@ class McpManager:
                          "n_hidden": len(hidden),
                          "hidden_line": mount_line(hidden, unused),
                          "server": (c.server_info or {}).get("name", ""),
-                         "caps": c.caps_line()})
+                         "caps": c.caps_line(),
+                         "last_event": getattr(c, "last_event_line", lambda: "")()})
         return rows
+
+    def events(self, sid: str = "", limit: int = 20) -> list[dict]:
+        """跨服务器取最近通知；sid 为空时按到达顺序合并。"""
+        want = str(sid or "").strip()
+        rows = []
+        for c in self.clients:
+            if want and c.cfg.sid != want:
+                continue
+            rows.extend(c.event_snapshot())
+        return rows[-max(1, int(limit or 20)):]
 
     def close_all(self) -> None:
         for c in self.clients:
@@ -1377,13 +1485,14 @@ def _version() -> str:
         return "0"
 
 
-def connect_servers(servers: list[McpServerConfig], log=None, on_elicit=None) -> McpManager:
+def connect_servers(servers: list[McpServerConfig], log=None, on_elicit=None,
+                    on_event=None) -> McpManager:
     """按配置连接全部启用的服务器(失败的跳过),返回管理器。
 
     `on_elicit` 是"服务端中途要用户确认"的回调(没装 = 一律 decline,见
     `CLIENT_PRIMITIVES` 上的取舍);谁有提问通道谁就传它进来。
     """
-    mgr = McpManager(servers, log=log, on_elicit=on_elicit)
+    mgr = McpManager(servers, log=log, on_elicit=on_elicit, on_event=on_event)
     mgr.connect_all()
     return mgr
 

@@ -95,8 +95,7 @@ def test_caps_line_says_what_the_server_declared_and_what_we_use(client):
     """对端声明的能力要逐项摊开,并说清**哪几样学长不接** —— 不假装。
 
     不说清的表现是:用户看到「连上了、2 个工具」,就以为那台服务器的其余能力
-    也能用。v0.9.172+ 起 prompts 已接(与 tools/resources 同级),logging 仍未接
-    —— 所以"没实现"的名单里只剩 logging,而这一支针正是钉"名单要如实"。
+    也能用。v0.9.178 起 logging 通知也已接，四种能力都要如实列在已接名单里。
     ⚠ 断言写成**整串**:只写 `"学长只接了 tools" in line` 会被
     `"学长只接了 tools、resources、prompts"` 子串蒙过去(实测踩过)。
     """
@@ -104,8 +103,8 @@ def test_caps_line_says_what_the_server_declared_and_what_we_use(client):
     assert "对端声明" in line
     for prim in ("tools", "resources", "prompts", "logging"):
         assert prim in line, prim
-    assert "学长只接了 tools、resources、prompts" in line, line
-    assert "logging 没实现" in line and "不会去调" in line, line
+    assert "学长只接了 tools、resources、prompts、logging" in line, line
+    assert "logging 没实现" not in line
 
 
 def test_caps_line_when_the_server_declared_nothing():

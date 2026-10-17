@@ -42,6 +42,12 @@ def reply(rid, result):
     sys.stdout.flush()
 
 
+def notify(method, params):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": method,
+                                 "params": params}, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
 def main() -> None:
     for line in sys.stdin:
         line = line.strip()
@@ -56,13 +62,13 @@ def main() -> None:
         if rid is None:          # 通知(notifications/initialized)无需响应
             continue
         if method == "initialize":
-            # 故意声明得比学长接的多(logging 学长不接):
-            # caps_line 那句「哪几样没实现、不会去调」要有真数据才验得到。
-            # v0.9.172+ 起 prompts 也接了,所以这里留 logging 当"没接的那一样"。
+            # 四种能力都已接；另有 sampling/elicitation 的明确拒绝口径在客户端测试。
             reply(rid, {"protocolVersion": "2024-11-05",
                         "capabilities": {"tools": {}, "resources": {},
                                          "prompts": {}, "logging": {}},
                         "serverInfo": {"name": "fake-mcp", "version": "0.0.1"}})
+        elif method == "logging/setLevel":
+            reply(rid, {})
         elif method == "tools/list":
             reply(rid, {"tools": TOOLS})
         elif method == "prompts/list":
@@ -111,6 +117,13 @@ def main() -> None:
             name = params.get("name")
             args = params.get("arguments") or {}
             if name == "echo":
+                token = (params.get("_meta") or {}).get("progressToken")
+                notify("notifications/progress",
+                       {"progressToken": token, "progress": 1, "total": 2,
+                        "message": "准备回显"})
+                notify("notifications/message",
+                       {"level": "info", "logger": "fake",
+                        "data": f"echo {args.get('message', '')}"})
                 reply(rid, {"content": [{"type": "text", "text": f"echo: {args.get('message', '')}"}]})
             elif name == "fail":
                 reply(rid, {"isError": True,

@@ -176,6 +176,22 @@ def test_call_tool_returns_text(client):
     assert client.call_tool("echo", {"message": "你好"}) == "echo: 你好"
 
 
+def test_progress_and_log_notifications_are_observable(client):
+    """stdio 通知不能再被读线程丢掉：进度带 token，日志进有界事件环。"""
+    seen = []
+    client.on_event = seen.append
+    assert client.call_tool("echo", {"message": "观测"}) == "echo: 观测"
+    events = client.event_snapshot()
+    assert [e["kind"] for e in events[-2:]] == ["progress", "log"]
+    progress, log = events[-2:]
+    assert progress["token"] and progress["progress"] == 1 and progress["total"] == 2
+    assert progress["message"] == "准备回显"
+    assert log["level"] == "info" and log["logger"] == "fake"
+    assert "echo 观测" in log["data"]
+    assert [e["kind"] for e in seen[-2:]] == ["progress", "log"]
+    assert client.last_event_line().startswith("日志[info] fake:")
+
+
 def test_call_tool_error_flag(client):
     assert client.call_tool("fail", {}) == "错误: 故意失败"
 
@@ -346,11 +362,13 @@ def test_manager_builds_tools_and_summary():
                             "server": "fake-mcp",
                             # 不抄第二份措辞:能力那句由 caps_line 自己说,这里只钉
                             # "summary 的每一行都带着它"(形状仍是精确比对,多一个键就红)
-                            "caps": mgr.clients[0].caps_line()}]
+                            "caps": mgr.clients[0].caps_line(),
+                            "last_event": ""}]
 
         ctx = ToolContext(workspace=Path.cwd(), config=Config())
         out = tools[0].handler(ctx, message="hi")
         assert out == "echo: hi"
+        assert [e["kind"] for e in mgr.events(limit=2)] == ["progress", "log"]
     finally:
         mgr.close_all()
 
