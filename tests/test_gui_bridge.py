@@ -502,6 +502,96 @@ def test_resume_and_delete_by_filename(config, tmp_path):
     assert target.path.name not in {s.path.name for s in list_sessions(tmp_path / "sessions")}
 
 
+def test_resume_switches_back_to_the_saved_workspace(config, tmp_path):
+    """恢复旧会话必须连工具围栏一起切回它原来的项目。"""
+    from minicode import workspace
+    from minicode.session import list_sessions
+
+    sessions = tmp_path / "sessions"
+    state_file = tmp_path / "workspaces.json"
+    old_ws = tmp_path / "old-project"
+    new_ws = tmp_path / "new-project"
+    old_ws.mkdir()
+    new_ws.mkdir()
+
+    old_bridge, old_ui, _old_agent, _old_session = create_app(
+        config, old_ws, llm=FakeLLM([AssistantTurn(text="旧项目里做完的")]),
+        sessions_dir=sessions, config_path=tmp_path / "config.json",
+        workspace_file=state_file, app_dir=tmp_path)
+    old_ui.attach(FakeWindow())
+    source = tmp_path / "旧项目说明.txt"
+    source.write_text("旧项目的附件", encoding="utf-8")
+    attachment = save_attachment(old_ws, source)
+    assert old_bridge.send_task(
+        "记住这个项目", json.dumps([attachment.to_dict()]))["ok"]
+    assert wait_until(lambda: not old_bridge._busy)
+    target = next(s for s in list_sessions(sessions) if s.n_messages > 0)
+    old_path = target.path
+
+    bridge, ui, _agent, _session = create_app(
+        config, new_ws, llm=FakeLLM([AssistantTurn(text="x")]),
+        sessions_dir=sessions, config_path=tmp_path / "config.json",
+        workspace_file=state_file, app_dir=tmp_path)
+    window = FakeWindow()
+    ui.attach(window)
+    bridge._dock_cwd = new_ws
+
+    got = bridge.resume_session(old_path.name)
+
+    assert got["ok"] and got["workspace"] == str(old_ws)
+    assert bridge.workspace == old_ws
+    assert bridge.session.workspace == old_ws
+    assert bridge._sandbox.workspace == old_ws
+    assert bridge._dock_cwd is None
+    assert workspace.load_state(state_file)["current"] == str(old_ws)
+    resumed = window.of_type("resumed")[-1]
+    user = next(m for m in resumed["messages"] if m["role"] == "user")
+    assert user["atts"][0]["name"] == "旧项目说明.txt"
+    ws_events = window.of_type("workspace")
+    assert ws_events and ws_events[-1]["path"] == str(old_ws)
+    assert any("已切回原工作区" in e.get("text", "")
+               for e in window.of_type("info"))
+
+
+def test_resume_refuses_a_missing_saved_workspace(config, tmp_path):
+    """原目录没了就停下说清,不许拿当前工作区假装恢复成功。"""
+    import shutil
+
+    from minicode.session import list_sessions
+
+    sessions = tmp_path / "sessions"
+    state_file = tmp_path / "workspaces.json"
+    old_ws = tmp_path / "old-project"
+    new_ws = tmp_path / "new-project"
+    old_ws.mkdir()
+    new_ws.mkdir()
+
+    old_bridge, old_ui, _old_agent, _old_session = create_app(
+        config, old_ws, llm=FakeLLM([AssistantTurn(text="旧项目里做完的")]),
+        sessions_dir=sessions, config_path=tmp_path / "config.json",
+        workspace_file=state_file, app_dir=tmp_path)
+    old_ui.attach(FakeWindow())
+    assert old_bridge.send_task("记住这个项目")["ok"]
+    assert wait_until(lambda: not old_bridge._busy)
+    target = next(s for s in list_sessions(sessions) if s.n_messages > 0)
+    old_name = target.path.name
+    shutil.rmtree(old_ws)
+
+    bridge, ui, _agent, _session = create_app(
+        config, new_ws, llm=FakeLLM([AssistantTurn(text="x")]),
+        sessions_dir=sessions, config_path=tmp_path / "config.json",
+        workspace_file=state_file, app_dir=tmp_path)
+    window = FakeWindow()
+    ui.attach(window)
+
+    got = bridge.resume_session(old_name)
+
+    assert got["ok"] is False
+    assert "原来的工作区不可用" in got["msg"]
+    assert bridge.workspace == new_ws
+    assert not window.of_type("resumed")
+
+
 def test_delete_current_session(config, tmp_path):
     bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="done")]))
     bridge.send_task("任务")

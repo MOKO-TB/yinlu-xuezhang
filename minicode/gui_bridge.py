@@ -1568,6 +1568,8 @@ class Bridge:
                 "skills": self.get_skills().get("skills") or [],
                 "skill_channels": describe_channels(self.workspace),
                 "mcp": self._mcp_summary(),
+                "mcp_events": (self._mcp.events(limit=30)
+                               if getattr(self, "_mcp", None) is not None else []),
                 "sidepages": {"items": side.get("items") or [],
                               "skipped": side.get("skipped") or [],
                               "root": side.get("root") or ""},
@@ -2568,11 +2570,7 @@ class Bridge:
         if running:
             return {"ok": False,
                     "msg": f"还有 {len(running)} 个任务在跑:等它们结束或先停止,再切工作区"}
-        self._close_runners()
-        self.workspace = target
-        if self._sandbox is not None:
-            self._sandbox.retarget(target)
-        ws.remember(target, state_file=self.workspace_file, app_dir=self.app_dir)
+        self._retarget_workspace(target)
         runner = self.open_session()          # 新工作区从空会话开始
         # 先 cleared 再 workspace:前端用 cleared 认下新的 session 键,
         # 否则带旧 session 键的事件会被“后台会话不渲染”那道阑筛掉
@@ -2585,6 +2583,16 @@ class Bridge:
         self._apply_chrome()
         self.invalidate_env_info()        # 环境信息跟着工作区走(分支/改动都是新目录的)
         return {"ok": True, "session": runner.key, "path": str(target)}
+
+    def _retarget_workspace(self, target: Path) -> None:
+        """丢掉按旧工作区装配的运行器,把共用围栏与终端基准一起换掉。"""
+        self._close_runners()
+        self.workspace = Path(target)
+        if self._sandbox is not None:
+            self._sandbox.retarget(self.workspace)
+        self._dock_cwd = None
+        ws.remember(self.workspace, state_file=self.workspace_file,
+                    app_dir=self.app_dir)
 
     def _close_runners(self) -> None:
         """丢掉所有会话运行器(切工作区时用),并请求它们手上的回合停下。"""
@@ -3285,6 +3293,8 @@ class Bridge:
             "enabled": state.policy.enabled,
             "allow_outside_workspace": state.policy.allow_outside_workspace,
             "allow_network": state.policy.allow_network,
+            "app_container": state.policy.app_container,
+            "restricted_token": state.policy.restricted_token,
             "timeout_seconds": state.policy.timeout_seconds,
             "strip_env_secrets": state.policy.strip_env_secrets,
             "description": state.describe(),
@@ -4239,23 +4249,50 @@ class Bridge:
         以前这里会先打断当前任务,现在切换就是纯粹"换视角"。
         index 可以是**留档文件名**(前端首选,稳定)或序号(int,兼容旧调用):
         渲染到点击之间若有新会话落盘,序号会错位到另一条,文件名不会。
+
+        恢复**不在内存里的**旧会话时,若留档记着它原来的工作区,先把整座桥
+        切回那里再加载。否则消息回来了、工具围栏却还在另一个项目,下一次
+        读写或还原附件就会落到错误目录。原目录已失效时明确拒绝,不拿当前
+        工作区假装恢复成功。
         """
         chosen, _summaries = self._resolve_session_summary(index)
         if chosen is None:
             return {"ok": False, "msg": "会话不存在"}
         live = self._runner_for_log(chosen.path)
+        switched = False
         if live is not None:
             self.switch_to(live)                 # 后台任务:接上它当前的内存上下文
             key, n = live.key, max(0, len(live.session.messages) - 1)
         else:
+            recorded = str(getattr(chosen, "workspace", "") or "").strip()
+            if recorded:
+                target, err = ws.resolve_target(recorded, app_dir=self.app_dir)
+                if target is None:
+                    return {"ok": False,
+                            "msg": f"这条会话原来的工作区不可用,没有恢复:{err}"}
+                if ws.key(target) != ws.key(self.workspace):
+                    running = self.running_sessions()
+                    if running:
+                        return {"ok": False,
+                                "msg": (f"还有 {len(running)} 个任务在跑:"
+                                        "等它们结束或先停止,再恢复那个工作区的会话")}
+                    self._retarget_workspace(target)
+                    switched = True
             runner = self.open_session(load_path=chosen.path)
             key, n = runner.key, max(0, len(runner.session.messages) - 1)
         self.ui.push("cleared", session=key)
+        if switched:
+            self.ui.push("workspace", session=key,
+                         **ws.entry(self.workspace, self.app_dir))
+            self._apply_chrome()
+            self.invalidate_env_info()
         self.ui.push("resumed", session=key, messages=self._history_for_frontend())
+        where = f";已切回原工作区 {self.workspace}" if switched else ""
         self.ui.push("info", session=key,
-                     text=f"已恢复 {n} 条消息(来自 {chosen.path.name})")
+                     text=f"已恢复 {n} 条消息(来自 {chosen.path.name}){where}")
         self._push_sessions()
-        return {"ok": True, "session": key}
+        return {"ok": True, "session": key,
+                "workspace": str(self.workspace)}
 
     # ------------------------------------------------------------ 会话导出 / 搜索
 

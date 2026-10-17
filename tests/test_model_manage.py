@@ -529,6 +529,25 @@ def test_drop_last_answer_is_a_noop_when_nothing_has_been_answered():
     assert s.last_user_message()["content"] == "问了但还没答"
 
 
+def test_regenerated_marker_restores_without_the_old_answer(tmp_path):
+    """重答标记带有效上下文:重启后不能把刚撤掉的旧答案又恢复回来。"""
+    s = Session(system_prompt="sys", log_dir=tmp_path)
+    s.add_user("第一个问题")
+    s.add_assistant(AssistantTurn(text="第一个答案"))
+    s.add_user("第二个问题")
+    s.add_assistant(AssistantTurn(tool_calls=[
+        ToolCall(id="c1", name="grep", arguments="{}")]))
+    s.add_tool_result("c1", "grep", "命中若干")
+    s.add_assistant(AssistantTurn(text="第二个答案"))
+    assert s.drop_last_answer() == 3
+
+    back = Session(system_prompt="sys")
+    assert back.load_from(s.log_path) == 3
+    assert [m["content"] for m in back.messages[1:]] == [
+        "第一个问题", "第一个答案", "第二个问题"]
+    assert not [m for m in back.messages if m.get("role") == "tool"]
+
+
 # ---------------------------------------------------------------- 会话搜索
 
 def _log(path: Path, entries) -> Path:

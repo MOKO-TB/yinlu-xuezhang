@@ -13101,10 +13101,23 @@ async function extLoad() {
     const sec4 = extSection("🔌 MCP 服务器", mcp.length + " 台");
     for (const m of mcp) {
       const name = m.name || m.id || "?";
-      const state = m.connected ? `已连${m.tools ? " · " + m.tools + " 只工具" : ""}`
+      let state = m.connected ? `已连${m.tools ? " · " + m.tools + " 只工具" : ""}`
         : (m.enabled === false ? "已停用" : "未连上");
+      if (m.last_event) state += ` · 最近:${m.last_event}`;
       sec4.appendChild(extRow(name, state + (m.msg ? " · " + m.msg : ""),
         m.connected ? "" : "dim"));
+    }
+    const events = r.mcp_events || [];
+    if (events.length) {
+      sec4.appendChild(extRow("最近通知", `${events.length} 条`, "dim"));
+      for (const e of events.slice(-8).reverse()) {
+        const detail = e.kind === "progress"
+          ? `进度 ${e.progress ?? "?"}${e.total != null ? "/" + e.total : ""} ${e.message || ""}`
+          : e.kind === "log"
+            ? `日志[${e.level || "info"}] ${e.logger || ""} ${e.data || ""}`
+            : (e.method || "通知");
+        sec4.appendChild(extRow(e.server || "MCP", detail.trim(), "dim"));
+      }
     }
     body.appendChild(sec4);
   }
