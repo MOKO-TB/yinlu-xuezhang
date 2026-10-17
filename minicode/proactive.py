@@ -948,6 +948,33 @@ def _sidecar(part: Path) -> Path:
     return part.with_name(part.name + ".meta")
 
 
+class _RateMeter:
+    """窗口化的下载速率。**只用于说话,不参与任何判定** —— 慢成什么样,该下哪一件、
+    能不能装都不变(那是清单与 sha256 的事)。
+
+    为什么是窗口而不是平均:一次 920 MB 的下载里,平均值会把"前 30 秒 3 MB/s、
+    后面卡住"说成"还行";而用户问的恰恰是"现在为什么不动"。
+    窗口也不许跨"被打回整件重下"那一次 —— 那 `got` 会倒退,拿它除以时间是假数。
+    """
+
+    def __init__(self, window: float = 2.0):
+        self.window = float(window)
+        self.t = None            # 用 None 当"没采过样",别用 0.0 —— monotonic 也可能给 0
+        self.b = 0
+        self.bps = 0.0
+
+    def sample(self, now: float, got: int) -> None:
+        if self.t is None or got < self.b:
+            self.t, self.b = now, got        # 第一次,或服务器不认 Range 打回重下
+            return
+        if now - self.t >= self.window:
+            self.bps = (got - self.b) / (now - self.t)
+            self.t, self.b = now, got
+
+    def read(self) -> int:
+        return int(self.bps)
+
+
 def _read_sidecar(part: Path) -> dict:
     try:
         import json
@@ -1053,9 +1080,11 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
     # 来源的字节接在一起,最后那个 sha256 会指向一个谁都没发布过的文件。
     last_pct = -1
     resumed_from = 0
+    meter = _RateMeter()          # 实测速率:记进 .part.meta 与进度事件,不参与判定
 
     def prog(got: int) -> None:
         nonlocal last_pct
+        meter.sample(time.monotonic(), got)
         if on_progress is None:
             return
         pct = int(got * 100 / total) if total else -1
@@ -1063,7 +1092,8 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
             return
         last_pct = pct
         on_progress({"name": safe, "got": got, "total": total, "pct": pct,
-                     "resumed": resumed_from > 0, "start_at": resumed_from})
+                     "resumed": resumed_from > 0, "start_at": resumed_from,
+                     "bps": meter.read()})
 
     def _resumable() -> "tuple[int, str]":
         """本机那份半截能不能接着用:名字与总大小对得上才行,对不上就删。"""
@@ -1154,7 +1184,8 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
                     u, label, ctx, start_at, validator)
                 if outcome == "stop":
                     _write_sidecar(part, {"name": safe, "total": total,
-                                          "validator": v or validator, "bytes": pos})
+                                          "validator": v or validator, "bytes": pos,
+                                          "bps": meter.read()})
                     return {"ok": False, "cancelled": True, "verified": "none",
                             "partial": pos, "resumable": True,
                             "why": "已取消,已下的 %s 留着,下次点下载接着走"
@@ -1172,7 +1203,8 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
             have = part.stat().st_size if part.exists() else 0
             if have:
                 _write_sidecar(part, {"name": safe, "total": total,
-                                      "validator": validator, "bytes": have})
+                                      "validator": validator, "bytes": have,
+                                      "bps": meter.read()})
             return {"ok": False, "verified": "none", "resumable": bool(have),
                     "partial": have,
                     "why": ("下载没通:" + "；".join(attempt_why[:4])) if attempt_why
@@ -1181,7 +1213,8 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
     on_disk = part.stat().st_size
     if total and on_disk != total:
         _write_sidecar(part, {"name": safe, "total": total,
-                              "validator": validator, "bytes": on_disk})
+                              "validator": validator, "bytes": on_disk,
+                              "bps": meter.read()})
         return {"ok": False, "verified": "none", "resumable": True,
                 "partial": on_disk, "total": total,
                 "why": f"这一趟只拿到 {fmt_bytes(on_disk)} / {fmt_bytes(total)},"
@@ -1205,6 +1238,7 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
     except OSError:
         pass
     return {"ok": True, "path": str(final), "name": safe, "size": on_disk,
+            "bps": meter.read(),
             "sha256": sha, "verified": verified, "version": ver,
             "resumed": bool(resumed),
             "why": "" if verified != "none" else (vwhy or "没有可用的校验文件")}
@@ -1264,6 +1298,7 @@ def pending_part(dest_dir: Path) -> dict:
     return {"name": p.name, "version": m.group(1) if m else "",
             "bytes": have, "total": total,
             "pct": int(have * 100 / total) if total else -1,
+            "bps": int(rec.get("bps") or 0),
             "size": fmt_bytes(have)}
 
 

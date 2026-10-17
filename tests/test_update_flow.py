@@ -277,6 +277,45 @@ def test_download_cancel_keeps_the_part_for_resume(server, tmp_path, monkeypatch
     assert rec.get("bytes") == part.stat().st_size, "条子写的字节数和盘上的不一致"
 
 
+def test_the_rate_meter_is_a_window_not_an_average():
+    """速率是**窗口**里的数,而且不许跨"被打回整件重下"那一次。
+
+    为什么单独钉它:用户问的是"现在为什么不动"。一次 920 MB 的下载里,总平均会把
+    "前 30 秒 3 MB/s、后面卡住"说成"还行"。
+    """
+    m = proactive._RateMeter(window=2.0)
+    m.sample(0.0, 0)
+    m.sample(2.0, 6 * 1024 * 1024)
+    assert m.read() == 3 * 1024 * 1024, m.read()          # 2 秒 6 MB = 3 MB/s
+    m.sample(4.0, 7 * 1024 * 1024)
+    assert m.read() == int(1024 * 1024 / 2.0), m.read()   # 只看最近那个窗口
+    # 服务器不认 Range → 字节数倒退:窗口必须重来,不能拿"倒退"算出个速率
+    m.sample(6.0, 1024)
+    m.sample(8.0, 1024 * 1024 * 3)
+    assert m.read() == int((1024 * 1024 * 3 - 1024) / 2.0), m.read()
+    assert proactive._RateMeter().read() == 0, "没采过样要说'不知道',不许编"
+
+
+def test_a_partial_records_its_measured_rate(server, tmp_path, monkeypatch):
+    """半截那条子上要留着**实测速率** —— 这是"慢在哪"唯一的证据来源。
+
+    它不参与任何判定(该下哪一件由清单说了算、能不能装由 sha256 说了算),
+    所以这一支针钉的是"记没记下来",不是"记成什么值"。
+    """
+    monkeypatch.setattr(proactive, "_expected_sha256", lambda *a, **k: (SHA, ""))
+    seen = []
+    r = proactive.download_asset(_asset(server + "/real"), tmp_path,
+                                 should_stop=lambda: True,
+                                 on_progress=lambda ev: seen.append(ev))
+    assert r["ok"] is False and r.get("cancelled")
+    part = tmp_path / (ASSET_NAME + ".part")
+    rec = proactive._read_sidecar(part)
+    assert isinstance(rec.get("bps"), int), (rec, "条子里要有实测速率")
+    pend = proactive.pending_part(tmp_path)
+    assert "bps" in pend, pend                          # 重启后界面也拿得到
+    assert all("bps" in ev for ev in seen) or not seen, "进度事件里要带速率"
+
+
 def test_download_resumes_with_a_real_range_request(server, tmp_path, monkeypatch):
     """**真续传**:半截在盘上 ⇒ 服务器被要求从第 N 字节发,拼出来的是完整一件。
 

@@ -1223,6 +1223,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # (实测 1.0 秒换少下 743 MB)。漏 `read_kernel_identity` 的表现
                            # 是"这台机器永远读不到凭证 ⇒ 永远下整包",而源码态全绿。
                            "kernel_dir", "kernel_identity", "read_kernel_identity",
+                           # v0.9.180+ 第 0 步:实测速率记进 .part.meta 与进度事件
+                           # (漏收的表现是"用户说慢,我们手里一个数都没有")
+                           "_RateMeter",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",
