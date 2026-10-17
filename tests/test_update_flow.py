@@ -1005,20 +1005,47 @@ def test_fetch_release_manifest_reads_the_named_asset_and_says_why(monkeypatch):
 
 
 def test_prune_recognises_the_two_new_file_names(tmp_path):
-    """v0.9.178 多了两件产物名:`app-setup.exe` 与 `assets.json`。
+    """v0.9.178 多了两件产物名,v0.9.181 又把其中一件**改了名** —— 三种形状都得认。
 
     它们**必须**进那道文件名形状闸,否则清理永远不认识它们 —— 表现是"用户按了清理,
-    腾出 0 字节,而盘上躺着三件旧的小包"。这条针钉的就是"新产物有没有交登记税"。
+    腾出 0 字节,而盘上躺着三件旧的小包"。这条针钉的就是"新产物有没有交登记税",
+    而**改名也是一次登记**:旧名字 `app-setup.exe` 还躺在很多人的 `updates/` 里。
     """
     cur = proactive._cur_version()
     for n in ("yinlu-xuezhang-0.9.50-app-setup.exe",
+              "yinlu-xuezhang-0.9.51-appupdate.exe",
               "yinlu-xuezhang-0.9.50-assets.json",
-              f"yinlu-xuezhang-{cur}-app-setup.exe"):
+              f"yinlu-xuezhang-{cur}-appupdate.exe"):
         (tmp_path / n).write_bytes(b"z" * 7)
     r = proactive.prune_updates(tmp_path, keep_version="")
     assert [x["name"] for x in r["removed"]] == [
-        "yinlu-xuezhang-0.9.50-app-setup.exe", "yinlu-xuezhang-0.9.50-assets.json"], r
-    assert (tmp_path / f"yinlu-xuezhang-{cur}-app-setup.exe").exists(), "当前版要留"
+        "yinlu-xuezhang-0.9.50-app-setup.exe",
+        "yinlu-xuezhang-0.9.50-assets.json",
+        "yinlu-xuezhang-0.9.51-appupdate.exe"], r
+    assert (tmp_path / f"yinlu-xuezhang-{cur}-appupdate.exe").exists(), "当前版要留"
+
+
+def test_the_app_only_package_is_not_named_like_the_full_setup():
+    """「仅 app」那件的名字**不许以 `setup.exe` 结尾** —— 老程序只按后缀挑。
+
+    装在 0.9.177/0.9.178 上的那份字节码里 `pick_asset(release, form)` 没有 `want_name`
+    参数、也**不读发布清单**,它取第一个以 `setup.exe` 结尾的资产;GitHub 按字母序返回,
+    `…-app-setup.exe` 就在整包前面 ⇒ 老机器会下那件不含馆藏库与内核的小包,装完功能
+    悄悄是坏的(§6 第 86 条:0.9.180 那件的发布页资产因此被撤)。改名是唯一能从根上
+    挡住的办法 —— 我们改不了别人机器上已经装好的程序。
+    """
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from publish_release import published_names
+
+    nm = published_names("9.9.9")
+    assert not nm["app_setup"].endswith("setup.exe"), nm
+    assert nm["setup"].endswith("-setup.exe"), nm
+    assets = sorted(({"name": nm[k]} for k in ("assets", "app_setup", "setup",
+                                               "sha256")), key=lambda a: a["name"])
+    old_pick = next(a for a in assets if a["name"].endswith("setup.exe"))
+    assert old_pick["name"] == nm["setup"], \
+        "老程序按后缀会挑到:%s —— 那件小包又回到陷阱位置了" % old_pick["name"]
 
 
 def test_pending_part_needs_the_sidecar(tmp_path):

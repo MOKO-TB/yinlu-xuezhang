@@ -70,12 +70,18 @@ def published_names(ver: str) -> dict:
     英文名,而 App 端 `pick_asset` 拿清单里的名字与发布资产**逐字比** —— 两边永远对不上,
     "该下哪一件"就退化成"找不到那件"(界面上是「打开发布页」,或按整包下并说清单在说谎)。
     与 §7 (o) 同族:一件事两处各写一份,各自都被测对,合起来是坏的。
+
+    ⚠ **`app_setup` 那件的名字刻意不许以 `setup.exe` 结尾**(v0.9.181 起叫 `…-appupdate.exe`)。
+    原因是装在 0.9.177/0.9.178 上的老程序**不读发布清单**,只按后缀 `setup.exe` 挑第一个
+    匹配的,而 `…-app-setup.exe` 也以它结尾、字母序又排在整包前面 ⇒ 老机器会去下那件不含
+    馆藏库与浏览器内核的小包,装完功能悄悄是坏的(§6 第 86 条:0.9.180 那件的发布页资产因此
+    被撤)。新程序按清单逐字取,改名对它没有影响 —— 一个名字同时解掉两代客户端的歧义。
     """
     return {
         "setup": f"yinlu-xuezhang-{ver}-setup.exe",
         "zip": f"yinlu-xuezhang-{ver}-win64.zip",
         "single_file": f"yinlu-xuezhang-{ver}-single-file.exe",
-        "app_setup": f"yinlu-xuezhang-{ver}-app-setup.exe",
+        "app_setup": f"yinlu-xuezhang-{ver}-appupdate.exe",
         "assets": f"yinlu-xuezhang-{ver}-assets.json",
         "sha256": f"yinlu-xuezhang-{ver}-sha256.txt",
     }

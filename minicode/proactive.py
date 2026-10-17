@@ -1473,8 +1473,11 @@ def fmt_bytes(n: int) -> str:
 # 这个目录是用户可写的本机目录,谁也可能往里放别的东西;"清理"的权限来自
 # "这是我写的",不来自"它在我的目录下"。
 _UPDATE_NAME = re.compile(
-    r"^yinlu-xuezhang-\d+\.\d+\.\d+-(setup\.exe|app-setup\.exe|single-file\.exe"
-    r"|win64\.zip|sha256\.txt|assets\.json)(\.part(\.meta)?)?$")
+    r"^yinlu-xuezhang-\d+\.\d+\.\d+-(setup\.exe|app-setup\.exe|appupdate\.exe"
+    r"|single-file\.exe|win64\.zip|sha256\.txt|assets\.json)(\.part(\.meta)?)?$")
+# `app-setup.exe` 是 0.9.178~0.9.180 发布过的旧名字(它以 `setup.exe` 结尾,老客户端按
+# 后缀挑会挑到它 —— §6 第 86 条);v0.9.181 起改叫 `appupdate.exe`。两个都得留着认:
+# 漏了旧名字 = 用户按「清理旧安装包」腾出 0 字节,而盘上躺着两件 135 MB。
 _VER_IN_NAME = re.compile(r"yinlu-xuezhang-(\d+\.\d+\.\d+)-")
 
 
