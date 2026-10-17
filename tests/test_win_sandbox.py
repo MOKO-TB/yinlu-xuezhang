@@ -181,6 +181,32 @@ def test_kill_tree_via_shell_closes_the_job(tmp_path):
 
 
 @needs_win
+def test_py_script_timeout_reclaims_spawned_child(tmp_path):
+    """真实 py_script 超时必须关闭 job,不能留下仍在执行的孙进程。"""
+    child_pid = tmp_path / "child.pid"
+    script = tmp_path / "spawn.py"
+    script.write_text(
+        "import pathlib, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(120)'])\n"
+        f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid))\n"
+        "time.sleep(120)\n", encoding="utf-8")
+    from minicode.config import Config
+    from minicode.tools.base import ToolContext
+    pid = None
+    try:
+        out = shell.py_script(ToolContext(workspace=tmp_path, config=Config()),
+                              "spawn.py", timeout=10)
+        assert "超过 10 秒被中止" in out, out
+        assert child_pid.exists(), "脚本没有跑到 spawn,测试前提不成立"
+        pid = child_pid.read_text(encoding="utf-8")
+        assert not _wait_gone([pid]), f"超时后子进程仍存活: {pid}"
+    finally:
+        if pid:
+            _reap(pid)
+
+
+@needs_win
 def test_the_main_process_is_never_put_in_the_job(tmp_path):
     """关窗不能把 pywebview 自己杀掉:只关学长 spawn 出来的那些进程。
 

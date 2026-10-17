@@ -48,6 +48,7 @@ def _ctx(ws, policy=None, home=None):
 def test_policy_from_raw_defaults_and_invalid():
     p = policy_from_raw(None)
     assert p.enabled and not p.allow_outside_workspace and p.allow_network
+    assert p.app_container is False
     assert p.timeout_seconds == 60 and p.deny_patterns == []
 
     p2 = policy_from_raw({"enabled": False, "allow_outside_workspace": True,
@@ -56,6 +57,13 @@ def test_policy_from_raw_defaults_and_invalid():
     assert p2.enabled is False and p2.allow_outside_workspace is True
     assert p2.timeout_seconds == 300            # 夹到上限
     assert p2.deny_patterns == ["git push"]     # 非字符串项被丢弃
+
+
+def test_appcontainer_policy_roundtrip():
+    p = SandboxPolicy(app_container=True, restricted_token=True)
+    again = policy_from_raw(policy_to_raw(p))
+    assert again.app_container is True
+    assert again.restricted_token is True
 
 
 def test_policy_roundtrip_and_timeout_clamp():

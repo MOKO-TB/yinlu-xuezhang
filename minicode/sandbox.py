@@ -85,6 +85,12 @@ class SandboxPolicy:
     enabled: bool = True
     allow_outside_workspace: bool = False
     allow_network: bool = True
+    # Windows AppContainer 执行层。默认关，打开后 bash/py_script 不再用普通
+    # subprocess 直起；工作区可写、运行时只读、网络按 allow_network 注入 capability。
+    app_container: bool = False
+    # Windows 受限令牌(S5b):保留用户读取面，写入必须同时命中工作区专用 SID。
+    # 默认关；不负责禁网，网络仍由 allow_network 的命令门禁管理。
+    restricted_token: bool = False
     timeout_seconds: int = DEFAULT_TIMEOUT
     deny_patterns: list[str] = field(default_factory=list)
     # 子进程环境剥离:默认开。关掉只影响 bash/py_script 起的子进程,
@@ -113,6 +119,8 @@ def policy_from_raw(raw) -> SandboxPolicy:
         enabled=bool(raw.get("enabled", True)),
         allow_outside_workspace=bool(raw.get("allow_outside_workspace", False)),
         allow_network=bool(raw.get("allow_network", True)),
+        app_container=bool(raw.get("app_container", False)),
+        restricted_token=bool(raw.get("restricted_token", False)),
         timeout_seconds=max(1, min(timeout, MAX_TIMEOUT)),
         deny_patterns=patterns,
         strip_env_secrets=bool(raw.get("strip_env_secrets", True)),
@@ -124,6 +132,8 @@ def policy_to_raw(policy: SandboxPolicy) -> dict:
         "enabled": policy.enabled,
         "allow_outside_workspace": policy.allow_outside_workspace,
         "allow_network": policy.allow_network,
+        "app_container": policy.app_container,
+        "restricted_token": policy.restricted_token,
         "timeout_seconds": policy.timeout_seconds,
         "deny_patterns": list(policy.deny_patterns),
         "strip_env_secrets": policy.strip_env_secrets,
@@ -719,6 +729,10 @@ class SandboxState:
                      else "禁网(按命令名/脚本导入拦,不是防火墙)")
         if self.policy.strip_env_secrets:
             parts.append("子进程已摘密钥环境变量")
+        if self.policy.app_container:
+            parts.append("AppContainer 文件/网络执行层已启用")
+        elif self.policy.restricted_token:
+            parts.append("Windows 受限令牌写围栏已启用")
         if self.session_approved:
             parts.append(f"本会话已记住 {len(self.session_approved)} 个工作区外路径")
         return " · ".join(parts)

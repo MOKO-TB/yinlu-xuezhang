@@ -84,9 +84,13 @@
 
 写在这里是为了别把它当成它做不到的事:
 
-- **不是隔离**。子进程仍以你当前用户的权限运行;`allow_network: false` 是按命令名
-  和脚本导入名拦的门禁,**不是操作系统防火墙**(`sandbox.KNOWN_LIMITS` 里逐条写着)。
-  真需要隔离请上 Windows 沙盒或另一台机器。
+- **默认不是 OS 级隔离**。未打开 `sandbox.app_container` 时,子进程仍以当前用户权限运行;
+  `allow_network: false` 只是按命令名和脚本导入名拦的门禁。打开 AppContainer 后,
+  `bash` / `py_script` 才使用受限 token、工作区 ACL 与可选网络 capability;
+  它仍不是虚拟机级隔离,失败时会拒绝执行而不是假装隔离。
+  `sandbox.restricted_token` 是较轻的 S5b 写围栏:`bash` 保留用户读取面、只允许写
+  ACL 命中工作区 SID 的对象;`py_script` 自动改用 AppContainer,避免 Python 运行时
+  在纯受限令牌下无法初始化。
 - **工具钩子也不是策略层之外的安全边界**(v0.9.115)。它是你自己在 config.json 里
   配的任意命令:能拒绝一步、能改写一步的参数,但**改不动红线** —— 敏感目录、灾难命令、
   `.git` 写入、工作区内凭据、以及"本回合接触过外部内容"之后升格的那类确认,权限门在

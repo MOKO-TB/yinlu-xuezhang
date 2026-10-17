@@ -110,6 +110,50 @@ def _env_note(dropped: list[str]) -> str:
             "需要它们请在 config.json 把 sandbox.strip_env_secrets 设为 false)")
 
 
+def _appcontainer_note(ctx: ToolContext, actual_mode: str = "") -> str:
+    state = getattr(ctx, "sandbox", None)
+    if state is None:
+        return ""
+    if actual_mode == "appcontainer" or getattr(state.policy, "app_container", False):
+        network = "允许" if getattr(state.policy, "allow_network", False) else "禁用"
+        return (f"\n(执行隔离: AppContainer 已启用;工作区可写,运行时目录只读,"
+                f"子进程网络{network};这不是对工作区外所有系统对象的绝对隔离)")
+    if actual_mode == "restricted" or getattr(state.policy, "restricted_token", False):
+        return ("\n(执行隔离: Windows 受限令牌已启用;工作区可写,"
+                "工作区外写入受 SID 围栏限制;该层不负责禁网)")
+    return ""
+
+
+def _spawn(ctx: ToolContext, args, *, cwd, env, stdout, stderr, stdin,
+           creationflags: int, isolation_mode: str = ""):
+    """起一条工具子进程；启用 AppContainer 时不允许静默退回普通 Popen。"""
+    state = getattr(ctx, "sandbox", None)
+    use_appcontainer = bool(state is not None
+                            and getattr(state.policy, "app_container", False))
+    use_restricted = bool(state is not None
+                          and getattr(state.policy, "restricted_token", False))
+    if isolation_mode == "appcontainer" and use_restricted:
+        use_appcontainer, use_restricted = True, False
+    if use_appcontainer or use_restricted:
+        if sys.platform != "win32":
+            raise OSError("Windows 隔离令牌只支持 Windows")
+        from minicode import appcontainer
+        if not appcontainer.available():
+            raise OSError("Windows 隔离令牌 API 不可用")
+        argv = list(args) if isinstance(args, (list, tuple)) else [
+            "cmd.exe", "/d", "/s", "/c", str(args)]
+        return appcontainer.Popen(
+            argv, cwd=cwd, env=env,
+            allow_network=bool(getattr(state.policy, "allow_network", False)),
+            mode="appcontainer" if use_appcontainer else "restricted",
+            stdout=stdout, stderr=stderr, stdin=stdin,
+            creationflags=creationflags)
+    return subprocess.Popen(
+        args, shell=isinstance(args, str), cwd=cwd,
+        stdout=stdout, stderr=stderr, stdin=stdin, env=env,
+        creationflags=creationflags)
+
+
 def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
          background: bool = False) -> str:
     """在工作区目录执行一条 shell 命令,返回退出码与输出。
@@ -122,6 +166,14 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
     之后用 `bash_status` 看进度与输出、`bash_kill` 终止(实现见 `_BgJob`)。
     """
     argv = resolve_shell_argv(ctx.config.shell)
+    state = getattr(ctx, "sandbox", None)
+    if (state is not None and (getattr(state.policy, "app_container", False)
+            or getattr(state.policy, "restricted_token", False))
+            and argv and "bash" in Path(argv[0]).name.lower()):
+        # Git Bash 的启动器还会去找安装目录里的 usr/bin；该目录未必允许
+        # 给 AppContainer 加 ACE。隔离模式下退回系统 cmd，避免“能启动
+        # bash.exe、却找不到它自己的解释器”。
+        argv = None
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     env, dropped = _child_env(ctx)
     env_note = _env_note(dropped)
@@ -129,7 +181,6 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
         return _bg_start(ctx, command, argv, env, creationflags, env_note)
 
     timeout = min(max(1, int(timeout)), MAX_TIMEOUT)
-    state = getattr(ctx, "sandbox", None)
     if state is not None:                      # 沙箱收紧执行超时上限
         timeout = state.policy.command_timeout(timeout)
 
@@ -138,11 +189,14 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
     # 各一个读线程 —— 只读一条、或先 wait 再读,都会在另一条写满时把子进程卡死。
     # stdin 给 DEVNULL:以前它继承控制台,GUI 那边等于"永远没人输入",命令会干等;
     # 交互式命令仍然不该走这里(那是 PTY 那条没做的路),但现在不会吊住。
-    proc = subprocess.Popen(
-        ([*argv, command] if argv is not None else command),
-        shell=(argv is None), cwd=ctx.workspace,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
-        env=env, creationflags=creationflags)
+    try:
+        proc = _spawn(
+            ctx, ([*argv, command] if argv is not None else command),
+            cwd=ctx.workspace, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL, env=env, creationflags=creationflags)
+    except Exception as e:
+        return f"错误: 命令没能启动({type(e).__name__}: {e})。"
+    isolation_note = _appcontainer_note(ctx)
     # 一挂上去,这条命令的整棵进程树就归操作系统记着(见 `win_sandbox` 那段)。
     # 挂不上不影响命令照常跑 —— 这一层是"限制",不是"许可",更不是拒绝执行的理由。
     job = _new_job(proc)
@@ -185,7 +239,8 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
     if timed_out:
         partial = ("".join(out_buf) + "".join(err_buf)).strip()
         return (f"错误: 命令超时(>{timeout}s),已终止{killed_note}。"
-                f"已产生的输出:\n{partial[:TIMEOUT_OUTPUT_LIMIT]}{lost}{env_note}")
+                f"已产生的输出:\n{partial[:TIMEOUT_OUTPUT_LIMIT]}{lost}{env_note}"
+                f"{isolation_note}")
 
     out = _clip("".join(out_buf).strip())
     err = _clip("".join(err_buf).strip())
@@ -201,7 +256,7 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
     # 它们没有"退出码是几"这个结论,记进去等于给"跑过了"开门。
     from minicode import planning
     planning.note_verify_run(ctx, command, proc.returncode, out or err)
-    return "\n".join(sections) + lost + env_note
+    return "\n".join(sections) + lost + env_note + isolation_note
 
 
 BASH_OUTPUT_LIMIT = 6000
@@ -440,10 +495,10 @@ def _bg_start(ctx: ToolContext, command: str, argv: list[str] | None,
                     "先 `bash_kill` 掉不要的,或者等它们结束。")
         job_id = _bg_new_id()
     try:
-        proc = subprocess.Popen(
-            ([*argv, command] if argv is not None else command),
-            shell=(argv is None), cwd=str(ctx.workspace),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        proc = _spawn(
+            ctx, ([*argv, command] if argv is not None else command),
+            cwd=str(ctx.workspace), stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             # v0.9.146:`DEVNULL` → `PIPE` 是 `bash_input` 唯一真正的开关。
             # `proc` 本来就留着,所以拿到写入口不需要新字段 —— 今天 `proc.stdin is None`
             # 只是因为 DEVNULL 不建管道。**前台那一处(`:142`)与 `py_script`(`:809`)
@@ -459,6 +514,7 @@ def _bg_start(ctx: ToolContext, command: str, argv: list[str] | None,
                      name=f"bg-{job_id}").start()
     return (f"已放进后台:{job_id}(pid={proc.pid}) · {job.command}\n"
             + _job_status_line(job.job)
+            + _appcontainer_note(ctx)
             + "它不会因为这一轮结束而停止 —— 跑完了去看:`bash_status`(id 传 "
             f"{job_id})拿输出尾部;要停:`bash_kill`(id 传 {job_id})。\n"
             "跑完的那一刻会替用户弹一条桌面通知(类别「后台命令跑完」,他在「桌面提醒」"
@@ -907,13 +963,19 @@ def py_script(ctx: ToolContext, path: str, timeout: int = 120) -> str:
     env, dropped = _child_env(ctx, {"PYTHONUTF8": "1"})
     env_note = _env_note(dropped)
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    restricted_only = bool(
+        sandbox is not None
+        and getattr(sandbox.policy, "restricted_token", False)
+        and not getattr(sandbox.policy, "app_container", False))
+    isolation_mode = "appcontainer" if restricted_only else ""
     try:
         # `subprocess.run(timeout=...)` 到点只杀**直接子进程**,而脚本里再 spawn 的
         # 东西会留下继续吃 CPU —— 所以这里自己起进程、挂 job、再 communicate。
         # 语义与 run 一致:同样两条管道、同样超时抛 TimeoutExpired、同样拿 returncode。
-        proc = subprocess.Popen(
-            cmd, cwd=ctx.workspace, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL, env=env, creationflags=creationflags)
+        proc = _spawn(
+            ctx, cmd, cwd=ctx.workspace, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, env=env,
+            creationflags=creationflags, isolation_mode=isolation_mode)
         run_job = _new_job(proc)
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
@@ -924,12 +986,15 @@ def py_script(ctx: ToolContext, path: str, timeout: int = 120) -> str:
             how = ("整棵进程树已随这次终止一起回收(启动那一瞬在 job 之外起来的"
                    "进程不在此列)" if run_job is not None else
                    "进程约束未启用:只能杀这一个进程,它下面的可能还活着")
+            if run_job is not None:
+                run_job.close()
             with contextlib.suppress(Exception):
                 proc.kill()
             with contextlib.suppress(Exception):
                 proc.wait(timeout=BG_KILL_WAIT)
             return (f"错误: 脚本运行超过 {timeout} 秒被中止,{how}。已产生的输出:\n"
-                    f"{partial[:TIMEOUT_OUTPUT_LIMIT]}{env_note}")
+                    f"{partial[:TIMEOUT_OUTPUT_LIMIT]}{env_note}"
+                    f"{_appcontainer_note(ctx, 'appcontainer' if restricted_only else '')}")
         if run_job is not None:
             run_job.close()                    # 正常跑完也要关(见 _BgJob._pump 那句理由)
         proc.stdout, proc.stderr = None, None    # 与 run() 一样:取完就别再碰管道
@@ -948,7 +1013,8 @@ def py_script(ctx: ToolContext, path: str, timeout: int = 120) -> str:
         text = text[:PY_SCRIPT_OUTPUT_LIMIT] + "\n…(输出过长,已截断)"
     if proc.returncode != 0 and not out and not err:
         text += "\n(无输出。脚本可能抛了异常却没打印,检查代码或让脚本 print 关键步骤。)"
-    return text + env_note
+    return text + env_note + _appcontainer_note(
+        ctx, "appcontainer" if restricted_only else "")
 
 
 # ---------------------------------------------------- 终端页那条路(v0.9.159)

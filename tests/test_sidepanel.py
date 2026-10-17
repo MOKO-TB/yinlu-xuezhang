@@ -191,7 +191,8 @@ def test_extensions_overview_composes_five_sections(tmp_path, monkeypatch):
     got = b.extensions_overview()
     assert got["ok"]
     assert set(k for k in got if k != "ok") == {
-        "skills", "skill_channels", "mcp", "sidepages", "hooks"}
+        "skills", "skill_channels", "mcp", "mcp_events", "sidepages", "hooks"}
+    assert got["mcp_events"] == []
     assert got["sidepages"]["items"] and got["sidepages"]["items"][0]["id"] == "db"
     skipped = got["sidepages"]["skipped"]
     assert skipped and skipped[0]["dir"] == "broken" and "读不出来" in skipped[0]["msg"], \

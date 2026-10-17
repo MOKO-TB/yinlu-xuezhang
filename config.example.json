@@ -46,6 +46,10 @@
     "enabled": true,
     "allow_outside_workspace": false,
     "allow_network": true,
+    "app_container": false,
+    "_说明_app_container": "Windows 专属的实验性执行层。设为 true 后 bash / py_script 改用 AppContainer：工作区可写、Python 与命令运行时只读、allow_network=false 时子进程没有网络 capability。它需要 Windows 10/11 与可用的 AppContainer API；失败会拒绝执行而不是静默退回普通进程。默认 false，先在小项目验证命令与依赖是否兼容。",
+    "restricted_token": false,
+    "_说明_restricted_token": "Windows 专属的 S5b 写围栏。设为 true 后 bash / py_script 使用 Windows 受限令牌：保留当前用户的读取面，写入必须同时命中工作区专用 SID，因此工作区可写、工作区外普通文件写入被拒。它不负责禁网，网络仍由 allow_network 的命令门禁管理；AppContainer 开启时优先使用 AppContainer。",
     "timeout_seconds": 60,
     "deny_patterns": [],
     "strip_env_secrets": true
