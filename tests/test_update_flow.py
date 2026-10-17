@@ -316,6 +316,83 @@ def test_a_partial_records_its_measured_rate(server, tmp_path, monkeypatch):
     assert all("bps" in ev for ev in seen) or not seen, "进度事件里要带速率"
 
 
+def test_a_big_asset_goes_out_as_parallel_ranges_and_still_verifies(server, tmp_path,
+                                                                    monkeypatch):
+    """A:够大的一件**分几条连接各要一段**,而最后仍按整件 sha256 才算装得。
+
+    判据不是"文件对上了"(从 0 单连接下也能对上),而是**服务器被要求从好几个不同
+    偏移开始发** —— 那才是并发。
+    """
+    monkeypatch.setattr(proactive, "PARALLEL_MIN", 1024)
+    monkeypatch.setattr(proactive, "_expected_sha256", lambda *a, **k: (SHA, ""))
+    _Handler.ranges_seen = []
+    r = proactive.download_asset(_asset(server + "/ranged"), tmp_path)
+    assert r["ok"] is True and r["verified"] == "ok", r
+    assert (tmp_path / ASSET_NAME).read_bytes() == PAYLOAD, "分段拼回来必须逐字相等"
+    starts = sorted({s.split("=")[1].split("-")[0] for _v, s in _Handler.ranges_seen
+                     if s.startswith("bytes=")})
+    assert len(starts) > 1, \
+        "只看到一个起点 = 并发根本没开(把 PARALLEL_SEGS 改成 1 时这一句就该红):%s" \
+        % _Handler.ranges_seen
+    assert len(starts) >= proactive.PARALLEL_SEGS, \
+        "只看到一个起点 = 并发没开(或它被静默降级了):%s" % _Handler.ranges_seen
+
+
+def test_parallel_steps_down_when_the_server_ignores_range(server, tmp_path,
+                                                           monkeypatch):
+    """服务器不认 Range(带 Range 来也只给整件)→ 照旧单连接,**不许拼出洞**。
+
+    这是并发那条路的退路:并发是优化,不是新前提。
+    """
+    monkeypatch.setattr(proactive, "PARALLEL_MIN", 1024)
+    monkeypatch.setattr(proactive, "_expected_sha256", lambda *a, **k: (SHA, ""))
+    r = proactive.download_asset(_asset(server + "/norange"), tmp_path)
+    assert r["ok"] is True and r["verified"] == "ok", r
+    assert (tmp_path / ASSET_NAME).read_bytes() == PAYLOAD
+
+
+def test_a_parallel_part_is_never_spliced_by_the_sequential_path(server, tmp_path,
+                                                                 monkeypatch):
+    """分段下到一半的 `.part` **中间有洞**:顺序那条路看见就该当它不可用。
+
+    不然表现是"把两份不同来源的字节接在一起",最后那个 sha256 指向一个谁都没发布过
+    的文件 —— 而它会被当成"下好了"。
+    """
+    part = tmp_path / (ASSET_NAME + ".part")
+    part.write_bytes(b"X" * 40 + b"\x00" * 40)          # 前 40 字节是好的,后面是洞
+    proactive._write_sidecar(part, {"name": ASSET_NAME, "total": len(PAYLOAD),
+                                    "validator": '"abc123"', "bytes": 80,
+                                    "mode": "parallel", "segs": [80, 80, 80, 80]})
+    monkeypatch.setattr(proactive, "PARALLEL_MIN", 10 ** 12)   # 逼它走顺序那条路
+    monkeypatch.setattr(proactive, "_expected_sha256", lambda *a, **k: (SHA, ""))
+    r = proactive.download_asset(_asset(server + "/ranged"), tmp_path)
+    assert r["ok"] is True and r["verified"] == "ok", r
+    assert (tmp_path / ASSET_NAME).read_bytes() == PAYLOAD, "洞里那 40 个 X 没被清掉"
+
+
+def test_cancel_midway_keeps_the_segment_offsets(server, tmp_path, monkeypatch):
+    """取消之后条子上要留着**每段各到哪儿了**,下次是四段一起续而不是一段。"""
+    monkeypatch.setattr(proactive, "PARALLEL_MIN", 1024)
+    monkeypatch.setattr(proactive, "_expected_sha256", lambda *a, **k: (SHA, ""))
+    calls = {"n": 0}
+
+    def stop():
+        calls["n"] += 1
+        return calls["n"] > 3
+    r = proactive.download_asset(_asset(server + "/ranged"), tmp_path,
+                                 should_stop=stop)
+    if r.get("cancelled"):
+        part = tmp_path / (ASSET_NAME + ".part")
+        rec = proactive._read_sidecar(part)
+        assert rec.get("mode") == "parallel", rec
+        assert len(rec.get("segs") or []) == proactive.PARALLEL_SEGS, rec
+        assert isinstance(rec.get("bps"), int) and rec.get("bytes", 0) > 0, rec
+        pend = proactive.pending_part(tmp_path)
+        assert pend.get("bytes") == rec["bytes"], pend
+    else:
+        pytest.skip("这台机器太快,四段都在取消之前下完了(不是缺陷)")
+
+
 def test_download_resumes_with_a_real_range_request(server, tmp_path, monkeypatch):
     """**真续传**:半截在盘上 ⇒ 服务器被要求从第 N 字节发,拼出来的是完整一件。
 

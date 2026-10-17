@@ -1022,6 +1022,156 @@ def _hash_prefix(path: Path, n: int) -> "object":
     return h
 
 
+PARALLEL_MIN = 8 * 1024 * 1024      # 小于这个数不值得开多条连接(握手成本 > 收益)
+PARALLEL_SEGS = 4                   # 保守取 4:家用路由的会话数、CDN 的每 IP 上限都吃得消
+PROBE_BYTES = 256 * 1024            # 每条路线试这么多字节来比分快慢
+
+
+def _byte_ranges(total: int, n: int) -> list:
+    """把 [0,total) 均分成 n 段,回 [(起, 止)](止是闭区间,按 HTTP Range 的写法)。"""
+    step = -(-total // n)
+    return [(i * step, min(total, (i + 1) * step) - 1)
+            for i in range(n) if i * step < total]
+
+
+def _open_client(u: str, ctx, connect_timeout: float):
+    import httpx
+    return httpx.Client(timeout=httpx.Timeout(connect_timeout, read=120.0),
+                        follow_redirects=True,
+                        **({} if ctx is None else {"verify": ctx}))
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for blk in iter(lambda: f.read(1 << 20), b""):
+            h.update(blk)
+    return h.hexdigest()
+
+
+def _probe_route(u: str, ctx, connect_timeout: float):
+    """拉一小段给这条路线计时。回 `(bps, 认不认 Range, 实话)`;不通就回 0。
+
+    为什么要有这一步(而不是"失败才退下一条"):v0.9.177 把 `api.github.com` 排成首选
+    是对的 —— 有些机器 `github.com:443` 整台连不通而 API 通。但**慢不是失败**:
+    2026-10-17 这台机器上实测单连接 0.03 MB/s vs 0.28 MB/s(慢 9 倍),按"失败才退"
+    那条永远退不过去。
+    """
+    got = 0
+    t0 = time.monotonic()
+    honored = False
+    try:
+        with _open_client(u, ctx, connect_timeout) as c:
+            with c.stream("GET", u, headers={
+                    "Accept": "application/octet-stream",
+                    "Range": "bytes=0-%d" % (PROBE_BYTES - 1)}) as r:
+                if r.status_code not in (200, 206):
+                    return 0.0, False, "%s HTTP %s" % (_host_of(u), r.status_code)
+                honored = r.status_code == 206
+                for chunk in r.iter_bytes():
+                    got += len(chunk)
+                    if not honored or got >= PROBE_BYTES:
+                        break
+    except Exception as e:
+        return 0.0, False, "%s %s" % (_host_of(u), type(e).__name__)
+    dt = max(time.monotonic() - t0, 1e-6)
+    return (got / dt) if honored else 0.0, honored, (
+        "" if honored else "%s 不认 Range" % _host_of(u))
+
+
+def _pick_route(urls: list, variants: list, connect_timeout: float):
+    """两条路线各试一小段,**谁快用谁**。回 `(路线或 None, 试过的实话列表)`。"""
+    best = None
+    notes: list[str] = []
+    for u in urls:
+        for label, ctx in variants:
+            bps, honored, why = _probe_route(u, ctx, connect_timeout)
+            if why:
+                notes.append("%s:%s" % (label, why))
+                continue
+            cand = {"url": u, "ctx": ctx, "label": label, "bps": bps,
+                    "honored": honored}
+            if best is None or bps > best["bps"]:
+                best = cand
+            break                       # 这一跳的证书链通了,不必再试第二跳
+    return best, notes
+
+
+def _download_segments(part: Path, ranges: list, url: str, ctx, connect_timeout,
+                       should_stop, on_got, validator: str, resume: dict):
+    """A:一条连接只给它自己那一段,写进同一个 `.part` 的各自偏移。
+
+    为什么敢让四个线程碰同一个文件:每段只写**互不重叠**的区间,且各自 `seek` 之后
+    顺序写 —— 没有交叉覆盖可言。代价是这半截文件**中间可能有洞**,所以:
+    ①续传只认这张条子里的 `segs`(顺序那条路看见 `mode=parallel` 就当它不可用、删掉重来,
+    绝不把两份不同的字节接在一起);②摘要**最后整件算一次**,不边下边喂 —— 分段顺序
+    喂出来的哈希根本不是这个文件的。
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    lock = threading.Lock()
+    state = {"stop": False, "unsupported": False, "why": []}
+    offs = {}
+
+    def one(i):
+        start, end = ranges[i]
+        off = max(int(resume.get(i) or 0), start)
+        if off > end:
+            offs[i] = end + 1
+            return
+        hd = {"Accept": "application/octet-stream", "Range": "bytes=%d-%d" % (off, end)}
+        if validator:
+            hd["If-Range"] = validator
+        try:
+            with _open_client(url, ctx, connect_timeout) as c:
+                with c.stream("GET", url, headers=hd) as r:
+                    if r.status_code == 416:
+                        offs[i] = end + 1
+                        return
+                    if r.status_code == 200 and off > start:
+                        with lock:
+                            state["unsupported"] = True
+                        return
+                    if r.status_code not in (200, 206):
+                        with lock:
+                            state["why"].append("%s HTTP %s(第 %d 段)"
+                                                % (_host_of(url), r.status_code, i))
+                        return
+                    with part.open("r+b") as f:
+                        f.seek(off)
+                        for chunk in r.iter_bytes():
+                            with lock:
+                                if state["stop"]:
+                                    return
+                                if should_stop is not None and should_stop():
+                                    state["stop"] = True
+                                    return
+                            f.write(chunk)
+                            off += len(chunk)
+                            offs[i] = off
+                            if on_got is not None:
+                                on_got(sum(offs.get(k, v[0]) - v[0]
+                                           for k, v in enumerate(ranges)))
+            offs[i] = off
+        except Exception as e:
+            with lock:
+                state["why"].append("%s %s(第 %d 段)" % (_host_of(url),
+                                                        type(e).__name__, i))
+
+    for i, (s, _e) in enumerate(ranges):
+        offs[i] = int(resume.get(i) or s)
+    with ThreadPoolExecutor(max_workers=len(ranges)) as ex:
+        list(ex.map(one, range(len(ranges))))
+    if state["unsupported"]:
+        return "unsupported", offs, "服务器把带 Range 的请求当整件回,退回单连接"
+    if state["stop"]:
+        return "stop", offs, ""
+    if any(offs.get(i, ranges[i][0]) < ranges[i][1] + 1 for i in range(len(ranges))):
+        return "retry", offs, "；".join(state["why"]) or "分段没拉齐"
+    return "done", offs, ""
+
+
 def download_asset(asset: dict, dest_dir: Path, on_progress=None,
                    should_stop=None, verify: bool = True,
                    connect_timeout: float = 20.0) -> dict:
@@ -1096,10 +1246,17 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
                      "bps": meter.read()})
 
     def _resumable() -> "tuple[int, str]":
-        """本机那份半截能不能接着用:名字与总大小对得上才行,对不上就删。"""
+        """本机那份半截能不能接着用:名字与总大小对得上才行,对不上就删。
+
+        ⚠ `mode=parallel` 的那份**中间可能有洞**(四条连接各写自己那段),顺序续传
+        会把它当"前 N 字节都是好的"往后面接 —— 那正是"两份不同来源的字节接在一起"
+        的形状。所以这里直接判它不可用:分段那条路自己读 `segs`,读不懂就删掉重来。
+        """
         if not part.exists():
             return 0, ""
         rec = _read_sidecar(part)
+        if rec.get("mode") == "parallel":
+            return 0, ""
         have = part.stat().st_size
         ok = (rec.get("name") == safe and have > 0
               and int(rec.get("total") or 0) == total
@@ -1176,6 +1333,51 @@ def download_asset(asset: dict, dest_dir: Path, on_progress=None,
     else:
         sha, resumed = None, False
         attempt_why: list[str] = []
+        # ---- A + B:大件先"两条路线各试一小段,谁快用谁",再一条连接给一段 ----
+        # 任何一步不成就照原样走下面那条单连接的路 —— 并发是优化,不是新前提。
+        if total >= PARALLEL_MIN:
+            route, rnotes = _pick_route(urls, variants, connect_timeout)
+            attempt_why.extend(rnotes)
+            if route is not None and route["honored"]:
+                ranges = _byte_ranges(total, PARALLEL_SEGS)
+                rec0 = _read_sidecar(part) if part.exists() else {}
+                resumable = (rec0.get("mode") == "parallel"
+                             and rec0.get("name") == safe
+                             and int(rec0.get("total") or 0) == total
+                             and len(rec0.get("segs") or []) == len(ranges))
+                if not resumable:
+                    with part.open("wb") as f:
+                        f.truncate(total)        # 预分配:每段只写自己那块偏移
+                resume = ({i: int(v) for i, v in enumerate(rec0.get("segs") or [])}
+                          if resumable else {})
+                resumed_from = sum(max(0, resume.get(i, ranges[i][0]) - ranges[i][0])
+                                   for i in range(len(ranges)))
+                outcome, offs, why = _download_segments(
+                    part, ranges, route["url"], route["ctx"], connect_timeout,
+                    should_stop, prog, validator, resume)
+                got = sum(max(0, offs.get(i, ranges[i][0]) - ranges[i][0])
+                          for i in range(len(ranges)))
+                if outcome == "done":
+                    sha, validator = _file_sha256(part), validator
+                    resumed = resumable and any(
+                        offs.get(i, ranges[i][0]) > ranges[i][0]
+                        for i in range(len(ranges)))
+                elif outcome == "stop":
+                    _write_sidecar(part, {"name": safe, "total": total,
+                                          "validator": validator, "bytes": got,
+                                          "bps": meter.read(), "mode": "parallel",
+                                          "segs": [offs.get(i, ranges[i][0])
+                                                   for i in range(len(ranges))]})
+                    return {"ok": False, "cancelled": True, "verified": "none",
+                            "partial": got, "resumable": True,
+                            "why": "已取消,已下的 %s 留着,下次点下载接着走"
+                                   % fmt_bytes(got)}
+                else:
+                    # 没下齐:这半截**中间有洞**,顺序那条路不能拿它续传 → 删掉重来,
+                    # 绝不把两份不同来源的字节接成一个谁都没发布过的文件。
+                    if why:
+                        attempt_why.append(why)
+                    _drop_part(part)
         for u in urls:
             for label, ctx in variants:
                 start_at, validator = _resumable()

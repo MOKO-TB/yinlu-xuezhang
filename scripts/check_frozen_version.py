@@ -1226,6 +1226,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # v0.9.180+ 第 0 步:实测速率记进 .part.meta 与进度事件
                            # (漏收的表现是"用户说慢,我们手里一个数都没有")
                            "_RateMeter",
+                           # v0.9.181 分段并发 + 路线择快:漏 `download_segments` 的表现
+                           # 是"包内又退回单连接,用户还是慢",而源码态全绿
+                           "_byte_ranges", "_probe_route", "_pick_route",
+                           "_download_segments", "_file_sha256",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",
