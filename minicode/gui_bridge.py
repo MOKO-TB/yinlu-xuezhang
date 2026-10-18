@@ -1675,9 +1675,35 @@ class Bridge:
             self.ui.push("update_state", **self._upd_public())
 
         try:
+            # 路 2(v0.9.183):先问一句"有没有从本机这一版出发的补丁"。有就只下那一件
+            # 并逐件验进暂存目录;没有(太老、跳了好几版、或这一版没出补丁)就照原样下
+            # 整件 —— 这条路不覆盖那一台不是失败,所以界面上不写吓人的 why。
+            ver = str(upd.get("version") or "")
+            from minicode import fileupdate
+            try:
+                st2 = fileupdate.stage_update(ver, on_progress=prog)
+            except Exception as e:                       # noqa: BLE001
+                st2 = {"ok": False,
+                       "why": "暂存这一步炸了(%s: %s)" % (type(e).__name__, e)}
+            if st2.get("ok"):
+                nbytes = int(st2.get("bytes") or 0)
+                with self._upd_lock:
+                    self._upd = {"state": "done", "mode": "patch", "version": ver,
+                                 "name": str(asset.get("name") or ""),
+                                 "path": st2.get("script"), "size": nbytes,
+                                 "total": nbytes, "got": nbytes, "pct": 100,
+                                 "verified": "ok",
+                                 "staged": st2.get("staged"),
+                                 "apply": st2.get("apply"), "same": st2.get("same"),
+                                 "drop": st2.get("drop"), "why": ""}
+                self.ui.push("update_state", **self._upd_public())
+                return
+            whole_why = str(st2.get("why") or "")
             res = proactive.download_asset(asset, app_path("updates"),
                                            on_progress=prog,
                                            should_stop=self._upd_stop.is_set)
+            if not res.get("ok") and whole_why:
+                res["why"] = str(res.get("why") or whole_why)
         except Exception as e:
             res = {"ok": False, "verified": "none",
                    "why": f"下载这一步炸了({type(e).__name__}: {e})"}
@@ -1748,6 +1774,17 @@ class Bridge:
             return {"ok": False,
                     "why": "这份**没有通过 sha256 校验**(" + str(st.get("why") or "")
                            + " 装之前请从发布页重新下载"}
+        if str(st.get("mode") or "") == "patch":
+            # 路 2:交出去的不是一个安装程序,而是一份在外面等我们退出的应用脚本。
+            # 仍然"点两次"——这一次是用户点的,而且它不会替用户关窗口。
+            from minicode import fileupdate
+            r = fileupdate.apply_update(str(st.get("version") or ""))
+            if not r.get("ok"):
+                return {"ok": False, "why": str(r.get("why") or "应用脚本没起来")}
+            return {"ok": True, "mode": "patch",
+                    "why": "增量更新的应用器已经在外面等着了(它等这一份进程退出才动手):"
+                           "退出学长一次就换完;过程中任何一件对不上会整体回滚,"
+                           "回滚后旧版本照样能启动。"}
         try:
             if str(st.get("name") or "").endswith(".exe"):
                 subprocess.Popen([str(p)], cwd=str(p.parent))

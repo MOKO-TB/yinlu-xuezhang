@@ -168,3 +168,13 @@ def test_the_apply_command_is_a_detached_powershell_on_the_generated_script(tmp_
     cmd = fu.apply_command(ps1)
     assert cmd[0] == "powershell" and "-File" in cmd and cmd[-1] == str(ps1)
     assert "-ExecutionPolicy" in cmd and "Bypass" in cmd
+
+
+def test_the_updater_waits_for_our_pid_before_touching_any_file(tmp_path):
+    """应用脚本必须等学长自己退出完再搬文件 —— 边跑边搬的结果是半新半旧。"""
+    ps1 = tmp_path / "apply.ps1"
+    ps1.write_text("exit 0", encoding="utf-8")
+    cmd = fu.apply_command(ps1, 4321)
+    assert cmd[-2:] == ["-WaitPid", "4321"], cmd
+    assert "param([int]$WaitPid" in fu._PS1 and "Get-Process -Id $WaitPid" in fu._PS1, \
+        "脚本里没有等待那一段,命令带个 pid 也没用"

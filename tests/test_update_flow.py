@@ -1379,3 +1379,81 @@ def test_download_state_surfaces_a_part_from_a_previous_run(tmp_path, monkeypatc
     assert "path" not in s                                  # 与 `_upd_public` 同一条口径
     b._upd = {"state": "downloading", "pct": 40}
     assert b.update_download_state()["state"] == "downloading", "在跑的那一份优先于盘上的"
+
+
+# ---------------------------------------------------- 路 2:卡片该走暂存还是整件(v0.9.183)
+
+def _card(tmp_path):
+    b = _bridge(tmp_path)
+
+    class _UI:
+        def push(self, *a, **k):
+            pass
+    b.ui = _UI()
+    b._upd_lock = threading.Lock()
+    b._upd_stop = threading.Event()
+    return b
+
+
+def test_the_card_routes_a_patch_through_staging_not_the_whole_installer(tmp_path, monkeypatch):
+    """有对应来源版本的补丁时,卡片**只许**走暂存那条 —— 走整件就等于路 2 白做。"""
+    from minicode import fileupdate
+    b = _card(tmp_path)
+    upd = {"version": "9.9.9", "asset": {"name": "x-appupdate.exe", "size": 141989351}}
+    monkeypatch.setattr(fileupdate, "stage_update",
+                        lambda ver, on_progress=None: {
+                            "ok": True, "bytes": 4096, "script": "/tmp/apply.ps1",
+                            "staged": 3, "apply": 2, "same": 9, "drop": 1})
+    monkeypatch.setattr(proactive, "download_asset",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("有补丁时不许再下整件")))
+    b._upd_run(upd["asset"], upd)
+    st = b._upd_snapshot()
+    assert st["state"] == "done" and st.get("mode") == "patch", st
+    assert st["verified"] == "ok" and st["size"] == 4096 and st["apply"] == 2, st
+
+
+def test_the_card_falls_back_to_the_whole_package_when_no_patch_exists(tmp_path, monkeypatch):
+    """本机版本不在补丁表里 = 这条路不覆盖 —— 照旧下整件,而且**不许把界面卡在暂存**。"""
+    from minicode import fileupdate
+    b = _card(tmp_path)
+    upd = {"version": "9.9.9", "asset": {"name": "x-setup.exe", "size": 10}}
+    monkeypatch.setattr(fileupdate, "stage_update",
+                        lambda ver, on_progress=None: {
+                            "ok": False, "why": "没有 v0.9.182 → v9.9.9 的补丁,退回整件"})
+    seen = {}
+
+    def fake_download(asset, dest, **kw):
+        seen["called"] = True
+        return {"ok": True, "name": "x-setup.exe", "size": 10, "verified": "ok",
+                "path": "/tmp/x-setup.exe"}
+    monkeypatch.setattr(proactive, "download_asset", fake_download)
+    b._upd_run(upd["asset"], upd)
+    st = b._upd_snapshot()
+    assert seen.get("called") and st["state"] == "done", st
+    assert st.get("mode") != "patch" and st["verified"] == "ok", st
+
+
+def test_install_hands_a_patch_to_the_external_updater_and_never_popen_an_exe(tmp_path,
+                                                                              monkeypatch):
+    """`mode=patch` 那份状态点"运行"时交出去的是应用脚本,不是把 .ps1 当 exe 起。
+
+    反证:去掉 update_install 里那一段分支 —— `name` 以 `.exe` 结尾,它会去 Popen
+    那个脚本路径,返回的 mode 变成 installer,这一支就红。
+    """
+    from minicode import fileupdate
+    b = _card(tmp_path)
+    got = {}
+    script = tmp_path / "apply.ps1"
+    script.write_text("exit 0", encoding="utf-8")
+    b._upd = {"state": "done", "mode": "patch", "version": "9.9.9",
+              "name": "x-appupdate.exe", "path": str(script),
+              "verified": "ok"}
+    def fake_apply(ver):
+        got["version"] = ver
+        return {"ok": True}
+    monkeypatch.setattr(fileupdate, "apply_update", fake_apply)
+    r = b.update_install()
+    assert r["ok"] is True and r["mode"] == "patch", r
+    assert got.get("version") == "9.9.9", got
+    assert "退出" in r["why"], r

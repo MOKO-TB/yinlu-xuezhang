@@ -163,7 +163,15 @@ def write_apply_script(updates_dir: Path, version: str, install_root: Path,
 
 
 _PS1 = r"""
+param([int]$WaitPid = 0)
 $ErrorActionPreference = 'Stop'
+# 等 App 自己走开再动手:onedir 的 exe 与它加载的 dll 在被锁着的时候搬不动,
+# 硬搬的结果是"半新半旧"—— 那比不更新更坏。界面把**自己的 pid** 传进来。
+if ($WaitPid -gt 0) {
+    while (Get-Process -Id $WaitPid -ErrorAction SilentlyContinue) {
+        Start-Sleep -Milliseconds 250
+    }
+}
 $plan = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'plan.json') -Raw | ConvertFrom-Json
 function Roll-Back {
     if (Test-Path -LiteralPath $plan.rollback) {
@@ -209,10 +217,17 @@ try {
 """
 
 
-def apply_command(ps1: Path) -> list:
-    """界面退出前 detached 起它的那条命令(单独一个函数是为了能被针钉住)。"""
-    return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-            "-File", str(ps1)]
+def apply_command(ps1: Path, wait_pid: int = 0) -> list:
+    """界面 detached 起它的那条命令(单独一个函数是为了能被针钉住)。
+
+    `wait_pid` 传的是**学长自己的进程号**:脚本会等它消失再搬文件,所以点完"应用"
+    不必替用户关窗口(那条边界从 v0.9.176 起就在),只要他随后自己退出一次。
+    """
+    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+           "-File", str(ps1)]
+    if int(wait_pid or 0) > 0:
+        cmd += ["-WaitPid", str(int(wait_pid))]
+    return cmd
 
 
 def pick_patch(man: "dict | None", current: str) -> "dict | None":
@@ -348,6 +363,7 @@ def apply_update(version: str) -> dict:
 
     这里只负责 detached 起进程;脚本自己验哈希、自己回滚、自己写 state。
     """
+    import os
     import subprocess
     import sys
     ps1 = staged_root(updates_dir(), str(version).lstrip("vV")) / "_apply" / "apply.ps1"
@@ -356,6 +372,6 @@ def apply_update(version: str) -> dict:
     flags = 0
     if sys.platform == "win32":
         flags = 0x00000008 | 0x00000200      # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen(apply_command(ps1), creationflags=flags,
+    subprocess.Popen(apply_command(ps1, getattr(os, "getpid", lambda: 0)()), creationflags=flags,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {"ok": True, "why": "", "script": str(ps1)}
