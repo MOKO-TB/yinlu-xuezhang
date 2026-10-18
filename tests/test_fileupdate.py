@@ -4,9 +4,11 @@
 zip slip 成员、以及"应用脚本长什么样"的形状针。
 应用器那两支要真起 powershell 在假安装树上跑 —— 更新类功能只验源码不算验过。
 """
+import json
 import subprocess
 import sys
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -178,3 +180,27 @@ def test_the_updater_waits_for_our_pid_before_touching_any_file(tmp_path):
     assert cmd[-2:] == ["-WaitPid", "4321"], cmd
     assert "param([int]$WaitPid" in fu._PS1 and "Get-Process -Id $WaitPid" in fu._PS1, \
         "脚本里没有等待那一段,命令带个 pid 也没用"
+
+
+def test_the_plan_is_absolute_even_when_the_caller_handed_relative_paths(tmp_path, monkeypatch):
+    """PowerShell 的 `FullName` 永远是绝对的 —— 相对前缀会让回滚**切错位置**。
+
+    这条是包内探针抓到的真 bug:回滚按 `$_.FullName.Substring($plan.rollback.Length + 1)`
+    求相对名,给它一个相对前缀就从错误处切,切出来的"相对名"再拼回安装树,
+    结果是回滚文件被搬进一个凭空造出来的子目录、原件根本没回来。
+    开发态测试传的都是绝对 tmp_path,所以它一路绿到包内才现形。
+    """
+    monkeypatch.chdir(tmp_path)
+    Path("install").mkdir()
+    Path("install/a.txt").write_bytes(b"OLD-A")
+    Path("updates/staged/9.9.9").mkdir(parents=True)
+    Path("updates/staged/9.9.9/a.txt").write_bytes(b"CORRUPT")
+    files = [{"p": "a.txt", "s": 5, "h": _h(b"NEW-A")}]
+    ps1 = fu.write_apply_script(Path("updates"), "9.9.9", Path("install"), files, [])
+    plan = json.loads((ps1.parent / "plan.json").read_text(encoding="utf-8"))
+    for key in ("install", "staged", "rollback", "state"):
+        assert Path(plan[key]).is_absolute(), (key, plan[key])
+    r = subprocess.run(fu.apply_command(ps1), capture_output=True, text=True, timeout=180)
+    assert r.returncode != 0
+    assert Path("install/a.txt").read_bytes() == b"OLD-A", "相对路径也不能让回滚搬错地方"
+    assert not (tmp_path / "install" / "9.9.9").exists(), "不许在安装树里凭空造目录"

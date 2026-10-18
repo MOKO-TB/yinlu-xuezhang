@@ -153,8 +153,14 @@ def write_apply_script(updates_dir: Path, version: str, install_root: Path,
     st = staged_root(updates_dir, version)
     adir = st / "_apply"
     adir.mkdir(parents=True, exist_ok=True)
-    plan = {"install": str(Path(install_root)), "staged": str(st),
-            "rollback": str(adir / "rollback"), "state": str(state_path(updates_dir, version)),
+    # **一律 resolve 成绝对路径**再写进 plan:PowerShell 的 `FullName` 永远是绝对的,
+    # 而回滚是按 `$_.FullName.Substring($plan.rollback.Length + 1)` 求相对名的 ——
+    # 给它一个相对前缀就会从错误的位置切,切出来的"相对名"再拼回安装树,
+    # 结果是回滚文件被搬进一个凭空造出来的子目录、原件根本没回来
+    # (2026-10-18 包内探针抓到;开发态测试传的是绝对 tmp_path,所以全绿)。
+    plan = {"install": str(Path(install_root).resolve()), "staged": str(st.resolve()),
+            "rollback": str((adir / "rollback").resolve()),
+            "state": str(state_path(updates_dir, version).resolve()),
             "files": [{"p": f["p"], "h": f["h"]} for f in files], "drop": list(drop)}
     (adir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
     ps1 = adir / "apply.ps1"
