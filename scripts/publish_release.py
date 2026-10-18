@@ -107,9 +107,10 @@ def _assets(ver: str) -> "list[tuple[Path, str]]":
     # 所以这两件**必须一起出现**,只传一件比两件都不传更坏。
     extra = [(ROOT / "dist" / f"引路学长-{ver}-app-setup.exe",
               nm["app_setup"], "仅 app 更新包(不含馆藏库与内核)"),
-             (ROOT / "dist" / nm["assets" (ROOT / "dist" / nm["files"],
-              nm["files"], "路 2 文件级清单:安装树逐件的相对路径/大小/sha256")],
-              nm["assets"], "发布清单:各件哈希与两块数据的身份")]
+             (ROOT / "dist" / nm["assets"],
+              nm["assets"], "发布清单:各件哈希与两块数据的身份"),
+             (ROOT / "dist" / nm["files"],
+              nm["files"], "路 2 文件级清单:安装树逐件的相对路径/大小/sha256")]
     have_extra = [(p, n) for p, n, _l in extra if p.exists()]
     for p, n, l in extra:
         if not p.exists():
