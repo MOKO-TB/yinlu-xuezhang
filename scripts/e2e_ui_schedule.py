@@ -22,7 +22,12 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# 出包那一场必须对着包内那份前端再跑一遍(这一件的缺陷**全在界面上**):
+#   python scripts/e2e_ui_schedule.py --frontend dist/引路学长/_internal/frontend
+# (v0.9.138 的教训:只验源码那份等于没验。)
 FRONTEND = ROOT / "frontend"
+if "--frontend" in sys.argv:
+    FRONTEND = Path(sys.argv[sys.argv.index("--frontend") + 1]).resolve()
 VIEW = ROOT / "_tmp_segsweep" / "sched_view.json"
 STATS = ROOT / "_tmp_segsweep" / "scores_view.json"
 
