@@ -624,7 +624,13 @@ def _stub_round_sources(monkeypatch, *, near=None, note=None, alerts=None):
     monkeypatch.setattr(proactive, "calendar_alerts",
                         lambda *a, **k: list(alerts or []))
     monkeypatch.setattr(proactive, "check_once", lambda state=None: [])
-    monkeypatch.setattr(proactive, "check_update", lambda cur: None)
+    monkeypatch.setattr(proactive, "check_update",
+                        lambda cur, detail=False: {"ok": True, "update": None,
+                                                   "why": ""})
+    # 「历史更新内容」那一屏的取数也是外部源(v0.9.184 起每天那次检查顺手刷它)。
+    monkeypatch.setattr(proactive, "list_releases",
+                        lambda limit=8, **k: {"ok": True, "releases": [],
+                                              "why": "", "source": "stub"})
     # 任务表也是外部源(v0.9.57 起有真任务),按住防时间相关翻红。
     monkeypatch.setattr(proactive, "JOB_SPECS", [])
     from minicode import reminders, schedule
@@ -711,6 +717,29 @@ def test_round_nags_once_per_day_not_once_per_round(monkeypatch):
     _restart()
     proactive._round(bridge)                    # 中间还重启过一次
     assert len(ui.events) == 3
+
+
+def test_the_update_check_in_a_round_is_gone_once_it_ran_today(monkeypatch):
+    """看门狗那一遍查版本:一天一次,重启不算第二遍。
+
+    匿名接口是**每 IP 60 次/小时**,而原来 6 小时一轮 + 每次启动 15 秒后那一遍,
+    就是用户图 p2 那句「接口回了 HTTP 403」的来历 —— 配额是被这台机器自己吃光的。
+    这支针断的是出网**次数**,不是"拿到了什么":换成正文断言的话,把节流整段删掉
+    它照样绿。
+    """
+    _stub_round_sources(monkeypatch)
+    calls = []
+    monkeypatch.setattr(proactive, "check_update",
+                        lambda cur, detail=False: calls.append(1) or
+                        {"ok": True, "update": None, "why": ""})
+    bridge, _ui = _push_bridge()
+    proactive._round(bridge)                    # 启动后那一轮
+    proactive._round(bridge)                    # 6 小时后的下一轮
+    _restart()
+    proactive._round(bridge)                    # 中间还关开过一次学长
+    assert len(calls) == 1, f"今天出了 {len(calls)} 次网,节流没生效"
+    assert any("今天已查过" in r for r in proactive.wd_log_tail(10)), \
+        "跳过也要留下一行,否则「今天怎么没提示新版本」又只能猜"
 
 
 def test_round_lets_the_briefing_cover_the_singles_and_says_so(monkeypatch):

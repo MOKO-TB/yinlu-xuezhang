@@ -87,6 +87,7 @@ scores.json
 skill-usage.jsonl
 /weather-cache.json
 /notice-watch.json
+/release-notes.json
 
 # v0.9.21 候选审核并入的人工知识库(含本机问答,应用级数据,不进仓库)
 /kb/reviewed.json

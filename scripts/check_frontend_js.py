@@ -47,4 +47,34 @@ for i, body in enumerate(blocks, start=1):
         print((proc.stderr or "").strip()[:1500])
     Path(tmp).unlink(missing_ok=True)
 
+# ---- id 唯一性:同一个 id 在文档里出现两次,`getElementById` 只回第一个,另一个容器
+# 永远是空的。v0.9.183 的课表面板就是这么整块空白 —— 侧聊那条线程流的容器也叫
+# `scBody`,与课表对话框的 `#scBody` 撞了,`renderSchedule()` 把课表渲染进了侧栏。
+# 这类撞车静态标记 vs 脚本模板之间也会发生,所以两边都扫。
+static = re.sub(r"<script(?![^>]*\bsrc=)[^>]*>.*?</script>", "", src, flags=re.S)
+ids_static = re.findall(r'\bid="([A-Za-z0-9_\-]+)"', static)
+ids_js = re.findall(r'\bid="([A-Za-z0-9_\-]+)"', "".join(blocks))
+
+
+def _dups(seq):
+    seen, out = set(), set()
+    for x in seq:
+        (out if x in seen else seen).add(x)
+    return sorted(out)
+
+
+dup_static = _dups(ids_static)
+across = sorted(set(ids_static) & set(ids_js))
+if dup_static or across:
+    failed += 1
+    print("  ✗ id 撞车:静态标记里重复 %s;静态 id 又被脚本模板用一次 %s"
+          % (dup_static, across))
+    print("    —— 两个同名容器只认得第一个,另一个永远空白(课表面板那次就是这样)。")
+else:
+    print("  ✓ id 唯一(静态 %d 个,且没有一个被脚本模板再用一次)" % len(set(ids_static)))
+js_dup = _dups(ids_js)
+if js_dup:
+    print("  注意:脚本模板内部重名 %s —— 若它们是互斥分支(同一时刻只渲染一个)不致出事,"
+          "但值得逐条确认。" % js_dup)
+
 sys.exit(1 if failed else 0)

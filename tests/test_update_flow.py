@@ -228,6 +228,92 @@ def test_list_releases_says_which_kind_of_failure_it_is(monkeypatch, resp, why):
     assert r["why"].strip(), "失败了却给不出原因,界面只能编一句"
 
 
+# ------------------------------------------- 发布说明的本机缓存(v0.9.184)
+#
+# 这一节的由头是用户图 p2:点「历史更新内容」只剩一句 HTTP 403。GitHub 匿名接口是
+# **每个 IP 60 次/小时**,而这一屏原来每点一次打一枪,加上后台每轮查版本,配额是
+# 这台机器自己吃光的。所以口径改成:先读盘上那一份,一天最多为这一屏出一次网。
+# 针要钉住的是**「一次都不出网」这件事本身** —— 只断言"拿到了列表"的针,把缓存
+# 整段删掉照样绿(网络那份也能给出列表),那叫假绿。
+
+_V183 = {"version": "0.9.183", "tag": "v0.9.183", "date": "2026-10-17",
+         "name": "引路学长 v0.9.183", "notes": "路 2 那一版", "truncated": False,
+         "url": "https://x/183"}
+
+
+def test_a_fresh_cache_answers_the_history_screen_with_zero_requests(monkeypatch):
+    proactive.save_notes(releases=[_V183])
+
+    def _no_network(*a, **k):
+        raise AssertionError("缓存还新却出了网 —— 配额就是这么被自己烧光的")
+
+    monkeypatch.setattr(proactive, "_http_get", _no_network)
+    r = proactive.list_releases()
+    assert r["ok"] and r["releases"][0]["version"] == "0.9.183"
+    assert r["source"] == "cache", "给的是缓存就要说清是缓存,不许冒充实时读数"
+    assert r["cached_at"], "连「上次什么时候取的」都报不出来,那句话就还是含糊的"
+
+
+def test_a_rate_limited_call_falls_back_to_the_cache_and_says_so(monkeypatch):
+    proactive.save_notes(releases=[_V183])
+    monkeypatch.setattr(proactive, "NOTES_TTL_HOURS", 0)   # 让它过期,才轮到出网
+    _patch_get(monkeypatch, _Resp(403))
+    r = proactive.list_releases()
+    assert r["ok"] is True and r["source"] == "cache-stale"
+    assert "403" in r["why"] and "缓存" in r["why"], \
+        "既要说得清这次为什么没新数据,也要说得清手里这份是哪来的"
+
+
+def test_the_cache_survives_a_restart_because_it_is_on_disk(tmp_path):
+    """这一屏的"不卡"必须跨进程:配额是 IP 级的,重启并不会还回来。"""
+    proactive.save_notes(releases=[_V183])
+    assert proactive.notes_path().is_file(), "写到了 app_path 之外,重启就找不到"
+    assert [x["version"] for x in proactive.read_notes_cache()["releases"]] == ["0.9.183"]
+
+
+def test_seeding_one_version_is_not_recorded_as_a_full_fetch():
+    """查版本免费带回来的那一版正文要收下,但**不能**把整屏标成"刚取过"。
+
+    否则缓存里明明只有一版,界面却 24 小时不再出网 —— 那是把一次局部写入
+    说成了一次完整取数。
+    """
+    proactive.seed_notes({"version": "0.9.184", "date": "2026-10-18T09:00:00Z",
+                          "notes": "今天这一版", "url": "https://x/184"})
+    rows = proactive.read_notes_cache()["releases"]
+    assert rows[0]["version"] == "0.9.184" and rows[0]["date"] == "2026-10-18"
+    assert proactive.notes_fresh() is False, "一条正文不是一次完整取数"
+
+
+def test_a_real_fetch_does_mark_the_cache_fresh(monkeypatch):
+    _patch_get(monkeypatch, _Resp(200, [
+        {"tag_name": "v0.9.183", "published_at": "2026-10-17T09:00:00Z",
+         "body": "路 2 那一版"}]))
+    proactive.list_releases()
+    assert proactive.notes_fresh(), "取到了却不落时间戳 = 下一次还要再打一遍"
+
+
+def test_the_background_check_is_a_once_a_day_thing_not_a_per_round_thing():
+    """一天一次(用户拍的口径),而且**没问到答案不把今天划掉**。"""
+    assert proactive.update_check_due(today="2026-10-18") is True
+    proactive.mark_update_checked(True, today="2026-10-18")
+    assert proactive.update_check_due(today="2026-10-18") is False
+    assert proactive.update_check_due(today="2026-10-19") is True, \
+        "划掉的是今天,不是以后"
+
+
+def test_a_failed_check_backs_off_for_an_hour_instead_of_banging(monkeypatch):
+    """断网/403 之后:一小时内的重启不再出网,一小时后又给一次机会。
+
+    把失败也算成"今天查过了"是另一种撒谎 —— 那天剩下的时间后台真的再也不会
+    提新版本,而界面上一句"已是最新"看着挺正常。
+    """
+    proactive.mark_update_checked(False, today="2026-10-18", now=1_000.0)
+    assert proactive.update_check_due(today="2026-10-18", now=1_500.0) is False
+    assert proactive.update_check_due(today="2026-10-18", now=8_000.0) is True
+    assert proactive.read_notes_cache().get("last_check_day") != "2026-10-18", \
+        "没问到答案就把今天划掉了"
+
+
 # ---------------------------------------------------------------- 下载
 
 def test_download_follows_the_redirect_and_lands_the_file(server, tmp_path, monkeypatch):

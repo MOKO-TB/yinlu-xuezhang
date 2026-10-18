@@ -108,6 +108,8 @@ SHIP_NEVER: tuple[StateFile, ...] = (
     StateFile("watchdog.log", FILE, "看门狗日志:本机弹过哪些提醒、为什么没弹"),
     StateFile("weather.json", FILE, "常驻城市:含位置"),
     StateFile("weather-cache.json", FILE, "天气缓存:构建机坐标的结果"),
+    StateFile("release-notes.json", FILE,
+              "发布说明缓存:本机哪天取的、取到哪几版,跟着机器走,带进包里就是别人的时间戳"),
     StateFile("web-daily.json", FILE,
               "网页版每日额度账本:构建机这份会把它的用量带进包里"),
     StateFile("web-daily.json.tmp", FILE, "原子写的半截文件"),

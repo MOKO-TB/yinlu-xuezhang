@@ -1248,6 +1248,14 @@ TARGETS: dict[str, tuple[str, ...]] = {
                            # 并发那条路的路线顺序(先 CDN、api 兜底)是这一档速度收益的
                            # 来源;漏收 = 包里又回到"赌一次小探测",而实测它赌不准。
                            "_parallel_urls",
+                           # v0.9.184 发布说明的本机缓存。漏 `read_notes_cache` 的表现
+                           # 是「历史更新内容」又每次现场打匿名接口(用户图 p2 那句
+                           # HTTP 403 的老病根);漏 `update_check_due` = 后台每轮都查,
+                           # 60 次/小时的配额还是被这台机器自己吃光。
+                           "NOTES_FILE_NAME", "NOTES_TTL_HOURS", "notes_path",
+                           "read_notes_cache", "save_notes", "notes_fresh",
+                           "seed_notes", "update_check_due", "mark_update_checked",
+                           "UPDATE_CHECK_RETRY_SECONDS",
                            "calendar_alerts",
                            # v0.9.25:同一份推送同步发到桌面
                            "KIND_TITLES", "desktop_text", "push_desktop",

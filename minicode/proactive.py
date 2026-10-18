@@ -16,6 +16,7 @@ payload 里没有课名/时间/地点就整条不发。
 """
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -859,39 +860,180 @@ def _fmt_mb(n: int) -> str:
     return f"{n / 1048576:.0f} MB" if n >= 1048576 else f"{n // 1024} KB"
 
 
+# ------------------------------------------------- 发布说明的本机缓存(v0.9.184)
+# 为什么要缓存:GitHub 的匿名接口是**每个 IP 60 次/小时**,而这条路上出网的有三处
+# (启动后 15 秒那一遍查版本、主循环 6 小时一轮再查一遍、用户点「历史更新内容」)。
+# 历史更新内容一天不会改八次,却每次点都打一次接口 —— 用户看到的
+# "没拿到历史:接口回了 HTTP 403" 就是这么烧出来的。缓存的口径:**一天最多为这一屏
+# 出一次网**,取到就落本机,取不到就用上一次落下的(并说清这是缓存、上次是什么时候)。
+NOTES_FILE_NAME = "release-notes.json"
+NOTES_TTL_HOURS = 24
+# 查版本那一遍失败后的退避:比"一天一次"短、比一轮长,重启轰炸也不多出网。
+UPDATE_CHECK_RETRY_SECONDS = 3600
+
+
+def notes_path() -> Path:
+    return app_path(NOTES_FILE_NAME)
+
+
+def read_notes_cache() -> dict:
+    """读本机那份发布说明缓存。没写过/坏了都回空 dict —— 不当成"没有历史"。"""
+    try:
+        data = json.loads(notes_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_notes(releases: "list | None" = None, check_day: str = "",
+               retry_after_ts: "float | None" = None, stamp: bool = True) -> None:
+    """写缓存(读-改-写:另一件事改过的字段不许被这次覆盖掉)。
+
+    `stamp=False` 给"只补一条正文"那种写入用:它不算一次完整取数,盖上新时间戳
+    就等于宣称"这一屏 24 小时内取过",而那份列表可能只有一版。
+
+    写不下去只当没缓存 —— 缓存是省配额的手段,不是功能前提,不该因为盘上写不了
+    一个 JSON 就让用户看不到历史。
+    """
+    cur = read_notes_cache()
+    if releases is not None:
+        cur["releases"] = releases
+        if stamp:
+            cur["fetched_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    if check_day:
+        cur["last_check_day"] = check_day
+    if retry_after_ts is not None:
+        cur["retry_after_ts"] = float(retry_after_ts)
+    cur["schema"] = 1
+    try:
+        notes_path().write_text(json.dumps(cur, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def notes_fresh(cache: "dict | None" = None) -> bool:
+    """缓存还新吗:有内容、且是 `NOTES_TTL_HOURS` 小时内取的。"""
+    cache = cache if cache is not None else read_notes_cache()
+    rows = [r for r in (cache.get("releases") or []) if isinstance(r, dict)]
+    stamp = str(cache.get("fetched_at") or "")
+    if not rows or not stamp:
+        return False
+    try:
+        got = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    return (datetime.now() - got).total_seconds() < NOTES_TTL_HOURS * 3600
+
+
+def seed_notes(update: "dict | None") -> None:
+    """把"查版本"顺手拿到的那一版正文并进缓存 —— 每天那次检查就该把缓存喂一口。
+
+    只并一条、**不盖时间戳**:一次完整取数是 `list_releases` 的事,这一版正文是
+    那次出网免费带回来的东西,别把它说成"整屏取过了"。
+    """
+    if not isinstance(update, dict) or not update.get("version"):
+        return
+    notes = str(update.get("body") or update.get("notes") or "").strip()
+    if not notes:
+        return
+    entry = {"version": str(update["version"]), "tag": "v%s" % update["version"],
+             "date": str(update.get("date") or "")[:10],
+             "name": str(update.get("name") or "").strip(),
+             "notes": notes[:NOTES_MAX], "truncated": len(notes) > NOTES_MAX,
+             "url": str(update.get("url") or "")}
+    cache = read_notes_cache()
+    rows = [r for r in (cache.get("releases") or []) if isinstance(r, dict)]
+    rows = [entry] + [r for r in rows if str(r.get("version") or "") != entry["version"]]
+    save_notes(releases=rows[:20], stamp=False)
+
+
+def update_check_due(today: str = "", now: float = 0.0) -> bool:
+    """这一轮该不该为"有没有新版本"出网。
+
+    原来每轮都查(主循环 6 小时一次,**每次启动 15 秒后还再来一次**),匿名配额
+    60 次/小时就是这么被自己吃光的 —— 用户看到的"没拿到历史:接口回了 HTTP 403"
+    有一半是配额,而配额是这台机器自己烧的。用户要的口径是**一天查一次**:
+    启动那一遍与手动「检查更新」「下载」不受此限(那是用户自己按的,不是后台在烧)。
+
+    `retry_after_ts` 是失败退避:上一遍**没问到答案**(断网 / 403 / 接口形状不对)
+    不把今天划掉,但也不许五分钟一小时地撞 —— 一小时内不再试。
+    """
+    cache = read_notes_cache()
+    day = today or time.strftime("%Y-%m-%d")
+    if str(cache.get("last_check_day") or "") == day:
+        return False
+    return (now or time.time()) >= float(cache.get("retry_after_ts") or 0.0)
+
+
+def mark_update_checked(ok: bool, today: str = "", now: float = 0.0) -> None:
+    """问到答案(有没有新版都算问到)才把今天划掉;没问到只退避一小时。
+
+    把"没问到"也划掉是另一种撒谎:那天剩下的时间后台就真的再也不会查版本,
+    而界面上一句"已是最新"看着挺正常。
+    """
+    if ok:
+        save_notes(check_day=today or time.strftime("%Y-%m-%d"), retry_after_ts=0.0)
+    else:
+        save_notes(retry_after_ts=(now or time.time()) + UPDATE_CHECK_RETRY_SECONDS)
+
+
 def list_releases(limit: int = 8, timeout: float = 12.0) -> dict:
-    """历史更新内容(用户图 p8 那张「历史更新内容」的列表)。
+    """历史更新内容(用户图 p8 那张「历史更新内容」的列表)—— **先读本机缓存**。
 
     只读公开接口、匿名 GET,与 `_release_payload` 共用同一套两跳证书。
     **拿不到不等于没有更新**:这一屏打不开只说明这一屏打不开,`why` 要写得 out
     是哪一种(网络 / 证书 / 接口形状),不许在界面上留一句"暂无历史"糊过去。
+    缓存救场时也要说清"这是缓存、上次什么时候取到的" —— 把缓存说成实时读数,
+    与把"没验过"说成"验过了"是同一类错。
     """
     n = max(1, min(int(limit or 8), 20))
+    cache = read_notes_cache()
+    cached = [r for r in (cache.get("releases") or []) if isinstance(r, dict)]
+    if cached and notes_fresh(cache):
+        return {"ok": True, "releases": cached[:n], "why": "",
+                "source": "cache", "cached_at": str(cache.get("fetched_at") or "")}
     resp, why = _http_get("%s?per_page=%d" % (RELEASES_API, n), timeout)
-    if resp is None:
-        return {"ok": False, "releases": [], "why": why}
-    if resp.status_code != 200:
-        return {"ok": False, "releases": [], "why": f"接口回了 HTTP {resp.status_code}"}
-    try:
-        data = resp.json()
-    except Exception:
-        return {"ok": False, "releases": [], "why": "接口回的正文不是 JSON"}
-    if not isinstance(data, list):
-        return {"ok": False, "releases": [], "why": "接口回的 JSON 不是清单"}
-    out = []
-    for r in data:
-        if not isinstance(r, dict):
-            continue
-        tag = str(r.get("tag_name") or r.get("name") or "").strip()
-        if not tag:
-            continue
-        notes = str(r.get("body") or "").strip()
-        out.append({"version": tag.lstrip("vV"), "tag": tag,
-                    "date": str(r.get("published_at") or "")[:10],
-                    "name": str(r.get("name") or "").strip(),
-                    "notes": notes[:NOTES_MAX], "truncated": len(notes) > NOTES_MAX,
-                    "url": str(r.get("html_url") or "")})
-    return {"ok": True, "releases": out, "why": ""}
+    got = {"ok": False, "releases": [], "why": why or ""}
+    if resp is not None and resp.status_code == 200:
+        try:
+            data = resp.json()
+        except Exception:
+            data = None
+            got["why"] = "接口回的正文不是 JSON"
+        if isinstance(data, list):
+            out = []
+            for r in data:
+                if not isinstance(r, dict):
+                    continue
+                tag = str(r.get("tag_name") or r.get("name") or "").strip()
+                if not tag:
+                    continue
+                notes = str(r.get("body") or "").strip()
+                out.append({"version": tag.lstrip("vV"), "tag": tag,
+                            "date": str(r.get("published_at") or "")[:10],
+                            "name": str(r.get("name") or "").strip(),
+                            "notes": notes[:NOTES_MAX],
+                            "truncated": len(notes) > NOTES_MAX,
+                            "url": str(r.get("html_url") or "")})
+            got = {"ok": True, "releases": out, "why": ""}
+            save_notes(releases=out[:20])
+            got["source"] = "net"
+            return got
+        if not isinstance(data, list):
+            # 200 但不是列表(接口形状变了):别把"取到了东西"糊成成功,也别把上面
+            # 那句"正文不是 JSON"覆盖掉 —— 两种失败的原因不一样,要各说各的。
+            got["why"] = got["why"] or "接口回的不是版本列表(接口形状变了)"
+    elif resp is not None:
+        got["why"] = "接口回了 HTTP %s" % resp.status_code
+    # 出网没成:有缓存就用缓存,并把话说清(哪来的、什么时候的、这次为什么没更新)
+    if cached:
+        got["releases"] = cached[:n]
+        got["ok"] = True
+        got["source"] = "cache-stale"
+        got["why"] = ((got["why"] + " —— ") if got.get("why") else "") \
+            + "这一屏给的是本机缓存(上次取到 %s),没出网也照样看得见" \
+            % (cache.get("fetched_at") or "时间不详")
+    return got
 
 
 def _expected_sha256(ver: str, asset_name: str, sha_url: str = "",
@@ -2203,7 +2345,28 @@ def _round(bridge) -> dict:
     # 可关(v0.9.162+):config.json 的 `update_check: false` 就一次都不出网。
     # 默认开 —— 分发出的 setup.exe 升不了级才是常态问题。
     if getattr(getattr(bridge, "config", None), "update_check", True):
-        update = check_update(__version__)   # 内部已把断网/改版全吞成 None
+        # 一天一次(v0.9.184):原来每轮都问(6 小时一轮 + 每次启动 15 秒后那一遍),
+        # 匿名配额 60 次/小时有一半是被这台机器自己烧掉的。用户按的那两颗
+        # (「检查更新」「下载」)不受此限 —— 那是他要的答案,不是后台在巡。
+        if not update_check_due():
+            wd_log("skip update [今天已查过]:一天一次,这一轮不出网")
+            update = None
+        else:
+            res = check_update(__version__, detail=True)
+            update = res.get("update")
+            mark_update_checked(bool(res.get("ok")))
+            # 同一次出网顺手把「历史更新内容」那一屏也取回来落盘:用户哪天点开都
+            # 不用现场打接口,断网那天也看得见 —— "存到本地"要的就是这一条。
+            # 它自己会先看缓存(今天刚取过就一个字都不出),所以这里不算额外配额。
+            hist = list_releases(limit=8)
+            if not hist.get("ok"):
+                wd_log(f"fail release-notes [缓存 {len(hist.get('releases') or [])} 版]:"
+                       f"{str(hist.get('why') or '未给原因')[:80]}")
+            # 上面那次没通时,查版本免费带回来的这一版正文至少让那一屏不是空的。
+            seed_notes(update)
+            if not res.get("ok"):
+                wd_log("fail update [-]:问不到版本 —— "
+                       f"{str(res.get('why') or '未给原因')[:80]}(一小时内不再试)")
         if update:
             cfg = getattr(bridge, "config", None)
             skipped = str(getattr(cfg, "update_skip_version", "") or "").lstrip("vV")

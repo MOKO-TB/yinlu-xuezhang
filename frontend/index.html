@@ -3145,7 +3145,7 @@ try {
       <button data-tab="week">本周</button>
       <button data-tab="scores" title="导入过成绩就在这里看:绩点/平均分/门数/总学分,可按学期筛(只读本机 scores.json)">成绩</button>
     </div>
-    <div class="sc-body" id="scBody"></div>
+    <div class="sc-body" id="schedBody"></div>
     <div class="btns">
       <button class="b-yes" id="btnScheduleImport">导入 / 更新课表</button>
       <button class="b-no" id="btnScoresImport"
@@ -3961,7 +3961,12 @@ function openHistoryDlg() {
       $("histBody").textContent = "没拿到历史:" + String((r && r.why) || "接口不通");
       return;
     }
-    $("histNote").textContent = "共 " + (r.releases || []).length + " 版";
+    const rows = r.releases || [];
+    // 取处要说清(v0.9.184:这一屏先读本机缓存)。把缓存说成实时读数,
+    // 与把"没验过"说成"验过了"是同一类错。
+    $("histNote").textContent = "共 " + rows.length + " 版"
+      + (r.source === "net" ? ""
+         : " · 本机缓存" + (r.cached_at ? "(上次取到 " + r.cached_at + ")" : ""));
     histReleases = r.releases || [];
     // "正在用"标在哪一版:侧栏那串版本号是唯一真相(它可能被 checkUpdateNow
     // 临时缀上" ·检查中",所以只抠 x.y.z 那一段,不整串比)
@@ -8660,7 +8665,7 @@ function scScoresPanel() {
     + `<div class="sc-note">${fine}<br>只在本机:<code>scores.json</code> —— 不进对话、不上传。</div>`;
 }
 function renderSchedule() {
-  const body = $("scBody");
+  const body = $("schedBody");
   const undoBtn = $("btnScheduleUndo");
   if (undoBtn) undoBtn.style.display = (scheduleData && scheduleData.can_undo) ? "" : "none";
   const timesBtn = $("btnScheduleTimes");
@@ -8738,7 +8743,7 @@ $("scTabs").addEventListener("click", (e) => {
 });
 // 「我的成绩」那一档的学期选择:换学期只是**换一次读数**,不改存档、也不改课表。
 // 自绘浮层(不是原生 select)—— 见 scScoresPanel 里那段注释。
-$("scBody").addEventListener("click", (e) => {
+$("schedBody").addEventListener("click", (e) => {
   if (!e.target.closest("#scSemBtn")) return;
   scSemToggle();
 });
@@ -8793,7 +8798,7 @@ function scSyncTabs() {
 }
 function scCollectTimes() {
   const box = {};
-  $("scBody").querySelectorAll(".sc-in").forEach(el => {
+  $("schedBody").querySelectorAll(".sc-in").forEach(el => {
     const n = el.dataset.n;
     box[n] = box[n] || {};
     box[n][el.dataset.k] = el.value || "";
@@ -8836,7 +8841,7 @@ function scAct(name) {
     scSaveTimes(rows);
   }
 }
-$("scBody").addEventListener("click", (e) => {
+$("schedBody").addEventListener("click", (e) => {
   // v0.9.35 走堂换楼:点开真的把两栋一起框出来(楼名是后端唯一解析过的,
   // 地图里搜不到的那栋由 showPlaces 如实说明,前端不猜位置也不悄悄少画)
   const w = e.target.closest(".sc-walkmap");
