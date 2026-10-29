@@ -17,6 +17,7 @@ import threading
 import pytest
 
 from minicode import asking
+from minicode.llm import AssistantTurn, ToolCall
 from minicode.subagents import SUBAGENT_TYPES, sub_tool_registry, type_spec
 from minicode.tools.base import Tool, ToolContext
 from minicode.tools.registry import build_default_registry
@@ -178,6 +179,52 @@ def test_bridge_round_trip_pushes_the_real_questions_and_returns_the_answer(conf
     assert [a["choice"] for a in got["answers"]] == [["选1"], ["选0"]]
     trace = [e for e in window.events if e["type"] == "ask_trace"]
     assert trace and "选1" in trace[-1]["text"]      # 聊天区那一行痕出自同一次回答
+
+
+def _ask_call(call_id="ask1"):
+    return ToolCall(id=call_id, name="ask_user",
+                    arguments=json.dumps({"questions": _qs(1),
+                                          "note": "定了再排步骤"}))
+
+
+def test_agent_ask_really_reaches_the_session_ui(config, tmp_path):
+    """回归:v0.9.96 起 handler 只装在基础 UI 上,Agent 用的 SessionGuiUI
+    没有 ask_handler —— 真实链路会把问题吞掉,模型拿到一句「没接通道」
+    就自己开工(P1 那张截图)。这条必须走 send_task,不能直接调
+    bridge.ask_user:那条是绕开 Agent 的测试便道,恰恰漏掉了这个洞。"""
+    llm = FakeLLM([AssistantTurn(tool_calls=[_ask_call()]),
+                   AssistantTurn(text="好,我等你选。")])
+    bridge, window, _ = make(config, tmp_path, llm)
+    assert bridge.send_task("帮我做个网站")["ok"]
+    assert wait_until(lambda: any(e["type"] == "ask_request" for e in window.events),
+                      timeout=10)
+    req = [e for e in window.events if e["type"] == "ask_request"][-1]
+    assert req["questions"][0]["q"] == "第0题怎么办?"
+    assert req["ask_id"]
+    assert req.get("session")                     # 事件必须带会话键
+    assert bridge.ask_reply(json.dumps({
+        "mode": "answer", "ask_id": req["ask_id"],
+        "answers": [{"id": 0, "choice": ["选0"], "free": ""}]}))["ok"] is True
+    assert wait_until(lambda: not bridge._busy, timeout=10)
+    trace = [e for e in window.events if e["type"] == "ask_trace"]
+    assert trace and trace[-1]["ask_id"] == req["ask_id"]
+    assert "选0" in trace[-1]["text"]
+
+
+def test_skip_is_written_as_unanswered_not_as_consent(config, tmp_path):
+    """「先不做」必须落成没答:模型上下文里不能出现"用户选过了"的意思。"""
+    llm = FakeLLM([AssistantTurn(tool_calls=[_ask_call()]),
+                   AssistantTurn(text="这一轮先不做。")])
+    bridge, window, _ = make(config, tmp_path, llm)
+    assert bridge.send_task("帮我做个网站")["ok"]
+    assert wait_until(lambda: any(e["type"] == "ask_request" for e in window.events),
+                      timeout=10)
+    req = [e for e in window.events if e["type"] == "ask_request"][-1]
+    assert bridge.ask_reply(json.dumps({"mode": "skip",
+                                        "ask_id": req["ask_id"]}))["ok"] is True
+    assert wait_until(lambda: not bridge._busy, timeout=10)
+    trace = [e for e in window.events if e["type"] == "ask_trace"][-1]
+    assert "没答" in trace["text"] and "先不做" in trace["text"]
 
 
 def test_garbage_reply_does_not_release_the_wait_with_a_fake_answer(config, tmp_path):

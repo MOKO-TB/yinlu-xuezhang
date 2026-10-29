@@ -8,11 +8,13 @@
 ③ 「改一条」写回 plan.md 的是**改后的那一句**,模型收到的是新单子;
 ④ 三颗出口各回各的话,句子由后端组(前端拼一份就是两份真相)。
 """
+import json
 from pathlib import Path
 
 import pytest
 
 from minicode import paths, planning
+from minicode.gui_bridge import Bridge
 
 
 @pytest.fixture(autouse=True)
@@ -198,14 +200,41 @@ def test_the_four_exits_are_one_list_not_two_copies():
         assert f'mode: "{mode}"' in fe, f"前端没有发「{mode}」这一种出口"
 
 
-def test_the_card_is_a_real_button_row_in_the_frontend():
+def test_history_carries_plan_write_as_an_inline_card():
+    """resume 后核对卡要能画回来:单子来自 plan(action=write) 的参数,
+    批单结果在工具结果的尾巴上。"""
+    messages = [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "p1", "type": "function", "function": {
+                "name": "plan",
+                "arguments": json.dumps({
+                    "action": "write", "goal": "把成绩导入修好",
+                    "steps": [{"title": "读现有代码", "verify": "pytest -q"},
+                              {"title": "改导入器"}]})}}]},
+        {"role": "tool", "tool_call_id": "p1",
+         "content": "计划已写入 plans/plan.md……用户已在界面上**批准这张计划**。"},
+    ]
+    out = Bridge._messages_for_frontend(type("S", (), {"messages": messages})())
+    assert out[0]["ui_calls"][0]["name"] == "plan"
+    assert out[0]["ui_calls"][0]["goal"] == "把成绩导入修好"
+    assert out[0]["ui_calls"][0]["steps"][0]["n"] == 1
+    assert out[0]["ui_calls"][0]["steps"][0]["verify"] == "pytest -q"
+    assert out[1]["name"] == "plan" and "批准" in out[1]["text"]
+
+
+def test_the_card_is_a_real_inline_card_in_the_frontend():
+    """v0.9.185:核对单从浮层改成流内卡,三种出口与「稍后再说」都在卡里。"""
     fe = Path("frontend/index.html").read_text(encoding="utf-8")
-    assert 'id="planReviewOverlay"' in fe
+    for fn in ("showPlanReview", "buildPlanReview", "renderPlanReviewCard",
+               "planReviewReply", "finishPlanReview"):
+        assert f"function {fn}" in fe, fn
     assert 'case "plan_review"' in fe
-    for bid in ("prApprove", "prRevise", "prClose"):
-        assert f'$("{bid}").addEventListener("click"' in fe, bid
+    for mode in ("approve", "edit", "revise", "unanswered"):
+        assert f'mode: "{mode}"' in fe, mode
     # 「稍后再说」必须回话:只关卡不回话 = 后端那条等待一直挂着
-    assert '$("prClose").addEventListener("click", () => prReply({ mode: "unanswered" }))' in fe
+    assert 'planReviewReply(st, { mode: "unanswered" })' in fe
     assert "plan_review_reply" in fe
-    # 三处出口都收卡:卡片关着却还在等,是最难查的一种"没反应"
-    assert '$("planReviewOverlay").classList.remove("show")' in fe
+    # 旧浮层必须彻底删掉:留两套出口 = 改一处忘一处,日后就是"点了没反应"
+    assert "planReviewOverlay" not in fe
+    assert "prData" not in fe
+    assert "prReply" not in fe

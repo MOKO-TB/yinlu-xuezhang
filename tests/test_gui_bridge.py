@@ -1066,8 +1066,24 @@ def test_plan_writes_push_plan_changed_to_the_window(config, tmp_path):
     from minicode import planning
     bridge, window, _ = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
     ctx = bridge._current.agent.ctx          # 真上下文:ui 是本会话的推送适配器
-    assert "计划已写入" in planning._plan_write(ctx, "毕设排期", [
-        {"title": "定题"}, {"title": "写开题报告", "depends_on": [1]}])
+    # v0.9.185:核对单通道真的接上了 —— 这条现在会弹卡并**等人批**;
+    # 不答它就一直等(这正是它该做的)。放在线程里,批完再收结果。
+    got: dict = {}
+    th = threading.Thread(target=lambda: got.update(result=planning._plan_write(
+        ctx, "毕设排期", [{"title": "定题"},
+                          {"title": "写开题报告", "depends_on": [1]}])))
+    th.start()
+    assert wait_until(lambda: any(e["type"] == "plan_review"
+                                  for e in window.events))
+    req = window.of_type("plan_review")[-1]
+    assert req["ask_id"].startswith("p"), req
+    assert req.get("session") == bridge._current.key
+    assert bridge.plan_review_reply(json.dumps({"mode": "approve"}))["ok"]
+    th.join(timeout=10)
+    assert "计划已写入" in got["result"]
+    trace = window.of_type("ask_trace")[-1]
+    assert trace["kind"] == "plan" and trace["ask_id"] == req["ask_id"]
+    assert trace["mode"] == "approve"
     events = window.of_type("plan_changed")
     assert len(events) == 1
     assert events[0]["goal"] == "毕设排期" and events[0]["ready"] == [1]
@@ -1304,7 +1320,7 @@ def test_board_open_card_flag_lives_only_while_waiting(config, tmp_path):
     assert bridge._ask_open is False and bridge._confirm_open is False
     got = {}
 
-    def spy(event, slice_s=1.0, open_flag=""):
+    def spy(event, slice_s=1.0, open_flag="", source_ui=None):
         got["flag"] = open_flag
         return True
     bridge._wait_event = spy                      # 只探参数,不真等

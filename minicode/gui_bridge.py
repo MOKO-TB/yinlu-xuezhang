@@ -15,7 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from minicode import APP_NAME, __version__
-from minicode import asking, model_probe
+from minicode import asking, model_probe, office_preview, widgets
 from minicode import workspace as ws
 from minicode.activate import take_pending_panel as _take_pending_panel
 from minicode.app_setup import (build_runner_agent, instruction_layers,
@@ -56,6 +56,9 @@ from minicode.tools.base import Tool
 PREVIEW_LINES = 15
 DIFF_MAX_LINES = 40
 PREVIEW_CHARS = 1200      # 浏览器 JS 之类"长参数"在确认框里的截断长度
+# 这些工具的调用参数要跟着历史回放(提问卡/图表/表格/清单),其余工具的参数
+# 只留在留档里,不送前端 —— 少一份可枚举的接口面。
+UI_TOOL_NAMES = ("ask_user", "plan", "show_chart", "show_table", "show_checklist")
 
 
 class PublicApi:
@@ -258,8 +261,12 @@ class PublicApi:
         return self._b.confirm_reply(choice)
 
     def ask_reply(self, payload) -> dict:
-        """提问卡的回答(「发送回复」/「按推荐继续」)。只转发,判定与记账都在桥里。"""
+        """提问卡的回答(「发送回复」/「按推荐继续」/「先不做」)。只转发,判定与记账都在桥里。"""
         return self._b.ask_reply(payload)
+
+    def widget_action(self, widget_id: str, action: str, payload="{}") -> dict:
+        """交互组件上的动作(清单勾选后发回)。只转发,判定与转写都在桥里。"""
+        return self._b.widget_action(widget_id, action, payload)
 
     def plan_review_reply(self, payload) -> dict:
         """计划核对单的三种回答(批准 / 改一条 / 重排)。判定与写回都在桥与 planning 里。"""
@@ -320,9 +327,21 @@ class PublicApi:
     def get_asset(self, rel_path: str) -> dict:
         return self._b.get_asset(rel_path)
 
-    def panel_preview(self, rel_path: str) -> dict:
+    def panel_preview(self, rel_path: str, mode: str = "preview") -> dict:
         # v0.9.177 可交互产物:界面拿到的每一份都在这里过净化 + CSP(见 Bridge 那条)
-        return self._b.panel_preview(rel_path)
+        return self._b.panel_preview(rel_path, mode)
+
+    def panel_annotate(self, rel_path: str, payload="{}") -> dict:
+        """产物批注:选中内容 + 修改要求交给 Agent;原文件不动,改工作副本。"""
+        return self._b.panel_annotate(rel_path, payload)
+
+    def panel_compare(self, rel_path: str, working: str = "") -> dict:
+        """原版 vs 工作版只读对比;两边都走预览档,不执行脚本。"""
+        return self._b.panel_compare(rel_path, working)
+
+    def panel_adopt(self, rel_path: str, working: str = "") -> dict:
+        """采用工作版:先备份原文件,再用工作副本覆盖它。"""
+        return self._b.panel_adopt(rel_path, working)
 
     def open_url(self, url: str) -> dict:
         return self._b.open_url(url)
@@ -870,9 +889,20 @@ class Bridge:
         self._ask_event = threading.Event()
         self._ask_answer: dict = {}
         self._ask_questions: list = []      # 当前这张卡问了什么(留痕那一行要用)
+        # 这一问的身份证与属主:前端按 ask_id 找回那张流内卡片,停止/关窗按
+        # session_key 只叫醒"这条会话"在等的那张(否则 A 会话按停止会把 B 会话的卡作废)。
+        self._ask_seq = 0
+        self._ask_id = ""
+        self._ask_owner = ""
+        self._ask_source_ui = None
         # 「此刻有没有一张卡等人答」(跨会话看板 B1 用,见 _wait_event)
         self._ask_open = False
         self._confirm_open = False
+        self._confirm_owner = ""
+        self._plan_owner = ""
+        self._plan_source_ui = None
+        self._plan_seq = 0
+        self._plan_id = ""
         # 计划核对单(v0.9.114):**又一条独立的锁与事件** —— 与提问卡分家不是洁癖,
         # 共用会让"点了核对单的批准"被当成对上一个提问的答复。
         self._plan_lock = threading.Lock()
@@ -904,7 +934,26 @@ class Bridge:
         """
         self._seq += 1
         ui = SessionGuiUI(self.ui, f"s{self._seq}")
-        ui.confirm_handler = self.confirm_tool
+        # 每个会话自己的 UI 必须把四条通道都接上。多会话改造时这里漏过
+        # ask/plan/停止唤醒三行:Agent 用的是这只 SessionGuiUI,而 handler
+        # 只装在基础 UI 上,于是提问卡永远"没接通道"、计划核对单也同样静默。
+        # 另外三条都带 source_ui:事件要按会话推(前端才知道是哪条会话在等),
+        # 停止也只能作废这一条会话的卡。
+        # 确认框那条要写成**显式六参**:GuiUI.confirm_tool 会按 signature 的
+        # 参数个数决定传几个位置参数(`lambda ... **kw` 只认两个位置参数,
+        # arity 被数成 3 → handler(tool, args, reason) 当场 TypeError,
+        # 表现是确认框根本弹不出来)。
+        def _confirm(tool, args, reason="", note="", label="",
+                     can_remember=False):
+            return self.confirm_tool(tool, args, reason, note, label,
+                                     can_remember, source_ui=ui)
+        ui.confirm_handler = _confirm
+        ui.ask_handler = lambda qs, note="", label="": self.ask_user(
+            qs, note, label, source_ui=ui)
+        ui.plan_review_handler = lambda plan: self.plan_review(
+            plan, source_ui=ui)
+        ui.abandon_pending = lambda reason="": self.abandon_pending(
+            reason, session_key=ui.session_key)
         ui.on_llm_failure = lambda _msg: self._watch_model_recovery(ui)
         agent, session = build_runner_agent(
             self.config, self.workspace, ui, self._shared_llm,
@@ -4183,18 +4232,11 @@ class Bridge:
         subprocess.Popen(["explorer", "/select,", str(p)])
         return {"ok": True, "msg": f"已在文件管理器里定位:{p.name}"}
 
-    def panel_preview(self, rel_path: str) -> dict:
-        """把一份**工作区里**的 html/svg 净化后交给界面就地显示(v0.9.177 可交互产物)。
+    def _panel_target(self, rel_path: str) -> tuple[Path | None, str, str]:
+        """产物预览/批注共用的路径闸:返回 (解析后路径, 工作区相对, 拒绝原因)。
 
-        四条不是显然的:
-        1. 只在工作区里解析,`..` 直接拒 —— 与 `get_asset` 同一条 `_within` 口径,
-           这一格不给工作区外面开门(它能渲染就等于给任意本地文件一个显形口)。
-        2. 交出去之前先删一遍可执行结构(`minicode.panel`),界面那侧还要再套一层
-           `<iframe sandbox="">`。**同一件事两处都立闸**:沙箱是浏览器的承诺,净化是
-           我们自己的承诺,少一道都会在某台机器上变成"以为还有另一道"。
-        3. 删了几处要**说给用户**(`stripped` + `note`),不静默改内容 —— 那张表少了一列
-           和"我拆了两处脚本"是两种完全不同的信任问题。
-        4. 回里没有绝对路径(与 `_upd_public`、`undo_records` 同一条口径)。
+        只在工作区里解析,`..` 直接拒 —— 与 `get_asset` 同一条 `_within` 口径。
+        一张能渲染的卡等于给任意本地文件一个显形口,所以这里不给工作区外开门。
         """
         from minicode import panel
         raw = str(rel_path or "").strip().replace("\\", "/")
@@ -4203,32 +4245,296 @@ class Bridge:
             # `\\fileserver\share\x.html` 归一后就是这种形状:它**指的是另一台机器**,
             # 不能被当成"工作区里的某个文件"悄悄重根(那样连不上时只会说"没这个文件",
             # 而真相是这条路根本不该开)。带盘符的那种由下面的 `_within` 拦。
-            return {"ok": False, "why": "网络路径(UNC)不在这里显示"}
+            return None, "", "网络路径(UNC)不在这里显示"
         if not rel or ".." in rel.split("/"):
-            return {"ok": False, "why": "这个路径我不能开(含 .. 或为空)"}
-        if not panel.looks_like_panel(rel):
-            return {"ok": False, "why": "只就地显示 .html / .htm / .svg 这几类"}
+            return None, "", "这个路径我不能开(含 .. 或为空)"
+        if not panel.looks_like_artifact(rel):
+            return None, "", ("只就地显示 .html/.htm/.svg 或 "
+                              ".docx/.pptx/.xlsx 这几类")
         root = Path(self.workspace).resolve()
         try:
             rp = (root / rel).resolve()
         except Exception:
-            return {"ok": False, "why": "这个路径拼不出来"}
+            return None, "", "这个路径拼不出来"
         if not _within(rp, root):
-            return {"ok": False, "why": "工作区外面的东西不在这里显示"}
+            return None, "", "工作区外面的东西不在这里显示"
         if not rp.is_file():
-            return {"ok": False, "why": "工作区里没有这一份(也许还没写出来)"}
+            return None, "", "工作区里没有这一份(也许还没写出来)"
+        return rp, rel, ""
+
+    def panel_preview(self, rel_path: str, mode: str = "preview") -> dict:
+        """把一份**工作区里**的 html/svg 净化后交给界面就地显示(v0.9.177)。
+
+        `mode="preview"` 走老路:删脚本 + `sandbox=""`,什么都不执行。
+        `mode="annotate"` 是 v0.9.185 的批注档:同样先删模型脚本,再注入一条
+        带 nonce 的受信脚本;前端沙箱要相应给 `allow-scripts`(不给同源)。
+        `mode="interactive"` 是 Gen UI 档:模型写的 HTML/JS **原样保留**,由用户
+        显式点「运行」进入;前端沙箱 `allow-scripts`(无同源),CSP 只放行 inline
+        脚本/样式并断掉 fetch/外链/worker。这一档不净化脚本 —— 它的价值就是执行。
+        三档都:路径只在工作区内解析、回里没有绝对路径。
+        """
+        from minicode import panel
+        mode = str(mode or "preview")
+        if mode not in ("preview", "annotate", "interactive"):
+            return {"ok": False, "why": "不认识的预览方式"}
+        rp, rel, why = self._panel_target(rel_path)
+        if why:
+            return {"ok": False, "why": why}
         try:
             raw = rp.read_bytes()
         except OSError as e:
             return {"ok": False, "why": f"读不出来({type(e).__name__})"}
+        office = rel.lower().endswith(panel.OFFICE_EXTS)
+        if office:
+            if mode == "interactive":
+                return {"ok": False, "why": "Office 文件不能运行交互版,请用「批注」"}
+            if len(raw) > panel.OFFICE_MAX_BYTES:
+                return {"ok": False,
+                        "why": (f"Office 文件超过 "
+                                f"{panel.OFFICE_MAX_BYTES // (1024 * 1024)} MB,"
+                                "不在这里预览")}
+            office_body, office_note = office_preview.render_office(rp)
+            if office_body is None:
+                return {"ok": False, "why": office_note}
+            annotate = mode == "annotate"
+            return {"ok": True,
+                    "html": (panel.wrap_annotatable(office_body, "html")
+                             if annotate else panel.wrap_document(office_body, "html")),
+                    "name": rel, "bytes": len(raw), "stripped": {},
+                    "note": office_note, "kind": "html", "mode": mode,
+                    "hint": ("批注模式：点一段/一行/一页，再写要改什么"
+                             if annotate else "")}
+        if mode == "interactive":
+            if not rel.lower().endswith((".html", ".htm")):
+                return {"ok": False, "why": "交互版只支持 .html / .htm"}
+            if len(raw) > panel.PANEL_MAX_BYTES:
+                return {"ok": False,
+                        "why": (f"这份有 {len(raw) / 1024:.0f} KB,超过交互版上限 "
+                                f"{panel.PANEL_MAX_BYTES // 1024} KB"),
+                        "bytes": len(raw)}
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                try:
+                    text = raw.decode("gbk")
+                except UnicodeDecodeError:
+                    return {"ok": False, "why": "这不是 UTF-8/GBK 文本,不按网页运行"}
+            return {"ok": True, "html": panel.wrap_interactive(text), "name": rel,
+                    "bytes": len(raw), "stripped": {},
+                    "note": "交互版：在隔离沙箱里运行，不能联网/碰宿主",
+                    "kind": "html", "mode": "interactive",
+                    "hint": "拖动/点击卡片里的控件，结果会实时变化"}
         body, counts, why = panel.read_and_sanitize(raw)
         if why:
             return {"ok": False, "why": why, "bytes": len(raw)}
         kind = "svg" if rel.lower().endswith(".svg") else "html"
-        return {"ok": True, "html": panel.wrap_document(body, kind),
-                "name": rel, "bytes": len(raw),
+        annotate = mode == "annotate"
+        html = (panel.wrap_annotatable(body, kind) if annotate
+                else panel.wrap_document(body, kind))
+        return {"ok": True, "html": html, "name": rel, "bytes": len(raw),
                 "stripped": counts, "note": panel.stripped_note(counts),
-                "kind": kind}
+                "kind": kind, "mode": mode,
+                "hint": ("批注模式：选中文字或点一个元素，然后在下面写要改什么"
+                         if annotate else "")}
+
+    def panel_annotate(self, rel_path: str, payload="{}") -> dict:
+        """把一段对产物的批注交给 Agent;已交付那份不动,改在工作副本上。
+
+        工作副本放在 `annotations/<stem>.working.<ext>`。第一次批注时从原文件
+        复制一份;之后继续批注**复用**它(上一版的修改不会被下一句批注冲掉)。
+        消息里把"选中的文字/点中的元素 + 要求 + 工作副本路径"写清,原文件路径
+        也写明不要动 —— 模型改错地方时用户还能撤。
+        """
+        from minicode import panel
+        rp, rel, why = self._panel_target(rel_path)
+        if why:
+            return {"ok": False, "msg": why}
+        try:
+            data = json.loads(payload) if isinstance(payload, str) else (payload or {})
+        except (ValueError, TypeError):
+            return {"ok": False, "msg": "批注格式不对"}
+        if not isinstance(data, dict):
+            return {"ok": False, "msg": "批注格式不对"}
+        mode = str(data.get("mode") or "element")
+        if mode not in ("text", "element"):
+            return {"ok": False, "msg": "不认识的批注方式"}
+        instruction = " ".join(str(data.get("instruction") or "").split())[:1000]
+        if not instruction:
+            return {"ok": False, "msg": "写一句要改什么再发"}
+        text = " ".join(str(data.get("text") or "").split())[:500]
+        selector = " ".join(str(data.get("selector") or "").split())[:300]
+        tag = " ".join(str(data.get("tag") or "").split())[:40]
+        block = " ".join(str(data.get("block") or "").split())[:160]
+        office = rel.lower().endswith(panel.OFFICE_EXTS)
+        if office and not block:
+            return {"ok": False,
+                    "msg": "请点一段文字/一个表格单元格/一页/一行再批注"}
+        ann_dir = Path(self.workspace) / "annotations"
+        try:
+            ann_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return {"ok": False, "msg": f"建不了 annotations 目录({type(exc).__name__})"}
+        working_rel = f"annotations/{rp.stem}.working{rp.suffix}"
+        working = Path(self.workspace) / working_rel
+        if not working.exists():
+            try:
+                working.write_bytes(rp.read_bytes())
+            except OSError as exc:
+                return {"ok": False, "msg": f"工作副本没建成({type(exc).__name__})"}
+        if mode == "text":
+            where = f"选中的文字：「{text or '(空)'}」"
+        else:
+            where = f"点中的元素：`{tag or '?'}`（位置 {selector or '未记录'}）"
+            if text:
+                where += f"，元素里的文字：「{text[:200]}」"
+        if block:
+            where += f"；块：`{block}`"
+        body = (
+            f"我在产物《{rel}》上做了一处批注，请**只改这一处**：\n"
+            f"- {where}\n"
+            f"- 要求：{instruction}\n"
+            f"请改在工作副本 `{working_rel}` 上，已交付的 `{rel}` 不要动。"
+            "改完用一两句话说明改了什么。"
+        )
+        if office:
+            body += (
+                "\n定位说明：pN=第 N 个段落;tN-rM-cK=第 N 个表格第 M 行第 K 列;"
+                "slide-N=第 N 页;slide-N-shape-M=第 N 页第 M 个形状;"
+                "sheet-N!rM=第 N 个工作表第 M 行;sheet-N!rM-cK=第 M 行第 K 列。"
+                "\n请用 py_script + python-docx / python-pptx / openpyxl "
+                "改工作副本；不要动原文件。"
+            )
+        result = self.send_task(body)
+        if result.get("ok"):
+            result["text"] = body
+            result["working"] = working_rel
+            result["source"] = rel
+        return result
+
+    def panel_compare(self, rel_path: str, working: str = "") -> dict:
+        """原版 vs 工作版:两栏都走预览档,返回 HTML 与逐块/逐行差异。
+
+        Office 按 `data-block` 比,HTML/SVG 按净化后的文本行比。两边都不执行
+        脚本;对比视图本身不提供"采用",采用仍在批注条里二次确认。
+        """
+        from minicode import panel
+        rp, rel, why = self._panel_target(rel_path)
+        if why:
+            return {"ok": False, "msg": why}
+        wrel = str(working or "").strip().replace("\\", "/").lstrip("/")
+        if not wrel:
+            wrel = f"annotations/{rp.stem}.working{rp.suffix}"
+        wp, wrel, why = self._panel_target(wrel)
+        if why:
+            return {"ok": False, "msg": why}
+        if wp == rp:
+            return {"ok": False, "msg": "工作版和原版是同一份"}
+        if not wp.is_file():
+            return {"ok": False, "msg": "工作版还没写出来"}
+        office = rel.lower().endswith(panel.OFFICE_EXTS)
+        if office:
+            try:
+                sizes = (rp.stat().st_size, wp.stat().st_size)
+            except OSError as exc:
+                return {"ok": False, "msg": f"读不出来({type(exc).__name__})"}
+            if max(sizes) > panel.OFFICE_MAX_BYTES:
+                return {"ok": False,
+                        "msg": (f"Office 文件超过 "
+                                f"{panel.OFFICE_MAX_BYTES // (1024 * 1024)} MB,"
+                                "不在这里对比")}
+            old_blocks: list = []
+            new_blocks: list = []
+            body_o, note_o = office_preview.render_office(rp, blocks_out=old_blocks)
+            body_w, note_w = office_preview.render_office(wp, blocks_out=new_blocks)
+            if body_o is None or body_w is None:
+                return {"ok": False, "msg": note_o if body_o is None else note_w}
+            diff = office_preview.diff_blocks(old_blocks, new_blocks)
+            old_hi = {c["id"] for c in diff["changes"]
+                      if c["id"] and c["type"] in ("changed", "removed")}
+            new_hi = {c["id"] for c in diff["changes"]
+                      if c["id"] and c["type"] in ("changed", "added")}
+            body_o, _ = office_preview.render_office(rp, highlight=old_hi)
+            body_w, _ = office_preview.render_office(wp, highlight=new_hi)
+            return {"ok": True,
+                    "original_html": panel.wrap_document(body_o, "html"),
+                    "working_html": panel.wrap_document(body_w, "html"),
+                    "diff": diff, "note": note_o, "mode": "preview"}
+        try:
+            raw_o = rp.read_bytes()
+            raw_w = wp.read_bytes()
+        except OSError as exc:
+            return {"ok": False, "msg": f"读不出来({type(exc).__name__})"}
+        body_o, _counts_o, why_o = panel.read_and_sanitize(raw_o)
+        if why_o:
+            return {"ok": False, "msg": why_o}
+        body_w, _counts_w, why_w = panel.read_and_sanitize(raw_w)
+        if why_w:
+            return {"ok": False, "msg": why_w}
+        kind = "svg" if rel.lower().endswith(".svg") else "html"
+        diff = panel.text_diff(panel.text_content(body_o),
+                               panel.text_content(body_w))
+        return {"ok": True,
+                "original_html": panel.wrap_document(body_o, kind),
+                "working_html": panel.wrap_document(body_w, kind),
+                "diff": diff, "mode": "preview"}
+
+    def panel_adopt(self, rel_path: str, working: str = "") -> dict:
+        """采用工作版:原文件先备份,再用工作副本整份覆盖。
+
+        这是**用户点名**的动作用户在界面上点两次确认才走到这里;Agent 没有这把钥匙。
+        工作副本只认 `annotations/` 目录;原文件与工作版逐字节相同就拒(还没改)。
+        覆盖走同目录临时文件 + `replace`,失败时原文件不动;备份写不进去也不覆盖。
+        """
+        rp, rel, why = self._panel_target(rel_path)
+        if why:
+            return {"ok": False, "msg": why}
+        wrel = str(working or "").strip().replace("\\", "/").lstrip("/")
+        if not wrel:
+            wrel = f"annotations/{rp.stem}.working{rp.suffix}"
+        if not wrel.startswith("annotations/") or ".." in wrel.split("/"):
+            return {"ok": False, "msg": "工作副本只认 annotations/ 目录里的文件"}
+        root = Path(self.workspace).resolve()
+        try:
+            wp = (root / wrel).resolve()
+        except Exception:
+            return {"ok": False, "msg": "工作副本路径拼不出来"}
+        if not _within(wp, root) or not wp.is_file():
+            return {"ok": False, "msg": "工作副本不在工作区里(或还没写出来)"}
+        if wp == rp:
+            return {"ok": False, "msg": "工作副本和原文件是同一份"}
+        try:
+            src = rp.read_bytes()
+            dst = wp.read_bytes()
+        except OSError as exc:
+            return {"ok": False, "msg": f"读不出来({type(exc).__name__})"}
+        if src == dst:
+            return {"ok": False, "msg": "工作版还没有改动,先让学长改完再采用"}
+        ann_dir = root / "annotations"
+        try:
+            ann_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return {"ok": False, "msg": f"建不了 annotations 目录({type(exc).__name__})"}
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        backup_rel = f"annotations/{rp.stem}.backup-{stamp}{rp.suffix}"
+        backup = root / backup_rel
+        n = 1
+        while backup.exists():
+            n += 1
+            backup_rel = f"annotations/{rp.stem}.backup-{stamp}-{n}{rp.suffix}"
+            backup = root / backup_rel
+        tmp = rp.with_name(rp.name + ".adopt-tmp")
+        try:
+            backup.write_bytes(src)
+            tmp.write_bytes(dst)
+            tmp.replace(rp)
+        except OSError as exc:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return {"ok": False, "msg": f"采用失败({type(exc).__name__});原文件未被替换"}
+        return {"ok": True, "source": rel, "working": wrel, "backup": backup_rel,
+                "msg": f"已采用工作版;原版备份在 {backup_rel}"}
 
     def get_asset(self, rel_path: str) -> dict:
         """把工作区 skills/ 下的图片等静态资产转成 data URL,供聊天里的图片显示
@@ -4685,19 +4991,108 @@ class Bridge:
     @staticmethod
     def _messages_for_frontend(session, workspace=None) -> list[dict]:
         """一份会话的消息翻成前端形状(v0.9.160 从 _history_for_frontend 抽出:
-        侧聊线程恢复历史要走同一条,两处各写一套迟早形状漂移)。"""
+        侧聊线程恢复历史要走同一条,两处各写一套迟早形状漂移)。
+
+        提问卡/可视化组件要能在 resume 后画回来,靠的是**工具调用参数**——
+        它们本来就在留档里,只是以前被压成了一个工具名。这里只把白名单里的
+        几只翻出来,并重新过一遍 asking.normalize:历史回放和实时渲染读同一份
+        规格,不能让两份各自解释一遍。
+        """
         out = []
+        # 工具结果按 tool_call_id 回来,消息里没有 name;先建一张 id -> name 的表。
+        names: dict[str, str] = {}
+        for m in session.messages:
+            if m.get("role") != "assistant":
+                continue
+            for t in (m.get("tool_calls") or []):
+                fn = t.get("function") or {}
+                if t.get("id"):
+                    names[str(t["id"])] = str(fn.get("name") or "")
         for m in session.messages:
             role = m.get("role")
             if role == "system":
                 continue
             content = m.get("content")
             if role == "tool":
-                out.append({"role": "tool", "text": str(content or "")[:200]})
+                name = names.get(str(m.get("tool_call_id") or ""), "")
+                text = str(content or "")
+                # 提问卡的回答、计划核对的结果都是可回看的记录,别按普通工具结果的
+                # 200 字砍掉。计划结论在**尾部**(前面是单子与调度视图),所以取尾。
+                if name == "plan":
+                    text = text[-2000:]
+                elif name != "ask_user":
+                    text = text[:200]
+                out.append({"role": "tool",
+                            "text": text,
+                            "name": name,
+                            "tool_call_id": str(m.get("tool_call_id") or "")})
             elif role == "assistant" and m.get("tool_calls"):
-                names = ", ".join(t["function"]["name"] for t in m["tool_calls"])
-                out.append({"role": "assistant", "text": str(content or ""),
-                            "tools": names})
+                tools_line = ", ".join(
+                    str((t.get("function") or {}).get("name") or "")
+                    for t in m["tool_calls"])
+                item = {"role": "assistant", "text": str(content or ""),
+                        "tools": tools_line}
+                ui_calls = []
+                for t in m["tool_calls"]:
+                    fn = t.get("function") or {}
+                    name = str(fn.get("name") or "")
+                    if name not in UI_TOOL_NAMES:
+                        continue
+                    try:
+                        args = json.loads(fn.get("arguments") or "{}")
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(args, dict):
+                        continue
+                    if name == "ask_user":
+                        qs, err = asking.normalize(args.get("questions"))
+                        if err:
+                            continue
+                        ui_calls.append({
+                            "id": t.get("id"), "name": name,
+                            "questions": qs,
+                            "note": str(args.get("note") or ""),
+                            "label": str(args.get("label") or ""),
+                        })
+                        continue
+                    if name == "plan":
+                        if str(args.get("action") or "") != "write":
+                            continue
+                        raw_steps = args.get("steps")
+                        if not isinstance(raw_steps, list):
+                            continue
+                        steps = []
+                        for i, s in enumerate(raw_steps[:20], start=1):
+                            if not isinstance(s, dict):
+                                continue
+                            title = str(s.get("title") or "").strip()
+                            if not title:
+                                continue
+                            steps.append({
+                                "n": i, "title": title[:200],
+                                "verify": str(s.get("verify") or "").strip()[:200],
+                            })
+                        if not steps:
+                            continue
+                        ui_calls.append({
+                            "id": t.get("id"), "name": "plan",
+                            "goal": str(args.get("goal") or "").strip()[:300],
+                            "steps": steps,
+                        })
+                        continue
+                    if name == "show_chart":
+                        spec, err = widgets.normalize_chart(args)
+                    elif name == "show_table":
+                        spec, err = widgets.normalize_table(args)
+                    else:
+                        spec, err = widgets.normalize_checklist(args)
+                    if err:
+                        continue
+                    ui_calls.append({"id": t.get("id"), "name": name,
+                                     "widget": spec})
+                if ui_calls:
+                    item["ui_calls"] = ui_calls
+                out.append(item)
             else:
                 item = {"role": role, "text": display_text(content)}
                 if role == "user" and workspace is not None:
@@ -4713,30 +5108,38 @@ class Bridge:
     # 确认握手:Agent 线程阻塞在此,前端点按钮后返回
     def confirm_tool(self, tool: Tool, args: dict, reason: str = "",
                      note: str = "", label: str = "",
-                     can_remember: bool = False) -> str:
+                     can_remember: bool = False,
+                     source_ui: SessionGuiUI | None = None) -> str:
         from minicode.explain import permission_why
         why = permission_why(tool.name, args, reason)
         risks = list(why.get("risks") or [])
+        source = source_ui or self.ui
         if note:
             risks.insert(0, note)      # 升级警示排在第一行,确认框里红字强调
         with self._confirm_lock:             # 一次只处理一个确认请求
             self._confirm_event.clear()
             self._confirm_choice = "no"
-            self.ui.push("confirm_request", tool=tool.name,
-                         can_remember=bool(can_remember),
-                         detail=self._permission_detail_text(tool, args),
-                         why=why.get("why", ""), digest=why.get("digest", ""),
-                         risks=risks, alert=bool(note),
-                         label=str(label or ""))
-            if not self._wait_event(self._confirm_event,
-                                    open_flag="_confirm_open"):
-                # 没人回答:按"拒绝"收口。这方向是安全的 —— 不执行任何东西,
-                # 也不会把"没点"说成"同意了"。
-                self.ui.push("info", text="这次没等到你的确认,已按**不执行**处理。")
-            return self._confirm_choice
+            self._confirm_owner = getattr(source, "session_key", "") or ""
+            try:
+                source.push("confirm_request", tool=tool.name,
+                            can_remember=bool(can_remember),
+                            detail=self._permission_detail_text(tool, args),
+                            why=why.get("why", ""), digest=why.get("digest", ""),
+                            risks=risks, alert=bool(note),
+                            label=str(label or ""))
+                if not self._wait_event(self._confirm_event,
+                                        open_flag="_confirm_open",
+                                        source_ui=source):
+                    # 没人回答:按"拒绝"收口。这方向是安全的 —— 不执行任何东西,
+                    # 也不会把"没点"说成"同意了"。
+                    source.push("info", text="这次没等到你的确认,已按**不执行**处理。")
+                return self._confirm_choice
+            finally:
+                self._confirm_owner = ""
 
     def _wait_event(self, event: threading.Event, slice_s: float = 1.0,
-                    open_flag: str = "") -> bool:
+                    open_flag: str = "",
+                    source_ui: SessionGuiUI | None = None) -> bool:
         """等一个"用户点了什么"的事件,每秒醒一次看还有没有人会来回答它。
 
         为什么不能 `event.wait()` 一把梭:确认框与提问卡都是**后台线程阻塞等前端**,
@@ -4752,9 +5155,13 @@ class Bridge:
         """
         if open_flag:
             setattr(self, open_flag, True)
+        # 停止标志在**会话自己的 UI** 上。以前这里读的是基础 UI,那个标志
+        # 永远为 False —— 停止键只能靠 abandon_pending 叫醒,读错了还会
+        # 让"按了停止但卡还挂着"多一条隐蔽路径。
+        stop_ui = source_ui or self.ui
         try:
             while not event.wait(slice_s):
-                if self._closing or self.ui.stop_requested:
+                if self._closing or getattr(stop_ui, "stop_requested", False):
                     return False
             return True
         finally:
@@ -4763,44 +5170,91 @@ class Bridge:
 
     # 提问握手(v0.9.96):Agent 线程阻塞在此,前端点完按钮后带答案返回
     def ask_user(self, questions: list[dict], note: str = "",
-                 label: str = "") -> dict:
+                 label: str = "",
+                 source_ui: SessionGuiUI | None = None) -> dict:
+        source = source_ui or self.ui
+        owner = getattr(source, "session_key", "") or ""
         with self._ask_lock:                # 一次只问一张卡(与确认框同一条规矩)
+            self._ask_seq += 1
+            ask_id = f"a{self._ask_seq}"
             self._ask_event.clear()
+            self._ask_id = ask_id
+            self._ask_owner = owner
+            self._ask_source_ui = source
             self._ask_answer = {"mode": asking.MODE_UNANSWERED,
                                 "reason": "没等到回答"}
             self._ask_questions = questions
-            self.ui.push("ask_request", questions=questions,
-                         note=str(note or ""), label=str(label or ""))
-            if not self._wait_event(self._ask_event,
-                                    open_flag="_ask_open"):
+            source.push("ask_request", ask_id=ask_id, questions=questions,
+                        note=str(note or ""), label=str(label or ""),
+                        session_title=self._session_title(owner))
+            if not self._wait_event(self._ask_event, open_flag="_ask_open",
+                                    source_ui=source):
                 reason = ("窗口正在关闭" if self._closing else "你按了停止")
-                self._push_ask_trace("没等到回答,这一题按未回答处理")
-                return {"mode": asking.MODE_UNANSWERED, "reason": reason}
-            return self._ask_answer
+                self._ask_answer = {"mode": asking.MODE_UNANSWERED,
+                                    "reason": reason}
+            got = dict(self._ask_answer or {})
+            # 留痕放在**唤醒之后**、且只在这一处:以前 answer/recommend 在
+            # ask_reply 里推、unanswered 在分支里推,停止键走 abandon_pending
+            # 那条路时两边都不推 —— 卡片永远停在"等你",而这一轮已经结束了。
+            self._push_ask_trace(self._ask_trace_text(got), source_ui=source,
+                                 ask_id=ask_id)
+            self._ask_id = ""
+            self._ask_owner = ""
+            self._ask_source_ui = None
+            self._ask_questions = []
+            return got
+
+    def _session_title(self, session_key: str) -> str:
+        """这条会话叫什么 —— 只给「另一条会话在等你」那张卡做上下文。"""
+        runner = self._runners.get(str(session_key or ""))
+        if runner is None:
+            return ""
+        for m in runner.session.messages:
+            if m.get("role") == "user":
+                text = " ".join(display_text(m.get("content")).split())
+                return text[:24] + ("…" if len(text) > 24 else "")
+        return ""
 
     # 计划核对单(v0.9.114):Agent 线程阻塞在此,前端点完按钮后带回裁决
-    def plan_review(self, plan: dict) -> dict:
+    def plan_review(self, plan: dict,
+                    source_ui: SessionGuiUI | None = None) -> dict:
         """弹一张**整单核对单**并等用户点:批准 / 改一条 / 重排。
 
         与 `ask_user` 各一条锁各一个事件(见 __init__ 那段注释):共用就会串答案。
         等不到回答(停止/关窗/界面死了)按 `unanswered` 收口 —— 由 planning 那一侧
         翻成"先讲给用户听,别直接开工",**绝不替他批准**。
         """
+        source = source_ui or self.ui
+        owner = getattr(source, "session_key", "") or ""
         data = plan if isinstance(plan, dict) else {}
         with self._plan_lock:
+            self._plan_seq += 1
+            plan_id = f"p{self._plan_seq}"
             self._plan_event.clear()
             self._plan_answer = {"mode": "unanswered", "reason": "没等到回答"}
-            self.ui.push("plan_review", goal=str(data.get("goal") or ""),
-                         steps=[{"n": s.get("n"), "title": str(s.get("title") or ""),
-                                 "verify": str(s.get("verify") or "")}
-                                for s in (data.get("steps") or []) if isinstance(s, dict)])
-            if not self._wait_event(self._plan_event, open_flag="_plan_open"):
+            self._plan_owner = owner
+            self._plan_source_ui = source
+            self._plan_id = plan_id
+            source.push("plan_review", ask_id=plan_id,
+                        goal=str(data.get("goal") or ""),
+                        steps=[{"n": s.get("n"), "title": str(s.get("title") or ""),
+                                "verify": str(s.get("verify") or "")}
+                               for s in (data.get("steps") or []) if isinstance(s, dict)],
+                        session_title=self._session_title(owner))
+            if not self._wait_event(self._plan_event, open_flag="_plan_open",
+                                    source_ui=source):
                 reason = ("窗口正在关闭" if self._closing else "你按了停止")
-                self._push_ask_trace("计划核对单没等到回答,按未确认处理")
-                return {"mode": "unanswered", "reason": reason}
+                self._plan_answer = {"mode": "unanswered", "reason": reason}
             got = dict(self._plan_answer or {})
-        self._push_ask_trace(self._plan_review_trace(got))
-        return got
+            # 与提问卡同一条口径:留痕只在唤醒之后推一次。停止/关窗也会走到
+            # 这里,界面的核对单才会收起来,而不是永远停在"等你批"。
+            self._push_ask_trace(self._plan_review_trace(got),
+                                 source_ui=source, kind="plan", ask_id=plan_id,
+                                 mode=str(got.get("mode") or ""))
+            self._plan_id = ""
+            self._plan_owner = ""
+            self._plan_source_ui = None
+            return got
 
     def _plan_review_trace(self, verdict: dict) -> str:
         """卡片关掉之后聊天区留下一行"你当时怎么点的"(与提问卡同一条规矩:
@@ -4824,6 +5278,9 @@ class Bridge:
             return {"ok": False, "msg": "回话格式不对,没记下来"}
         if not isinstance(data, dict):
             return {"ok": False, "msg": "回话格式不对,没记下来"}
+        ask_id = str(data.get("ask_id") or "")
+        if ask_id and (not self._plan_id or ask_id != self._plan_id):
+            return {"ok": False, "msg": "这张核对单已经过期了,以当前这张为准"}
         mode = str(data.get("mode") or "")
         if mode not in planning.REVIEW_MODES:
             return {"ok": False, "msg": f"未知的回答方式「{mode}」"}
@@ -4835,43 +5292,106 @@ class Bridge:
         self._plan_event.set()
         return {"ok": True}
 
-    def _push_ask_trace(self, text: str) -> None:
+    def _push_ask_trace(self, text: str, source_ui: SessionGuiUI | None = None,
+                        kind: str = "ask", ask_id: str = "",
+                        mode: str = "") -> None:
         """答完在聊天区留一行痕(v0.9.96 拍的 D2:卡片关掉不是消失)。
 
         这句话由**后端**组:前端自己拼一份同样的话,以后就是两处真相 ——
         而这两处都会显示给用户看,分家时没人看得出来。
+        `kind` 区分提问卡与计划核对单;`mode` 给流内卡收尾用(批准/改一条/重排/未答)。
         """
+        source = source_ui or self._ask_source_ui or self.ui
         try:
-            self.ui.push("ask_trace", text=str(text or ""))
+            source.push("ask_trace", text=str(text or ""),
+                        kind=str(kind or "ask"), ask_id=str(ask_id or ""),
+                        mode=str(mode or ""))
         except Exception:
             pass        # 留痕是展示层,绝不能把回答通道本身弄坏
 
     def ask_reply(self, payload) -> dict:
-        """前端「发送回复」/「按推荐继续」的落点。payload 是 JSON 字符串或对象。"""
+        """前端「发送回复」/「按推荐继续」/「先不做」的落点。
+
+        payload 是 JSON 字符串或对象。`ask_id` 用来拒绝过期卡片的迟到回答:
+        上一张卡点完之后又点了一次,不能拿它去释放下一张还在等的卡。
+        """
         try:
             data = json.loads(payload) if isinstance(payload, str) else (payload or {})
         except (ValueError, TypeError):
             return {"ok": False, "msg": "回答的格式不对,没记下来"}
         if not isinstance(data, dict):
             return {"ok": False, "msg": "回答的格式不对,没记下来"}
+        if not self._ask_id:
+            return {"ok": False, "msg": "此刻没有等你回答的问题"}
+        ask_id = str(data.get("ask_id") or "")
+        if ask_id and ask_id != self._ask_id:
+            return {"ok": False, "msg": "这张卡已经过期了,以当前这张为准"}
         mode = str(data.get("mode") or "")
-        if mode not in (asking.MODE_ANSWER, asking.MODE_RECOMMEND):
+        if mode == asking.MODE_SKIP:
+            # 「先不做」不是一种新答案:它必须落成"没答",模型才不会拿推荐
+            # 当用户点头。reason 会原样出现在留痕里。
+            self._ask_answer = {"mode": asking.MODE_UNANSWERED,
+                                "reason": "你点了「先不做」"}
+        elif mode == asking.MODE_RECOMMEND:
+            self._ask_answer = {"mode": mode}
+        elif mode == asking.MODE_ANSWER:
+            answers = data.get("answers")
+            if not isinstance(answers, list):
+                return {"ok": False, "msg": "answer 方式必须带 answers 数组"}
+            self._ask_answer = {"mode": mode, "answers": answers}
+        else:
             return {"ok": False, "msg": f"未知的回答方式「{mode}」"}
-        answers = data.get("answers")
-        if mode == asking.MODE_ANSWER and not isinstance(answers, list):
-            return {"ok": False, "msg": "answer 方式必须带 answers 数组"}
-        self._ask_answer = {"mode": mode, "answers": answers or []}
         self._ask_event.set()
-        # 卡片关掉之后聊天区要留下一行"你当时怎么答的"(D2 拍板:可回看)。
-        # 这句话由后端组,前端只负责摆 —— 两处各拼一份就是两份真相,而两份都摆在用户眼前。
-        self._push_ask_trace(self._ask_trace_text(mode, answers or []))
         return {"ok": True}
 
-    def _ask_trace_text(self, mode: str, answers: list) -> str:
+    def widget_action(self, widget_id: str, action: str, payload="{}") -> dict:
+        """组件卡片上的动作:清单勾选后发回来。
+
+        这里只把用户的**选择**转成一句自然语言,走 `send_task` 那条现成的路
+        (busy 时自然变成插话)。不执行前端传来的任何命令:payload 只认
+        `title` + `selected`,每项按文本截断。图表/表格的排序、搜索、图例
+        切换都是纯本地交互,不经过这里。
+        """
+        try:
+            data = json.loads(payload) if isinstance(payload, str) else (payload or {})
+        except (ValueError, TypeError):
+            return {"ok": False, "msg": "动作格式不对"}
+        if not isinstance(data, dict):
+            return {"ok": False, "msg": "动作格式不对"}
+        if str(action or "") != "submit_checklist":
+            return {"ok": False, "msg": f"不认识的动作「{action}」"}
+        title = " ".join(str(data.get("title") or "").split())[:80]
+        raw = data.get("selected")
+        if not isinstance(raw, list):
+            return {"ok": False, "msg": "没有带选择"}
+        selected = []
+        for item in raw[:30]:
+            text = " ".join(str(item or "").split())[:80]
+            if text:
+                selected.append(text)
+        if not selected:
+            return {"ok": False, "msg": "一项都没选"}
+        label = f"「{title}」" if title else "你刚展示的清单"
+        body = "我在" + label + "里勾选了：" + "、".join(selected) + "。请按这个继续。"
+        result = self.send_task(body)
+        if result.get("ok"):
+            result["text"] = body
+        return result
+
+    def _ask_trace_text(self, answer: dict) -> str:
+        mode = str((answer or {}).get("mode") or "")
+        answers = (answer or {}).get("answers") or []
         qs = self._ask_questions or []
         if mode == asking.MODE_RECOMMEND:
             return ("学长问的 " + str(len(qs)) + " 题:你点了「按推荐继续」"
                     "→ 逐题按他列在第一项的推荐做(没逐题确认)。")
+        if mode == asking.MODE_UNANSWERED:
+            reason = str((answer or {}).get("reason") or "").strip()
+            return ("学长问的 " + str(len(qs)) + " 题:没答"
+                    + (f"({reason})" if reason else "")
+                    + "。这一轮没有按推荐开工。")
+        if not isinstance(answers, list):
+            answers = []
         by_id: dict[int, dict] = {}
         for a in answers:
             if isinstance(a, dict):
@@ -4891,21 +5411,28 @@ class Bridge:
         return ("学长问的 " + str(len(qs)) + " 题,你答了:" + ";".join(parts)
                 if parts else "学长的提问已回答。")
 
-    def abandon_pending(self, reason: str = "") -> None:
+    def abandon_pending(self, reason: str = "",
+                        session_key: str | None = None) -> None:
         """停止键 / 关窗时叫醒正在等待的线程(确认框、提问卡、计划核对单各一次)。
 
         由 `GuiUI.request_stop` 与 `Bridge.close` 调:那两处是"用户已经不打算再答了"
         的确凿时刻。不叫醒的话挂住的不是这一次,而是**下一切** —— 锁在后面那条
         线程手里,后来的确认框根本弹不出来。
+
+        `session_key` 给了就只作废**那条会话**在等的卡:A 会话按停止不能把
+        B 会话的等待也一起判成"没答"。
         """
-        self._confirm_choice = "no"
-        self._confirm_event.set()
-        self._ask_answer = {"mode": asking.MODE_UNANSWERED,
-                            "reason": str(reason or "没等到回答")}
-        self._ask_event.set()
-        self._plan_answer = {"mode": "unanswered",
-                             "reason": str(reason or "没等到回答")}
-        self._plan_event.set()
+        if session_key is None or session_key == self._confirm_owner:
+            self._confirm_choice = "no"
+            self._confirm_event.set()
+        if session_key is None or session_key == self._ask_owner:
+            self._ask_answer = {"mode": asking.MODE_UNANSWERED,
+                                "reason": str(reason or "没等到回答")}
+            self._ask_event.set()
+        if session_key is None or session_key == self._plan_owner:
+            self._plan_answer = {"mode": "unanswered",
+                                 "reason": str(reason or "没等到回答")}
+            self._plan_event.set()
 
     def _permission_detail_text(self, tool: Tool, args: dict) -> str:
         if tool.name == "bash":

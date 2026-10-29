@@ -5,11 +5,15 @@
 `scripts/e2e_ui_panel.py` 在真浏览器里验(这一格的价值全在"执行不了",而 `capsys`
 一类的进程内捕获看不见执行与否)。
 """
+import json
+
 import pytest
 
 from minicode import panel
 from minicode.config import Config, Provider
 from minicode.gui_bridge import create_app
+from minicode.llm import AssistantTurn
+from test_gui_bridge import FakeLLM, make, wait_until
 
 
 # ---------------------------------------------------------------- 删可执行结构
@@ -119,6 +123,32 @@ def test_the_csp_we_inject_is_the_first_thing_in_the_document(kind):
     assert "img-src data: blob:" in doc
 
 
+def test_annotatable_wrap_allows_only_our_script_and_keeps_csp_first():
+    """批注档是新开的信任层:模型脚本先被删,只有带 nonce 的注入脚本能跑。"""
+    body, _counts, _why = panel.read_and_sanitize(
+        "<p>正文</p><script>evil()</script>".encode("utf-8"))
+    doc = panel.wrap_annotatable(body, "html")
+    assert "evil" not in doc
+    assert doc.count("<script") == 1          # 只有我们注入的那一条
+    assert "ann-select" in doc and "ann-hint" in doc
+    assert "script-src 'nonce-" in doc and "default-src 'none'" in doc
+    assert doc.index("Content-Security-Policy") < doc.index("正文")
+
+
+def test_interactive_wrap_keeps_the_model_script_and_csp_first():
+    """交互版不删脚本 —— 它的价值就是执行;CSP 仍是第一件东西,断网。"""
+    raw = ('<p>模拟器</p><input id="r" type="range">'
+           '<script>document.getElementById("r").oninput = function(){};</script>'
+           '<meta http-equiv="refresh" content="0;url=http://x">')
+    doc = panel.wrap_interactive(raw)
+    assert "<script>" in doc and "oninput" in doc
+    assert "refresh" not in doc.lower()          # 防止被 meta refresh 自己跳走
+    assert doc.index("Content-Security-Policy") < doc.index("模拟器")
+    assert "default-src 'none'" in doc
+    assert "script-src 'unsafe-inline'" in doc
+    assert "connect-src 'none'" in doc
+
+
 # ---------------------------------------------------------------- 桥那一层:真文件
 
 def _bridge(tmp_path):
@@ -140,6 +170,111 @@ def test_panel_preview_renders_a_real_file_from_the_workspace(tmp_path):
     assert "高数" in r["html"] and "default-src 'none'" in r["html"]
     assert r["stripped"]["script"] == 1 and "脚本 1 处" in r["note"]
     assert r["kind"] == "html"
+
+
+def test_panel_preview_annotate_mode_has_only_the_trusted_script(tmp_path):
+    b = _bridge(tmp_path)
+    (tmp_path / "复盘.html").write_text(
+        "<p>正文</p><script>evil()</script>", encoding="utf-8")
+    r = b.panel_preview("复盘.html", "annotate")
+    assert r["ok"] and r["mode"] == "annotate", r
+    assert "evil" not in r["html"]
+    assert "ann-select" in r["html"] and "ann-hint" in r["html"]
+    assert "script-src 'nonce-" in r["html"]
+    assert r["html"].count("<script") == 1
+
+
+def test_panel_preview_interactive_keeps_scripts_and_rejects_svg_or_oversize(tmp_path):
+    b = _bridge(tmp_path)
+    (tmp_path / "模拟器.html").write_text(
+        '<input id="r" type="range"><script>document.title="run";</script>',
+        encoding="utf-8")
+    r = b.panel_preview("模拟器.html", "interactive")
+    assert r["ok"] and r["mode"] == "interactive", r
+    assert "<script>" in r["html"] and "document.title" in r["html"]
+    assert "script-src 'unsafe-inline'" in r["html"]
+    assert r["stripped"] == {}
+    (tmp_path / "x.svg").write_text("<svg></svg>", encoding="utf-8")
+    r = b.panel_preview("x.svg", "interactive")
+    assert r["ok"] is False and "只支持" in r["why"]
+    (tmp_path / "big.html").write_text("x" * (panel.PANEL_MAX_BYTES + 1),
+                                      encoding="utf-8")
+    r = b.panel_preview("big.html", "interactive")
+    assert r["ok"] is False and "上限" in r["why"]
+
+
+def test_panel_annotate_makes_a_working_copy_and_leaves_the_source_alone(
+        config, tmp_path):
+    """已交付那份不动、改在工作副本;第二次批注复用同一份工作副本。"""
+    llm = FakeLLM([AssistantTurn(text="改好了"), AssistantTurn(text="又改好了")])
+    bridge, _window, _ = make(config, tmp_path, llm)
+    src = tmp_path / "复盘.html"
+    src.write_text("<h1>原版</h1><p>高数 92</p>", encoding="utf-8")
+    r = bridge.panel_annotate("复盘.html", json.dumps({
+        "mode": "text", "text": "高数 92", "selector": "p:nth-child(2)",
+        "tag": "p", "instruction": "改成 95，并注明补考"}))
+    assert r["ok"], r
+    assert r["working"] == "annotations/复盘.working.html"
+    working = tmp_path / "annotations" / "复盘.working.html"
+    assert working.read_text(encoding="utf-8") == src.read_text(encoding="utf-8")
+    assert src.read_text(encoding="utf-8") == "<h1>原版</h1><p>高数 92</p>"
+    assert "只改这一处" in r["text"] and "不要动" in r["text"]
+    assert wait_until(lambda: not bridge._busy)
+    user = [m for m in bridge.session.messages if m.get("role") == "user"]
+    assert "高数 92" in user[-1]["content"]
+    assert "annotations/复盘.working.html" in user[-1]["content"]
+
+    working.write_text("<h1>原版</h1><p>高数 95（补考）</p>", encoding="utf-8")
+    r2 = bridge.panel_annotate("复盘.html", json.dumps({
+        "mode": "element", "tag": "p", "selector": "p:nth-child(2)",
+        "text": "高数 95", "instruction": "再加一句说明"}))
+    assert r2["ok"] and r2["working"] == "annotations/复盘.working.html"
+    assert "补考" in working.read_text(encoding="utf-8"), "第二次批注把上一版冲掉了"
+    assert wait_until(lambda: not bridge._busy)
+
+
+def test_panel_adopt_backs_up_then_replaces_the_source(tmp_path):
+    b = _bridge(tmp_path)
+    src = tmp_path / "复盘.html"
+    src.write_text("<p>原版</p>", encoding="utf-8")
+    ann = tmp_path / "annotations"
+    ann.mkdir()
+    working = ann / "复盘.working.html"
+    working.write_text("<p>新版</p>", encoding="utf-8")
+    r = b.panel_adopt("复盘.html", "annotations/复盘.working.html")
+    assert r["ok"], r
+    assert src.read_text(encoding="utf-8") == "<p>新版</p>"
+    assert working.read_text(encoding="utf-8") == "<p>新版</p>", "工作副本要留着"
+    backup = tmp_path / r["backup"]
+    assert backup.read_text(encoding="utf-8") == "<p>原版</p>"
+    assert str(tmp_path) not in repr(r), "回给界面的那份不许带绝对路径"
+
+
+def test_panel_adopt_refuses_identical_outside_or_missing(tmp_path):
+    b = _bridge(tmp_path)
+    src = tmp_path / "复盘.html"
+    src.write_text("<p>同一版</p>", encoding="utf-8")
+    ann = tmp_path / "annotations"
+    ann.mkdir()
+    (ann / "复盘.working.html").write_text("<p>同一版</p>", encoding="utf-8")
+    r = b.panel_adopt("复盘.html", "annotations/复盘.working.html")
+    assert r["ok"] is False and "还没有改动" in r["msg"]
+    (tmp_path / "x.html").write_text("<p>x</p>", encoding="utf-8")
+    r = b.panel_adopt("复盘.html", "x.html")
+    assert r["ok"] is False and "annotations/" in r["msg"]
+    r = b.panel_adopt("复盘.html", "annotations/nope.html")
+    assert r["ok"] is False and "不在工作区" in r["msg"]
+
+
+def test_panel_annotate_refuses_empty_or_outside(tmp_path):
+    b = _bridge(tmp_path)
+    (tmp_path / "x.html").write_text("<p>x</p>", encoding="utf-8")
+    r = b.panel_annotate("x.html", json.dumps({
+        "mode": "text", "text": "x", "instruction": "   "}))
+    assert r["ok"] is False and "写一句" in r["msg"]
+    r = b.panel_annotate("../outside.html", json.dumps({
+        "mode": "text", "text": "x", "instruction": "改"}))
+    assert r["ok"] is False and "不能开" in r["msg"]
 
 
 def test_panel_preview_never_leaks_an_absolute_path(tmp_path):
@@ -198,15 +333,20 @@ def test_panel_preview_refuses_a_symlink_pointing_out_of_the_workspace(tmp_path)
 
 # ---------------------------------------------------------------- gui_ui 那只闸
 
-def test_panel_arg_only_takes_workspace_relative_html_and_svg():
+def test_panel_arg_only_takes_workspace_relative_artifacts():
     from minicode.gui_ui import _panel_arg
     assert _panel_arg({"path": "charts/期中.svg"}) == "charts/期中.svg"
     assert _panel_arg({"file_path": "report.html"}) == "report.html"
+    # v0.9.185:Office 也是产物,走文字预览而不是 HTML 净化
+    assert _panel_arg({"path": "复盘.docx"}) == "复盘.docx"
+    assert _panel_arg({"path": "汇报.pptx"}) == "汇报.pptx"
+    assert _panel_arg({"path": "名单.xlsx"}) == "名单.xlsx"
     # 绝对路径不进事件(它与 `_upd_public`、`undo_records` 是同一条口径)
     assert _panel_arg({"path": r"C:\Users\me\report.html"}) == ""
     assert _panel_arg({"path": "/var/www/x.html"}) == ""
     # 不是这几类扩展名就不挂卡
     assert _panel_arg({"path": "notes.md"}) == ""
+    assert _panel_arg({"path": "截图.png"}) == ""
     assert _panel_arg({}) == ""
     assert _panel_arg(None) == ""
 
@@ -222,3 +362,5 @@ def test_the_frontend_layer_can_reach_the_backend_method():
     """桥上有 `panel_preview` 而 `PublicApi` 没转发 = 界面点了没反应(上一轮刚踩过)。"""
     from minicode.gui_bridge import PublicApi
     assert callable(getattr(PublicApi, "panel_preview", None))
+    assert callable(getattr(PublicApi, "panel_annotate", None))
+    assert callable(getattr(PublicApi, "panel_adopt", None))

@@ -32,7 +32,9 @@ FREE_TEXT_LIMIT = 500
 
 # 用户没点选项、改走输入框自由补充时,界面回传里带这个键;
 # 三种出口的名字也是口径的一部分:前端按钮、桥、工具结果三处都按它判。
-MODE_ANSWER, MODE_RECOMMEND, MODE_UNANSWERED = "answer", "recommend", "unanswered"
+# skip 是界面的「先不做」:桥把它翻成 unanswered,模型看到的是"没答",不是"同意"。
+MODE_ANSWER, MODE_RECOMMEND, MODE_SKIP, MODE_UNANSWERED = (
+    "answer", "recommend", "skip", "unanswered")
 RECOMMEND_MARK = "(推荐)"
 
 
@@ -73,6 +75,10 @@ def _one_question(raw, idx: int) -> tuple[dict | None, str]:
             "q": q,
             "why": _clip(raw.get("why"), WHY_LIMIT),
             "multi": bool(raw.get("multi")),
+            # 推荐不是结构化入参:它"排在第一项 + label 里写着(推荐)"。
+            # 这里把它翻成一个布尔值,界面据此决定要不要给「按推荐继续」——
+            # 前端不再自己猜那个中文标记(那是第二份真相)。
+            "recommend": RECOMMEND_MARK in opts[0]["label"],
             "options": opts}, ""
 
 
@@ -119,9 +125,10 @@ def format_answers(questions: list[dict], reply: dict | None) -> str:
     if mode == MODE_UNANSWERED:
         why = _clip((reply or {}).get("reason"), 80)
         return ("没等到你的回答" + (f"({why})" if why else "") + "。"
-                "**这不算同意**:要么按你自己推荐的先做、并在回复里写清"
-                "「没等到确认,先按 X 做了」,要么换个时间再问一次;"
-                "不许把这一题当成用户选过了往下编。")
+                "**这不算同意,也不许替用户做决定**:这一轮停在这里,"
+                "不要用推荐项开工、不要写文件、不要调用会改变状态的工具。"
+                "把问题留在那里,等用户回答,或明确点那颗「推荐」按钮;"
+                "如果用户已经停止/关窗,就用一句话说明「这一轮没做,等你选」。")
     picks = (reply or {}).get("answers")
     if mode == MODE_RECOMMEND:
         lines = []

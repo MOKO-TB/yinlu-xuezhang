@@ -28,11 +28,17 @@ WebView2 的某些档位上不完全一致,②"没有回写通道"这件事不�
 """
 from __future__ import annotations
 
+import difflib
 import html as _html
 import re
+import secrets
 
 PANEL_MAX_BYTES = 512 * 1024      # 超过就不渲染:一张 1 MB 的表在聊天里没人看得完
 PANEL_EXTS = (".html", ".htm", ".svg")
+# Office 产物走**文字预览**(不是版式):docx 段落/表格、pptx 幻灯片/形状、
+# xlsx 工作表/行。源文件可以比 HTML 大,但预览块有上限(见 office_preview.py)。
+OFFICE_EXTS = (".docx", ".pptx", ".xlsx")
+OFFICE_MAX_BYTES = 20 * 1024 * 1024
 
 # 会被整段拆掉开标签的元素:危害来自元素本身(能引外部脚本、能发请求、能改基址)
 _RISKY_TAGS = ("iframe", "frame", "object", "embed", "link", "base", "form")
@@ -62,9 +68,15 @@ _BAD_SCHEME = re.compile(
 
 
 def looks_like_panel(path: str) -> bool:
-    """这个路径值不值得走这一格(只看扩展名,判定留给 `read_and_sanitize`)。"""
+    """这个路径值不值得走 HTML/SVG 那一格(只看扩展名,判定留给 read_and_sanitize)。"""
     low = str(path or "").strip().lower()
     return low.endswith(PANEL_EXTS)
+
+
+def looks_like_artifact(path: str) -> bool:
+    """产物卡认哪些文件:HTML/SVG 走净化预览,Office 走文字预览。"""
+    low = str(path or "").strip().lower()
+    return low.endswith(PANEL_EXTS) or low.endswith(OFFICE_EXTS)
 
 
 def sanitize(text: str) -> "tuple[str, dict]":
@@ -117,6 +129,55 @@ def stripped_note(counts: dict) -> str:
         f"{label[k]} {counts[k]} 处" for k in hit) + "(这份是工具写下的文本,不当代码执行)"
 
 
+def text_content(body: str) -> str:
+    """把净化后的 HTML/SVG 正文压成可比较的纯文本行(跳过脚本/样式)。"""
+    src = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", "", body or "",
+                 flags=re.IGNORECASE | re.DOTALL)
+    src = re.sub(r"<[^>]+>", "\n", src)
+    src = _html.unescape(src)
+    return "\n".join(line.strip() for line in src.splitlines() if line.strip())
+
+
+def text_diff(old: str, new: str, limit: int = 40) -> dict:
+    """HTML/SVG 的逐行差异。只做展示,不改正文、不执行任何东西。"""
+    old_lines = str(old or "").splitlines()
+    new_lines = str(new or "").splitlines()
+    sm = difflib.SequenceMatcher(None, old_lines, new_lines)
+    changes: list[dict] = []
+    counts = {"changed": 0, "added": 0, "removed": 0}
+
+    def add(kind: str, old_text: str = "", new_text: str = "") -> None:
+        counts[kind] += 1
+        if len(changes) < limit:
+            changes.append({"type": kind, "id": "",
+                            "old": str(old_text)[:300],
+                            "new": str(new_text)[:300]})
+
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            continue
+        if tag == "replace":
+            pairs = min(i2 - i1, j2 - j1)
+            for k in range(pairs):
+                add("changed", old_lines[i1 + k], new_lines[j1 + k])
+            for k in range(i1 + pairs, i2):
+                add("removed", old_lines[k], "")
+            for k in range(j1 + pairs, j2):
+                add("added", "", new_lines[k])
+        elif tag == "delete":
+            for k in range(i1, i2):
+                add("removed", old_lines[k], "")
+        elif tag == "insert":
+            for k in range(j1, j2):
+                add("added", "", new_lines[k])
+    total = sum(counts.values())
+    summary = ("两版文字一样" if total == 0 else
+               f"共 {total} 处文字变化（改 {counts['changed']} / "
+               f"增 {counts['added']} / 删 {counts['removed']}）")
+    return {"kind": "text", "summary": summary, "changes": changes,
+            "counts": counts, "truncated": max(0, total - limit)}
+
+
 def read_and_sanitize(raw: bytes) -> "tuple[str, dict, str]":
     """字节 → (干净正文, 删了什么, 实话)。超限 / 解不开一律拒,不截断了装像完整。"""
     if len(raw) > PANEL_MAX_BYTES:
@@ -161,3 +222,172 @@ def wrap_document(body: str, kind: str) -> str:
     # 正文自己已经带了 <!doctype>/<head> 也不再拆它:CSP 排在**最前面**,
     # 浏览器只认第一份 doctype,后面那份会被忽略而不会顶掉我们这条。
     return head + body
+
+
+# ---------------------------------------------------------------- 批注模式
+# 预览那份是"不执行任何东西";批注这份要**执行一段我们自己的脚本**,所以另开一条:
+# 模型写的脚本仍然先被 `sanitize` 删掉,只放行带 nonce 的注入脚本。沙箱侧只给
+# `allow-scripts`、不给 `allow-same-origin` —— 它拿不到宿主 DOM/Cookie,也读不到
+# 自己的源;唯一出口是 `parent.postMessage`。CSP 也只放行这个 nonce + 内联样式,
+# 出网仍然全拒。
+ANNOTATION_CSS = (
+    "#ann-hint{position:fixed;left:12px;bottom:12px;z-index:2147483647;"
+    "font:12px/1.5 'Microsoft YaHei',system-ui,sans-serif;color:#0b1720;"
+    "background:rgba(255,255,255,.94);border:1px solid #3FBDAE;"
+    "border-radius:999px;padding:5px 11px;box-shadow:0 4px 14px rgba(0,0,0,.12);"
+    "pointer-events:none;}"
+    "::selection{background:rgba(63,189,174,.35);}"
+)
+
+ANNOTATION_SCRIPT = r"""
+(function () {
+  "use strict";
+  var picked = null;
+  var suppressClick = 0;
+  function pathOf(el) {
+    var parts = [];
+    while (el && el.nodeType === 1 && parts.length < 6) {
+      var part = el.tagName.toLowerCase();
+      if (el.id) { part += "#" + el.id; parts.unshift(part); break; }
+      var cls = (el.getAttribute("class") || "").split(/\s+/).filter(Boolean).slice(0, 2);
+      if (cls.length) part += "." + cls.join(".");
+      var p = el.parentElement;
+      if (p) {
+        var i = Array.prototype.indexOf.call(p.children, el) + 1;
+        part += ":nth-child(" + i + ")";
+      }
+      parts.unshift(part);
+      el = p;
+    }
+    return parts.join(" > ");
+  }
+  function post(type, payload) {
+    try {
+      parent.postMessage(Object.assign({ type: type }, payload || {}), "*");
+    } catch (e) { /* 宿主没接也不该把页面弄坏 */ }
+  }
+  function snippet(el) {
+    var t = el ? (el.innerText || el.textContent || "") : "";
+    return t.replace(/\s+/g, " ").trim().slice(0, 500);
+  }
+  // Office 文字预览给每个段落/单元格/页/行挂了 data-block;取最近的那个祖先。
+  function blockOf(el) {
+    while (el && el !== document.body) {
+      if (el.getAttribute) {
+        var b = el.getAttribute("data-block");
+        if (b) return b;
+      }
+      el = el.parentElement;
+    }
+    return "";
+  }
+  function pick(el) {
+    if (picked && picked !== el) {
+      picked.style.outline = picked.getAttribute("data-ann-outline") || "";
+      picked.style.outlineOffset = "";
+    }
+    picked = el;
+    if (!el) return;
+    if (!el.hasAttribute("data-ann-outline")) {
+      el.setAttribute("data-ann-outline", el.style.outline || "");
+    }
+    el.style.outline = "2px solid #3FBDAE";
+    el.style.outlineOffset = "2px";
+  }
+  function ready() {
+    if (document.getElementById("ann-hint")) return;
+    var hint = document.createElement("div");
+    hint.id = "ann-hint";
+    hint.textContent = "批注模式：选中文字，或点一个元素";
+    if (document.body) document.body.appendChild(hint);
+    post("ann-ready", {});
+  }
+  document.addEventListener("mouseup", function () {
+    var sel = window.getSelection ? window.getSelection() : null;
+    var text = sel ? String(sel.toString() || "").replace(/\s+/g, " ").trim() : "";
+    if (!text) return;
+    var node = sel.anchorNode;
+    var el = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
+    pick(el);
+    suppressClick = Date.now() + 350;
+    post("ann-select", {
+      mode: "text", text: text.slice(0, 500),
+      selector: pathOf(el), tag: el ? el.tagName.toLowerCase() : "",
+      block: blockOf(el)
+    });
+  }, true);
+  document.addEventListener("click", function (ev) {
+    var t = ev.target;
+    if (!t || t.nodeType !== 1) return;
+    if (t.closest && t.closest("#ann-hint")) return;
+    if (Date.now() < suppressClick) { ev.preventDefault(); return; }
+    ev.preventDefault();
+    pick(t);
+    post("ann-select", {
+      mode: "element", text: snippet(t),
+      selector: pathOf(t), tag: t.tagName.toLowerCase(),
+      block: blockOf(t)
+    });
+  }, true);
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") post("ann-cancel", {});
+  }, true);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ready);
+  } else {
+    ready();
+  }
+})();
+"""
+
+
+INTERACTIVE_CSP = (
+    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+    "img-src data: blob:; font-src data:; media-src data: blob:; "
+    "connect-src 'none'; worker-src 'none'; form-action 'none'; "
+    "frame-src 'none'; object-src 'none'; base-uri 'none'; navigate-to 'none'"
+)
+
+
+def wrap_interactive(raw: str) -> str:
+    """交互版:模型写的 HTML/JS **原样保留**,只加 CSP 与 charset。
+
+    与预览/批注不同,这里不能再删脚本 —— 删了就没有"拖动会变"这回事。
+    这是一格**用户显式点「运行」才进入**的信任层,边界由三样东西共同守:
+    - 界面沙箱 `allow-scripts`:不给同源、弹窗、表单、下载、顶层跳转;
+    - 这条 CSP:只允许 inline 脚本/样式;外链脚本、fetch/XHR、worker、外图全拒;
+    - 前端**不接**它的 postMessage(父页只认批注 iframe 那条)。
+
+    已知不挡的:iframe 自己导航到某个 URL(Chromium 不支持 navigate-to 的强制);
+    同步死循环会占 CPU。这两条在 SECURITY.md 里写明,系统提示词也要求模型别写死循环。
+    """
+    raw = _META_REFRESH.sub("", str(raw or ""))   # 防止被 meta refresh 自己跳走
+    head = ('<meta http-equiv="Content-Security-Policy" content="'
+            + INTERACTIVE_CSP + '"><meta charset="utf-8">')
+    return head + raw
+
+
+def wrap_annotatable(body: str, kind: str) -> str:
+    """把**已净化**的正文装进可批注文档。
+
+    `body` 必须已经过 `sanitize`/`read_and_sanitize`;这个函数只负责加 CSP、
+    套壳、注入受信脚本。CSP 用 nonce 只放行**这一条**脚本:模型即使留下了
+    一段 `<script>`,它没有 nonce 也跑不起来(净化那一层本来也会删掉它)。
+    """
+    nonce = secrets.token_hex(12)
+    csp = ("default-src 'none'; style-src 'unsafe-inline'; "
+           f"script-src 'nonce-{nonce}'; img-src data: blob:; font-src data:; "
+           "media-src 'none'; form-action 'none'; frame-src 'none'; "
+           "object-src 'none'; base-uri 'none'")
+    head = (f'<meta http-equiv="Content-Security-Policy" content="{csp}">'
+            '<meta charset="utf-8"><style>' + ANNOTATION_CSS + '</style>')
+    script = f'<script nonce="{nonce}">{ANNOTATION_SCRIPT}</script>'
+    if kind == "svg":
+        return ("<!doctype html><html><head>" + head + "</head><body>"
+                + body + script + "</body></html>")
+    low = body.lower()
+    if "</body>" in low:
+        # 插在最后一个 </body> 之前:脚本在解析时就在,不等 DOMContentLoaded 也行。
+        i = low.rfind("</body>")
+        return head + body[:i] + script + body[i:]
+    return head + body + script

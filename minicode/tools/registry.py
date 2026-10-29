@@ -10,13 +10,11 @@ v0.9.39 #84 之前这里是 987 行、40 个 `Tool(...)` 挤在一个函数里 �
 一轮、说清为什么,并同步改那条测试。
 """
 from __future__ import annotations
-
 from minicode.tools import (catalog_files, catalog_bg, catalog_diag, catalog_web,
                             catalog_knowledge, catalog_media, catalog_campus,
-                            catalog_remind, catalog_places, catalog_sub)
+                            catalog_remind, catalog_places, catalog_sub, catalog_viz)
 from minicode.tools import concurrency
 from minicode.tools.base import Tool
-
 
 def build_default_registry() -> list[Tool]:
     """内置工具清单(子代理的 `task` 由 `app_setup` 装配时再接一个)。
@@ -55,6 +53,7 @@ def build_default_registry() -> list[Tool]:
         *catalog_places.map_tools(),
         # v0.9.154 I:子代理 → 主会话留话(只读;只有子代理那边有对象可转达)
         *catalog_sub.tools(),
+        *catalog_viz.tools(),   # v0.9.185:交互式可视化,展示层,接在最后
     ]
     concurrency.mark_concurrent(tools)   # 资格表在 tools/concurrency.py
     return tools

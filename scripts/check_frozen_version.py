@@ -124,6 +124,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
                             # (漏收 = 前端点了没处回,或停止键叫不醒正在等的那条线程)
                             "ask_user", "ask_reply", "_ask_trace_text",
                             "abandon_pending", "_wait_event",
+                            # v0.9.185:产物批注三条门面(漏 panel_annotate =
+                            # 界面点了「发给学长」没处落;漏 panel_adopt = 采用工作版
+                            # 那颗按钮点了没反应,原版永远不更新;漏 panel_compare =
+                            # 「对比工作版」点了静默,改了哪儿仍然只能靠肉眼逐行找)
+                            "panel_preview", "panel_annotate", "panel_adopt",
+                            "panel_compare",
                             # v0.9.97:界面上记一条长期记忆(漏收 = 按钮点了没方法)
                             "remember",
                             # v0.9.23:教务课表导入 + 首次运行向导
@@ -291,8 +297,15 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # = 外联没人管(实测过:沙箱拦得住脚本与攀宿主,**拦不住一张普通 <img> 出网**,
     # 那一格靠的是这条 CSP);漏 `_panel_arg` = 卡永远不出现,而什么都不报错。
     "minicode.panel": ("sanitize", "read_and_sanitize", "wrap_document",
-                       "CSP_META", "looks_like_panel", "PANEL_MAX_BYTES",
-                       "stripped_note"),
+                       "CSP_META", "looks_like_panel", "looks_like_artifact",
+                       "PANEL_MAX_BYTES", "OFFICE_EXTS", "stripped_note",
+                       # v0.9.185 批注档:模型脚本仍然先删,只注入带 nonce 的受信脚本。
+                       "wrap_annotatable", "ANNOTATION_SCRIPT", "ANNOTATION_CSS",
+                       # v0.9.185 运行档:模型脚本原样保留,靠沙箱 + 断网 CSP 守。
+                       "wrap_interactive", "INTERACTIVE_CSP"),
+    # v0.9.185 Office 文字预览:docx/pptx/xlsx 按块定位,不执行宏/脚本。
+    "minicode.office_preview": ("render_office", "_render_docx",
+                                "_render_pptx", "_render_xlsx"),
     "minicode.monitor": ("read_pref", "write_pref", "pref_path", "SECTIONS",
                          "DEFAULTS", "PREF_FILE", "_clean_folded"),
     # v0.9.37:实时耗时表(漏 live_rows = 时间线一行时刻都没有;漏 live_abandon =
@@ -1528,8 +1541,11 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # v0.9.114 p5/p6:自动化「新建」那张表单
     "jbForm", "jbSave", "jbSetCadence", "jbRenderDays", "add_automation",
     "autoNew", "remove_automation", "jb-tag",
-    # v0.9.114 新功能①:计划核对单
-    "planReviewOverlay", "renderPlanReview", "prReply", "plan_review_reply",
+    # v0.9.185:计划核对单改为流内卡(旧浮层针 planReviewOverlay/renderPlanReview/
+    # prReply 随浮层删除;新针钉住核对卡、四种出口与收尾)
+    "showPlanReview", "buildPlanReview", "renderPlanReviewCard",
+    "planReviewReply", "finishPlanReview", 'case "plan_review"',
+    "plan_review_reply",
     # v0.9.114 新功能③:技能分享包两颗
     "btnSkillPack", "btnSkillPackImport", "skPackExport", "skPackImport",
     "export_skill_pack", "apply_skill_pack",
@@ -1544,9 +1560,11 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     "imgLightbox", "openLightbox",
     # v0.9.94 p1/p2:主题切换时让系统标题栏跟着换色(后端那半另有针)
     "set_chrome",
-    # v0.9.96:提问卡(漏收 = 后端推 ask_request 而界面没人接,用户看到的是
-    # "学长卡住了" —— 这一层在包里,前端是整份文件拷进去的,漏的是改旧版没覆盖)
-    "askOverlay", "renderAsk", "ask_reply", "ask-trace",
+    # v0.9.185:提问卡从浮层改为流内卡片(OpenSquilla 形态);旧针 askOverlay/
+    # renderAsk 随浮层删除。新针钉住"卡在流里、答完留痕、三类可视化卡"。
+    "showAskCard", "finishAskCard", "renderAskCard", "askBar", "askc-done",
+    "ask_reply", "ask-trace",
+    "addWidgetCard", "wc-svg", "show_chart", "show_table", "show_checklist",
     # v0.9.97:长期记忆面板(界面上从此能记一条,不只 CLI 的 /remember)
     "memoryOverlay", "rememberIt", "memCountLine",
     # v0.9.101 ①R1:改动审查那一段(漏 buildChanges = 监控栏里没有「本轮改动」;
@@ -1676,6 +1694,26 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # —— 这一根钉的不是形状,是这一格**唯一的红线**。
     "function addPanelCard", "e.artifact", "setAttribute(\"sandbox\", \"\")",
     "f.srcdoc", "gen-frame",
+    # v0.9.185 产物批注:预览仍空沙箱,批注档才 allow-scripts(不给同源)。
+    # 少 gen-annot = 入口没了;少 ann-frame/ann-input = 选了没处写、写了没处发。
+    "gen-annot", "openAnnotate", "allow-scripts", "ann-frame", "ann-input",
+    "panel_annotate", "工作副本",
+    # v0.9.185:采用工作版(用户二次确认;先备份再替换原文件)
+    "adoptWorking", "panel_adopt", "采用工作版",
+    # v0.9.185 运行档:默认不执行,点运行才进 allow-scripts 沙箱;少 run-frame =
+    # 点了「运行」没地方挂,少 openInteractive = 按钮是死的。
+    "gen-run", "openInteractive", "run-frame", "交互版",
+    # v0.9.185 p:产物全屏(不搬 iframe,状态不丢) + 表格 FLIP + 统一阅读列
+    "gen-fs", "openArtifactFullscreen", "gen-fs-backdrop", "gencard.fullscreen",
+    "oldTops", "tr.animate", "--chat-measure:820px",
+    # v0.9.185 Office 批注:块 id 从批注脚本回传到 panel_annotate
+    "annState.block", "block: st.block",
+    # v0.9.185 原版 vs 工作版对比(两栏只读;采用仍在批注条里二次确认)
+    # 少 cmp-diff = 两栏并排但「改了哪几块」那条差异条没人画,差异还是靠肉眼找
+    "openCompare", "cmp-overlay", "cmp-pane", "cmp-diff", "对比工作版",
+    # v0.9.185 原生卡片(图表/表格/清单)也能放大;少 wc-fs = 按钮不存在,
+    # 少 wcard.fullscreen = 点了只是把按钮改成「还原」而卡没放大
+    "wc-fs", "wcard.fullscreen",
     # v0.9.178:「这次要下哪一件、为什么是这件」那一行。少 `id="updPlan"` = 后端算完
     # 判定没人显示它(下载照旧,只是用户永远不知道为什么是 135 MB 或为什么退回 878 MB);
     # 少 `plan.choice === "app_setup"` = 跳过与退回被涂成同一句话,那正是这一格不许的含糊。

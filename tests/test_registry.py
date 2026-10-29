@@ -43,8 +43,10 @@ def test_registry_contents():
                      "export_ics",
                      "map_find_place", "map_show_list", "map_highlight_building",
                      "map_drop_pin", "map_clear",
-                     # v0.9.154 I:子代理 → 主会话留话(排在最后,见 registry_split 那支)
-                     "notify_parent"]
+                     # v0.9.154 I:子代理 → 主会话留话
+                     "notify_parent",
+                     # v0.9.185:交互式可视化(展示层,只读;桌面端渲染;接在最后)
+                     "show_chart", "show_table", "show_checklist"]
     assert len(set(names)) == len(names)
 
 
@@ -132,6 +134,11 @@ def test_read_only_flags():
         # 不落盘、不联网、不读本机数据,所以是只读;图会随消息外发,那由
         # trust/沙箱那条线管(与 ocr_image 同一档的外发口径)。
         "view_image": True,
+        # v0.9.185:交互式可视化三只 —— 只推规格给界面,不落盘/不联网/不执行代码。
+        # 清单的"发回选择"是一条新的用户消息,不是工具自己改状态;所以工具仍只读。
+        "show_chart": True,
+        "show_table": True,
+        "show_checklist": True,
         "campus_calendar": True,      # 校历查询:只读本地数据文件
         "gpa_calc": True,             # 绩点计算:纯计算,不落盘
         "kb_suggest": False,          # 写候选文件:确认框就是"用户同意存入"那一步

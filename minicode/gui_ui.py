@@ -37,7 +37,7 @@ def _panel_arg(args: dict) -> str:
         cand = str((args or {}).get(key) or "").strip().replace("\\", "/")
         if not cand or cand.startswith("/") or re.match(r"^[A-Za-z]:", cand):
             continue
-        if panel.looks_like_panel(cand):
+        if panel.looks_like_artifact(cand):
             return cand
     return ""
 

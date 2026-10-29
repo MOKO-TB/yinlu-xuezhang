@@ -51,6 +51,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
+OUT_DIR = ROOT / "_tmp_dev_check" / "ui-panel"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))          # 要 import minicode.panel(那份 CSP 是真的)
 if str(ROOT / "scripts") not in sys.path:
@@ -80,6 +81,9 @@ def _hostile(port: int) -> str:
 STUB_JS = r"""
 window.__E2E_CALLS__ = [];
 window.__PAYLOAD__ = "";
+window.__ANNOT_PAYLOAD__ = "";
+window.__RUN_PAYLOAD__ = "";
+window.__WORK_PAYLOAD__ = "";
 window.__API__ = {
   get_info: () => Promise.resolve({
     version: "0.9.177", app_name: "引路学长", permission_mode: "confirm",
@@ -92,13 +96,58 @@ window.__API__ = {
     kb_count: 0, campus_map: null, library_health: {},
     session_metrics: {ok: false, selectable: []},
   }),
-  panel_preview: (rel) => {
-    window.__E2E_CALLS__.push(["panel_preview", rel]);
-    return Promise.resolve({ok: true, name: rel, kind: "html",
+  panel_preview: (rel, mode) => {
+    window.__E2E_CALLS__.push(["panel_preview", rel, mode || "preview"]);
+    if (String(rel).indexOf("annotations/") === 0) {
+      return Promise.resolve({ok: true, name: rel, kind: "html", mode: "preview",
+                              bytes: (window.__WORK_PAYLOAD__ || "").length,
+                              html: window.__WORK_PAYLOAD__,
+                              note: "工作版预览", stripped: {}});
+    }
+    if (mode === "annotate") {
+      return Promise.resolve({ok: true, name: rel, kind: "html", mode: "annotate",
+                              bytes: (window.__ANNOT_PAYLOAD__ || "").length,
+                              html: window.__ANNOT_PAYLOAD__,
+                              hint: "批注模式：选中文字或点一个元素",
+                              note: "", stripped: {}});
+    }
+    if (mode === "interactive") {
+      return Promise.resolve({ok: true, name: rel, kind: "html", mode: "interactive",
+                              bytes: (window.__RUN_PAYLOAD__ || "").length,
+                              html: window.__RUN_PAYLOAD__,
+                              note: "交互版：在隔离沙箱里运行，不能联网/碰宿主",
+                              stripped: {}});
+    }
+    return Promise.resolve({ok: true, name: rel, kind: "html", mode: "preview",
                             bytes: (window.__PAYLOAD__ || "").length,
                             html: window.__PAYLOAD__,
                             note: "就地显示(第二道闸单独验:这份没删脚本)",
                             stripped: {}});
+  },
+  panel_annotate: (rel, payload) => {
+    window.__E2E_CALLS__.push(["panel_annotate", rel, String(payload)]);
+    return Promise.resolve({ok: true, source: rel,
+                            working: "annotations/批注样例.working.html",
+                            text: "我在产物《" + rel + "》上做了一处批注，请**只改这一处**：\n"
+                                + "- 选中的文字：「高数 92」\n- 要求：把 92 改成 95\n"
+                                + "请改在工作副本 `annotations/批注样例.working.html` 上，"
+                                + "已交付的 `" + rel + "` 不要动。"});
+  },
+  panel_adopt: (rel, working) => {
+    window.__E2E_CALLS__.push(["panel_adopt", rel, String(working)]);
+    return Promise.resolve({ok: true, source: rel, working: String(working),
+                            backup: "annotations/批注样例.backup-20260101-000000.html"});
+  },
+  panel_compare: (rel, working) => {
+    window.__E2E_CALLS__.push(["panel_compare", rel, String(working)]);
+    return Promise.resolve({ok: true, mode: "preview",
+      original_html: window.__PAYLOAD__,
+      working_html: window.__WORK_PAYLOAD__,
+      diff: {kind: "text",
+             summary: "共 1 处文字变化（改 1 / 增 0 / 删 0）",
+             changes: [{type: "changed", id: "",
+                        old: "高数 92", new: "高数 95（补考）"}],
+             counts: {changed: 1, added: 0, removed: 0}, truncated: 0}});
   },
 };
 window.pywebview = {api: new Proxy({}, {
@@ -167,6 +216,7 @@ def main() -> int:
     from playwright.sync_api import sync_playwright
     from e2e_launch import launch
 
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     hits: dict = {}
     exfil, exfil_port = _serve_exfil(hits)
     url, site = _serve(FRONTEND)
@@ -191,6 +241,39 @@ def main() -> int:
             from minicode import panel as _panel
             page.evaluate("(s) => { window.__PAYLOAD__ = s; }",
                           _panel.wrap_document(_hostile(exfil_port), "html"))
+            # 批注档:模型脚本先被 read_and_sanitize 删掉,再注入受信脚本。
+            annot_body, _ac, _aw = _panel.read_and_sanitize(
+                ("<p id='p1'>高数 92</p><p>英语 88</p>"
+                 "<script>parent.__ANN_ESC=1</script>").encode("utf-8"))
+            page.evaluate("(s) => { window.__ANNOT_PAYLOAD__ = s; }",
+                          _panel.wrap_annotatable(annot_body, "html"))
+            # 交互版:模型脚本原样保留,由 sandbox=allow-scripts(无同源)+ CSP 断网。
+            # 这段脚本同时做三件事:证明交互真的能改 DOM、试摸宿主、试 fetch 出网。
+            run_html = (
+                "<style>body{font-family:system-ui;padding:18px}"
+                "#bar{height:18px;background:#3FBDAE;border-radius:9px;"
+                "transition:width .1s}</style>"
+                "<h3>调豆模拟器</h3>"
+                "<label>研磨 <input id='r' type='range' min='0' max='100' value='20'>"
+                " <b id='out'>20</b></label>"
+                "<button id='preset'>预设 70</button>"
+                "<div id='bar' style='width:20%'></div>"
+                "<script>"
+                "var r=document.getElementById('r'),out=document.getElementById('out'),"
+                "bar=document.getElementById('bar');"
+                "function draw(){out.textContent=r.value;bar.style.width=r.value+'%';}"
+                "r.addEventListener('input',draw);draw();"
+                "document.getElementById('preset').onclick=function(){r.value=70;draw();};"
+                "try{parent.__RUN_ESC=1}catch(e){}"
+                "try{fetch('http://127.0.0.1:__PORT__/run')}catch(e){}"
+                "try{localStorage.setItem('x','1');window.__RUN_LS=1}"
+                "catch(e){window.__RUN_LS=0}"
+                "</script>").replace("__PORT__", str(exfil_port))
+            page.evaluate("(s) => { window.__RUN_PAYLOAD__ = s; }",
+                          _panel.wrap_interactive(run_html))
+            page.evaluate("(s) => { window.__WORK_PAYLOAD__ = s; }",
+                          _panel.wrap_document(
+                              "<p>工作版正文</p><p>高数 95（补考）</p>", "html"))
 
             _push(page, {"type": "tool_start", "name": "file_write",
                          "summary": "复盘.html", "trust": "local",
@@ -265,6 +348,179 @@ def main() -> int:
             check("default-src 'none'" in doc_html, "这条 CSP 确实是断外联那一条")
             check(doc_html.lower().find("<script") > doc_html.find("<body"),
                   "这份里那段 <script> 还在(我们**故意没删**,单验浏览器这一道)")
+
+            # ------------------------------------------------ 批注模式
+            _push(page, {"type": "tool_start", "name": "file_write",
+                         "summary": "批注样例.html", "trust": "local",
+                         "artifact": "批注样例.html"})
+            page.wait_for_timeout(250)
+            cards = page.locator(".gencard")
+            check(cards.count() == 2, "批注样例又出了一张产物卡(实得 %d)" % cards.count())
+            if cards.count() != 2:
+                return _report(tally, failures)
+            ann_card = cards.nth(1)
+            ann_card.locator(".gen-annot").click()
+            page.wait_for_timeout(600)
+            ann_frame = ann_card.locator("iframe.ann-frame")
+            check(ann_frame.count() == 1, "点「批注」后出现可批注 iframe")
+            if ann_frame.count() != 1:
+                return _report(tally, failures)
+            sb = ann_frame.first.get_attribute("sandbox")
+            check(sb is not None and "allow-scripts" in sb,
+                  "批注 iframe 给了 allow-scripts(拿到的是 %r)" % sb)
+            check("allow-same-origin" not in (sb or ""),
+                  "批注 iframe **没有**给同源")
+            page.wait_for_timeout(400)
+            check(page.evaluate("() => window.__ANN_ESC || 0") == 0,
+                  "模型脚本在批注档里仍然没执行")
+            try:
+                inner = ann_frame.first.content_frame
+                body_text = inner.locator("body").inner_text(timeout=3000)
+            except Exception as e:
+                body_text = ""
+                check(False, "批注 iframe 内容读得到(%s)" % type(e).__name__)
+            check("批注模式" in body_text, "受信批注脚本真的跑起来了(hint 在)")
+
+            # 模拟子页选中一段文字:父页应把片段填进批注条
+            page.evaluate("""() => {
+              const f = document.querySelector('iframe.ann-frame');
+              window.dispatchEvent(new MessageEvent('message', {
+                source: f.contentWindow,
+                data: {type: 'ann-select', mode: 'text', text: '高数 92',
+                       selector: 'p:nth-child(1)', tag: 'p', block: 'p1'}
+              }));
+            }""")
+            page.wait_for_timeout(200)
+            snippet = ann_card.locator(".ann-snippet").inner_text()
+            check("高数 92" in snippet, "选中片段回填到了批注条:%r" % snippet)
+            check("p1" in snippet, "Office 块 id 没显示在批注条:%r" % snippet)
+            ann_card.locator(".ann-input").fill("把 92 改成 95，并注明补考")
+            ann_card.locator(".ann-foot .b-yes").click()
+            page.wait_for_timeout(300)
+            calls = page.evaluate("() => window.__E2E_CALLS__")
+            ann_calls = [c for c in calls if isinstance(c, list)
+                         and c[0] == "panel_annotate"]
+            check(len(ann_calls) == 1, "panel_annotate 调了一次(实得 %d)" % len(ann_calls))
+            if ann_calls:
+                payload = json.loads(ann_calls[0][2])
+                check(payload.get("text") == "高数 92", "选中文字原样带回:%r" % payload)
+                check(payload.get("selector") == "p:nth-child(1)", "选择器原样带回")
+                check(payload.get("block") == "p1", "Office 块 id 没带回")
+                check("补考" in payload.get("instruction", ""), "修改要求原样带回")
+            check("工作副本" in ann_card.inner_text(), "发完后卡片显示了工作副本路径")
+            check("只改这一处" in page.locator("#chat").inner_text(),
+                  "发回对话的那条用户消息在场")
+            page.screenshot(path=str(OUT_DIR / "annotate.png"))
+
+            # 原版 vs 工作版:两栏只读预览
+            compare_btn = ann_card.locator(".ann-foot button", has_text="对比工作版")
+            check(compare_btn.count() == 1, "批注后没有「对比工作版」按钮")
+            compare_btn.click()
+            page.wait_for_timeout(500)
+            check(page.locator(".cmp-overlay").count() == 1, "没有打开对比视图")
+            check(page.locator(".cmp-pane").count() == 2, "对比视图不是两栏")
+            cmp_frames = page.locator(".cmp-pane iframe")
+            check(cmp_frames.count() == 2, "对比视图没有两个 iframe")
+            check(page.locator(".cmp-cap", has_text="已交付版").count() == 1,
+                  "对比视图缺已交付版标题")
+            check(page.locator(".cmp-cap", has_text="工作版").count() == 1,
+                  "对比视图缺工作版标题")
+            work_text = cmp_frames.nth(1).content_frame.locator("body").inner_text()
+            check("工作版正文" in work_text, "对比视图的工作版内容不对")
+            diff_text = page.locator(".cmp-diff").inner_text()
+            check("共 1 处" in diff_text, "对比视图没有差异摘要")
+            check("高数 95" in diff_text, "对比视图没有改后内容")
+            calls = page.evaluate("() => window.__E2E_CALLS__")
+            cmp_calls = [c for c in calls if isinstance(c, list)
+                         and c[0] == "panel_compare"]
+            check(len(cmp_calls) == 1, "panel_compare 调用次数不对")
+            page.screenshot(path=str(OUT_DIR / "compare.png"))
+            page.locator(".cmp-head button", has_text="关闭").click()
+            page.wait_for_timeout(200)
+            check(page.locator(".cmp-overlay").count() == 0, "对比视图没关掉")
+
+            # 采用工作版:二次确认 → panel_adopt(rel, working)
+            ann_card.locator(".ann-foot .b-always").click()
+            page.wait_for_selector("#appConfirmOverlay.show")
+            page.click("#btnAppOk")
+            page.wait_for_timeout(300)
+            calls = page.evaluate("() => window.__E2E_CALLS__")
+            adopt_calls = [c for c in calls if isinstance(c, list)
+                           and c[0] == "panel_adopt"]
+            check(len(adopt_calls) == 1, "采用工作版调了一次(实得 %d)" % len(adopt_calls))
+            if adopt_calls:
+                check(adopt_calls[0][1] == "批注样例.html", "采用的是这张产物")
+                check("annotations/" in adopt_calls[0][2], "采用的是工作副本路径")
+            check("已采用工作版" in ann_card.inner_text(), "采用后卡片显示了已采用")
+            page.screenshot(path=str(OUT_DIR / "adopt.png"))
+
+            # ------------------------------------------------ 交互版(Gen UI)
+            _push(page, {"type": "tool_start", "name": "file_write",
+                         "summary": "咖啡模拟器.html", "trust": "local",
+                         "artifact": "咖啡模拟器.html"})
+            page.wait_for_timeout(250)
+            cards = page.locator(".gencard")
+            check(cards.count() == 3, "交互版又出了一张产物卡(实得 %d)" % cards.count())
+            if cards.count() != 3:
+                return _report(tally, failures)
+            run_card = cards.nth(2)
+            run_card.locator(".gen-run").click()
+            page.wait_for_timeout(700)
+            run_frame = run_card.locator("iframe.run-frame")
+            check(run_frame.count() == 1, "点「运行」后出现交互 iframe")
+            if run_frame.count() != 1:
+                return _report(tally, failures)
+            sb = run_frame.first.get_attribute("sandbox")
+            check(sb is not None and "allow-scripts" in sb,
+                  "交互 iframe 给了 allow-scripts(拿到的是 %r)" % sb)
+            check("allow-same-origin" not in (sb or ""),
+                  "交互 iframe **没有**给同源")
+            inner = run_frame.first.content_frame
+            try:
+                out0 = inner.locator("#out").inner_text(timeout=3000)
+            except Exception as e:
+                out0 = ""
+                check(False, "交互 iframe 内容读得到(%s)" % type(e).__name__)
+            check(out0 == "20", "初始数值读得到(实得 %r)" % out0)
+            inner.locator("#r").evaluate(
+                "r => { r.value = '10';"
+                " r.dispatchEvent(new Event('input', {bubbles: true})); }")
+            page.wait_for_timeout(120)
+            check(inner.locator("#out").inner_text() == "10",
+                  "拖动滑条后数值实时变了")
+            check(inner.locator("#bar").evaluate("el => el.style.width") == "10%",
+                  "滑条也改了图(条形宽度 10%)")
+            inner.locator("#preset").click()
+            page.wait_for_timeout(120)
+            check(inner.locator("#out").inner_text() == "70",
+                  "预设按钮也能改数值")
+            check(page.evaluate("() => window.__RUN_ESC || 0") == 0,
+                  "交互版**攀不到宿主**(parent 属性没写成)")
+            check(inner.locator("body").evaluate("() => window.__RUN_LS") == 0,
+                  "交互版的 localStorage 被拒(不透明源)")
+            check(not hits.get("n"),
+                  "交互版里的 fetch **没出网**(hits=%r)" % hits)
+            page.screenshot(path=str(OUT_DIR / "run.png"))
+            # 放大/全屏:只把卡 fixed 铺满,不搬 iframe —— 模拟器状态不能丢
+            fs_btn = run_card.locator(".gen-fs")
+            check(fs_btn.count() == 1, "产物卡没有放大按钮")
+            fs_btn.click()
+            page.wait_for_timeout(300)
+            check(page.locator(".gencard.fullscreen").count() == 1, "没有进入全屏")
+            check(page.locator(".gen-fs-backdrop").count() == 1, "全屏没有遮罩")
+            check(fs_btn.inner_text() == "还原", "放大按钮没变成还原")
+            check(inner.locator("#out").inner_text() == "70", "全屏后模拟器状态丢了")
+            page.screenshot(path=str(OUT_DIR / "run-fullscreen.png"))
+            fs_btn.click()
+            page.wait_for_timeout(300)
+            check(page.locator(".gencard.fullscreen").count() == 0, "没有退出全屏")
+            check(run_card.locator("iframe.run-frame").count() == 1,
+                  "退出全屏把 iframe 弄没了")
+            run_card.locator(".gen-head").click()
+            page.wait_for_timeout(250)
+            check(run_card.locator("iframe.run-frame").count() == 0,
+                  "收起卡片会摘掉 iframe(停止运行)")
+            page.screenshot(path=str(OUT_DIR / "run-stopped.png"))
     finally:
         site.shutdown()
         site.server_close()

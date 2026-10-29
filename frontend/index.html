@@ -949,13 +949,106 @@ try {
             border-radius:10px; overflow:hidden; }
   html.dark .gencard{ background:rgba(12,21,32,.94); }
   .gen-head{ display:flex; justify-content:space-between; gap:10px;
-             padding:8px 10px; cursor:pointer; }
-  .gen-name{ font-size:11.5px; color:var(--text-2); white-space:nowrap;
-             overflow:hidden; text-overflow:ellipsis; }
-  .gen-note{ font-size:11px; color:var(--text-3); white-space:nowrap; }
+             padding:8px 10px; cursor:pointer; align-items:center; }
+  .gen-name{ flex:1 1 auto; min-width:0; font-size:11.5px; color:var(--text-2);
+             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .gen-note{ font-size:11px; color:var(--text-3); white-space:nowrap;
+             margin-left:auto; }
+  .gen-annot{ flex:none; font-size:11px; font-family:inherit; cursor:pointer;
+              color:var(--primary-text); background:var(--primary-light);
+              border:1px solid var(--primary); border-radius:var(--r-full);
+              padding:2px 10px; }
+  .gen-annot:hover{ background:var(--glass-strong); }
+  .gen-run{ flex:none; font-size:11px; font-family:inherit; cursor:pointer;
+            color:#fff; background:var(--primary); border:1px solid var(--primary);
+            border-radius:var(--r-full); padding:2px 10px; }
+  .gen-run:hover{ filter:brightness(1.06); }
+  .gen-fs{ flex:none; font-size:11px; font-family:inherit; cursor:pointer;
+           color:var(--text-1); background:var(--glass-strong);
+           border:1px solid var(--line); border-radius:var(--r-full);
+           padding:2px 10px; }
+  .gen-fs:hover{ border-color:var(--primary); color:var(--primary-text); }
+  .gen-head{ flex-wrap:wrap; }
+  .run-frame{ height:560px; background:#fff; }
+  /* 产物全屏:不搬 iframe(搬 DOM 会重载,模拟器状态就没了),只把卡 fixed 铺满。 */
+  .gencard.fullscreen{ position:fixed; inset:16px; z-index:45; margin:0; width:auto;
+                       display:flex; flex-direction:column; border-color:var(--primary);
+                       box-shadow:var(--shadow-lg); animation:none; }
+  /* z-index 压在弹窗(50/80/90)下面:全屏时点「采用工作版」/权限确认,
+     对话框必须还能盖在上面。 */
+  .gencard.fullscreen .gen-body{ flex:1 1 auto; min-height:0; display:flex;
+                                 flex-direction:column; }
+  .gencard.fullscreen .gen-frame{ flex:1 1 auto; width:100%; height:auto; min-height:0; }
+  .gencard.fullscreen .ann-box{ flex:none; max-height:42vh; overflow:auto; }
+  .gen-fs-backdrop{ position:fixed; inset:0; z-index:40; background:rgba(6,12,18,.42);
+                    backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px); }
+  /* 原版 vs 工作版:并排只读预览;两个 iframe 都不给脚本,采用仍走原按钮。 */
+  .cmp-overlay{ position:fixed; inset:0; z-index:55; background:rgba(6,12,18,.55);
+                backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);
+                display:flex; align-items:center; justify-content:center; padding:18px; }
+  .cmp-box{ width:min(1280px,100%); height:min(900px,100%); background:var(--glass-strong);
+            border:1px solid var(--primary); border-radius:14px;
+            box-shadow:var(--shadow-lg); display:flex; flex-direction:column;
+            overflow:hidden; }
+  .cmp-head{ display:flex; align-items:center; gap:10px; padding:10px 14px;
+             border-bottom:1px solid var(--line-soft); background:var(--glass-strong); }
+  .cmp-title{ flex:1 1 auto; min-width:0; font-size:14px; font-weight:800;
+              color:var(--text-1); white-space:nowrap; overflow:hidden;
+              text-overflow:ellipsis; }
+  .cmp-note{ flex:none; font-size:11.5px; color:var(--text-3); max-width:42%;
+             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cmp-btn{ flex:none; font-size:12px; font-family:inherit; cursor:pointer;
+            color:var(--text-1); background:var(--glass-lite);
+            border:1px solid var(--line); border-radius:var(--r-full);
+            padding:4px 12px; }
+  .cmp-btn:hover{ border-color:var(--primary); color:var(--primary-text); }
+  .cmp-diff{ flex:none; max-height:128px; overflow:auto; padding:8px 14px;
+             background:var(--glass-lite); border-bottom:1px solid var(--line-soft);
+             font-size:11.5px; line-height:1.65; color:var(--text-2); }
+  .cmp-diff:empty{ display:none; }
+  .cmp-diff-sum{ font-size:12px; font-weight:800; color:var(--text-1);
+                 margin-bottom:4px; }
+  .cmp-diff-list{ display:flex; flex-direction:column; gap:3px; }
+  .cmp-change{ white-space:pre-wrap; word-break:break-word; }
+  .cmp-old{ color:var(--danger); text-decoration:line-through; }
+  .cmp-new{ color:var(--success); }
+  .cmp-body{ flex:1 1 auto; min-height:0; display:grid;
+             grid-template-columns:1fr 1fr; gap:10px; padding:10px; }
+  .cmp-pane{ min-width:0; min-height:0; display:flex; flex-direction:column;
+             border:1px solid var(--line-soft); border-radius:10px;
+             overflow:hidden; background:#fff; }
+  .cmp-cap{ padding:6px 10px; font-size:11.5px; color:var(--text-2);
+            background:var(--glass-lite); border-bottom:1px solid var(--line-soft);
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cmp-pane iframe{ flex:1 1 auto; width:100%; min-height:0; border:0; background:#fff; }
+  .cmp-err{ padding:14px; font-size:12.5px; line-height:1.7; color:var(--danger); }
+  @media (max-width:900px){
+    .cmp-body{ grid-template-columns:1fr; overflow:auto; }
+    .cmp-pane{ min-height:45vh; }
+  }
   .gen-body{ border-top:1px solid var(--line-soft); background:#fff; }
   .gen-frame{ display:block; width:100%; height:360px; border:0;
               color-scheme:light; }
+  .ann-frame{ height:420px; }
+  /* 批注条:选中片段 + 修改要求。底色跟产物卡一致(白),不跟界面主题走。 */
+  .ann-box{ padding:10px 12px 11px; border-top:1px solid var(--line-soft);
+            background:rgba(247,250,249,.98); }
+  html.dark .ann-box{ background:rgba(12,21,32,.96); }
+  .ann-sel{ font-size:12px; color:var(--text-2); line-height:1.6; margin-bottom:6px; }
+  .ann-snippet{ color:var(--text-1); font-weight:700; }
+  .ann-input{ width:100%; box-sizing:border-box; font-size:12.5px; font-family:inherit;
+              line-height:1.6; color:var(--text-1); background:var(--surface);
+              border:1px solid var(--line); border-radius:8px; padding:7px 9px;
+              resize:vertical; min-height:44px; }
+  .ann-foot{ display:flex; gap:8px; align-items:center; justify-content:flex-end;
+             flex-wrap:wrap; margin-top:7px; }
+  .ann-note{ flex:1 1 160px; font-size:11px; color:var(--text-3); line-height:1.5; }
+  .ann-foot .b-no, .ann-foot .b-yes, .ann-foot .b-always{
+    border-radius:var(--r-full); padding:6px 14px; cursor:pointer;
+    font-size:12px; font-weight:800; font-family:inherit; }
+  .ann-hint{ font-size:11.5px; color:var(--warning); min-height:0; margin-top:4px; }
+  .ann-hint:empty{ display:none; }
+  .ann-box.sent{ opacity:.85; }
 
   /* ---------------- 输入区 ---------------- */
   .composer{ border-top:1px solid var(--line-soft); background:var(--glass);
@@ -1394,6 +1487,13 @@ try {
   .pr-note input{ width:100%; box-sizing:border-box; background:var(--glass-lite);
                   color:var(--text-1); border:1px solid var(--line);
                   border-radius:9px; padding:7px 10px; font-size:12.5px; }
+  /* 流内计划核对卡(v0.9.185):复用 .askc 的框与 .pr-* 的步骤样式 */
+  .planc .pr-list{ max-height:40vh; }
+  .planc .plan-note{ margin-top:9px; min-height:44px; }
+  .planc .pr-edit{ font-family:inherit; font-size:12.5px; padding:3px 9px; }
+  .planc .pr-save{ font-family:inherit; }
+  .planc .pr-step.editing{ border-color:var(--primary);
+                           background:var(--primary-light); }
   /* ---- 技能分享包(v0.9.114)---- */
   .sk-pack-row{ display:flex; align-items:center; gap:10px; margin:10px 0 2px;
                 flex-wrap:wrap; }
@@ -1424,6 +1524,182 @@ try {
   .ask-trace{ font-size:12.5px; color:var(--text-2); line-height:1.7; margin:10px 0;
               border-left:3px solid var(--primary); padding:6px 10px;
               background:var(--glass-lite); border-radius:0 var(--r-m) var(--r-m) 0; }
+  /* ---- 流内提问卡(v0.9.185):OpenSquilla 的形态,卡片住在对话里 ----
+     为什么不用浮层:关掉就消失,历史里只剩模型的一句话;用户回头想答
+     已经找不到问题了。这张卡答完、没答都留在流里,resume 也还在。 */
+  .askc{ width:min(760px,100%); margin:14px 0 16px; padding:14px 16px 12px;
+         border:1px solid var(--line); border-radius:14px;
+         /* 和助手消息正文同一档实底:这是要读、要点的控件,不是装饰层 */
+         background:rgba(251,253,252,.97); box-shadow:var(--shadow-sm); }
+  html.dark .askc{ background:rgba(9,16,24,.95); }
+  .askc:focus{ outline:none; }
+  .askc-head{ display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+              margin-bottom:6px; }
+  .askc-prog{ margin-left:auto; font-size:12.5px; color:var(--text-2);
+              font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .askc-from{ font-size:10.5px; color:var(--warning); border:1px solid var(--warning);
+              border-radius:var(--r-full); padding:1px 8px; white-space:nowrap; }
+  .askc-rule{ font-size:12px; color:var(--text-2); line-height:1.6;
+              margin-bottom:8px; }
+  .askc-note{ font-size:12.5px; color:var(--text-2); margin:0 0 8px; line-height:1.6; }
+  .askc .ask-ol{ font-size:13.5px; }
+  .askc .ask-on{ font-size:12px; }
+  .askc .ask-free{ font-size:13px; }
+  .askc-opts{ margin-top:8px; }
+  .askc-opts .ask-opt{ user-select:none; }
+  .askc-opts .ask-opt.off{ opacity:.62; cursor:default; }
+  .askc-opts .ask-dot.multi{ border-radius:4px; }
+  .askc-foot{ display:flex; gap:8px; align-items:center; justify-content:flex-end;
+              flex-wrap:wrap; margin-top:10px; }
+  .askc-foot .askc-done{ flex:1 1 100%; }
+  /* 这些按钮不在 .dialog 里,拿不到 `.dialog button` 的尺寸;
+     只靠 b-no/b-yes 的底色会变成浏览器默认的小按钮。 */
+  .askc-foot .b-no, .askc-foot .b-yes, .askc-foot .b-always{
+    border-radius:var(--r-full); padding:7px 16px; cursor:pointer;
+    font-size:12.5px; font-weight:800; font-family:inherit; transition:.15s; }
+  .askc-foot .b-no:disabled, .askc-foot .b-yes:disabled, .askc-foot .b-always:disabled{
+    opacity:.45; cursor:default; }
+  .askc-wait{ font-size:12px; color:var(--text-2); }
+  .askc-hint{ font-size:11.5px; color:var(--warning); line-height:1.5;
+              min-height:0; margin-top:4px; }
+  .askc-hint:empty{ display:none; }
+  .askc.done{ opacity:.95; }
+  .askc.done .ask-opt{ cursor:default; }
+  .askc.done .ask-tag{ color:var(--text-2); border-color:var(--line);
+                       background:var(--glass-lite); }
+  .askc.unanswered .ask-tag{ color:var(--text-3); }
+  .askc-done{ margin-top:10px; padding:8px 10px; border-left:3px solid var(--success);
+              background:var(--success-bg); border-radius:0 9px 9px 0;
+              font-size:12.5px; color:var(--text-1); line-height:1.65; }
+  .askc.unanswered .askc-done{ border-left-color:var(--text-3);
+              background:var(--glass-lite); color:var(--text-2); }
+  .askbar{ display:flex; align-items:center; gap:9px; padding:8px 11px;
+           margin:0 0 7px; border:1px solid var(--primary);
+           background:var(--primary-light); border-radius:10px;
+           font-size:12.5px; color:var(--text-1); }
+  .askbar .ab-ico{ color:var(--primary-text); font-weight:900; flex:none; }
+  .askbar .ab-text{ flex:1 1 auto; min-width:0; line-height:1.5; }
+  .askbar .ab-btn{ flex:none; font-size:12px; font-family:inherit; cursor:pointer;
+                   color:var(--primary-text); background:var(--glass-strong);
+                   border:1px solid var(--primary); border-radius:var(--r-full);
+                   padding:3px 11px; }
+  .askbar .ab-btn:hover{ background:var(--primary-light); }
+  /* ---- 交互手感(v0.9.185 p):进出有动效、点选有反馈、键盘有焦点环 ---- */
+  @keyframes cardIn{ from{ opacity:0; transform:translateY(10px) scale(.995); }
+                     to{ opacity:1; transform:none; } }
+  @keyframes barIn{ from{ opacity:0; transform:translateY(-4px); }
+                    to{ opacity:1; transform:none; } }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  @keyframes wcFade{ from{ opacity:.35; } to{ opacity:1; } }
+  @keyframes optPulse{ 0%{ transform:scale(1); } 45%{ transform:scale(1.008); }
+                       100%{ transform:scale(1); } }
+  .askc, .wcard, .gencard{ animation:cardIn .22s cubic-bezier(.22,.8,.28,1) both; }
+  .ask-opt.on, .wc-item.on{ animation:optPulse .18s ease; }
+  .askbar{ animation:barIn .18s cubic-bezier(.22,.8,.28,1); }
+  .askc:focus{ outline:none; }
+  /* 容器不画焦点框:它是被程序自动聚焦的,画上去像整张卡被选中;
+     键盘用户看选项/按钮自己的焦点环就够了。 */
+  .ask-opt:focus-visible, .wc-item:focus-visible, .pr-edit:focus-visible,
+  .wc-btn:focus-visible, .gen-run:focus-visible, .gen-annot:focus-visible,
+  .gen-fs:focus-visible{
+    outline:2px solid var(--primary); outline-offset:2px; }
+  .askc-foot button, .ann-foot button, .wc-btn, .gen-run, .gen-annot, .gen-fs,
+  .pr-edit, .pr-save, .ask-opt, .wc-item{
+    transition:transform .12s ease, background-color .14s ease,
+                border-color .14s ease, color .14s ease, opacity .14s ease; }
+  .askc-foot button:active, .ann-foot button:active, .wc-btn:active,
+  .gen-run:active, .gen-annot:active, .gen-fs:active,
+  .pr-edit:active, .pr-save:active{ transform:scale(.97); }
+  .ask-dot, .wc-check{ transition:background-color .14s ease,
+                       border-color .14s ease, transform .14s ease; }
+  .ask-opt.on .ask-dot, .wc-item.on .wc-check{ transform:scale(1.08); }
+  .wc-svg{ animation:wcFade .18s ease; }
+  .gen-note.loading::after{ content:""; display:inline-block; width:9px; height:9px;
+    margin-left:6px; vertical-align:-1px; border:2px solid var(--line);
+    border-top-color:var(--primary); border-radius:50%;
+    animation:spin .8s linear infinite; }
+  .gen-body:not([hidden]){ animation:cardIn .18s ease both; }
+  @media (prefers-reduced-motion: reduce){
+    .askc, .wcard, .gencard, .askbar, .gen-body:not([hidden]), .wc-svg,
+    .ask-opt.on, .wc-item.on{ animation:none; }
+    .askc-foot button, .ann-foot button, .wc-btn, .gen-run, .gen-annot, .gen-fs,
+    .pr-edit, .pr-save, .ask-opt, .wc-item{ transition:none; }
+  }
+  /* ---- 交互式可视化(v0.9.185):图表/表格/清单,原生组件 ---- */
+  .wcard{ width:min(760px,100%); margin:14px 0 16px; padding:13px 15px 11px;
+          border:1px solid var(--line); border-radius:14px; position:relative;
+          background:rgba(251,253,252,.97); box-shadow:var(--shadow-sm); }
+  html.dark .wcard{ background:rgba(9,16,24,.95); }
+  .wc-head{ display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .wc-title{ font-size:13.5px; font-weight:800; color:var(--text-1); }
+  .wc-kind{ font-size:10.5px; color:var(--primary-text); border:1px solid var(--primary);
+            border-radius:var(--r-full); padding:1px 8px; white-space:nowrap; }
+  .wc-note{ font-size:11.5px; color:var(--text-3); line-height:1.5; margin:3px 0 4px; }
+  .wc-body{ margin-top:4px; }
+  .wc-chart{ position:relative; }
+  .wc-svg{ width:100%; height:auto; display:block; color:var(--text-2); }
+  .wc-legend{ display:flex; gap:12px; flex-wrap:wrap; margin:4px 0 2px; }
+  .wc-lg{ display:inline-flex; align-items:center; gap:5px; font-size:11.5px;
+          color:var(--text-2); background:none; border:0; padding:0; cursor:pointer;
+          font-family:inherit; }
+  .wc-lg.off{ opacity:.42; text-decoration:line-through; }
+  .wc-lg.static{ cursor:default; }
+  .wc-dot{ width:9px; height:9px; border-radius:2px; flex:none; }
+  .wc-actions{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:7px; }
+  .wc-btn{ font-size:11.5px; font-family:inherit; color:var(--text-1); cursor:pointer;
+           background:var(--glass-lite); border:1px solid var(--line);
+           border-radius:var(--r-full); padding:3px 10px; }
+  .wc-btn:hover{ border-color:var(--primary); }
+  .wc-btn:disabled{ opacity:.45; cursor:default; }
+  .wc-btn.primary{ color:var(--primary-text); border-color:var(--primary);
+                   background:var(--primary-light); }
+  .wc-tip{ position:absolute; z-index:6; display:none; pointer-events:none;
+           padding:5px 8px; font-size:11.5px; line-height:1.4; color:var(--text-1);
+           background:var(--glass-strong); border:1px solid var(--line);
+           border-radius:8px; box-shadow:var(--shadow-sm); white-space:nowrap; }
+  .wc-data{ margin-top:8px; max-height:280px; overflow:auto; }
+  .wc-tablewrap{ max-height:360px; overflow:auto; margin-top:6px;
+                 border:1px solid var(--line-soft); border-radius:10px; }
+  .wc-table{ width:100%; border-collapse:collapse; font-size:12px; }
+  .wc-table th, .wc-table td{ padding:6px 9px; border-bottom:1px solid var(--line-soft);
+                              text-align:left; vertical-align:top; }
+  .wc-table th{ position:sticky; top:0; z-index:1; background:var(--glass-strong);
+                cursor:pointer; user-select:none; font-weight:700; white-space:nowrap; }
+  .wc-table tr:last-child td{ border-bottom:0; }
+  .wc-search{ flex:1 1 180px; min-width:120px; font-size:12px; font-family:inherit;
+              color:var(--text-1); background:var(--surface); border:1px solid var(--line-soft);
+              border-radius:var(--r-s); padding:5px 9px; }
+  .wc-count{ font-size:11px; color:var(--text-3); white-space:nowrap; }
+  .wc-list{ display:flex; flex-direction:column; gap:6px; margin-top:6px; }
+  .wc-item{ display:flex; gap:9px; align-items:flex-start; text-align:left; width:100%;
+            padding:8px 10px; border:1px solid var(--line-soft); border-radius:10px;
+            background:var(--glass-lite); cursor:pointer; font-family:inherit;
+            color:var(--text-1); }
+  .wc-item:hover{ border-color:var(--primary); }
+  .wc-item.on{ border-color:var(--primary); background:var(--primary-light); }
+  .wc-item:disabled{ cursor:default; }
+  .wc-item.done{ opacity:.66; }
+  .wc-check{ flex:none; width:14px; height:14px; margin-top:2px; border:2px solid var(--text-3);
+             border-radius:4px; }
+  .wc-item.on .wc-check{ border-color:var(--primary); background:var(--primary); }
+  .wc-item-label{ font-size:12.5px; font-weight:700; line-height:1.5; }
+  .wc-item-note{ font-size:11.5px; color:var(--text-2); line-height:1.55; margin-top:2px; }
+  .wc-sent{ font-size:11.5px; color:var(--success); }
+  .wc-fs{ margin-left:auto; font-size:11px; font-family:inherit; cursor:pointer;
+          color:var(--text-2); background:none; border:1px solid var(--line);
+          border-radius:var(--r-full); padding:2px 9px; }
+  .wc-fs:hover{ border-color:var(--primary); color:var(--primary-text); }
+  /* 图表/表格/清单也能铺满窗口看;同一张卡只 fixed,不重建内容。 */
+  .wcard.fullscreen{ position:fixed; inset:16px; z-index:45; margin:0; width:auto;
+                     display:flex; flex-direction:column; border-color:var(--primary);
+                     box-shadow:var(--shadow-lg); animation:none; }
+  .wcard.fullscreen .wc-body{ flex:1 1 auto; min-height:0; display:flex;
+                              flex-direction:column; }
+  .wcard.fullscreen .wc-chart{ flex:1 1 auto; min-height:0; }
+  .wcard.fullscreen .wc-svg{ max-height:100%; }
+  .wcard.fullscreen .wc-tablewrap{ flex:1 1 auto; max-height:none; }
+  .wcard.fullscreen .wc-list{ flex:1 1 auto; overflow:auto; }
+  .wcard.fullscreen .wc-data{ max-height:30vh; }
   /* ---------------- 长期记忆面板(v0.9.97:界面上从此也能记一条,不只 CLI) ---------------- */
   .mem-count{ font-size:12.5px; color:var(--text-2); margin-bottom:8px; }
   .mem-hint{ font-size:11.5px; color:var(--text-3); line-height:1.6; margin:6px 0 12px; }
@@ -2628,6 +2904,45 @@ try {
 .il-bar button:hover{ color:var(--primary); }
 .msg .att img{ cursor:zoom-in; }
 .msg .body img{ cursor:zoom-in; }
+  /* ---- 主聊天区统一尺度(v0.9.185 p) ----
+     正文 14.5 / 1.78、消息间距 18、阅读列 820;卡片与正文同宽,不再一张 760
+     一张 860 地各走各的。窄屏由 min() 自动退回 100%。 */
+  :root{ --chat-measure:820px; --chat-gap:18px; --chat-font:14.5px; --chat-line:1.78; }
+  #chat{ padding:24px 28px; }
+  #chat .placeholder{ max-width:var(--chat-measure); margin-left:auto;
+                      margin-right:auto; }
+  .msg{ max-width:var(--chat-measure); margin-left:auto; margin-right:auto;
+        margin-bottom:var(--chat-gap); }
+  .msg .who{ font-size:12px; margin-bottom:5px; }
+  .msg.assistant .body{ max-width:100%; font-size:var(--chat-font);
+                        line-height:var(--chat-line); padding:14px 18px; }
+  .msg.user .col{ max-width:min(78%, var(--chat-measure)); }
+  .msg.user .bubble{ font-size:var(--chat-font); line-height:1.65; padding:10px 15px; }
+  .askc, .wcard{ width:min(var(--chat-measure),100%);
+                 margin-left:auto; margin-right:auto; }
+  .askc{ margin-top:16px; margin-bottom:18px; padding:16px 18px 14px; }
+  .wcard{ margin-top:16px; margin-bottom:18px; padding:15px 17px 13px; }
+  .askc-rule{ margin-bottom:10px; }
+  .askc-foot{ margin-top:12px; }
+  .wc-title{ font-size:14px; }
+  .wc-note{ font-size:12px; }
+  .wc-table, .wc-data .wc-table{ font-size:12.5px; }
+  .wc-lg{ font-size:12px; }
+  .gen-head{ padding:9px 12px; }
+  .gen-name{ font-size:12px; }
+  .gen-note{ font-size:11.5px; }
+  .toolline{ font-size:12.5px; }
+  .trace .tr-head, .think .th-head{ font-size:12.5px; }
+  .think .th-body{ font-size:12.5px; }
+  .stats{ font-size:11.5px; }
+  .ask-trace{ max-width:var(--chat-measure); margin-left:auto; margin-right:auto; }
+  /* 输入区也和阅读列同宽:聊天 820、输入框 1300 会像两套版式 */
+  .composer > .proactivebar, .composer > .draftbar, .composer > .askbar,
+  .composer > .editbar, .composer > .attachbar, .composer > .box,
+  .composer > .taskbar, .composer > .hint{
+    width:100%; max-width:var(--chat-measure);
+    margin-left:auto; margin-right:auto;
+  }
 </style>
 </head>
 <body>
@@ -2784,6 +3099,11 @@ try {
         <button class="pi-x" id="proactiveClose" title="本次忽略">✕</button>
       </div>
       <div class="draftbar" id="draftBar" style="display:none"></div>
+      <div class="askbar" id="askBar" style="display:none">
+        <span class="ab-ico">?</span>
+        <span class="ab-text" id="askBarText"></span>
+        <button class="ab-btn" id="askBarGo">去回答</button>
+      </div>
       <div class="editbar" id="editBar" style="display:none">
         ✎ 编辑重发:发送后将替换该条消息及其后的全部对话
         <button id="btnEditCancel">取消编辑</button>
@@ -2938,47 +3258,10 @@ try {
     </div>
   </div>
 </div>
-<!-- 动手前问一句(v0.9.96):模型给的选择题,答完它才接着规划。
-     抬头那句是规矩不是装饰:必须说清"不答会怎样",否则用户以为被锁在这里。 -->
-<div class="overlay" id="askOverlay">
-  <div class="dialog ask-dlg">
-    <div class="ask-head">
-      <span class="ask-tag">需要输入</span>
-      <span class="ask-rule">选一选就行;不想逐题选就点「按推荐继续」,想自己说就写在下面。</span>
-    </div>
-    <div class="ask-note" id="askNote"></div>
-    <div class="ask-body" id="askBody"></div>
-    <div class="btns ask-btns">
-      <button class="b-no" id="askPrev" title="上一题">‹ 上一个</button>
-      <button class="b-no" id="askNext" title="下一题" style="display:none">下一个 ›</button>
-      <span class="ask-page" id="askPage">1 / 1</span>
-      <button class="b-always" id="askRecommend" title="不逐题选,按学长标在第一项的推荐走">按推荐继续</button>
-      <button class="b-yes" id="askSend">发送回复</button>
-    </div>
-  </div>
-</div>
-<!-- 计划核对单(v0.9.114,用户点名的新功能①):plan 写完弹**整单**,
-     批准 / 改一条 / 重排。与上面那张提问卡分家 —— 那是问路,这是批单。 -->
-<div class="overlay" id="planReviewOverlay">
-  <div class="dialog ask-dlg">
-    <div class="ask-head">
-      <span class="ask-tag">计划核对</span>
-      <span class="ask-rule">整张单子先过你的眼:批准就开工;哪一步不对点「改这条」;
-        整体不对就点「重排」并写一句为什么。</span>
-    </div>
-    <div class="pr-goal" id="prGoal"></div>
-    <div class="pr-list" id="prList"></div>
-    <div class="pr-note">
-      <input id="prNote" maxlength="500"
-             placeholder="点「重排」时写一句哪里不对(只点批准就不用填)">
-    </div>
-    <div class="btns ask-btns">
-      <button class="b-always" id="prRevise" title="这张单子没通过,让学长重出一版">重排</button>
-      <button class="b-no" id="prClose" title="先不答:这一轮不会开工">稍后再说</button>
-      <button class="b-yes" id="prApprove" title="按这张单子开始做">批准并开工</button>
-    </div>
-  </div>
-</div>
+<!-- 提问卡与计划核对单都已改为流内卡片(v0.9.185,OpenSquilla 形态):
+     卡住在对话里,答完/批完都留记录;不再用浮层。 -->
+<!-- 计划核对单已改为流内卡片(v0.9.185):与提问卡同一套 .askc 框,
+     三种出口(批准/改一条/重排)与「稍后再说」都在卡里。 -->
 <!-- 长期记忆:记一条 + 整理(v0.9.97:以前界面上只能"整理",想主动记一条只有 CLI /remember) -->
 <div class="overlay" id="memoryOverlay">
   <div class="dialog" style="width:520px">
@@ -3522,6 +3805,11 @@ let busy = false;
 const INPUT_HINT = $("input").placeholder;
 let currentSessionKey = null;   // 当前视图对应的会话(后台任务的事件不带这个键就不渲染)
 let cur = null;          // 当前助手消息块 {wrap, body, reasoning, text, reasoningText, timer}
+let activeAsk = null;    // 流内提问卡的当前状态(一次只让一张可操作)
+let activePlanReview = null;   // 流内计划核对卡的当前状态(批单与提问分家)
+const widgetCards = new Map();   // widget_id -> 卡片节点,实时事件去重
+let annState = null;     // 当前打开的产物批注 {rel, frame, body, note, ...}
+let fullscreenArt = null;   // 当前放大的产物卡 {card, body, note, backdrop, scroll}
 let lastSent = null;     // 刚发出去、模型那边一句都没答的那句 {text, atts}:失败时放回输入框
 let lastTool = null;     // 最近一张工具卡片
 let lastTraceTurn = null; // 最近一輪的"工作过程"容器(工具卡片落进它的 trace)
@@ -5311,6 +5599,73 @@ function renderAssistant(force) {
    后端还另有两道:`minicode/panel.py` 删可执行结构 + 注入 CSP,`panel_preview`
    只在工作区里解析路径。四处都不报错也都不出声 —— 少任何一处,这张卡都会变成
    "看起来正常但把网页/模型写的内容当代码执行了"。 */
+function loadArtifactPreview(rel, body, note) {
+  if (body.firstChild) return Promise.resolve(true);
+  const api = (window.pywebview && pywebview.api) || {};
+  if (!api.panel_preview) {
+    note.textContent = "这一屏只在桌面版能预览";
+    return Promise.resolve(false);
+  }
+  note.textContent = "取过来…";
+  note.classList.add("loading");
+  return api.panel_preview(rel).then(r => {
+    note.classList.remove("loading");
+    if (!r || !r.ok) {
+      note.textContent = (r && r.why) || "这份开不出来";
+      return false;                   // 失败**不留着空 iframe**,也允许再点开重试
+    }
+    note.textContent = r.note || ("就地显示 · " + (r.kind || "html"));
+    const f = document.createElement("iframe");
+    f.className = "gen-frame";
+    f.setAttribute("sandbox", "");
+    f.setAttribute("referrerpolicy", "no-referrer");
+    f.setAttribute("title", rel);
+    f.srcdoc = String(r.html || "");  // 走属性而不是拼字符串:内容永远进不了解析器外的位置
+    body.appendChild(f);
+    return true;
+  }).catch(() => {
+    note.classList.remove("loading");
+    note.textContent = "预览没通(后端没回话)";
+    return false;
+  });
+}
+
+function openArtifactFullscreen(card, body, note, btn) {
+  closeArtifactFullscreen();
+  const backdrop = document.createElement("div");
+  backdrop.className = "gen-fs-backdrop";
+  backdrop.addEventListener("click", closeArtifactFullscreen);
+  // 遮罩必须和卡片进**同一个**堆叠上下文:挂到 body 会被外层壳的 stacking
+  // context 压在卡片上(e2e 实测点不到「还原」)。挂到卡片父节点,两者同级。
+  (card.parentElement || document.body).appendChild(backdrop);
+  card.classList.add("fullscreen");
+  if (body) body.hidden = false;
+  fullscreenArt = { card, body, note, backdrop, scroll: chat.scrollTop,
+                    btn: btn || card.querySelector(".gen-fs") };
+  if (fullscreenArt.btn) {
+    fullscreenArt.btn.textContent = "还原";
+    fullscreenArt.btn.title = "退出全屏";
+  }
+}
+
+function closeArtifactFullscreen() {
+  if (!fullscreenArt) return;
+  const st = fullscreenArt;
+  fullscreenArt = null;
+  st.card.classList.remove("fullscreen");
+  if (st.backdrop) st.backdrop.remove();
+  const btn = st.btn || st.card.querySelector(".gen-fs");
+  if (btn) {
+    btn.textContent = "放大";
+    btn.title = "全屏看这份产物（Esc 或「还原」退出）";
+  }
+  if (typeof st.scroll === "number") chat.scrollTop = st.scroll;
+}
+
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && fullscreenArt) closeArtifactFullscreen();
+});
+
 function addPanelCard(rel) {
   const c = ensureAssistant();
   const card = document.createElement("div");
@@ -5323,39 +5678,484 @@ function addPanelCard(rel) {
   const note = document.createElement("span");
   note.className = "gen-note";
   note.textContent = "点开就地显示";
+  const run = document.createElement("button");
+  run.className = "gen-run";
+  run.type = "button";
+  run.textContent = "运行";
+  run.title = "在隔离沙箱里运行学长写的交互网页：不能联网、碰不到宿主；收起卡片即停止";
+  run.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    openInteractive(card, rel, body, note);
+  });
+  if (!/\.html?$/i.test(rel)) run.style.display = "none";   // SVG 先不给交互版
+  const annot = document.createElement("button");
+  annot.className = "gen-annot";
+  annot.type = "button";
+  annot.textContent = "批注";
+  annot.title = "选中文字或点一个元素，把修改要求发给学长；原文件不动";
+  annot.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    openAnnotate(card, rel, body, note);
+  });
+  const fs = document.createElement("button");
+  fs.className = "gen-fs";
+  fs.type = "button";
+  fs.textContent = "放大";
+  fs.title = "全屏看这份产物（Esc 或「还原」退出）";
+  fs.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (card.classList.contains("fullscreen")) {
+      closeArtifactFullscreen();
+      return;
+    }
+    const open = () => openArtifactFullscreen(card, body, note, fs);
+    if (body.firstChild) { body.hidden = false; open(); return; }
+    ensurePreview().then(ok => { if (ok) open(); });
+  });
+  head.title = "点开/收起；运行中的交互收起即停止";
   head.appendChild(name); head.appendChild(note);
+  head.appendChild(run); head.appendChild(annot); head.appendChild(fs);
   const body = document.createElement("div");
   body.className = "gen-body";
   body.hidden = true;
   let loading = false;
-  head.addEventListener("click", () => {
-    body.hidden = !body.hidden;
-    if (body.hidden || loading || body.firstChild) return;
-    const api = (window.pywebview && pywebview.api) || {};
-    if (!api.panel_preview) { note.textContent = "这一屏只在桌面版能预览"; return; }
+  const ensurePreview = () => {
+    if (body.firstChild) return Promise.resolve(true);
+    if (loading) return Promise.resolve(false);
     loading = true;
-    note.textContent = "取过来…";
-    api.panel_preview(rel).then(r => {
-      loading = false;
-      if (!r || !r.ok) {
-        note.textContent = (r && r.why) || "这份开不出来";
-        return;                       // 失败**不留着空 iframe**,也允许再点开重试
-      }
-      note.textContent = r.note || ("就地显示 · " + (r.kind || "html"));
-      const f = document.createElement("iframe");
-      f.className = "gen-frame";
-      f.setAttribute("sandbox", "");
-      f.setAttribute("referrerpolicy", "no-referrer");
-      f.setAttribute("title", rel);
-      f.srcdoc = String(r.html || "");   // 走属性而不是拼字符串:内容永远进不了解析器外的位置
-      body.appendChild(f);
-    }).catch(() => { loading = false; note.textContent = "预览没通(后端没回话)"; });
+    return loadArtifactPreview(rel, body, note).finally(() => { loading = false; });
+  };
+  head.addEventListener("click", () => {
+    if (card.classList.contains("fullscreen")) return;
+    if (!body.hidden && annState && annState.body === body) {
+      closeAnnState();
+      body.hidden = true;
+      body.innerHTML = "";
+      note.textContent = "点开就地显示";
+      return;
+    }
+    if (!body.hidden && body.querySelector("iframe.run-frame")) {
+      // 收起 = 停止:把 iframe 摘掉,别让一段模型写的脚本在隐藏里继续跑。
+      body.hidden = true;
+      body.innerHTML = "";
+      note.textContent = "点开就地显示";
+      return;
+    }
+    body.hidden = !body.hidden;
+    if (body.hidden || body.firstChild) return;
+    ensurePreview();
   });
   card.appendChild(head); card.appendChild(body);
   c.wrap.insertBefore(card, c.wrap.querySelector(".acts"));
   toBottom();
   return card;
 }
+
+/* 交互版(Gen UI):模型写的自包含单页在隔离沙箱里跑。
+   默认预览仍然是静态的;用户点「运行」才进入这一档。iframe 只给 allow-scripts,
+   **不给同源**,所以碰不到宿主与 pywebview;后端另注入一条只放行 inline 脚本/
+   样式、断掉 fetch/外链/worker 的 CSP。收起卡片会把 iframe 摘掉 = 停止。 */
+function openInteractive(card, rel, body, note) {
+  const api = (window.pywebview && pywebview.api) || {};
+  if (!api.panel_preview) { toast("这一屏只在桌面版能跑", true); return; }
+  if (annState && annState.body && annState.body !== body) {
+    annState.body.hidden = true;
+    annState.body.innerHTML = "";
+    if (annState.note) annState.note.textContent = "点开就地显示";
+  }
+  closeAnnState();
+  body.hidden = false;
+  body.innerHTML = "";
+  note.textContent = "取交互版…";
+  note.classList.add("loading");
+  api.panel_preview(rel, "interactive").then(r => {
+    note.classList.remove("loading");
+    if (!r || !r.ok) { note.textContent = (r && r.why) || "交互版开不出来"; return; }
+    note.textContent = r.note || "交互版：在隔离沙箱里运行，不能联网/碰宿主";
+    const f = document.createElement("iframe");
+    f.className = "gen-frame run-frame";
+    f.setAttribute("sandbox", "allow-scripts");
+    f.setAttribute("referrerpolicy", "no-referrer");
+    f.setAttribute("title", rel + "（交互版）");
+    f.srcdoc = String(r.html || "");
+    body.appendChild(f);
+    requestAnimationFrame(() => f.scrollIntoView({ block: "nearest" }));
+  }).catch(() => {
+    note.classList.remove("loading");
+    note.textContent = "交互版没通(后端没回话)";
+  });
+}
+
+/* 产物批注(v0.9.185,OpenSquilla 0.5.7 的 Workbench 那一格):
+   默认预览仍是 `sandbox=""`(什么都不执行)。点「批注」才换成 `allow-scripts`
+   (不给同源)的批注档;后端先删模型脚本,再注入带 nonce 的受信脚本。
+   选中文字/点元素 → 子页 postMessage → 这里填进批注条 → 发给学长。
+   **原文件不动**,后端复制一份 annotations/<stem>.working.<ext> 给 Agent 改。 */
+function openAnnotate(card, rel, body, note) {
+  const api = (window.pywebview && pywebview.api) || {};
+  if (!api.panel_preview || !api.panel_annotate) {
+    toast("这一屏不支持批注", true);
+    return;
+  }
+  if (annState && annState.body && annState.body !== body) {
+    annState.body.hidden = true;
+    annState.body.innerHTML = "";
+    if (annState.note) annState.note.textContent = "点开就地显示";
+  }
+  closeAnnState();
+  body.hidden = false;
+  body.innerHTML = "";
+  note.textContent = "取批注版…";
+  note.classList.add("loading");
+  api.panel_preview(rel, "annotate").then(r => {
+    note.classList.remove("loading");
+    if (!r || !r.ok) { note.textContent = (r && r.why) || "批注版开不出来"; return; }
+    note.textContent = r.hint || "批注模式：选中文字或点一个元素";
+    const f = document.createElement("iframe");
+    f.className = "gen-frame ann-frame";
+    f.setAttribute("sandbox", "allow-scripts");
+    f.setAttribute("referrerpolicy", "no-referrer");
+    f.setAttribute("title", rel + "（批注）");
+    f.srcdoc = String(r.html || "");
+    body.appendChild(f);
+
+    const box = document.createElement("div");
+    box.className = "ann-box";
+    const sel = document.createElement("div");
+    sel.className = "ann-sel";
+    sel.appendChild(document.createTextNode("已选中："));
+    const snip = document.createElement("span");
+    snip.className = "ann-snippet";
+    sel.appendChild(snip);
+    const ta = document.createElement("textarea");
+    ta.className = "ann-input";
+    ta.rows = 2;
+    ta.placeholder = "要改什么？例如：这句话改得更委婉；只改这一处";
+    const foot = document.createElement("div");
+    foot.className = "ann-foot";
+    const hint = document.createElement("span");
+    hint.className = "ann-note";
+    hint.textContent = "改在工作副本上，已交付的这份不动。";
+    const cancel = document.createElement("button");
+    cancel.className = "b-no";
+    cancel.type = "button";
+    cancel.textContent = "取消";
+    const compare = document.createElement("button");
+    compare.className = "b-no";
+    compare.type = "button";
+    compare.textContent = "对比工作版";
+    compare.title = "并排看已交付版和工作版；预览只读";
+    compare.style.display = "none";
+    const adopt = document.createElement("button");
+    adopt.className = "b-always";
+    adopt.type = "button";
+    adopt.textContent = "采用工作版";
+    adopt.title = "用工作副本替换已交付版；会先自动备份原版";
+    adopt.style.display = "none";
+    const send = document.createElement("button");
+    send.className = "b-yes";
+    send.type = "button";
+    send.textContent = "发给学长";
+    const msg = document.createElement("div");
+    msg.className = "ann-hint";
+    foot.appendChild(hint); foot.appendChild(cancel);
+    foot.appendChild(compare); foot.appendChild(adopt); foot.appendChild(send);
+    box.appendChild(sel); box.appendChild(ta); box.appendChild(foot); box.appendChild(msg);
+    body.appendChild(box);
+    annState = { rel, card, frame: f, body, note, box, snip, ta, send, adopt, compare,
+                 msg, hint, working: "", adopted: false,
+                 mode: "element", text: "", selector: "", tag: "", block: "",
+                 sent: false };
+    updateAnnBox(annState);
+    cancel.addEventListener("click", () => {
+      closeAnnState();
+      body.hidden = true;
+      body.innerHTML = "";
+      note.textContent = "点开就地显示";
+      if (card.classList.contains("fullscreen")) closeArtifactFullscreen();
+    });
+    compare.addEventListener("click", () => openCompare(annState));
+    adopt.addEventListener("click", () => adoptWorking(annState));
+    send.addEventListener("click", () => sendAnnotation(annState));
+    requestAnimationFrame(() => box.scrollIntoView({ block: "nearest" }));
+  }).catch(() => {
+    note.classList.remove("loading");
+    note.textContent = "批注版没通(后端没回话)";
+  });
+}
+
+function updateAnnBox(st) {
+  if (!st || !st.box) return;
+  const has = !!(st.text || st.selector || st.block);
+  const where = st.block ? " · " + st.block : "";
+  if (!has) {
+    st.snip.textContent = "在上面的文档里选中文字，或点一个元素";
+  } else if (st.mode === "text") {
+    st.snip.textContent = "「" + st.text + "」" + where;
+  } else {
+    st.snip.textContent = "元素 " + (st.tag || "?") + "：「"
+      + (st.text || "无文字") + "」" + where;
+  }
+  if (!st.sent) st.send.disabled = !has;
+}
+
+function sendAnnotation(st) {
+  if (!st || !st.rel || st.sent) return;
+  const instruction = String(st.ta.value || "").trim();
+  if (!(st.text || st.selector)) {
+    st.msg.textContent = "先在文档里选中文字，或点一个元素。";
+    return;
+  }
+  if (!instruction) {
+    st.msg.textContent = "写一句要改什么再发。";
+    st.ta.focus();
+    return;
+  }
+  const api = window.pywebview && pywebview.api;
+  if (!api || !api.panel_annotate) { toast("这一屏不支持批注", true); return; }
+  st.send.disabled = true;
+  st.send.textContent = "发送中…";
+  st.msg.textContent = "";
+  Promise.resolve(api.panel_annotate(st.rel, JSON.stringify({
+    mode: st.mode, text: st.text, selector: st.selector, tag: st.tag,
+    block: st.block || "", instruction: instruction
+  }))).then(r => {
+    if (!r || r.ok === false) {
+      st.send.disabled = false;
+      st.send.textContent = "发给学长";
+      st.msg.textContent = (r && r.msg) || "批注没送到";
+      return;
+    }
+    st.sent = true;
+    st.working = String(r.working || "");
+    st.box.classList.add("sent");
+    st.ta.disabled = true;
+    st.hint.textContent = "已发给学长 · 工作副本：" + (st.working || "annotations/…")
+      + "（原版保留）";
+    st.send.textContent = "已发送";
+    st.send.disabled = true;
+    if (st.working) {
+      st.adopt.style.display = "";
+      st.compare.style.display = "";
+    }
+    if (r.text) addUserMsg(String(r.text));
+    toast("批注已发出；改在工作副本上，原版没动");
+    nearBottom = true; toBottom();
+  }).catch(() => {
+    st.send.disabled = false;
+    st.send.textContent = "发给学长";
+    st.msg.textContent = "批注没送到（界面没回话）";
+  });
+}
+
+/* 原版 vs 工作版:并排只读预览。两边都走 panel_preview(mode=preview),
+   不带脚本;采用仍要回批注条点「采用工作版」二次确认。 */
+function openCompare(st) {
+  if (!st || !st.rel || !st.working) return;
+  const api = window.pywebview && pywebview.api;
+  if (!api || !api.panel_compare) {
+    toast("这一屏不支持对比预览", true);
+    return;
+  }
+  const old = document.querySelector(".cmp-overlay");
+  if (old) old.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "cmp-overlay";
+  const box = document.createElement("div");
+  box.className = "cmp-box";
+  const head = document.createElement("div");
+  head.className = "cmp-head";
+  const title = document.createElement("div");
+  title.className = "cmp-title";
+  title.textContent = "原版 vs 工作版 · " + st.rel;
+  const note = document.createElement("div");
+  note.className = "cmp-note";
+  note.textContent = "取两版…";
+  const refresh = document.createElement("button");
+  refresh.className = "cmp-btn";
+  refresh.type = "button";
+  refresh.textContent = "刷新";
+  const close = document.createElement("button");
+  close.className = "cmp-btn";
+  close.type = "button";
+  close.textContent = "关闭";
+  head.appendChild(title); head.appendChild(note);
+  head.appendChild(refresh); head.appendChild(close);
+  const body = document.createElement("div");
+  body.className = "cmp-body";
+  const panes = [
+    { label: "已交付版（原文件）", rel: st.rel },
+    { label: "工作版（未采用）", rel: st.working }
+  ];
+  const hosts = [];
+  panes.forEach(p => {
+    const pane = document.createElement("div");
+    pane.className = "cmp-pane";
+    const cap = document.createElement("div");
+    cap.className = "cmp-cap";
+    cap.textContent = p.label;
+    const host = document.createElement("div");
+    host.style.flex = "1 1 auto";
+    host.style.minHeight = "0";
+    host.style.display = "flex";
+    pane.appendChild(cap); pane.appendChild(host);
+    body.appendChild(pane);
+    hosts.push({ cap, host });
+  });
+  const diffBox = document.createElement("div");
+  diffBox.className = "cmp-diff";
+  box.appendChild(head); box.appendChild(diffBox); box.appendChild(body);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  let seq = 0;
+  let onKey = null;
+  const closeCompare = () => {
+    overlay.remove();
+    if (onKey) document.removeEventListener("keydown", onKey);
+  };
+  onKey = (ev) => { if (ev.key === "Escape") closeCompare(); };
+  document.addEventListener("keydown", onKey);
+  overlay.addEventListener("click", (ev) => {
+    if (ev.target === overlay) closeCompare();
+  });
+  close.addEventListener("click", closeCompare);
+  const renderDiff = (diff) => {
+    diffBox.innerHTML = "";
+    if (!diff) return;
+    const sum = document.createElement("div");
+    sum.className = "cmp-diff-sum";
+    sum.textContent = diff.summary || "没有差异信息";
+    diffBox.appendChild(sum);
+    const list = document.createElement("div");
+    list.className = "cmp-diff-list";
+    (diff.changes || []).forEach(c => {
+      const row = document.createElement("div");
+      row.className = "cmp-change";
+      const label = c.type === "added" ? "新增"
+        : c.type === "removed" ? "删除" : "改动";
+      row.appendChild(document.createTextNode(
+        label + (c.id ? " · " + c.id : "") + "："));
+      if (c.old) {
+        const o = document.createElement("span");
+        o.className = "cmp-old";
+        o.textContent = c.old;
+        row.appendChild(o);
+      }
+      if (c.old && c.new) row.appendChild(document.createTextNode(" → "));
+      if (c.new) {
+        const n = document.createElement("span");
+        n.className = "cmp-new";
+        n.textContent = c.new;
+        row.appendChild(n);
+      }
+      list.appendChild(row);
+    });
+    if (diff.truncated) {
+      const more = document.createElement("div");
+      more.className = "cmp-change";
+      more.textContent = "还有 " + diff.truncated + " 处没列出";
+      list.appendChild(more);
+    }
+    if (list.children.length) diffBox.appendChild(list);
+  };
+  const load = () => {
+    const my = ++seq;
+    note.textContent = "取两版…";
+    diffBox.innerHTML = "";
+    Promise.resolve(api.panel_compare(st.rel, st.working)).then(r => {
+      if (my !== seq || !overlay.isConnected) return;
+      const htmls = r && r.ok
+        ? [String(r.original_html || ""), String(r.working_html || "")]
+        : [];
+      hosts.forEach((slot, i) => {
+        slot.host.innerHTML = "";
+        if (!r || !r.ok) {
+          const err = document.createElement("div");
+          err.className = "cmp-err";
+          err.textContent = (r && (r.msg || r.why)) || "这一版打不开";
+          slot.host.appendChild(err);
+          slot.cap.textContent = panes[i].label + " · 打不开";
+          return;
+        }
+        const f = document.createElement("iframe");
+        f.setAttribute("sandbox", "");
+        f.setAttribute("referrerpolicy", "no-referrer");
+        f.setAttribute("title", panes[i].label);
+        f.srcdoc = htmls[i];
+        slot.host.appendChild(f);
+        slot.cap.textContent = panes[i].label;
+      });
+      if (!r || !r.ok) {
+        note.textContent = (r && (r.msg || r.why)) || "对比打不开";
+        return;
+      }
+      renderDiff(r.diff);
+      note.textContent = "只读预览；采用前可以来回看";
+    }).catch(() => { note.textContent = "对比没通（界面没回话）"; });
+  };
+  refresh.addEventListener("click", load);
+  load();
+}
+
+function adoptWorking(st) {
+  if (!st || !st.rel || !st.working || st.adopted) return;
+  appConfirm("采用工作版会用工作副本替换已交付的那份，并先把原版备份到 annotations/。确定？", () => {
+    st.adopt.disabled = true;
+    st.adopt.textContent = "采用中…";
+    const api = window.pywebview && pywebview.api;
+    if (!api || !api.panel_adopt) {
+      toast("这一屏不支持采用工作版", true);
+      st.adopt.disabled = false;
+      st.adopt.textContent = "采用工作版";
+      return;
+    }
+    Promise.resolve(api.panel_adopt(st.rel, st.working)).then(r => {
+      if (!r || r.ok === false) {
+        st.adopt.disabled = false;
+        st.adopt.textContent = "采用工作版";
+        st.msg.textContent = (r && r.msg) || "采用失败";
+        return;
+      }
+      st.adopted = true;
+      st.adopt.textContent = "已采用";
+      st.adopt.disabled = true;
+      st.hint.textContent = "已采用工作版 · 原版备份：" + (r.backup || "annotations/…");
+      toast("已采用工作版；原版已备份，工作副本还在");
+      const b = st.body, n = st.note;
+      closeAnnState();
+      if (b) { b.hidden = true; b.innerHTML = ""; }
+      if (n) n.textContent = "已采用工作版 · 点开看新版";
+      if (st.card && st.card.classList.contains("fullscreen")) closeArtifactFullscreen();
+    }).catch(() => {
+      st.adopt.disabled = false;
+      st.adopt.textContent = "采用工作版";
+      st.msg.textContent = "采用没送到（界面没回话）";
+    });
+  }, "采用工作版");
+}
+
+function closeAnnState() {
+  annState = null;
+}
+
+window.addEventListener("message", (ev) => {
+  if (!annState || !annState.frame || ev.source !== annState.frame.contentWindow) return;
+  const data = ev.data || {};
+  if (data.type === "ann-select") {
+    annState.mode = data.mode === "text" ? "text" : "element";
+    annState.text = String(data.text || "").slice(0, 500);
+    annState.selector = String(data.selector || "").slice(0, 300);
+    annState.tag = String(data.tag || "").slice(0, 40);
+    annState.block = String(data.block || "").slice(0, 160);
+    updateAnnBox(annState);
+  } else if (data.type === "ann-cancel") {
+    const st = annState;
+    closeAnnState();
+    if (st && st.body) { st.body.hidden = true; st.body.innerHTML = ""; }
+    if (st && st.note) st.note.textContent = "点开就地显示";
+    if (st && st.card && st.card.classList.contains("fullscreen")) closeArtifactFullscreen();
+  }
+});
 
 function addToolCard(name, summary, folded, trust) {
   removePlaceholder();
@@ -5433,9 +6233,14 @@ window.__gcodeEvent = function (e) {
   // 侧聊线程(v0.9.160):事件带着自己的 session 键,归侧聊页 —— 必须排在
   // 下面那道"后台会话不进当前视图"的闸**之前**,否则永远轮不到页面收。
   if (SideChatFeed(e)) return;
-  // 后台会话的事件:不往当前视图里画(切回去时会用 resumed 重建)
+  // 后台会话的事件:不往当前视图里画(切回去时会用 resumed 重建)。
+  // 例外是四类**阻塞**事件:提问卡、确认框、计划核对单都是"它在等你",
+  // 不显示出来用户就没法回答,那条会话会一直挂到停止/关窗;ask_trace 负责
+  // 把提问卡/核对单收尾。widget 不阻塞(切回去会在历史里重建),不在此列。
   if (e.session && currentSessionKey && e.session !== currentSessionKey
       && e.type !== "cleared" && e.type !== "resumed"
+      && e.type !== "ask_request" && e.type !== "ask_trace"
+      && e.type !== "confirm_request" && e.type !== "plan_review"
       && e.type !== "workspace") {   // 工作区是全局状态,不属于某个会话
     if (e.type === "info" && e.text) toast(e.text);   // 后台的提示仍然要让用户看到
     return;
@@ -5557,35 +6362,24 @@ window.__gcodeEvent = function (e) {
       break;
     }
     case "ask_request": {
-      // v0.9.96「动手前问一句」:模型给的选择题。卡片开着时输入框那句提示跟着变,
-      // 但**不锁输入框** —— 他完全可以不理这张卡直接打字,锁住等于替用户做决定。
-      askData = { qs: Array.isArray(e.questions) ? e.questions : [],
-                  idx: 0, picks: {}, free: {} };
-      $("askNote").textContent = [e.label, e.note].filter(Boolean).join(" · ");
-      renderAsk();
-      if (askData.qs.length) {
-        if (!askSavedPh) askSavedPh = $("input").placeholder || "";
-        $("input").placeholder = "上面有问题等你点选(也可以直接在卡片里自己补一句)";
-        $("askOverlay").classList.add("show");
-      }
+      // v0.9.185:流内卡片(OpenSquilla 形态)。不锁输入框 —— 他完全可以
+      // 不理这张卡直接打字,锁住等于替用户做决定;但卡片和顶部那条
+      // 「在等你」会一直留在页面上,不会再像浮层那样一关就没。
+      showAskCard(e);
       break;
     }
+    case "ui_widget":
+      addWidgetCard(e.widget, e.widget_id, e.session);
+      break;
     case "plan_review": {
-      // 计划核对单(v0.9.114):整张单子摊开让人批。
+      // 计划核对单(v0.9.185):整张单子摊在流里让人批。
       // 与提问卡一样**不锁输入框** —— 不理这张卡直接打字说话是他的权利。
-      prData = { goal: String(e.goal || ""),
-                 steps: Array.isArray(e.steps) ? e.steps : [], editing: -1 };
-      renderPlanReview();
-      $("planReviewOverlay").classList.add("show");
+      showPlanReview(e);
       break;
     }
     case "ask_trace": {
-      // 答完(或压根没等到答)都收卡 + 在对话里留一行痕。句子由后端组,
-      // 这里只负责摆 —— 前端再拼一份同样的话就是两份真相,而两份都摆在用户眼前。
-      $("askOverlay").classList.remove("show");
-      $("planReviewOverlay").classList.remove("show");
-      if (askSavedPh) { $("input").placeholder = askSavedPh; askSavedPh = ""; }
-      if (e.text) askSay(String(e.text));
+      // 句子由后端组:kind=plan 收流内核对卡,kind=ask 收提问卡。
+      finishAskCard(e);
       break;
     }
     case "map":
@@ -5771,9 +6565,9 @@ function setBusy(v) {
   busy = v;
   $("btnSend").style.display = v ? "none" : "block";
   $("btnStop").style.display = v ? "block" : "none";
-  // 跑着的时候输入框本来就能打字(那条路是插话),但没人知道要按 Enter —— 提示语替它说话
-  $("input").placeholder = v
-    ? "这一轮正在跑，补一句会排在下一步之后（Enter 发送）" : INPUT_HINT;
+  // 跑着的时候输入框本来就能打字(那条路是插话),但没人知道要按 Enter —— 提示语替它说话。
+  // 有提问卡在等时,提示语要让位给"先回答上面的问题"(那条比插话更要紧)。
+  updateComposerPlaceholder();
   if (!v && cur) { renderAssistant(true); cur = null; }
   if (!v) markPlanCardIdle();   // 这一轮结束了:还挂着「进行中」的步骤不能再转圈
   if (!v) maybeChangeReviewHint();
@@ -5831,6 +6625,7 @@ function openChangesSection() {
 }
 
 function renderHistory(messages) {
+  if (fullscreenArt) closeArtifactFullscreen();
   chat.innerHTML = "";
   hintTurn = 0;          // 换会话 = 那一问说过没有的账要重记(回合号是**会话内**的坐标)
   livePlanCard = null;   // 整段对话被换掉:旧卡片节点已经不在 DOM 里了
@@ -5839,6 +6634,12 @@ function renderHistory(messages) {
   userSeq = 0;
   lastUserQ = "";
   cancelEdit(false);
+  const histAsks = new Map();
+  const openAsks = new Set();
+  const histPlans = new Map();
+  const openPlans = new Set();
+  widgetCards.clear();
+  annState = null;      // 整段对话被换掉:批注 iframe 已不在 DOM 里,别再收它的消息
   for (const m of messages) {
     if (m.role === "user") addUserMsg(m.text, m.atts);
     else if (m.role === "assistant") {
@@ -5853,12 +6654,57 @@ function renderHistory(messages) {
         const acts = c.wrap.querySelector(".acts");
         if (acts) acts.remove();
       }
+      // 提问卡按工具调用参数重建(实时那条走 ask_request;两条读同一份规格)
+      (m.ui_calls || []).forEach(call => {
+        if (call.name === "ask_user") {
+          const st = addHistoryAsk(call);
+          if (st) { histAsks.set(call.id, st); openAsks.add(call.id); }
+        } else if (call.name === "plan") {
+          const st = addHistoryPlanReview(call);
+          if (st) { histPlans.set(call.id, st); openPlans.add(call.id); }
+        } else if (call.widget) {
+          addWidgetCard(call.widget, "hist-" + call.id, "", { history: true });
+        }
+      });
       cur = null;
     } else if (m.role === "tool") {
-      const el = addToolCard("工具结果", m.text.replace(/\n/g, " ").slice(0, 160), true);
-      el.classList.remove("run");        // 历史消息无法得知当时状态,用中性灰
+      if (m.name === "ask_user") {
+        const st = histAsks.get(m.tool_call_id);
+        if (st) {
+          finishHistoryAsk(st, m.text);
+          openAsks.delete(m.tool_call_id);
+        }
+      } else if (m.name === "plan") {
+        const st = histPlans.get(m.tool_call_id);
+        if (st) {
+          finishHistoryPlanReview(st, m.text);
+          openPlans.delete(m.tool_call_id);
+        }
+      } else if (m.name === "show_chart" || m.name === "show_table"
+                 || m.name === "show_checklist") {
+        // 组件卡片已在 assistant 的 ui_calls 里画过,不再多一张"工具结果"
+      } else {
+        const el = addToolCard("工具结果", m.text.replace(/\n/g, " ").slice(0, 160), true);
+        el.classList.remove("run");      // 历史消息无法得知当时状态,用中性灰
+      }
     }
   }
+  openAsks.forEach(id => {
+    const st = histAsks.get(id);
+    if (st) finishHistoryAsk(st, "这一轮没有留下回答记录（可能已停止或界面关闭）。");
+  });
+  openPlans.forEach(id => {
+    const st = histPlans.get(id);
+    if (st) finishHistoryPlanReview(st, "这一轮没有留下核对结果（可能已停止或界面关闭）。");
+  });
+  // 正在等你的卡不属于历史:重建完把它重新挂到末尾,切会话/恢复都不会把它弄丢。
+  if (activeAsk && !activeAsk.done) {
+    chat.appendChild(activeAsk.el);
+  }
+  if (activePlanReview && !activePlanReview.done) {
+    chat.appendChild(activePlanReview.el);
+  }
+  refreshAskBar();
   nearBottom = true; toBottom();
   fixImages(chat);
   renderMermaidBlocks(chat);
@@ -8248,13 +9094,11 @@ $("btnYes").addEventListener("click", () => { $("confirmOverlay").classList.remo
 $("btnAlways").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("always"); });
 $("btnRemember").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("remember"); });
 
-/* ---------------- 动手前问一句:提问卡(v0.9.96) ----------------
-   状态只有一份:askData.qs 是后端给的原文,选项 label 原样回传(不翻译、不改写、
-   不替用户把他没选的项当成他选的)。渲染一律用 textContent —— 模型写的题目
-   可能带尖括号,当 HTML 解析等于让外部内容进界面。 */
-let askData = { qs: [], idx: 0, picks: {}, free: {} };
-let askSavedPh = "";
-
+/* ---------------- 动手前问一句:流内提问卡(v0.9.185) ----------------
+   卡住在对话流里,不是浮层:答完、没答、重开会话都还能看见问题本身。
+   状态只有一份:问题原文来自后端 asking.normalize,选项 label 原样回传,
+   渲染一律 textContent —— 模型写的题目可能带尖括号,当 HTML 解析等于
+   让外部内容进界面。 */
 function askSay(text) {
   const box = document.createElement("div");
   box.className = "ask-trace";
@@ -8263,35 +9107,263 @@ function askSay(text) {
   nearBottom = true; toBottom();
 }
 
-function renderAsk() {
-  const body = $("askBody");
-  body.innerHTML = "";
-  const q = askData.qs[askData.idx];
-  const n = askData.qs.length;
-  $("askPage").textContent = (askData.idx + 1) + " / " + n;
-  $("askPrev").style.display = askData.idx > 0 ? "" : "none";
-  $("askNext").style.display = askData.idx < n - 1 ? "" : "none";
-  if (!q) return;
+function askSig(qs) { return JSON.stringify(Array.isArray(qs) ? qs : []); }
+
+function askAllAnswered(st) {
+  return st.data.questions.every(q => {
+    const picks = st.picks[q.id] || [];
+    const free = String(st.free[q.id] || "").trim();
+    return picks.length > 0 || free.length > 0;
+  });
+}
+
+function askPayload(st, mode) {
+  const out = { mode: mode, ask_id: st.id };
+  if (mode === "answer") {
+    out.answers = st.data.questions.map(q => ({
+      id: q.id,
+      choice: st.picks[q.id] || [],
+      free: String(st.free[q.id] || "").trim()
+    }));
+  }
+  return out;
+}
+
+function askCanRecommend(st) {
+  const qs = st.data.questions || [];
+  return qs.length > 0 && qs.every(q => !!q.recommend);
+}
+
+function updateComposerPlaceholder() {
+  const input = $("input");
+  if (!input) return;
+  if (activeAsk && !activeAsk.done) {
+    input.placeholder = "先回答上面的问题，或在这里补一句（Enter 发送）";
+    return;
+  }
+  if (activePlanReview && !activePlanReview.done) {
+    input.placeholder = "先批一下上面的计划，或在这里补一句（Enter 发送）";
+    return;
+  }
+  input.placeholder = busy
+    ? "这一轮正在跑，补一句会排在下一步之后（Enter 发送）" : INPUT_HINT;
+}
+
+function refreshAskBar() {
+  const bar = $("askBar");
+  if (!bar) return;
+  if (activeAsk && !activeAsk.done) {
+    const n = activeAsk.data.questions.length;
+    $("askBarText").textContent = "学长在等你回答上面的问题"
+      + (n > 1 ? "（第 " + (activeAsk.idx + 1) + "/" + n + " 题）" : "");
+    $("askBarGo").textContent = "去回答";
+    bar.style.display = "flex";
+    return;
+  }
+  if (activePlanReview && !activePlanReview.done) {
+    $("askBarText").textContent = "学长在等你批这张计划"
+      + (activePlanReview.data.steps.length
+         ? "（" + activePlanReview.data.steps.length + " 步）" : "");
+    $("askBarGo").textContent = "去处理";
+    bar.style.display = "flex";
+    return;
+  }
+  bar.style.display = "none";
+}
+
+$("askBarGo").addEventListener("click", () => {
+  const target = (activeAsk && !activeAsk.done) ? activeAsk
+    : (activePlanReview && !activePlanReview.done) ? activePlanReview : null;
+  if (target && target.el) {
+    target.el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+});
+
+function buildAskCard(st) {
+  const el = document.createElement("div");
+  el.className = "askc";
+  el.dataset.askId = st.id;
+  el.tabIndex = 0;
+  st.el = el;      // renderAskCard 里要按 done/unanswered 改这张卡的 class
   const head = document.createElement("div");
-  head.className = "ask-q";
-  head.textContent = (q.header ? "【" + q.header + "】" : "") + q.q
-    + (q.multi ? "(可多选)" : "");
-  body.appendChild(head);
-  const why = document.createElement("div");
-  why.className = "ask-why";
-  why.textContent = q.why || "";
-  body.appendChild(why);
-  const picked = askData.picks[q.id] || [];
-  (q.options || []).forEach(o => {
+  head.className = "askc-head";
+  const tag = document.createElement("span");
+  tag.className = "ask-tag";
+  tag.textContent = "需要输入";
+  head.appendChild(tag);
+  if (st.data.session && currentSessionKey
+      && st.data.session !== currentSessionKey && st.data.session_title) {
+    const from = document.createElement("span");
+    from.className = "askc-from";
+    from.textContent = "来自会话：" + st.data.session_title;
+    head.appendChild(from);
+  }
+  const prog = document.createElement("span");
+  prog.className = "askc-prog";
+  head.appendChild(prog);
+  el.appendChild(head);
+  const rule = document.createElement("div");
+  rule.className = "askc-rule";
+  el.appendChild(rule);
+  if (st.data.note) {
+    const note = document.createElement("div");
+    note.className = "askc-note";
+    note.textContent = st.data.note;
+    el.appendChild(note);
+  }
+  const body = document.createElement("div");
+  body.className = "askc-body";
+  el.appendChild(body);
+  const foot = document.createElement("div");
+  foot.className = "askc-foot";
+  el.appendChild(foot);
+  const hint = document.createElement("div");
+  hint.className = "askc-hint";
+  el.appendChild(hint);
+  st._ui = { head, tag, prog, rule, body, foot, hint };
+  el.addEventListener("keydown", (ev) => {
+    if (st.done || st.pending) return;
+    if (ev.target && ev.target.tagName === "TEXTAREA") return;
+    const q = st.data.questions[st.idx];
+    if (!q) return;
+    if (/^[1-4]$/.test(ev.key)) {
+      const o = (q.options || [])[Number(ev.key) - 1];
+      if (o) {
+        ev.preventDefault();
+        chooseAskOption(st, q, o.label);
+      }
+      return;
+    }
+    if (ev.key === "ArrowLeft" && st.idx > 0) {
+      ev.preventDefault(); clearTimeout(st.advanceTimer);
+      st.idx--; renderAskCard(st); refreshAskBar();
+    } else if (ev.key === "ArrowRight" && st.idx < st.data.questions.length - 1) {
+      ev.preventDefault(); clearTimeout(st.advanceTimer);
+      st.idx++; renderAskCard(st); refreshAskBar();
+    } else if (ev.key === "Enter" && st.idx === st.data.questions.length - 1) {
+      ev.preventDefault();
+      if (askAllAnswered(st)) {
+        sendAsk(st, "answer");
+      } else {
+        const missing = st.data.questions.findIndex(qq => {
+          const p = st.picks[qq.id] || [];
+          const f = String(st.free[qq.id] || "").trim();
+          return !p.length && !f;
+        });
+        if (missing >= 0) st.idx = missing;
+        renderAskCard(st);
+        st._ui.hint.textContent = "每题至少选一项或写一句；不想答就点「先不做」。";
+        refreshAskBar();
+      }
+    }
+  });
+  renderAskCard(st);
+  return el;
+}
+
+function syncAskOptions(st, q) {
+  if (!st._ui) return;
+  const picked = st.picks[q.id] || [];
+  const rows = st._ui.body.querySelectorAll(".askc-opts .ask-opt");
+  (q.options || []).forEach((o, i) => {
+    const row = rows[i];
+    if (!row) return;
+    const on = picked.includes(o.label);
+    row.classList.toggle("on", on);
+    row.setAttribute("aria-checked", on ? "true" : "false");
+  });
+}
+
+function chooseAskOption(st, q, label) {
+  if (!st || st.done || st.pending) return;
+  clearTimeout(st.advanceTimer);
+  const cur = st.picks[q.id] || [];
+  if (q.multi) {
+    st.picks[q.id] = cur.includes(label)
+      ? cur.filter(x => x !== label) : cur.concat([label]);
+  } else {
+    st.picks[q.id] = cur[0] === label ? [] : [label];
+  }
+  // 只改选中态,不重画整张卡:重画会让焦点/滚动位置跳一下,手感就是"死"。
+  syncAskOptions(st, q);
+  // 单选后自动翻到下一题(Qoder 那种手感);给 260ms 让人看清选中态。
+  if (!q.multi && st.picks[q.id].length
+      && st.idx < st.data.questions.length - 1) {
+    st.advanceTimer = setTimeout(() => {
+      if (st.done || st.pending) return;
+      if (st.idx >= st.data.questions.length - 1) return;
+      st.idx++;
+      renderAskCard(st);
+      refreshAskBar();
+    }, 260);
+  }
+}
+
+function renderAskCard(st) {
+  const ui = st._ui;
+  if (!ui) return;
+  const qs = st.data.questions || [];
+  const q = qs[st.idx] || qs[0];
+  if (!q) return;
+  const unanswered = !!st.done && /没答|没等到/.test(st.trace || "");
+  if (st.el) {
+    st.el.classList.toggle("done", !!st.done);
+    st.el.classList.toggle("unanswered", unanswered);
+  }
+  ui.tag.textContent = st.done ? (unanswered ? "未回答" : "已回答") : "需要输入";
+  ui.prog.textContent = (st.idx + 1) + " / " + qs.length;
+  ui.rule.textContent = st.done
+    ? "这张问题已经结束，记录留在对话里。"
+    : "请回答必填问题以继续，或点「先不做」结束这一轮。";
+  // 结束的卡收成摘要:只留结果 + 一颗「展开原题」;连聊几轮时不再一排大卡。
+  if (st.done && !st.expanded) {
+    ui.body.innerHTML = "";
+    ui.foot.innerHTML = "";
+    ui.hint.textContent = "";
+    const done = document.createElement("div");
+    done.className = "askc-done";
+    done.textContent = st.trace || "这一题已经结束。";
+    ui.foot.appendChild(done);
+    const expand = document.createElement("button");
+    expand.className = "b-no";
+    expand.type = "button";
+    expand.textContent = "展开原题";
+    expand.addEventListener("click", () => {
+      st.expanded = true;
+      renderAskCard(st);
+    });
+    ui.foot.appendChild(expand);
+    return;
+  }
+  const qEl = document.createElement("div");
+  qEl.className = "ask-q";
+  qEl.textContent = (q.header ? "【" + q.header + "】" : "") + q.q
+    + (q.multi ? "（可多选）" : "");
+  ui.body.innerHTML = "";
+  ui.body.appendChild(qEl);
+  if (q.why) {
+    const why = document.createElement("div");
+    why.className = "ask-why";
+    why.textContent = q.why;
+    ui.body.appendChild(why);
+  }
+  const opts = document.createElement("div");
+  opts.className = "askc-opts";
+  const picked = st.picks[q.id] || [];
+  (q.options || []).forEach((o, i) => {
     const row = document.createElement("div");
-    row.className = "ask-opt" + (picked.includes(o.label) ? " on" : "");
+    row.className = "ask-opt" + (picked.includes(o.label) ? " on" : "")
+                  + (st.done ? " off" : "");
+    row.tabIndex = 0;
+    row.setAttribute("role", q.multi ? "checkbox" : "radio");
+    row.setAttribute("aria-checked", picked.includes(o.label) ? "true" : "false");
     const dot = document.createElement("span");
-    dot.className = "ask-dot";
+    dot.className = "ask-dot" + (q.multi ? " multi" : "");
     row.appendChild(dot);
     const col = document.createElement("div");
     const lb = document.createElement("div");
     lb.className = "ask-ol";
-    lb.textContent = o.label;
+    lb.textContent = (i + 1) + ". " + o.label;
     col.appendChild(lb);
     if (o.note) {
       const nt = document.createElement("div");
@@ -8300,108 +9372,1085 @@ function renderAsk() {
       col.appendChild(nt);
     }
     row.appendChild(col);
-    row.addEventListener("click", () => {
-      const cur = askData.picks[q.id] || [];
-      if (q.multi) {
-        askData.picks[q.id] = cur.includes(o.label)
-          ? cur.filter(x => x !== o.label) : cur.concat([o.label]);
-      } else {
-        // 再点一次已选中的那一项 = 取消选择:不选是合法答案,不该被界面逼着选一个
-        askData.picks[q.id] = cur[0] === o.label ? [] : [o.label];
-      }
-      renderAsk();
+    const pick = () => chooseAskOption(st, q, o.label);
+    row.addEventListener("click", pick);
+    row.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); }
     });
-    body.appendChild(row);
+    opts.appendChild(row);
   });
+  ui.body.appendChild(opts);
+
   const free = document.createElement("textarea");
   free.className = "ask-free";
   free.rows = 2;
-  free.placeholder = "都不合适?自己说一句(可留空)";
-  free.value = askData.free[q.id] || "";
-  free.addEventListener("input", () => { askData.free[q.id] = free.value; });
-  body.appendChild(free);
+  free.placeholder = "其他（自己说一句，可留空）";
+  free.value = st.free[q.id] || "";
+  free.disabled = !!st.done || !!st.pending;
+  // 开始自己写就等于不打算吃"自动翻页"那一手:把计时器停掉,别把输入框抢走。
+  free.addEventListener("focus", () => clearTimeout(st.advanceTimer));
+  free.addEventListener("input", () => {
+    st.free[q.id] = free.value;
+    clearTimeout(st.advanceTimer);
+  });
+  ui.body.appendChild(free);
+
+  ui.foot.innerHTML = "";
+  ui.hint.textContent = "";
+  if (st.done) {
+    const done = document.createElement("div");
+    done.className = "askc-done";
+    done.textContent = st.trace || "这一题已经结束。";
+    ui.foot.appendChild(done);
+    if (st.expanded) {
+      const fold = document.createElement("button");
+      fold.className = "b-no";
+      fold.type = "button";
+      fold.textContent = "收起";
+      fold.addEventListener("click", () => {
+        st.expanded = false;
+        renderAskCard(st);
+      });
+      ui.foot.appendChild(fold);
+    }
+    return;
+  }
+  if (st.pending) {
+    const wait = document.createElement("span");
+    wait.className = "askc-wait";
+    wait.textContent = "正在送回去…";
+    ui.foot.appendChild(wait);
+    return;
+  }
+  if (st.idx > 0) {
+    const prev = document.createElement("button");
+    prev.className = "b-no";
+    prev.type = "button";
+    prev.textContent = "‹ 上一个";
+    prev.addEventListener("click", () => {
+      clearTimeout(st.advanceTimer);
+      st.idx--; renderAskCard(st); refreshAskBar();
+    });
+    ui.foot.appendChild(prev);
+  }
+  if (st.idx < qs.length - 1) {
+    const next = document.createElement("button");
+    next.className = "b-yes";
+    next.type = "button";
+    next.textContent = "下一个 ›";
+    next.addEventListener("click", () => {
+      clearTimeout(st.advanceTimer);
+      st.idx++; renderAskCard(st); refreshAskBar();
+    });
+    ui.foot.appendChild(next);
+  } else {
+    const submit = document.createElement("button");
+    submit.className = "b-yes";
+    submit.type = "button";
+    submit.textContent = "发送回复";
+    submit.addEventListener("click", () => {
+      if (!askAllAnswered(st)) {
+        const missing = st.data.questions.findIndex(qq => {
+          const p = st.picks[qq.id] || [];
+          const f = String(st.free[qq.id] || "").trim();
+          return !p.length && !f;
+        });
+        if (missing >= 0) st.idx = missing;
+        renderAskCard(st);
+        ui.hint.textContent = "每题至少选一项或写一句；不想答就点「先不做」。";
+        refreshAskBar();
+        return;
+      }
+      sendAsk(st, "answer");
+    });
+    ui.foot.appendChild(submit);
+  }
+  if (askCanRecommend(st)) {
+    const rec = document.createElement("button");
+    rec.className = "b-always";
+    rec.type = "button";
+    rec.textContent = "按推荐继续";
+    rec.title = "不逐题选，按学长标在第一项的推荐走";
+    rec.addEventListener("click", () => sendAsk(st, "recommend"));
+    ui.foot.appendChild(rec);
+  }
+  const skip = document.createElement("button");
+  skip.className = "b-no";
+  skip.type = "button";
+  skip.textContent = "先不做";
+  skip.addEventListener("click", () => sendAsk(st, "skip"));
+  ui.foot.appendChild(skip);
 }
 
-$("askPrev").addEventListener("click", () => {
-  if (askData.idx > 0) { askData.idx--; renderAsk(); }
-});
-$("askNext").addEventListener("click", () => {
-  if (askData.idx < askData.qs.length - 1) { askData.idx++; renderAsk(); }
-});
-$("askRecommend").addEventListener("click", () => {
-  $("askOverlay").classList.remove("show");
-  pywebview.api.ask_reply(JSON.stringify({ mode: "recommend" }));
-});
-$("askSend").addEventListener("click", () => {
-  const answers = askData.qs.map(q => ({
-    id: q.id, choice: askData.picks[q.id] || [],
-    free: String(askData.free[q.id] || "").trim() }));
-  $("askOverlay").classList.remove("show");
-  pywebview.api.ask_reply(JSON.stringify({ mode: "answer", answers: answers }));
-});
+function sendAsk(st, mode) {
+  if (!st || st.done || st.pending) return;
+  clearTimeout(st.advanceTimer);
+  const api = window.pywebview && pywebview.api;
+  if (!api || !api.ask_reply) { toast("这一屏不支持回答问题", true); return; }
+  st.pending = true;
+  renderAskCard(st);
+  Promise.resolve(api.ask_reply(JSON.stringify(askPayload(st, mode))))
+    .then(r => {
+      if (!r || r.ok === false) {
+        if (st.done) return;      // 已经收到 ask_trace:迟到的那一次不用再报错
+        st.pending = false;
+        renderAskCard(st);
+        toast((r && r.msg) || "回答没送到", true);
+      }
+    })
+    .catch(() => {
+      st.pending = false;
+      renderAskCard(st);
+      toast("回答没送到（界面没回话）", true);
+    });
+}
 
-/* ---------------- 计划核对单(v0.9.114,新功能①)----------------
-   plan 写完弹**整单**:批准 / 改一条 / 重排。机制与提问卡分家(那是问路,这是批单),
-   三个出口都回同一颗 `plan_review_reply`,判定与写回全在后端 ——
-   前端只负责把单子摆出来,不自己改计划(两处能改就两份真相)。 */
-let prData = { goal: "", steps: [], editing: -1 };
-function renderPlanReview() {
-  $("prGoal").textContent = prData.goal || "(模型没写目标)";
-  const box = $("prList");
-  box.innerHTML = "";
-  prData.steps.forEach(s => {
+function showAskCard(e) {
+  const qs = Array.isArray(e.questions) ? e.questions : [];
+  if (!qs.length) return;
+  const sig = askSig(qs);
+  if (activeAsk && !activeAsk.done && activeAsk.sig === sig) {
+    activeAsk.el.scrollIntoView({ block: "nearest" });
+    refreshAskBar();
+    return;
+  }
+  if (activeAsk && !activeAsk.done) {
+    // 同一时刻只让一张卡可操作:旧卡留着当记录,但按钮全部停掉。
+    clearTimeout(activeAsk.advanceTimer);
+    activeAsk.done = true;
+    activeAsk.pending = false;
+    activeAsk.expanded = false;
+    activeAsk.trace = "这张卡已被新的提问接替。";
+    renderAskCard(activeAsk);
+  }
+  const st = {
+    id: String(e.ask_id || ("ask-" + Date.now())),
+    data: { questions: qs, note: String(e.note || ""), label: String(e.label || ""),
+            session: String(e.session || ""),
+            session_title: String(e.session_title || "") },
+    idx: 0, picks: {}, free: {}, done: false, pending: false, sig, el: null,
+    expanded: false, advanceTimer: null
+  };
+  qs.forEach(q => { st.picks[q.id] = []; st.free[q.id] = ""; });
+  st.el = buildAskCard(st);
+  $("chat").appendChild(st.el);
+  activeAsk = st;
+  refreshAskBar();
+  updateComposerPlaceholder();
+  nearBottom = true;
+  // 等待条出现在输入区上方,会把聊天区**再压矮**约 40px。先 toBottom 再等一帧
+  // 按卡片底边对齐:否则最后一行按钮正好被压在等待条下面(实测截图里"下一个"
+  // 和"先不做"看不见,但 Playwright 还能点 —— 典型的"断言过了、用户看不见")。
+  requestAnimationFrame(() => {
+    chat.scrollTop = chat.scrollHeight;
+  });
+  st.el.focus({ preventScroll: true });
+}
+
+function finishAskCard(e) {
+  if (e.kind === "plan") {
+    finishPlanReview(e);
+    return;
+  }
+  const id = String(e.ask_id || "");
+  if (!activeAsk || (id && activeAsk.id !== id)) {
+    // 不是当前这张(历史回放/另一条会话):只在同一条会话的流里留一行痕
+    if (e.text && (!e.session || e.session === currentSessionKey)) {
+      askSay(String(e.text));
+    }
+    return;
+  }
+  clearTimeout(activeAsk.advanceTimer);
+  activeAsk.done = true;
+  activeAsk.pending = false;
+  activeAsk.expanded = false;
+  activeAsk.trace = String(e.text || "");
+  activeAsk.el.classList.toggle("unanswered", /没答|没等到/.test(activeAsk.trace));
+  renderAskCard(activeAsk);
+  refreshAskBar();
+  updateComposerPlaceholder();
+  nearBottom = true; toBottom();
+}
+
+/* 历史回放:问题在留档里是一条 ask_user 工具调用,回答在紧随其后的
+   工具结果里。这里按 tool_call_id 把两半配回去,画成一张只读卡片。 */
+function makeAskState(call) {
+  const qs = Array.isArray(call.questions) ? call.questions : [];
+  const st = {
+    id: "hist-" + String(call.id || Math.random()),
+    data: { questions: qs, note: String(call.note || ""), label: String(call.label || ""),
+            session: "", session_title: "" },
+    idx: 0, picks: {}, free: {}, done: false, pending: false,
+    sig: askSig(qs), el: null, history: true, expanded: false,
+    advanceTimer: null
+  };
+  qs.forEach(q => { st.picks[q.id] = []; st.free[q.id] = ""; });
+  return st;
+}
+
+function addHistoryAsk(call) {
+  if (activeAsk && !activeAsk.done && activeAsk.sig === askSig(call.questions)) {
+    return null;      // 正在等你的那张卡会在重建末尾重新挂上,别画两张
+  }
+  const st = makeAskState(call);
+  st.el = buildAskCard(st);
+  $("chat").appendChild(st.el);
+  st.done = true;
+  st.trace = "这一轮没有留下回答记录。";
+  renderAskCard(st);
+  return st;
+}
+
+function finishHistoryAsk(st, text) {
+  if (!st) return;
+  st.done = true;
+  st.pending = false;
+  st.trace = String(text || "这一轮没有留下回答记录。");
+  st.el.classList.toggle("unanswered", /没答|没等到/.test(st.trace));
+  renderAskCard(st);
+}
+
+/* ---------------- 计划核对：流内卡(v0.9.185) ----------------
+   与提问卡分家:那是问路,这是批单。三种出口(批准 / 改一条 / 重排)与
+   「稍后再说」都回同一颗 plan_review_reply;卡留在流里,resume 后还在。 */
+function planReviewSig(goal, steps) {
+  return JSON.stringify({
+    goal: String(goal || ""),
+    steps: (steps || []).map(s => [s.n, s.title, s.verify])
+  });
+}
+
+function planReviewData(e) {
+  const steps = (Array.isArray(e.steps) ? e.steps : []).map(s => ({
+    n: Number(s.n) || 0,
+    title: String(s.title || ""),
+    verify: String(s.verify || "")
+  })).filter(s => s.title);
+  return { goal: String(e.goal || ""), steps: steps };
+}
+
+function showPlanReview(e) {
+  const data = planReviewData(e);
+  if (!data.steps.length) return;
+  const sig = planReviewSig(data.goal, data.steps);
+  if (activePlanReview && !activePlanReview.done
+      && activePlanReview.sig === sig) {
+    activePlanReview.el.scrollIntoView({ block: "nearest" });
+    refreshAskBar();
+    return;
+  }
+  if (activePlanReview && !activePlanReview.done) {
+    // 同一时刻只让一张单子可操作:旧卡留着当记录,但按钮全部停掉。
+    activePlanReview.done = true;
+    activePlanReview.pending = false;
+    activePlanReview.mode = "unanswered";
+    activePlanReview.trace = "这张核对单已被新的一张接替。";
+    renderPlanReviewCard(activePlanReview);
+  }
+  const st = {
+    id: String(e.ask_id || ("plan-" + Date.now())),
+    data: data,
+    session: String(e.session || ""),
+    session_title: String(e.session_title || ""),
+    editing: -1,
+    note: "",
+    done: false,
+    pending: false,
+    expanded: false,
+    sig: sig,
+    trace: "",
+    mode: "",
+    el: null,
+    _ui: null
+  };
+  st.el = buildPlanReview(st);
+  $("chat").appendChild(st.el);
+  activePlanReview = st;
+  refreshAskBar();
+  updateComposerPlaceholder();
+  nearBottom = true;
+  // 与提问卡同一个坑:等待条出现后聊天区会被压矮,等一帧再滚到底。
+  requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
+  st.el.focus({ preventScroll: true });
+}
+
+function buildPlanReview(st) {
+  const el = document.createElement("div");
+  el.className = "askc planc";
+  el.dataset.askId = st.id;
+  el.tabIndex = 0;
+  st.el = el;
+  const head = document.createElement("div");
+  head.className = "askc-head";
+  const tag = document.createElement("span");
+  tag.className = "ask-tag";
+  tag.textContent = "计划核对";
+  head.appendChild(tag);
+  if (st.session && currentSessionKey
+      && st.session !== currentSessionKey && st.session_title) {
+    const from = document.createElement("span");
+    from.className = "askc-from";
+    from.textContent = "来自会话：" + st.session_title;
+    head.appendChild(from);
+  }
+  const prog = document.createElement("span");
+  prog.className = "askc-prog";
+  head.appendChild(prog);
+  el.appendChild(head);
+  const rule = document.createElement("div");
+  rule.className = "askc-rule";
+  el.appendChild(rule);
+  const body = document.createElement("div");
+  body.className = "askc-body";
+  el.appendChild(body);
+  const foot = document.createElement("div");
+  foot.className = "askc-foot";
+  el.appendChild(foot);
+  const hint = document.createElement("div");
+  hint.className = "askc-hint";
+  el.appendChild(hint);
+  st._ui = { tag, prog, rule, body, foot, hint };
+  renderPlanReviewCard(st);
+  return el;
+}
+
+function renderPlanReviewCard(st) {
+  const ui = st._ui;
+  if (!ui) return;
+  const steps = st.data.steps || [];
+  const unanswered = !!st.done
+    && (st.mode === "unanswered" || /没等到|没答|未确认/.test(st.trace || ""));
+  if (st.el) {
+    st.el.classList.toggle("done", !!st.done);
+    st.el.classList.toggle("unanswered", unanswered);
+  }
+  ui.tag.textContent = st.done ? (unanswered ? "未确认" : "已处理") : "计划核对";
+  ui.prog.textContent = steps.length + " 步";
+  ui.rule.textContent = st.done
+    ? "这张单子已经结束，记录留在对话里。"
+    : "整张单子先过你的眼：批准就开工；哪一步不对点「改这条」；整体不对就写一句「重排」。";
+  ui.body.innerHTML = "";
+  const goal = document.createElement("div");
+  goal.className = "pr-goal";
+  goal.textContent = st.data.goal || "(模型没写目标)";
+  ui.body.appendChild(goal);
+  // 结束的核对单收成摘要:目标 + 批单结果 + 「展开步骤」;连聊几轮时更清爽。
+  if (st.done && !st.expanded) {
+    ui.foot.innerHTML = "";
+    ui.hint.textContent = "";
+    const done = document.createElement("div");
+    done.className = "askc-done";
+    done.textContent = st.trace || "这张核对单已经结束。";
+    ui.foot.appendChild(done);
+    const expand = document.createElement("button");
+    expand.className = "b-no";
+    expand.type = "button";
+    expand.textContent = "展开步骤";
+    expand.addEventListener("click", () => {
+      st.expanded = true;
+      renderPlanReviewCard(st);
+    });
+    ui.foot.appendChild(expand);
+    return;
+  }
+  const list = document.createElement("div");
+  list.className = "pr-list";
+  steps.forEach(s => {
     const n = Number(s.n);
     const row = document.createElement("div");
     row.className = "pr-step";
-    if (prData.editing === n) {
-      row.innerHTML = `<span class="pr-n">${n}</span>`;
+    if (!st.done && st.editing === n) {
+      row.classList.add("editing");
+      const num = document.createElement("span");
+      num.className = "pr-n";
+      num.textContent = String(n);
       const inp = document.createElement("input");
       inp.className = "pr-input";
-      inp.value = String(s.title || "");
+      inp.value = s.title;
       inp.maxLength = 200;
       const save = document.createElement("button");
       save.className = "pr-save";
+      save.type = "button";
       save.textContent = "保存这条";
       save.addEventListener("click", () => {
         const text = inp.value.trim();
-        if (!text) { toast("改成空话不行 —— 这一步要做什么总得有一句", true); return; }
-        prReply({ mode: "edit", step: n, text: text });
+        if (!text) {
+          ui.hint.textContent = "改成空话不行 —— 这一步要做什么总得有一句。";
+          return;
+        }
+        planReviewReply(st, { mode: "edit", step: n, text: text });
       });
       const cancel = document.createElement("button");
       cancel.className = "pr-edit";
+      cancel.type = "button";
       cancel.textContent = "取消";
-      cancel.addEventListener("click", () => { prData.editing = -1; renderPlanReview(); });
-      row.appendChild(inp); row.appendChild(save); row.appendChild(cancel);
-      box.appendChild(row);
+      cancel.addEventListener("click", () => {
+        st.editing = -1;
+        renderPlanReviewCard(st);
+      });
+      inp.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") { ev.preventDefault(); save.click(); }
+        else if (ev.key === "Escape") { ev.preventDefault(); cancel.click(); }
+      });
+      row.appendChild(num); row.appendChild(inp);
+      row.appendChild(save); row.appendChild(cancel);
+      // 「改这条」点下去就该能直接打字,不必再点一次输入框。
+      requestAnimationFrame(() => { inp.focus(); inp.select(); });
+    } else {
+      const num = document.createElement("span");
+      num.className = "pr-n";
+      num.textContent = String(n);
+      const title = document.createElement("span");
+      title.className = "pr-t";
+      title.textContent = s.title;
+      if (s.verify) {
+        const v = document.createElement("span");
+        v.className = "pr-v";
+        v.textContent = "验收 " + s.verify;
+        title.appendChild(v);
+      }
+      row.appendChild(num); row.appendChild(title);
+      if (!st.done) {
+        const edit = document.createElement("button");
+        edit.className = "pr-edit";
+        edit.type = "button";
+        edit.textContent = "改这条";
+        edit.addEventListener("click", () => {
+          st.editing = n;
+          renderPlanReviewCard(st);
+        });
+        row.appendChild(edit);
+      }
+    }
+    list.appendChild(row);
+  });
+  ui.body.appendChild(list);
+  if (!st.done) {
+    const note = document.createElement("textarea");
+    note.className = "ann-input plan-note";
+    note.rows = 2;
+    note.placeholder = "点「重排」时写一句哪里不对（只点批准不用填）";
+    note.value = st.note || "";
+    note.addEventListener("input", () => { st.note = note.value; });
+    ui.body.appendChild(note);
+  }
+  ui.foot.innerHTML = "";
+  ui.hint.textContent = "";
+  if (st.done) {
+    const done = document.createElement("div");
+    done.className = "askc-done";
+    done.textContent = st.trace || "这张核对单已经结束。";
+    ui.foot.appendChild(done);
+    if (st.expanded) {
+      const fold = document.createElement("button");
+      fold.className = "b-no";
+      fold.type = "button";
+      fold.textContent = "收起";
+      fold.addEventListener("click", () => {
+        st.expanded = false;
+        renderPlanReviewCard(st);
+      });
+      ui.foot.appendChild(fold);
+    }
+    return;
+  }
+  if (st.pending) {
+    const wait = document.createElement("span");
+    wait.className = "askc-wait";
+    wait.textContent = "正在送回去…";
+    ui.foot.appendChild(wait);
+    return;
+  }
+  const later = document.createElement("button");
+  later.className = "b-no";
+  later.type = "button";
+  later.textContent = "稍后再说";
+  later.title = "先不答：这一轮不会开工";
+  later.addEventListener("click", () => planReviewReply(st, { mode: "unanswered" }));
+  const revise = document.createElement("button");
+  revise.className = "b-always";
+  revise.type = "button";
+  revise.textContent = "重排";
+  revise.title = "这张单子没通过，让学长重出一版";
+  revise.addEventListener("click", () => {
+    const note = String(st.note || "").trim();
+    if (!note) {
+      ui.hint.textContent = "点「重排」请写一句哪里不对 —— 不写学长只能猜。";
       return;
     }
-    row.innerHTML = `<span class="pr-n">${n}</span>
-      <span class="pr-t">${esc(String(s.title || ""))}
-        ${s.verify ? `<span class="pr-v">验收 ${esc(String(s.verify))}</span>` : ""}</span>`;
-    const edit = document.createElement("button");
-    edit.className = "pr-edit";
-    edit.textContent = "改这条";
-    edit.addEventListener("click", () => { prData.editing = n; renderPlanReview(); });
-    row.appendChild(edit);
-    box.appendChild(row);
+    planReviewReply(st, { mode: "revise", note: note });
   });
+  const approve = document.createElement("button");
+  approve.className = "b-yes";
+  approve.type = "button";
+  approve.textContent = "批准并开工";
+  approve.title = "按这张单子开始做";
+  approve.addEventListener("click", () => planReviewReply(st, { mode: "approve" }));
+  ui.foot.appendChild(later);
+  ui.foot.appendChild(revise);
+  ui.foot.appendChild(approve);
 }
-function prReply(payload) {
+
+function planReviewReply(st, payload) {
+  if (!st || st.done || st.pending) return;
   const api = window.pywebview && pywebview.api;
-  if (!api || !api.plan_review_reply) { toast("这一张核对单没接上", true); return; }
-  $("planReviewOverlay").classList.remove("show");
-  api.plan_review_reply(JSON.stringify(payload));
+  if (!api || !api.plan_review_reply) {
+    toast("这张核对单没接上", true);
+    return;
+  }
+  payload.ask_id = st.id;
+  if (payload.mode === "edit") {
+    // 本地先把改后的标题写进卡里,批完看到的就是新单子;后端会再写回 plan.md。
+    const hit = st.data.steps.find(s => Number(s.n) === Number(payload.step));
+    if (hit) hit.title = String(payload.text || "");
+  }
+  st.pending = true;
+  renderPlanReviewCard(st);
+  Promise.resolve(api.plan_review_reply(JSON.stringify(payload)))
+    .then(r => {
+      if (r && r.ok === false && !st.done) {
+        st.pending = false;
+        renderPlanReviewCard(st);
+        st._ui.hint.textContent = (r && r.msg) || "没记下来";
+      }
+    })
+    .catch(() => {
+      if (st.done) return;
+      st.pending = false;
+      renderPlanReviewCard(st);
+      st._ui.hint.textContent = "回话没送到（界面没回话）";
+    });
 }
-$("prApprove").addEventListener("click", () => prReply({ mode: "approve" }));
-$("prRevise").addEventListener("click", () => {
-  const note = $("prNote").value.trim();
-  if (!note) { toast("点「重排」请写一句哪里不对 —— 不写学长只能猜", true); return; }
-  prReply({ mode: "revise", note: note });
-});
-// 「稍后再说」= 明确按**未确认**收口:必须回话给后端,否则那条等待线程一直挂着,
-// 表现就是"卡关掉了但学长再也没动静"。回 unanswered 之后 planning 那一侧会说
-// "先把计划讲给用户,别直接开工" —— 这才是"稍后"的真意思。
-$("prClose").addEventListener("click", () => prReply({ mode: "unanswered" }));
+
+function finishPlanReview(e) {
+  const id = String(e.ask_id || "");
+  if (!activePlanReview || (id && activePlanReview.id !== id)) {
+    if (e.text && (!e.session || e.session === currentSessionKey)) {
+      askSay(String(e.text));
+    }
+    return;
+  }
+  activePlanReview.done = true;
+  activePlanReview.pending = false;
+  activePlanReview.trace = String(e.text || "");
+  activePlanReview.mode = String(e.mode || "");
+  renderPlanReviewCard(activePlanReview);
+  refreshAskBar();
+  updateComposerPlaceholder();
+  nearBottom = true; toBottom();
+}
+
+/* 历史回放:plan(action=write) 的调用参数就是那张单子,工具结果尾巴上是
+   用户当时批的结果。实时事件与历史回放读同一份形状。 */
+function addHistoryPlanReview(call) {
+  const data = {
+    goal: String(call.goal || ""),
+    steps: (Array.isArray(call.steps) ? call.steps : []).map(s => ({
+      n: Number(s.n) || 0,
+      title: String(s.title || ""),
+      verify: String(s.verify || "")
+    })).filter(s => s.title)
+  };
+  if (!data.steps.length) return null;
+  const sig = planReviewSig(data.goal, data.steps);
+  if (activePlanReview && !activePlanReview.done
+      && activePlanReview.sig === sig) {
+    return null;
+  }
+  const st = {
+    id: "hist-" + String(call.id || Math.random()),
+    data: data,
+    session: "",
+    session_title: "",
+    editing: -1,
+    note: "",
+    done: true,
+    pending: false,
+    expanded: false,
+    sig: sig,
+    trace: "这一轮没有留下核对结果。",
+    mode: "",
+    el: null,
+    _ui: null
+  };
+  st.el = buildPlanReview(st);
+  $("chat").appendChild(st.el);
+  renderPlanReviewCard(st);
+  return st;
+}
+
+function finishHistoryPlanReview(st, text) {
+  if (!st) return;
+  const t = String(text || "");
+  // 工具结果尾巴是"单子 + 调度 + 批单结果";只取批单那一句,顺手去掉 ** 记号,
+  // 免得历史卡上出现"**批准这张计划**"这种原始 Markdown。
+  let tail = t;
+  let at = -1;
+  ["用户已在界面上", "用户把第", "用户点了「重排」", "这张核对单没等到回答"]
+    .forEach(m => { const i = tail.lastIndexOf(m); if (i > at) at = i; });
+  if (at >= 0) tail = tail.slice(at);
+  st.trace = tail.replace(/\*\*/g, "").replace(/\s+/g, " ").trim().slice(0, 600);
+  if (!st.trace) st.trace = "这一轮没有留下核对结果。";
+  st.done = true;
+  st.pending = false;
+  if (/批准|开工/.test(st.trace)) st.mode = "approve";
+  else if (/重排/.test(st.trace)) st.mode = "revise";
+  else if (/改成|改后|第 \d+ 步/.test(st.trace)) st.mode = "edit";
+  else st.mode = "unanswered";
+  renderPlanReviewCard(st);
+}
+
+/* ---------------- 交互式可视化(v0.9.185) ----------------
+   原生组件:数据进,SVG/表格/清单出。模型写不了 HTML/JS,界面也不执行
+   任何外部代码 —— 和 panel.py 那条"模型写的网页"是两条路。
+   交互分三层:本地重算(排序/筛选/图例/看数据)、清单勾选后发回对话、
+   没有第三层 —— 图表上的点不会偷偷发请求。 */
+const WC_COLORS = ["#3FBDAE", "#7AA7FF", "#F5A524", "#E06C75", "#A78BFA", "#4FD1C5"];
+
+function wcEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function wcNum(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return String(v);
+  const a = Math.abs(n);
+  if (a >= 10000) return (n / 10000).toFixed(a >= 100000 ? 0 : 1).replace(/\.0$/, "") + "万";
+  if (a >= 1000) return (n / 1000).toFixed(a >= 10000 ? 0 : 1).replace(/\.0$/, "") + "千";
+  return String(Math.round(n * 100) / 100);
+}
+
+function wcCmp(a, b) {
+  const na = Number(a), nb = Number(b);
+  const an = a !== "" && a !== null && isFinite(na);
+  const bn = b !== "" && b !== null && isFinite(nb);
+  if (an && bn) return na - nb;
+  return String(a).localeCompare(String(b), "zh-CN");
+}
+
+function wcTip(card, text, ev) {
+  let tip = card.querySelector(".wc-tip");
+  if (!tip) { tip = wcEl("div", "wc-tip"); card.appendChild(tip); }
+  tip.textContent = text;
+  tip.style.display = "block";
+  const rect = card.getBoundingClientRect();
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  const x = Math.max(4, Math.min(ev.clientX - rect.left + 12, rect.width - tw - 4));
+  const y = Math.max(4, Math.min(ev.clientY - rect.top + 10, rect.height - th - 4));
+  tip.style.left = x + "px";
+  tip.style.top = y + "px";
+}
+
+function wcHideTip(card) {
+  const tip = card.querySelector(".wc-tip");
+  if (tip) tip.style.display = "none";
+}
+
+function addWidgetCard(spec, widgetId, session, opts) {
+  if (!spec || !spec.kind) return null;
+  const id = String(widgetId || ("w-" + Date.now() + "-" + Math.floor(Math.random() * 1e6)));
+  if (widgetCards.has(id)) return widgetCards.get(id);
+  const el = wcEl("div", "wcard");
+  el.dataset.widgetId = id;
+  const head = wcEl("div", "wc-head");
+  head.appendChild(wcEl("div", "wc-title", spec.title || "可视化"));
+  head.appendChild(wcEl("span", "wc-kind",
+    spec.kind === "chart" ? "图表" : spec.kind === "table" ? "表格" : "清单"));
+  const fs = wcEl("button", "wc-fs", "放大");
+  fs.type = "button";
+  fs.title = "全屏看这张卡片（Esc 或「还原」退出）";
+  fs.addEventListener("click", () => {
+    if (el.classList.contains("fullscreen")) {
+      closeArtifactFullscreen();
+      return;
+    }
+    openArtifactFullscreen(el, null, null, fs);
+  });
+  head.appendChild(fs);
+  el.appendChild(head);
+  if (spec.note) el.appendChild(wcEl("div", "wc-note", spec.note));
+  const host = wcEl("div", "wc-body");
+  el.appendChild(host);
+  if (spec.kind === "chart") renderChartCard(host, spec, el);
+  else if (spec.kind === "table") renderTableCard(host, spec);
+  else renderChecklistCard(host, spec, id);
+  $("chat").appendChild(el);
+  widgetCards.set(id, el);
+  nearBottom = true;
+  // 新卡刚插进 DOM 时 scrollHeight 还是旧的;等一帧再滚到底,
+  // 否则最后一行会被输入区压住(与提问卡同一个坑)。
+  requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
+  return el;
+}
+
+function renderChartCard(host, spec, card) {
+  const legend = wcEl("div", "wc-legend");
+  const chart = wcEl("div", "wc-chart");
+  const actions = wcEl("div", "wc-actions");
+  const dataBtn = wcEl("button", "wc-btn", "看数据");
+  dataBtn.type = "button";
+  const dataBox = wcEl("div", "wc-data");
+  dataBox.hidden = true;
+  const hidden = new Set();
+  const draw = () => {
+    chart.innerHTML = "";
+    legend.innerHTML = "";
+    if (spec.chart_type === "pie") {
+      const total = spec.series[0].values.reduce((a, b) => a + Math.max(0, b), 0) || 1;
+      spec.labels.forEach((label, i) => {
+        const item = wcEl("div", "wc-lg static");
+        const dot = wcEl("span", "wc-dot");
+        dot.style.background = WC_COLORS[i % WC_COLORS.length];
+        item.appendChild(dot);
+        item.appendChild(document.createTextNode(
+          label + "  " + (spec.series[0].values[i] / total * 100).toFixed(1) + "%"));
+        legend.appendChild(item);
+      });
+    } else {
+      spec.series.forEach((s, i) => {
+        const b = wcEl("button", "wc-lg" + (hidden.has(i) ? " off" : ""));
+        b.type = "button";
+        b.setAttribute("aria-pressed", hidden.has(i) ? "false" : "true");
+        const dot = wcEl("span", "wc-dot");
+        dot.style.background = WC_COLORS[i % WC_COLORS.length];
+        b.appendChild(dot);
+        b.appendChild(document.createTextNode(s.name));
+        b.addEventListener("click", () => {
+          if (hidden.has(i)) hidden.delete(i); else hidden.add(i);
+          draw();
+        });
+        legend.appendChild(b);
+      });
+    }
+    chart.appendChild(wcChartSvg(spec, hidden, card));
+  };
+  const drawData = () => {
+    dataBox.innerHTML = "";
+    const table = wcEl("table", "wc-table");
+    const thead = wcEl("thead");
+    const hr = wcEl("tr");
+    hr.appendChild(wcEl("th", "", "项目"));
+    spec.series.forEach(s => hr.appendChild(wcEl("th", "", s.name)));
+    thead.appendChild(hr); table.appendChild(thead);
+    const tbody = wcEl("tbody");
+    spec.labels.forEach((label, i) => {
+      const tr = wcEl("tr");
+      tr.appendChild(wcEl("td", "", label));
+      spec.series.forEach(s => tr.appendChild(wcEl("td", "", wcNum(s.values[i]))));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody); dataBox.appendChild(table);
+  };
+  dataBtn.addEventListener("click", () => {
+    dataBox.hidden = !dataBox.hidden;
+    dataBtn.textContent = dataBox.hidden ? "看数据" : "收起数据";
+    if (!dataBox.hidden) {
+      drawData();
+      requestAnimationFrame(() => dataBox.scrollIntoView({ block: "nearest" }));
+    }
+  });
+  host.appendChild(legend);
+  host.appendChild(chart);
+  actions.appendChild(dataBtn);
+  host.appendChild(actions);
+  host.appendChild(dataBox);
+  draw();
+}
+
+function wcNiceScale(all) {
+  let lo = Math.min(0, ...all), hi = Math.max(0, ...all);
+  if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
+  if (hi === lo) hi = lo + 1;
+  const raw = (hi - lo) / 4;
+  const mag = Math.pow(10, Math.floor(Math.log10(Math.abs(raw) || 1)));
+  const norm = raw / mag;
+  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+  lo = Math.floor(lo / step) * step;
+  hi = Math.ceil(hi / step) * step;
+  if (hi === lo) hi = lo + step;
+  const ticks = [];
+  for (let v = lo; v <= hi + step * 1e-6; v += step) ticks.push(v);
+  return { lo, hi, step, ticks };
+}
+
+function wcChartSvg(spec, hidden, card) {
+  const NS = "http://www.w3.org/2000/svg";
+  const make = (tag, attrs) => {
+    const el = document.createElementNS(NS, tag);
+    Object.keys(attrs || {}).forEach(k => el.setAttribute(k, String(attrs[k])));
+    return el;
+  };
+  const svg = make("svg", { viewBox: "0 0 720 320", class: "wc-svg",
+                            role: "img", "aria-label": spec.title });
+  if (spec.chart_type === "pie") {
+    const values = spec.series[0].values.map(v => Math.max(0, v));
+    const total = values.reduce((a, b) => a + b, 0);
+    if (!(total > 0)) {
+      const msg = make("text", { x: 360, y: 160, "text-anchor": "middle",
+                                 fill: "currentColor", "font-size": 13, opacity: .65 });
+      msg.textContent = "饼图需要一个大于 0 的合计";
+      svg.appendChild(msg);
+      return svg;
+    }
+    const cx = 220, cy = 160, r = 112;
+    let angle = -Math.PI / 2;
+    spec.labels.forEach((label, k) => {
+      const frac = values[k] / total;
+      const a1 = angle + frac * Math.PI * 2;
+      const x0 = cx + r * Math.cos(angle), y0 = cy + r * Math.sin(angle);
+      const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+      const path = make("path", {
+        d: "M " + cx + " " + cy + " L " + x0 + " " + y0
+           + " A " + r + " " + r + " 0 " + (frac > .5 ? 1 : 0) + " 1 " + x1 + " " + y1 + " Z",
+        fill: WC_COLORS[k % WC_COLORS.length], "fill-opacity": .92,
+        stroke: "rgba(0,0,0,.18)", "stroke-width": 1
+      });
+      const tipText = label + "：" + wcNum(values[k]) + "（" + (frac * 100).toFixed(1) + "%）";
+      path.addEventListener("mouseenter", ev => wcTip(card, tipText, ev));
+      path.addEventListener("mousemove", ev => wcTip(card, tipText, ev));
+      path.addEventListener("mouseleave", () => wcHideTip(card));
+      svg.appendChild(path);
+      angle = a1;
+    });
+    return svg;
+  }
+  const visible = spec.series.map((s, i) => ({ s, i })).filter(x => !hidden.has(x.i));
+  if (!visible.length) {
+    const msg = make("text", { x: 360, y: 160, "text-anchor": "middle",
+                               fill: "currentColor", "font-size": 13, opacity: .65 });
+    msg.textContent = "所有系列都藏起来了（点上面的图例恢复）";
+    svg.appendChild(msg);
+    return svg;
+  }
+  const L = 52, R = 704, T = 18, B = 262;
+  const all = [];
+  visible.forEach(({ s }) => s.values.forEach(v => all.push(v)));
+  const scale = wcNiceScale(all);
+  const lo = scale.lo, hi = scale.hi;
+  const y = v => B - (v - lo) / (hi - lo) * (B - T);
+  const zero = y(0);
+  scale.ticks.forEach((val, k) => {
+    const yy = y(val);
+    svg.appendChild(make("line", { x1: L, x2: R, y1: yy, y2: yy,
+      stroke: "currentColor", "stroke-opacity": k === 0 ? .18 : .09 }));
+    const t = make("text", { x: L - 8, y: yy + 3, "text-anchor": "end",
+      fill: "currentColor", "font-size": 10, opacity: .62 });
+    t.textContent = wcNum(val);
+    svg.appendChild(t);
+  });
+  svg.appendChild(make("line", { x1: L, x2: R, y1: zero, y2: zero,
+    stroke: "currentColor", "stroke-opacity": .35 }));
+  const n = spec.labels.length;
+  const groupW = (R - L) / n;
+  const barW = Math.max(3, groupW * 0.66 / visible.length);
+  visible.forEach(({ s, i }, j) => {
+    const color = WC_COLORS[i % WC_COLORS.length];
+    if (spec.chart_type === "bar") {
+      s.values.forEach((v, k) => {
+        const x = L + k * groupW + groupW * 0.17 + j * barW;
+        const top = Math.min(y(v), zero);
+        const h = Math.max(1, Math.abs(y(v) - zero));
+        const rect = make("rect", { x, y: top, width: Math.max(2, barW - 2), height: h,
+                                    rx: 3, fill: color, "fill-opacity": .9 });
+        const tipText = spec.labels[k] + " · " + s.name + "：" + wcNum(v);
+        rect.addEventListener("mouseenter", ev => wcTip(card, tipText, ev));
+        rect.addEventListener("mousemove", ev => wcTip(card, tipText, ev));
+        rect.addEventListener("mouseleave", () => wcHideTip(card));
+        svg.appendChild(rect);
+      });
+    } else {
+      const pts = s.values.map((v, k) => [L + k * groupW + groupW / 2, y(v)]);
+      svg.appendChild(make("polyline", {
+        points: pts.map(p => p.join(",")).join(" "), fill: "none",
+        stroke: color, "stroke-width": 2.2, "stroke-linejoin": "round" }));
+      pts.forEach(([px, py], k) => {
+        const c = make("circle", { cx: px, cy: py, r: 3.4, fill: color });
+        const tipText = spec.labels[k] + " · " + s.name + "：" + wcNum(s.values[k]);
+        c.addEventListener("mouseenter", ev => wcTip(card, tipText, ev));
+        c.addEventListener("mousemove", ev => wcTip(card, tipText, ev));
+        c.addEventListener("mouseleave", () => wcHideTip(card));
+        svg.appendChild(c);
+      });
+    }
+  });
+  spec.labels.forEach((label, k) => {
+    const x = L + k * groupW + groupW / 2;
+    const t = make("text", { x, y: B + 18, "text-anchor": n > 6 ? "end" : "middle",
+      fill: "currentColor", "font-size": 10, opacity: .68 });
+    if (n > 6) t.setAttribute("transform", "rotate(-30 " + x + " " + (B + 18) + ")");
+    t.textContent = label;
+    svg.appendChild(t);
+  });
+  return svg;
+}
+
+function renderTableCard(host, spec) {
+  const actions = wcEl("div", "wc-actions");
+  const search = wcEl("input", "wc-search");
+  search.type = "search";
+  search.placeholder = "搜这张表…";
+  const count = wcEl("span", "wc-count");
+  actions.appendChild(search); actions.appendChild(count);
+  const wrap = wcEl("div", "wc-tablewrap");
+  const table = wcEl("table", "wc-table");
+  wrap.appendChild(table);
+  host.appendChild(actions); host.appendChild(wrap);
+  const state = { q: "", sort: -1, dir: 1 };
+  const reduceMotion = !!(window.matchMedia
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const render = () => {
+    const q = state.q.trim().toLowerCase();
+    let rows = spec.rows.map((r, idx) => ({ r, idx }));
+    if (q) rows = rows.filter(x => x.r.some(v => String(v).toLowerCase().includes(q)));
+    if (state.sort >= 0) {
+      rows.sort((a, b) => wcCmp(a.r[state.sort], b.r[state.sort]) * state.dir);
+    }
+    // FLIP:先记旧位置,重画后让每一行从旧位置滑到新位置。
+    // 上一轮排序动画还没跑完就又点一次时,先收掉正在跑的动画再量位置,
+    // 否则量到的是半路坐标,新动画会从一个错的位置起步。
+    const oldTops = new Map();
+    table.querySelectorAll("tbody tr[data-idx]").forEach(tr => {
+      if (tr.getAnimations) tr.getAnimations().forEach(a => a.cancel());
+      oldTops.set(tr.dataset.idx, tr.getBoundingClientRect().top);
+    });
+    table.innerHTML = "";
+    const thead = wcEl("thead");
+    const hr = wcEl("tr");
+    spec.columns.forEach((col, i) => {
+      const th = wcEl("th", "", col + (state.sort === i ? (state.dir > 0 ? " ↑" : " ↓") : ""));
+      th.title = "点一下按这一列排序";
+      th.addEventListener("click", () => {
+        if (state.sort === i) state.dir = -state.dir;
+        else { state.sort = i; state.dir = 1; }
+        render();
+      });
+      hr.appendChild(th);
+    });
+    thead.appendChild(hr); table.appendChild(thead);
+    const tbody = wcEl("tbody");
+    if (!rows.length) {
+      const tr = wcEl("tr");
+      const td = wcEl("td", "", "没有匹配的行");
+      td.colSpan = spec.columns.length;
+      tr.appendChild(td); tbody.appendChild(tr);
+    } else {
+      rows.forEach(({ r, idx }) => {
+        const tr = wcEl("tr");
+        tr.dataset.idx = String(idx);
+        r.forEach(v => tr.appendChild(wcEl("td", "", String(v))));
+        tbody.appendChild(tr);
+      });
+    }
+    table.appendChild(tbody);
+    if (!reduceMotion) {
+      table.querySelectorAll("tbody tr[data-idx]").forEach(tr => {
+        const old = oldTops.get(tr.dataset.idx);
+        if (old == null) return;
+        const delta = old - tr.getBoundingClientRect().top;
+        if (Math.abs(delta) > 1 && tr.animate) {
+          tr.animate(
+            [{ transform: "translateY(" + delta + "px)" }, { transform: "none" }],
+            { duration: 220, easing: "cubic-bezier(.22,.8,.28,1)" });
+        }
+      });
+    }
+    count.textContent = rows.length + " / " + spec.rows.length + " 行";
+  };
+  let qTimer = null;
+  search.addEventListener("input", () => {
+    state.q = search.value;
+    clearTimeout(qTimer);
+    qTimer = setTimeout(render, 90);   // 200 行也经得起连打,不必每个键都重画
+  });
+  render();
+}
+
+function renderChecklistCard(host, spec, widgetId) {
+  const state = { picked: new Set(), done: false, busy: false };
+  const actions = wcEl("div", "wc-actions");
+  const all = wcEl("button", "wc-btn", "全选");
+  const clear = wcEl("button", "wc-btn", "清空");
+  const count = wcEl("span", "wc-count");
+  all.type = clear.type = "button";
+  actions.appendChild(all); actions.appendChild(clear); actions.appendChild(count);
+  const list = wcEl("div", "wc-list");
+  const foot = wcEl("div", "wc-actions");
+  const send = wcEl("button", "wc-btn primary", "把选中项发给学长");
+  send.type = "button";
+  const sent = wcEl("span", "wc-sent");
+  foot.appendChild(send); foot.appendChild(sent);
+  host.appendChild(actions); host.appendChild(list); host.appendChild(foot);
+  // 只同步状态,不重建行:重建会让勾选动画消失、焦点跳走。
+  const sync = () => {
+    Array.prototype.forEach.call(list.children, (row, i) => {
+      row.classList.toggle("on", state.picked.has(i));
+      row.classList.toggle("done", state.done);
+      row.disabled = state.done || state.busy;
+    });
+    count.textContent = "已选 " + state.picked.size + " / " + spec.items.length;
+    all.disabled = clear.disabled = state.done || state.busy;
+    send.disabled = state.done || state.busy || state.picked.size === 0;
+    send.textContent = state.done ? "已发送"
+      : (state.busy ? "发送中…" : "把选中项发给学长");
+  };
+  spec.items.forEach((it, i) => {
+    const row = wcEl("button", "wc-item");
+    row.type = "button";
+    const box = wcEl("span", "wc-check");
+    const col = wcEl("div");
+    col.appendChild(wcEl("div", "wc-item-label", it.label));
+    if (it.note) col.appendChild(wcEl("div", "wc-item-note", it.note));
+    row.appendChild(box); row.appendChild(col);
+    row.addEventListener("click", () => {
+      if (state.done || state.busy) return;
+      if (state.picked.has(i)) state.picked.delete(i); else state.picked.add(i);
+      sync();
+    });
+    list.appendChild(row);
+  });
+  all.addEventListener("click", () => {
+    if (state.done || state.busy) return;
+    spec.items.forEach((_, i) => state.picked.add(i));
+    sync();
+  });
+  clear.addEventListener("click", () => {
+    if (state.done || state.busy) return;
+    state.picked.clear(); sync();
+  });
+  send.addEventListener("click", () => {
+    if (state.done || state.busy || !state.picked.size) return;
+    const selected = [...state.picked].sort((a, b) => a - b)
+      .map(i => spec.items[i].label);
+    const api = window.pywebview && pywebview.api;
+    if (!api || !api.widget_action) { toast("这一屏不支持把选择发回去", true); return; }
+    state.busy = true; sync();
+    Promise.resolve(api.widget_action(widgetId, "submit_checklist",
+      JSON.stringify({ title: spec.title, selected })))
+      .then(r => {
+        if (!r || r.ok === false) {
+          state.busy = false; sync();
+          toast((r && r.msg) || "选择没送到", true);
+          return;
+        }
+        state.busy = false; state.done = true; sync();
+        sent.textContent = "已发回对话";
+        if (r.text) addUserMsg(String(r.text));
+        nearBottom = true; toBottom();
+      })
+      .catch(() => {
+        state.busy = false; sync();
+        toast("选择没送到（界面没回话）", true);
+      });
+  });
+  sync();
+}
+
+/* 计划核对单(v0.9.185)已改为流内卡:见上方 `showPlanReview` / `renderPlanReviewCard`。
+   旧的浮层实现与三颗按钮监听全部删除 —— 留一份旧实现等于留第二套出口,
+   日后改一处忘一处就会出现"点了没反应"的两份真相。 */
 // v0.9.12:p2 侧栏独立「＋ 新建任务」回归(项目卡片内那个保留,两处等价)
 $("btnNewTask").addEventListener("click", () => newTaskInProject());
 // v0.9.11:「＋ 新建任务」搬进当前项目卡片(newTaskInProject);不再有全局按钮
