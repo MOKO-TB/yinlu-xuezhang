@@ -260,6 +260,9 @@ class PublicApi:
     def confirm_reply(self, choice: str) -> dict:
         return self._b.confirm_reply(choice)
 
+    def elicit_reply(self, elicit_id, payload) -> dict:
+        return self._b.elicit_reply(elicit_id, payload)
+
     def ask_reply(self, payload) -> dict:
         """提问卡的回答(「发送回复」/「按推荐继续」/「先不做」)。只转发,判定与记账都在桥里。"""
         return self._b.ask_reply(payload)
@@ -893,6 +896,15 @@ class Bridge:
         # session_key 只叫醒"这条会话"在等的那张(否则 A 会话按停止会把 B 会话的卡作废)。
         self._ask_seq = 0
         self._ask_id = ""
+        # MCP elicitation 表单卡(v0.9.191):与确认框/提问卡**各一条锁**,不共用 ——
+        # 三种卡同时在等时,答案串了比等不到更坏。表单是全局的(服务端问的是
+        # "这台机器上的用户",不是某条会话),所以不走 source_ui 那一层。
+        self._elicit_lock = threading.Lock()
+        self._elicit_event = threading.Event()
+        self._elicit_seq = 0
+        self._elicit_id = ""
+        self._elicit_answer: dict | None = None
+        self._elicit_fields: list = []
         self._ask_owner = ""
         self._ask_source_ui = None
         # 「此刻有没有一张卡等人答」(跨会话看板 B1 用,见 _wait_event)
@@ -5139,7 +5151,8 @@ class Bridge:
 
     def _wait_event(self, event: threading.Event, slice_s: float = 1.0,
                     open_flag: str = "",
-                    source_ui: SessionGuiUI | None = None) -> bool:
+                    source_ui: SessionGuiUI | None = None,
+                    max_s: float | None = None) -> bool:
         """等一个"用户点了什么"的事件,每秒醒一次看还有没有人会来回答它。
 
         为什么不能 `event.wait()` 一把梭:确认框与提问卡都是**后台线程阻塞等前端**,
@@ -5159,14 +5172,81 @@ class Bridge:
         # 永远为 False —— 停止键只能靠 abandon_pending 叫醒,读错了还会
         # 让"按了停止但卡还挂着"多一条隐蔽路径。
         stop_ui = source_ui or self.ui
+        # max_s 只给 elicitation 用(v0.9.190):MCP 服务端自己的请求也有超时,
+        # 让它无限等是我们这边不讲理。确认框/提问卡保持"没有人为超时"的旧口径。
+        import time as _time
+        deadline = (_time.monotonic() + max_s) if max_s else None
         try:
             while not event.wait(slice_s):
                 if self._closing or getattr(stop_ui, "stop_requested", False):
+                    return False
+                if deadline is not None and _time.monotonic() > deadline:
                     return False
             return True
         finally:
             if open_flag:
                 setattr(self, open_flag, False)
+
+    # ------------------------------------------------------------ MCP elicitation(v0.9.191)
+
+    def _elicit(self, message: str, schema) -> dict:
+        """MCP 服务端要用户填表(McpClient 读线程阻塞在这里,与确认框同一条路)。
+
+        编译不支持的 schema、用户点拒绝、等超时、关窗 —— 全部按 decline 回;
+        accept 只在"编译通过 + 用户真提交 + 校验通过"三关都过时发生。
+        表单内容**只进当次请求**:这里不写日志(日志只有 action)、不留档。
+        """
+        from minicode import elicitation
+        fields, why = elicitation.compile_schema(schema)
+        if not fields:
+            self.ui.push("info",
+                         text="这台 MCP 服务器要的表单本版接不了(" + why + "),已按拒绝回。")
+            return {"action": "decline"}
+        with self._elicit_lock:
+            self._elicit_seq += 1
+            eid = "e%d" % self._elicit_seq
+            self._elicit_event.clear()
+            self._elicit_id = eid
+            self._elicit_fields = fields
+            self._elicit_answer = None
+            self.ui.push("elicit_request", elicit_id=eid,
+                         message=str(message or "(服务器没有说明来意)"),
+                         fields=fields)
+            answered = self._wait_event(self._elicit_event,
+                                        open_flag="_elicit_open",
+                                        max_s=elicitation.WAIT_SECONDS)
+            got = self._elicit_answer
+            self._elicit_id = ""
+            self._elicit_fields = []
+            if not answered or not isinstance(got, dict):
+                why2 = "窗口正在关闭" if self._closing else (
+                    "等了 %d 秒没人答" % int(elicitation.WAIT_SECONDS))
+                self.ui.push("info",
+                             text="这张 MCP 表单没等到回答(" + why2 + "),已按拒绝回。")
+                return {"action": "decline"}
+            if got.get("action") == "decline":
+                return {"action": "decline"}
+            return {"action": "accept", "content": got.get("content") or {}}
+
+    def elicit_reply(self, elicit_id: str, payload) -> dict:
+        """前端交表单:`{values:{...}}` 或 `{decline:true}`。校验不过**不打断等待**,
+        把错误清单递回界面重填 —— 卡还在,用户改完再交一次。"""
+        if str(elicit_id or "") != self._elicit_id:
+            return {"ok": False, "why": "这张表单已经不在了(超时/已答/已关窗)"}
+        if not isinstance(payload, dict):
+            return {"ok": False, "why": "载荷形状不对"}
+        if payload.get("decline"):
+            self._elicit_answer = {"action": "decline"}
+            self._elicit_event.set()
+            return {"ok": True}
+        from minicode import elicitation
+        content, errors = elicitation.validate(self._elicit_fields,
+                                               payload.get("values") or {})
+        if errors:
+            return {"ok": False, "errors": errors}
+        self._elicit_answer = {"action": "accept", "content": content}
+        self._elicit_event.set()
+        return {"ok": True}
 
     # 提问握手(v0.9.96):Agent 线程阻塞在此,前端点完按钮后带答案返回
     def ask_user(self, questions: list[dict], note: str = "",
@@ -5520,7 +5600,19 @@ def create_app(config, workspace: Path, llm=None, ui: GuiUI | None = None,
     """
     ui = ui or GuiUI()
     llm = llm or LLMClient(config)
-    mcp = connect_servers(parse_servers(config.mcp_servers), log=mcp_log(ui))
+    # elicitation(v0.9.191):回调在管理器构造时就得挂上,而 Bridge 要等 mcp
+    # 建完工具才造得出来 —— 用一个 holder 做转发:Bridge 造好后把真函数放进去;
+    # 没放(CLI/网页形态)或还没放 = 一律 decline,与没装回调的旧形状逐字一致。
+    elicit_holder: dict = {}
+
+    def _elicit_dispatch(message: str, schema):
+        fn = elicit_holder.get("fn")
+        if callable(fn):
+            return fn(message, schema)
+        return {"action": "decline"}
+
+    mcp = connect_servers(parse_servers(config.mcp_servers), log=mcp_log(ui),
+                          on_elicit=_elicit_dispatch)
     sandbox = SandboxState(policy_from_raw(config.sandbox), workspace)
     bridge = Bridge(config, workspace, ui,
                     sessions_dir=sessions_dir or SESSIONS_DIR,
@@ -5528,6 +5620,7 @@ def create_app(config, workspace: Path, llm=None, ui: GuiUI | None = None,
                     llm=llm, mcp_tools=mcp.build_tools(), sandbox=sandbox,
                     workspace_file=workspace_file, app_dir=app_dir)
     bridge._mcp = mcp
+    elicit_holder["fn"] = bridge._elicit   # 桌面 GUI 才有表单卡;网页版走 WebBridge 不装
     for runner in bridge._runners.values():
         runner.agent.mcp = mcp          # 退出时 bridge.close() 统一关停
     # v0.9.61:mcp 工具的落盘与热重载。钩子挂在**模块**上(局部变量 mcp 是

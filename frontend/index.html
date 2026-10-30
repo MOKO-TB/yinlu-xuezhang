@@ -3258,6 +3258,19 @@ try {
     </div>
   </div>
 </div>
+
+<div class="overlay" id="elicitOverlay">
+  <div class="dialog">
+    <h3>MCP 服务器在等你填表</h3>
+    <pre id="elicitMsg"></pre>
+    <div id="elicitFields"></div>
+    <div class="btns">
+      <button class="b-no" id="btnElicitNo">拒绝</button>
+      <button class="b-yes" id="btnElicitOk">提交</button>
+    </div>
+    <div id="elicitErr" style="display:none;color:var(--danger);font-size:12px;margin-top:6px"></div>
+  </div>
+</div>
 <!-- 提问卡与计划核对单都已改为流内卡片(v0.9.185,OpenSquilla 形态):
      卡住在对话里,答完/批完都留记录;不再用浮层。 -->
 <!-- 计划核对单已改为流内卡片(v0.9.185):与提问卡同一套 .askc 框,
@@ -6365,6 +6378,64 @@ window.__gcodeEvent = function (e) {
       $("btnRemember").style.display = e.can_remember ? "" : "none";
       break;
     }
+    case "elicit_request": {
+      /* MCP 服务器要用户填表(v0.9.191):字段由后端编译好的安全子集给,
+         前端只负责摆出来与收值 —— 不在前端做类型转换,那一份在 elicitation.validate。 */
+      const ef = $("elicitFields");
+      ef.innerHTML = "";
+      $("elicitMsg").textContent = e.message || "";
+      (e.fields || []).forEach(fd => {
+        const row = document.createElement("div");
+        row.style.margin = "8px 0";
+        const lab = document.createElement("label");
+        lab.style.cssText = "display:block;font-size:12px;color:var(--text-2);margin-bottom:3px";
+        lab.textContent = (fd.required ? "* " : "") + fd.label;
+        row.appendChild(lab);
+        let inp;
+        if (fd.enum) {
+          inp = document.createElement("select");
+          const empty = document.createElement("option");
+          empty.value = "";
+          empty.textContent = fd.required ? "—— 选一个 ——" : "(不填)";
+          inp.appendChild(empty);
+          fd.enum.forEach(v => {
+            const o = document.createElement("option");
+            o.value = v; o.textContent = v;
+            if (fd.default != null && String(fd.default) === v) o.selected = true;
+            inp.appendChild(o);
+          });
+        } else if (fd.type === "boolean") {
+          inp = document.createElement("select");
+          const no = document.createElement("option");
+          no.value = "no"; no.textContent = "否";
+          const yes = document.createElement("option");
+          yes.value = "yes"; yes.textContent = "是";
+          inp.appendChild(no); inp.appendChild(yes);
+          if (fd.default === true) inp.value = "yes";
+        } else {
+          inp = document.createElement("input");
+          inp.type = (fd.type === "number" || fd.type === "integer") ? "number" : "text";
+          if (fd.max_len) inp.maxLength = fd.max_len;
+          if (fd.minimum != null) inp.min = fd.minimum;
+          if (fd.maximum != null) inp.max = fd.maximum;
+          if (fd.default != null) inp.value = String(fd.default);
+        }
+        inp.dataset.name = fd.name;
+        inp.style.cssText = "width:100%;background:var(--glass-soft);border:1px solid var(--line-soft);border-radius:8px;padding:7px 9px;color:var(--text-1)";
+        row.appendChild(inp);
+        if (fd.description) {
+          const d = document.createElement("div");
+          d.style.cssText = "font-size:11px;color:var(--text-3);margin-top:2px";
+          d.textContent = fd.description;
+          row.appendChild(d);
+        }
+        ef.appendChild(row);
+      });
+      elicitState = { id: e.elicit_id, fields: e.fields || [] };
+      $("elicitErr").style.display = "none";
+      $("elicitOverlay").classList.add("show");
+      break;
+    }
     case "ask_request": {
       // v0.9.185:流内卡片(OpenSquilla 形态)。不锁输入框 —— 他完全可以
       // 不理这张卡直接打字,锁住等于替用户做决定;但卡片和顶部那条
@@ -9097,6 +9168,32 @@ $("btnNo").addEventListener("click", () => { $("confirmOverlay").classList.remov
 $("btnYes").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("yes"); });
 $("btnAlways").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("always"); });
 $("btnRemember").addEventListener("click", () => { $("confirmOverlay").classList.remove("show"); pywebview.api.confirm_reply("remember"); });
+
+/* MCP elicitation 表单卡(v0.9.191):同一时刻只有一张;提交只收字符串,
+   类型转换在 elicitation.validate(后端),校验不过把错误清单贴回卡上重填。 */
+let elicitState = null;
+$("btnElicitNo").addEventListener("click", () => {
+  $("elicitOverlay").classList.remove("show");
+  if (elicitState) pywebview.api.elicit_reply(elicitState.id, { decline: true });
+  elicitState = null;
+});
+$("btnElicitOk").addEventListener("click", () => {
+  if (!elicitState) return;
+  const vals = {};
+  document.querySelectorAll("#elicitFields [data-name]").forEach(inp => {
+    vals[inp.dataset.name] = inp.value;
+  });
+  pywebview.api.elicit_reply(elicitState.id, { values: vals }).then(r => {
+    if (r && r.ok) {
+      $("elicitOverlay").classList.remove("show");
+      elicitState = null;
+    } else {
+      const err = $("elicitErr");
+      err.textContent = ((r && r.errors) || [String((r && r.why) || "提交没成功")]).join("; ");
+      err.style.display = "block";
+    }
+  });
+});
 
 /* ---------------- 动手前问一句:流内提问卡(v0.9.185) ----------------
    卡住在对话流里,不是浮层:答完、没答、重开会话都还能看见问题本身。

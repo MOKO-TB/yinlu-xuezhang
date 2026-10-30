@@ -228,7 +228,7 @@
 - 非 Windows 或 ConPTY 不可用时明确降级，不假装是 PTY。
 - 现有 `bash`、`bash_input`、后台任务测试全绿。
 
-### 阶段 7：MCP elicitation 表单
+### 阶段 7：MCP elicitation 表单 —— **v0.9.191 已完成**
 
 **问题**：当前收到 elicitation 请求时固定回 `decline`，不会向用户展示字段表单。
 
@@ -373,7 +373,8 @@
 ### 阶段 2、4–8 —— 未开始，且各自的前置写清楚了
 
 - 路 2b（拆 PYZ）：硬前置是**冻结验证先双读**，没做前置就拆等于让包里两份来源互相冒充。
-- `fetch_image`：**v0.9.189 已完成**（`minicode/imgfetch.py`：SSRF 逐跳、文件头认图、大小双闸、策略零请求、`.source.json` 记来源；测试 14 支走 MockTransport）。
+- `fetch_image`：**v0.9.189 已完成**
+- MCP elicitation 表单：**v0.9.191 已完成**（`minicode/elicitation.py` 安全子集编译/校验 + Bridge 握手(`_wait_event` 加 `max_s` 只有 elicitation 用)+ 前端表单卡 + 10 断言 e2e;CLI/网页/子代理仍自动 decline;内容只回当次请求)。（`minicode/imgfetch.py`：SSRF 逐跳、文件头认图、大小双闸、策略零请求、`.source.json` 记来源；测试 14 支走 MockTransport）。
 - 馆藏 FTS 与 `title_norm`：**v0.9.187 已完成**（真库副本实测：迁移 + VACUUM 77 s、1.31 GB → 0.82 GB、2 字查询 3.4 s → 7 ms；迁移是显式脚本 `scripts/migrate_library_fts.py`，单事务可重入并重写凭证；旧库照旧可用）。
 - `fetch_image` / 子代理树 / ConPTY / elicitation 表单 / 校历地图数据 / e2e fallback 收口：
   各自是独立大项，本文 §三 的排序不变。
