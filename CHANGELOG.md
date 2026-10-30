@@ -6,7 +6,11 @@
 
 想看某一轮**为什么**长成这样、踩了什么坑:读 `HANDOFF.md` §2 与 `docs/handoff/milestones.md`(那里是按轮写的流水账,这里是索引)。
 
+## v0.9.191
+- v0.9.191 MCP elicitation 表单(计划书阶段 7):minicode/elicitation.py 安全子集编译/校验(string+枚举/maxLength、number/integer+min/max、boolean;≤8 字段;array/object/未知类型/format/pattern 整卡拒),Bridge _elicit/elicit_reply 照 ask_user 握手(_wait_event 加 max_s 只有 elicitation 用——300 秒超时,校验不过卡不下错误贴回重填),create_app 用 holder 转发(WebBridge/CLI 不装=decline 逐字回旧形状),前端 #elicitOverlay 表单卡(下拉/是否/数字带 min/max),内容只回当次请求不落盘不进日志;e2e_ui_elicit 10 断言 + 测试 14 支;手册 170 条,冻结针 6 根  · 2026-10-31
+
 ## v0.9.190
+- docs(changelog): 收进 v0.9.190 那一笔(生成器的输出,不手抄)  · 2026-10-30
 - v0.9.190 每学期校历自动获取(calendar_fetch:从学校要闻列表自己解析分页找标题带校历的通知、读正文、把带日期的行原样列出;只认 gzasc.edu.cn、只读不落库,录入仍走 calendar_edit 核对单;系统提示词加开学前后主动查一次)+ 按学校《2026-2027学年校历》录入 22 条(两学期起止/报到日/考试周/寒暑假/校运会/元旦清明劳动端午,期中校历未列如实留缺);测试 9 支,真网络 find+read 验过  · 2026-10-30
 
 ## v0.9.189
@@ -712,4 +716,4 @@
 ## v0.3.0
 - 初始提交:引路学长 v0.3.0 —— Windows 桌面编程引路智能体(GUI+CLI 同核引擎)  · 2026-09-12
 
-<!-- 生成自 git 提交 af59a8a;此后的提交还没收进来 -->
+<!-- 生成自 git 提交 6ddf5d8;此后的提交还没收进来 -->
