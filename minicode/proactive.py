@@ -281,7 +281,7 @@ def fetch_latest(url: str, timeout: float = 12.0) -> list[dict]:
     from urllib.parse import urljoin
 
     resp = httpx.get(url, headers={"User-Agent": _UA}, timeout=timeout,
-                     follow_redirects=True)
+                     follow_redirects=True, verify=_certifi_context())
     if resp.status_code >= 400:
         raise RuntimeError(f"HTTP {resp.status_code}")
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -393,6 +393,33 @@ def _ver_tuple(text: str) -> tuple[int, ...]:
     return tuple(int(n) for n in nums) or (0,)
 
 
+# SSLContext 是**可复用**的:httpx 每次 `httpx.get` 都会 new 一个客户端,不带
+# verify 时它要现建一份默认证书链(本机实测 0.176 s / 次,纯 CPU、抢 GIL)。
+# 一次更新检查会连着打好几个请求,而第一轮"主动推荐"就在启动后 15 秒跑 ——
+# 那 0.3~0.5 秒的卡顿正是用户刚开始打字的时候。所以两跳的上下文各建一次,
+# 之后所有请求都递同一份(SSLContext 本身线程安全,可以跨连接复用)。
+_CERT_CTX: dict = {}
+
+
+def _certifi_context():
+    """包内 certifi 那份默认上下文(建一次)。"""
+    if "certifi" not in _CERT_CTX:
+        import httpx
+        _CERT_CTX["certifi"] = httpx.create_ssl_context()
+    return _CERT_CTX["certifi"]
+
+
+def _system_context():
+    """系统证书库那份上下文(建一次;建不出来回 None)。"""
+    if "system" not in _CERT_CTX:
+        try:
+            import ssl
+            _CERT_CTX["system"] = ssl.create_default_context()
+        except Exception:      # 没有 ssl 可用 = 这台机器连不上任何 https,后面照实报
+            _CERT_CTX["system"] = None
+    return _CERT_CTX["system"]
+
+
 def _cert_variants():
     """更新通道的**证书两跳**:先是包内那份 certifi,再换系统证书库。
 
@@ -409,12 +436,10 @@ def _cert_variants():
     `ConnectError`,换系统证书库才 206 出字节。元数据全通、下载全不通,是这一条
     最容易骗过测试的坏法(测试只 stub 了元数据那条)。
     """
-    yield "certifi", None
-    try:
-        import ssl
-        yield "系统证书库", ssl.create_default_context()
-    except Exception:      # 没有 ssl 可用 = 这台机器连不上任何 https,后面照实报
-        pass
+    yield "certifi", _certifi_context()
+    ctx = _system_context()
+    if ctx is not None:
+        yield "系统证书库", ctx
 
 
 def _http_get(url: str, timeout: float = 10.0,

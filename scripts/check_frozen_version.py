@@ -1167,6 +1167,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # v0.9.95:换模型重建客户端的那条构造(漏收 = 档位分模型整块没了)
     "minicode.llm": ("scoped",                 # v0.9.110:400 摘字段重发的那张梯子
                              "LEAN_LADDER", "BODY_PARSE_MARKS", "lean",
+                             # v0.9.188:openai 惰性导入(漏 `_ai` = 第一句话时
+                             # 真客户端建不出来,而窗口和界面一切正常;漏
+                             # `retryable_errors` = 断网重试永远不触发)
+                             "_ai", "retryable_errors", "_build_client",
                              # v0.9.143 撞超限压一次再试(漏 `is_context_overflow` =
                              # agent 那边 import 就炸;漏标记表 = 认不出超限,白压或漏压)
                              "is_context_overflow", "_OVERFLOW_MARKERS"),

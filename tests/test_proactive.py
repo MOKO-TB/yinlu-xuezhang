@@ -1293,15 +1293,20 @@ def test_cert_failure_falls_back_to_the_system_store(monkeypatch):
     seen = []
 
     def fake_get(*a, **k):
-        seen.append("verify" in k)
-        if "verify" not in k:
+        seen.append(k.get("verify"))
+        if len(seen) == 1:
             raise __import__("ssl").SSLError("CERTIFICATE_VERIFY_FAILED")
         return _OkResp()
 
     monkeypatch.setattr(httpx, "get", fake_get)
     got = proactive.check_update("0.9.17")
     assert got and got["version"] == "9.9.9", "换系统证书库那一次该拿到数据"
-    assert seen == [False, True], "第一次不带 verify、第二次带 —— 顺序不许反"
+    # 两跳的顺序不许反:**先 certifi、再系统证书库**。v0.9.188 起第一次也显式带
+    # verify —— 带的是缓存好的 certifi 上下文(httpx 每次现建要 0.176 s,而这条
+    # 请求在启动后 15 秒就跑),所以断言从"第一次不带"改成"两次带的是不同的一份"。
+    assert len(seen) == 2, "第一次失败后必须换系统证书库再试一次"
+    assert seen[0] is not None and seen[1] is not None
+    assert seen[0] is not seen[1], "两跳必须真的换了一份上下文,不是同一份重试"
 
 
 def test_both_attempts_failing_is_reported_as_such(monkeypatch):

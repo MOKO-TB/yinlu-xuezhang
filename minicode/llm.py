@@ -7,11 +7,30 @@ from dataclasses import dataclass, field, replace
 from typing import Callable
 from urllib.parse import urlparse
 
-from openai import (AuthenticationError, BadRequestError, InternalServerError,
-                    NotFoundError, OpenAI, PermissionDeniedError,
-                    APIConnectionError, APITimeoutError, RateLimitError)
-
 from minicode.config import Config
+
+# openai 包的导入是启动路上最贵的一笔(v0.9.188 实测:冷进程 1.25 s,占
+# gui_bridge 全部导入时间的八成 —— 窗口在它付完之后才出现)。它只在**真发请求**
+# 与**处理异常**时才有用,所以整包推迟到第一次用到再导:窗口先出来,第一句话
+# 的代价里再付这一笔(一个进程只付一次)。为此 `_client` 变成惰性属性,
+# 异常类也改成 `_ai().Xxx` 的取值方式(`except` 的表达式在异常发生时才求值)。
+_AI = None
+
+
+def _ai():
+    """openai 包(惰性)。返回值就是模块本身,用法与 `import openai` 一致。"""
+    global _AI
+    if _AI is None:
+        import openai  # noqa: PLC0415 —— 刻意推迟,见模块级注释
+        _AI = openai
+    return _AI
+
+
+def retryable_errors() -> tuple:
+    """可重试的网络类错误(函数而不是常量:取它就意味着 openai 已经在用了)。"""
+    ai = _ai()
+    return (ai.APIConnectionError, ai.APITimeoutError, ai.RateLimitError,
+            ai.InternalServerError)
 
 MAX_RETRIES = 2
 
@@ -32,8 +51,7 @@ LEAN_LABELS = {"extra_body": "思考档位参数(thinking / reasoning_effort)",
 class FallbackUnavailable(RuntimeError):
     """备选供应商没有可用 Key —— 回落没发生,原错误继续往上走(C2)。"""
 
-RETRYABLE_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError,
-                    InternalServerError)
+
 
 # 「上下文太长」这一类失败长什么样:端点与网关各说各话,只能按标记串认。
 _OVERFLOW_MARKERS = (
@@ -111,15 +129,10 @@ class AssistantTurn:
 class LLMClient:
     def __init__(self, config: Config):
         self.config = config
-        http_client = _make_http_client(config.base_url, config.request_timeout_seconds)
-        kwargs = {"http_client": http_client} if http_client is not None else {}
-        self._client = OpenAI(
-            base_url=config.base_url,
-            api_key=config.api_key or "EMPTY",  # 空 key 允许构造(未配置时调用会 401,本地服务也需要占位)
-            timeout=config.request_timeout_seconds,
-            max_retries=0,  # 重试由本层自己做,以便向 UI 汇报
-            **kwargs,
-        )
+        # 构造本身**不碰网络也不导 openai**(见模块级注释):真客户端留到第一次
+        # 发请求时再建。测试里 `client._client.chat...` 那套打桩照旧可用 ——
+        # 属性一读就会把真客户端建出来,然后被 monkeypatch 换掉。
+        self._client_obj = None
         # 思考档位:界面上选的 default/off/low/high/max。会话级状态
         # (跟着 LLMClient 走 —— 每个会话切模型时会重建,所以新会话回到
         # "默认";Bridge 切档位时只重建共享客户端,不影响别的会话)。
@@ -127,6 +140,29 @@ class LLMClient:
         # 这台端点**不收**的请求字段(撞过 400 之后记在这儿,后面几轮直接不发):
         # 换供应商/换模型会重建客户端,所以这份账不会串到别的端点上,也不会跨重启留着。
         self.lean: list[str] = []
+
+    @property
+    def _client(self):
+        if self._client_obj is None:
+            self._client_obj = self._build_client()
+        return self._client_obj
+
+    @_client.setter
+    def _client(self, value):
+        self._client_obj = value
+
+    def _build_client(self):
+        """真客户端(第一次发请求时才建):这里才导 openai / httpx。"""
+        http_client = _make_http_client(self.config.base_url,
+                                        self.config.request_timeout_seconds)
+        kwargs = {"http_client": http_client} if http_client is not None else {}
+        return _ai().OpenAI(
+            base_url=self.config.base_url,
+            api_key=self.config.api_key or "EMPTY",  # 空 key 允许构造(未配置时调用会 401,本地服务也需要占位)
+            timeout=self.config.request_timeout_seconds,
+            max_retries=0,  # 重试由本层自己做,以便向 UI 汇报
+            **kwargs,
+        )
 
     @classmethod
     def scoped(cls, config: Config, provider_id: str = "",
@@ -163,7 +199,8 @@ class LLMClient:
         try:
             return self._with_retries(messages, schemas, on_text, on_reasoning,
                                       on_retry)
-        except (AuthenticationError, NotFoundError, PermissionDeniedError) as e:
+        except (_ai().AuthenticationError, _ai().NotFoundError,
+                _ai().PermissionDeniedError) as e:
             if not fallback_provider_id:
                 raise
             backup = LLMClient.scoped(self.config, provider_id=fallback_provider_id)
@@ -186,7 +223,7 @@ class LLMClient:
             try:
                 return self._stream_once(messages, schemas, on_text, on_reasoning,
                                          emitted, on_retry)
-            except RETRYABLE_ERRORS as e:
+            except retryable_errors() as e:
                 # 已经往界面上吐过 chunk 就不再重试:重跑一遍用户会看到"半截答案 +
                 # 完整答案"两段叠在一起(这条口径原来只写在一行注释里,`received_any`
                 # 记了却谁都没读 —— #85 跑 ruff 才撞出来,见 F841)。
@@ -234,7 +271,7 @@ class LLMClient:
         while True:
             try:
                 return self._client.chat.completions.create(**kwargs)
-            except BadRequestError as e:
+            except _ai().BadRequestError as e:
                 text = str(e).lower()
                 if not any(m in text for m in BODY_PARSE_MARKS):
                     raise
