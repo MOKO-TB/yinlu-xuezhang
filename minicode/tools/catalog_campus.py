@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-from minicode import calendar_edit, gpa, scores
+from minicode import calendar_edit, calendarsrc, gpa, scores
 from minicode import calendar as school_calendar
 from minicode.tools.base import Tool
 
@@ -79,6 +79,31 @@ def calendar_gpa() -> list[Tool]:
                 },
             },
             handler=calendar_edit.calendar_edit_tool,
+        ),
+
+        Tool(
+            name="calendar_fetch",
+            description=(
+                "查学校最新校历通知:action=find 在学校要闻里找标题带「校历」的条目;"
+                "action=read 读正文并把**带日期的行原样**列出来(含来源链接)。"
+                "只认学校官网域名(gzasc.edu.cn)。**只读、不落库**:读回来只当草稿 —— "
+                "核对后用 calendar_edit 的核对单录入;校历没列的项目(如「9月下旬」)"
+                "不要编成具体日期。每学期开学前后主动查一次,别等用户问。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["find", "read"],
+                               "description": "find=找最新校历通知(默认);read=读正文"},
+                    "url": {"type": "string",
+                            "description": "read 用:通知网址(只能是 gzasc.edu.cn);不给则读最新那条"},
+                    "pages": {"type": "integer",
+                              "description": "find 扫最近几页,默认 12、上限 20"},
+                },
+            },
+            handler=calendarsrc.calendar_fetch,
+            trust="external",
+            read_only=True,
         ),
         Tool(
             name="gpa_calc",

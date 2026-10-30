@@ -1000,6 +1000,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # "合并成一份上传"又退回让用户现写脚本,而现写脚本是最容易翻车的那条路) ----
     # v0.9.189:网页图片抓取(漏收 = 包里这只工具没有安全闸:SSRF 校验、
     # 逐跳重定向与文件头识别全在模块里,工具在而闸不在是最坏的一种)
+    # v0.9.190:校历自动发现(漏收 = 包里找不到校历通知;只读不落库的设计
+    # 也在模块里,工具在而发现层不在是最坏的一种)
+    "minicode.calendarsrc": ("find_calendar_notices", "read_notice",
+                             "calendar_fetch", "check_school_url",
+                             "CalendarFetchError", "SCHOOL_DOMAIN",
+                             "LIST_PAGE", "DEFAULT_PAGES"),
     "minicode.imgfetch": ("fetch", "fetch_image", "check_url", "host_blocked",
                           "sniff_image", "FetchError", "MAX_BYTES",
                           "MAX_REDIRECTS"),

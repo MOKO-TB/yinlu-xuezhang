@@ -39,7 +39,10 @@ def test_registry_contents():
                      "fetch_image",
                      # v0.9.186:PDF 页级操作(合并/抽页/旋转/提文字),pypdf 本地做
                      "pdf",
-                     "campus_calendar", "calendar_edit", "gpa_calc",
+                     "campus_calendar", "calendar_edit",
+                     # v0.9.190:校历自动发现(只读)
+                     "calendar_fetch",
+                     "gpa_calc",
                      "scores",
                      "kb_suggest", "library_search", "library_guide", "memory",
                      "repo_wiki",            # v0.9.171:代码库百科(只读查询)
@@ -149,6 +152,8 @@ def test_read_only_flags():
         # v0.9.189:网页图片抓取 —— 出网 + 往 uploads/ 写文件,两条都要确认。
         "fetch_image": False,
         "campus_calendar": True,      # 校历查询:只读本地数据文件
+        # v0.9.190:校历发现 —— 只读(出网抓学校官网,不写任何本机文件)
+        "calendar_fetch": True,
         "gpa_calc": True,             # 绩点计算:纯计算,不落盘
         "kb_suggest": False,          # 写候选文件:确认框就是"用户同意存入"那一步
         "library_search": True,      # 离线书目库查询,只读

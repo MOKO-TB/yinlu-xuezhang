@@ -94,6 +94,8 @@ ORDER = [
     "campus_calendar",
     # v0.9.62:校历补录(贴通知→核对→入库),挨着它读写的 campus_calendar
     "calendar_edit",
+    # v0.9.190:校历发现(只读,出网抓学校官网;排在补录之后)
+    "calendar_fetch",
     "gpa_calc",
     # v0.9.59:成绩存档(看/算/清),挨着它配套的 gpa_calc
     "scores",
@@ -154,7 +156,7 @@ def test_order_pin_is_not_stale():
     v0.9.96 加 `ask_user` 时它的位置就钉在 `plan` 后面 —— 模型每轮拿到的 tools 数组
     是这个顺序,挪位置等于改行为面,所以新工具插在谁后面都要在这里写明。
     """
-    assert len(ORDER) == len(set(ORDER)) == 80      # v0.9.185:+show_chart/show_table/show_checklist
+    assert len(ORDER) == len(set(ORDER)) == 81      # v0.9.185:+show_chart/show_table/show_checklist
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 
