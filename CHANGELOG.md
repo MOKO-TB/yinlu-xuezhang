@@ -6,6 +6,9 @@
 
 想看某一轮**为什么**长成这样、踩了什么坑:读 `HANDOFF.md` §2 与 `docs/handoff/milestones.md`(那里是按轮写的流水账,这里是索引)。
 
+## v0.9.186
+- v0.9.186 全局唤起热键(Ctrl+Alt+Y,唤起走托盘 show_main 同一条路,config.summon_hotkey 可改、置空即关,占用如实说;修掉自己第一版把默认值吃成关闭的 bug 并加行为针)+ PDF 页级操作工具 pdf(merge/extract/rotate/text,pypdf 本地零新依赖;加密不猜密码/页码越界点名/输出默认不覆盖/扫描件指路 ocr_image,14 支测试含手写最小 PDF)+ 矩阵 §10D 回填两行(S5b/S5c 已落 appcontainer.py、MCP progress/logging 接收面已接,均先 grep 核实)+ CHANGELOG 收进 v0.9.185 那笔  · 2026-10-30
+
 ## v0.9.185
 - v0.9.185 交互式可视化三只(show_chart/show_table/show_checklist,原生组件能排序筛选勾选、一切文字走 textContent 不执行任何代码)+ Office 文档文字预览与块定位(office_preview,批注回传后按块定位改工作副本)+ interactive-html 技能(收编并行会话未提交的一批,收编前体检:111 支相关测试与 ruff/前端语法全绿,收编后全量 4294 passed / 2 skipped)  · 2026-10-30
 
@@ -693,4 +696,4 @@
 ## v0.3.0
 - 初始提交:引路学长 v0.3.0 —— Windows 桌面编程引路智能体(GUI+CLI 同核引擎)  · 2026-09-12
 
-<!-- 生成自 git 提交 187aaeb;此后的提交还没收进来 -->
+<!-- 生成自 git 提交 7618774;此后的提交还没收进来 -->
