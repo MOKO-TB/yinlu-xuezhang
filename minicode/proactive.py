@@ -1706,7 +1706,10 @@ def fmt_bytes(n: int) -> str:
 # "这是我写的",不来自"它在我的目录下"。
 _UPDATE_NAME = re.compile(
     r"^yinlu-xuezhang-\d+\.\d+\.\d+-(setup\.exe|app-setup\.exe|appupdate\.exe"
-    r"|single-file\.exe|win64\.zip|sha256\.txt|assets\.json)(\.part(\.meta)?)?$")
+    r"|single-file\.exe|win64\.zip|sha256\.txt|assets\.json"
+    # v0.9.187:补丁 zip 也是这条通道写下来的 —— v0.9.183 起就有,但当年那道闸
+    # 漏了它;现在补丁里还会带数据件(几百 MB 一件),漏了就是每升一次级攒一份。
+    r"|patch-from-\d+\.\d+\.\d+\.zip)(\.part(\.meta)?)?$")
 # `app-setup.exe` 是 0.9.178~0.9.180 发布过的旧名字(它以 `setup.exe` 结尾,老客户端按
 # 后缀挑会挑到它 —— §6 第 86 条);v0.9.181 起改叫 `appupdate.exe`。两个都得留着认:
 # 漏了旧名字 = 用户按「清理旧安装包」腾出 0 字节,而盘上躺着两件 135 MB。
@@ -1791,6 +1794,30 @@ def prune_updates(dest_dir: Path, keep_version: str = "",
             continue
         removed.append({"name": p.name, "bytes": size, "why": ""})
         freed += size
+    # v0.9.187:暂存目录也要收 —— 数据件(馆藏库/内核)更新会在
+    # staged/<版本>/_apply/rollback 里留一份**旧库**(0.8 GB 量级),那是回滚的本钱,
+    # 不是永久留档。只认 `staged/<x.y.z>` 这个形状;正在跑的这一版与 keep_version
+    # 留着,别的整目录收掉。非版本形状的子目录一概不碰(同文件名闸那条理由)。
+    _ver_dir = re.compile(r"^v?\d+\.\d+\.\d+$")
+    staged_dir = Path(dest_dir) / "staged"
+    if staged_dir.is_dir():
+        import shutil
+        for d in sorted(staged_dir.iterdir()):
+            if not d.is_dir() or not _ver_dir.match(d.name):
+                continue
+            name = d.name.lstrip("vV")
+            if (keep_current and name == _cur_version())                     or (keep_version and name == keep_version):
+                kept.append("staged/" + d.name)
+                continue
+            size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+            try:
+                shutil.rmtree(d)
+            except OSError as e:
+                removed.append({"name": "staged/" + d.name, "bytes": 0,
+                                "why": f"没删掉:{e}"})
+                continue
+            removed.append({"name": "staged/" + d.name, "bytes": size, "why": ""})
+            freed += size
     return {"ok": True, "removed": removed, "freed": freed, "kept": kept, "why": ""}
 
 

@@ -1176,7 +1176,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
                         "MODE_UNANSWERED", "MAX_QUESTIONS"),
     # v0.9.95:馆藏连接的"整条语句在同一次持锁里跑完"(漏收 = 装好的包里并行派活
     # 随机一路"子代理执行出错",而这种只在并发下复现的毛病最难从用户话里倒推)
-    "minicode.library": ("_read", "_STATS_QUERIES",
+    # ---- v0.9.187:检索归一化 + 逐字索引(漏收 = 包里退回旧路径的变体阶梯:
+    # 2 字查询又变成 3.4 s 的全表 LIKE,而结果看起来一样,没人会红一次脸) ----
+    "minicode.library": ("_read", "_STATS_QUERIES", "norm_title", "_spaced",
+                         "_phrase_expr", "_fts_flavor", "_has_norm_column",
+                         "_norm_rows",
                          # v0.9.111 卡顿那一件:全库 COUNT 的结果必须有地方记住
                          # (漏 _STATS_CACHE = 每切一次会话都重算一遍 1.6 秒,而这正是
                          # 用户报的「切换任务总是要停顿好几秒」的那一根)
@@ -1202,6 +1206,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 漏 `write_apply_script`/`_PS1` 的表现是"暂存验完了却没有应用器",界面只能退回整包
     # 而没人知道;漏 `validate_manifest` 更坏 —— 清单的边界就是这次更新的爆炸半径。
     "minicode.fileupdate": ("validate_manifest", "diff_install", "hash_file",
+                            # v0.9.187:数据件进清单的放行面与补丁大小闸(漏收 =
+                            # 包里数据件一律被拒收,"数据变了只下那几件"整条失效,
+                            # 而客户端只会安静地退回整包 —— 功能在,但一分钱没省)
+                            "data_path_ok", "patch_worth_it", "_full_size",
                             "staged_root", "state_path", "read_state",
                             "write_apply_script", "apply_command", "_PS1",
                             "pick_patch", "verify_staged", "unpack_patch",

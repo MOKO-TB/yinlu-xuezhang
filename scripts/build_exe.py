@@ -213,7 +213,10 @@ def files_manifest(dist: Path) -> "tuple[Path, list]":
         if not loc.is_file():
             continue
         rel = loc.relative_to(dist).as_posix()
-        if rel.split("/")[0] in fu.EXCLUDE_DIRS or rel in fu.EXCLUDE_FILES:
+        # v0.9.187:数据件也进清单(路 2 第二半),但只按精确形状放行 ——
+        # 用户数据仍被 EXCLUDE 挡在外面,两条规则同一个函数说了算。
+        if (rel.split("/")[0] in fu.EXCLUDE_DIRS or rel in fu.EXCLUDE_FILES) \
+                and not fu.data_path_ok(rel):
             continue
         files.append({"p": rel, "s": loc.stat().st_size, "h": fu.hash_file(loc)})
     out = dist.parent / f"yinlu-xuezhang-{__version__}-files.json"
@@ -269,9 +272,16 @@ def build_patches(dist: Path, files: list) -> dict:
                    or oldf[f["p"]]["h"] != f["h"]]
         drop = [p for p in oldf if p not in mine]
         zp = dist.parent / f"yinlu-xuezhang-{__version__}-patch-from-{ver}.zip"
-        with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
+        # v0.9.187:补丁里会带数据件(馆藏库 1.3 GB / 内核),**必须用 LZMA** ——
+        # deflate 对 SQLite 只压到五六成,算出来的补丁会贴着甚至超过整包大小,
+        # 客户端那道 `patch_worth_it` 就会把整条数据件增量退掉(功能形同虚设)。
+        # 读取端是 Python zipfile(新旧客户端都支持 LZMA),不依赖资源管理器。
+        import time as _t
+        t0 = _t.time()
+        with zipfile.ZipFile(zp, "w", zipfile.ZIP_LZMA) as z:
             for f in changed:
                 z.write(dist / f["p"], f["p"])
+        print(f"  补丁压缩用时 {_t.time() - t0:.0f}s")
         h = fu.hash_file(zp)
         patches[ver] = {"asset": zp.name, "sha256": h, "size": zp.stat().st_size,
                         "files": len(changed), "drop": drop}
@@ -1159,7 +1169,9 @@ def write_user_files(dist: Path) -> None:
         "162. 「历史更新内容」改成先看本机(v0.9.184):点侧栏那串版本号弹出的历史列表,以前**每点一次都要打一次** GitHub 的公开接口,而那个接口对没登录的机器只给每小时 60 次 —— 多点几次、再加上后台自己每几小时查一遍新版本,配额就被这台机器自己用完了,表现是那一屏只剩一句「接口回了 HTTP 403」。现在取到的列表存在本机(「我的数据」里那一格「历史更新内容缓存」),一天最多为这一屏出一次网,屏上会写明这一份是本机缓存、上次是几点取到的;断网那天照样翻得着旧版本写了什么。查新版本也跟着改成**一天一次**(启动后那一遍就是当天那一遍),有新版本照常弹卡推给你;急的话随时用命令面板里的「检查更新」,那颗是你自己按的,不受此限、当场就问。\n"
         "163. 修掉「导入课表或成绩之后点开是空的」(v0.9.184):课程表那张弹窗和右边的侧栏用了同一个内部名字,于是课表与成绩的内容被写进了侧栏那一格、弹窗自己只剩一个空壳 —— 数据没丢,是显示接错了地方。改名之后两处各回各家,并给整份界面加了一道常闸:**同一个名字在一页里不许用两次**,以后再有这种接错会当场红。带这个毛病的是 0.9.183 那一炉的界面。\n"
         "164. 学长会做 PDF 的页级操作了(v0.9.186):把多份 PDF 按顺序合成一份(教务要「合并成一个文件上传」就用它)、从几百页课件里抽出要交的那几页、把倒着的扫描件转正、直接提取文字层 —— 都是本机完成,不联网。几条边界说在前头:**加了密的 PDF 不做也不猜密码**(自己用阅读器另存一份不加密的再来);页码从 1 数起、越了界会告诉你这份总共几页;**不会覆盖你已经有的文件**,要覆盖得明确说;扫描图版 PDF 一个字都提不出来时,它会指路「拍图取字」那只工具,而不是交一张白卷。\n"
-        "165. 在任何应用里按 Ctrl+Alt+Y,学长就到眼前(v0.9.186):托盘常驻之后「叫回学长」要伸手去找图标,现在有一个键盘直达。键位写在 config.json 的 summon_hotkey(留空 = 关),主键只认字母/数字/F1~F12、必须带 Ctrl/Alt/Shift/Win 至少一个修饰键;**被别的程序占用时会在启动日志里如实说**,其余一切不受影响;改了键位要重启学长才生效。唤起走的就是托盘「显示主窗口」那同一条路,不是另一套弹窗逻辑。",
+        "165. 在任何应用里按 Ctrl+Alt+Y,学长就到眼前(v0.9.186):托盘常驻之后「叫回学长」要伸手去找图标,现在有一个键盘直达。键位写在 config.json 的 summon_hotkey(留空 = 关),主键只认字母/数字/F1~F12、必须带 Ctrl/Alt/Shift/Win 至少一个修饰键;**被别的程序占用时会在启动日志里如实说**,其余一切不受影响;改了键位要重启学长才生效。唤起走的就是托盘「显示主窗口」那同一条路,不是另一套弹窗逻辑。\n"
+        "166. 馆藏库与浏览器内核变了,升级也不用重下整包了(v0.9.187):以前这两块「大数据」任何一个有变化,更新就退回 878 MB 的完整安装包。现在它们和程序文件走同一条文件级通道 —— 只下真正变了的那几件,由同一个「退出后应用」的脚本换位,失败整体回滚。两块同时变、补丁反而比整包大时,会自动按整包下(安装程序顺手把环境收拾干净)。一个过渡说明:从 0.9.186 及更早升上来的那一次,因为旧版发布里还没有这份数据清单,仍按原来的路走。\n"
+        "167. 图书馆搜书又快又能「照着书脊打」(v0.9.187):带书名号、全角字母、大小写、空格与连字符的写法现在都认(「《C程序设计》」「Ｃ程序设计」搜到的是同一本);**两字查询从三四秒降到十几毫秒**,没搜到的那一刻也不再卡着扫一遍全库。库本身也重新整理过(体积小了约三分之一,`crawled/` 里那份是构建输入);手上是旧格式的库也照常能用,只是享受不到这两项提速。",
         encoding="utf-8",
     )
 

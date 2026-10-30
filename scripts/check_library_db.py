@@ -100,9 +100,12 @@ def main(argv: list[str]) -> int:
     if total < EXPECT_TOTAL:
         ok = False
         print(f"  !! 条数偏少(完整版约 {EXPECT_TOTAL} 条)→ 库没装全,需要重新安装/拷贝")
-    if size < 1_000_000_000:
+    # v0.9.187:库迁到 unicode61 逐字索引之后整库**变小**(1.31 → 0.82 GB),旧版
+    # 那句"不足 1 GB 就是空壳"会把健康的库误判成坏了;真正的判据是凭证与条数
+    # (上面两道),这里只留一个"远小于任何正常馆藏库"的兜底地板。
+    if size < 300_000_000:
         ok = False
-        print("  !! 文件不足 1 GB → 多半是空壳或截断的库")
+        print(f"  !! 文件只有 {size / 1e6:.0f} MB → 多半是空壳或截断的库")
 
     print("\n样本查询:")
     for q in SAMPLES:

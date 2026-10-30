@@ -1,8 +1,14 @@
-"""增量更新·路 2:文件级清单 + 暂存 + 独立应用器(v0.9.183 起,默认关)。
+"""增量更新·路 2:文件级清单 + 暂存 + 独立应用器(v0.9.183 起)。
 
 路 1 只回答"馆藏库与内核这两块大数据要不要重下";**程序自己的字节**变化时仍然整件
 135 MB 起步。路 2 把安装树里"随包发的那些文件"逐件登记(相对路径 + 大小 + sha256),
 更新时只下**哈希对不上的那些**,再交给一个独立脚本在 App 退出之后应用。
+
+**v0.9.187 起数据件也走这条路**(路 2 的第二半):馆藏库、浏览器内核与两份凭证不再
+被清单一律排除,而是按精确形状放行(`data_path_ok`)—— 数据真变了的那一版,补丁里
+只装变了的那些数据文件、跟着同一个应用器换位,不再"数据一变就退回 878 MB 整包"。
+放行的是**产品数据**(可重下),用户数据仍一条都不许进清单;两块数据同时变时补丁
+可能比整包还大,`patch_worth_it` 会在那时把这次更新退回整包。
 
 为什么应用这一步不在 App 进程里做:onedir 包运行时,exe 与它加载的那几个 dll 是
 **被锁的**,自己覆盖自己必然失败一半 —— 半新半旧比更新失败更坏。所以这里生成一份
@@ -18,12 +24,40 @@ import json
 import re
 from pathlib import Path
 
-# 构建端不算进清单、客户端也绝不许碰的目录/文件:它们是**用户数据或大数据**,
-# 归路 1 的身份与「我的数据」管,不归文件级更新管。
+# 构建端不算进清单、客户端也绝不许碰的目录/文件。这里分两类,口径不同:
+#
+# - **用户数据**(`updates`/`sessions`/`checkpoints`/`shadow-git`/`web-sessions`/
+#   `study`/`__pycache__` 与 `config.json`/`token-usage.db`/`tray.log`):清单**永远
+#   不许碰** —— 清单能指挥覆盖与删除,边界就是爆炸半径。这条从 v0.9.183 起没变过。
+# - **产品数据**(`crawled/`、`ms-playwright/` 与两份凭证):v0.9.187 起**放行**,但只
+#   按精确形状放行(`data_path_ok`):馆藏库只认 `crawled/<站点>/library.db` 与其
+#   `.stamp.json`,内核只认 `ms-playwright/` 下、凭证只认根下那一个名字。理由:路 2
+#   的第二半(数据件也按文件级清单增量替换)就是靠它 —— 数据件在补丁里只装变了的
+#   那些、跟着同一个应用器换位,不再"数据一变就退回整包"。它们**可重下**,不是
+#   用户资产;而这两块目录里别的任何文件仍会被拒(形状写死,不多放一个字节)。
 EXCLUDE_DIRS = ("crawled", "ms-playwright", "updates", "sessions", "checkpoints",
                 "shadow-git", "web-sessions", "study", "__pycache__")
 EXCLUDE_FILES = ("config.json", "token-usage.db", "tray.log",
                  "library.db.stamp.json", "browser-kernel.stamp.json")
+
+# 产品数据的**精确形状**(相对安装树,正斜杠)。比"整个目录放行"窄得多:
+# 馆藏库只认一个站点目录下的那一个文件名与其凭证;内核认整个子树(它就是一堆
+# chromium 文件,没有别的命名规律);内核凭证只认根下那一个。
+_DATA_DB_RE = re.compile(r"^crawled/[^/]+/library\.db(?:\.stamp\.json)?$")
+_KERNEL_PREFIX = "ms-playwright/"
+_KERNEL_STAMP = "browser-kernel.stamp.json"
+
+
+def data_path_ok(rel: str) -> bool:
+    """这条相对路径算不算"产品数据"—— 只有它能在 EXCLUDE 里被放行。
+
+    放行面写死:馆藏库(`crawled/<站点>/library.db` 与 `.stamp.json`)、内核子树、
+    内核凭证。其余一切落在 EXCLUDE_DIRS/EXCLUDE_FILES 里的路径照旧拒收。
+    """
+    rel = str(rel or "").replace("\\", "/").strip("/")
+    return bool(_DATA_DB_RE.fullmatch(rel)) or rel.startswith(_KERNEL_PREFIX) \
+        or rel == _KERNEL_STAMP
+
 
 _BAD_SEG = re.compile(r"(^|/)(\.\.?)(/|$)")
 
@@ -47,7 +81,7 @@ def validate_manifest(man: "dict | None") -> "tuple[list, list, list]":
             problems.append("非法路径:%r" % p)
             continue
         head = norm.split("/")[0]
-        if head in EXCLUDE_DIRS or norm in EXCLUDE_FILES:
+        if (head in EXCLUDE_DIRS or norm in EXCLUDE_FILES) and not data_path_ok(norm):
             problems.append("清单碰了数据目录:%r" % p)
             continue
         if norm in seen:
@@ -64,7 +98,7 @@ def validate_manifest(man: "dict | None") -> "tuple[list, list, list]":
         if not p or _BAD_SEG.search(p) or re.match(r"^[A-Za-z]:", raw) or raw.startswith("/"):
             problems.append("非法删除路径:%r" % raw)
             continue
-        if p.split("/")[0] in EXCLUDE_DIRS or p in EXCLUDE_FILES:
+        if (p.split("/")[0] in EXCLUDE_DIRS or p in EXCLUDE_FILES) and not data_path_ok(p):
             problems.append("删除清单碰了数据目录:%r" % raw)
             continue
         drop.append(p)
@@ -236,6 +270,28 @@ def apply_command(ps1: Path, wait_pid: int = 0) -> list:
     return cmd
 
 
+def patch_worth_it(patch_size: int, full_size: int) -> bool:
+    """补丁值不值得下 —— v0.9.187 起补丁里会带数据件(馆藏库/内核),而 zip 的
+    压缩率不如安装包用的 lzma2/max。**两块数据同时变时补丁可能比整包还大**;
+    那时候按整包下才是对的(还附带安装程序把环境收拾干净)。两边任一为 0
+    (不知道)就不拦:拦要拦在有证据的地方。"""
+    if not full_size or not patch_size:
+        return True
+    return int(patch_size) < int(full_size)
+
+
+def _full_size(release: "dict | None") -> int:
+    """发布里整包那一件的大小(注意排除 `…-appupdate.exe`:它不以 setup.exe 结尾,
+    但老名字 `…-app-setup.exe` 有坑的历史写在 v0.9.181,这里的判据与它同向)。"""
+    for a in (release or {}).get("assets") or []:
+        if not isinstance(a, dict):
+            continue
+        nm = str(a.get("name") or "")
+        if nm.endswith("-setup.exe") and "-appupdate" not in nm:
+            return int(a.get("size") or 0)
+    return 0
+
+
 def pick_patch(man: "dict | None", current: str) -> "dict | None":
     """按"我现在是哪一版"挑对应那件补丁;挑不到回 None(调用方退回 appupdate/整包)。
 
@@ -332,6 +388,9 @@ def stage_update(version: str, on_progress=None) -> dict:
     patch = pick_patch(man, cur)
     if patch is None:
         return {"ok": False, "why": f"没有 v{cur} → v{ver} 的补丁,退回整件"}
+    if not patch_worth_it(int(patch.get("size") or 0), _full_size(rel)):
+        return {"ok": False,
+                "why": "这次的补丁(含变化的数据件)不比整包小,按整包下更划算"}
     sha_asset = next((a for a in rel.get("assets") or []
                       if str(a.get("name") or "").endswith("-sha256.txt")), None)
     asset = {"name": patch["asset"],

@@ -204,3 +204,162 @@ def test_the_plan_is_absolute_even_when_the_caller_handed_relative_paths(tmp_pat
     assert r.returncode != 0
     assert Path("install/a.txt").read_bytes() == b"OLD-A", "相对路径也不能让回滚搬错地方"
     assert not (tmp_path / "install" / "9.9.9").exists(), "不许在安装树里凭空造目录"
+
+
+# ---------------------------------------------------------------- v0.9.187:数据件进清单
+
+def test_product_data_paths_are_allowed_while_user_data_stays_banned():
+    """路 2 第二半的边界:产品数据按**精确形状**放行,用户数据照旧一条不进。
+
+    放行的三种:馆藏库(`crawled/<站点>/library.db` 与它的凭证)、内核子树、
+    内核凭证。别的形状——`crawled/` 根下、`crawled/<站点>/别的文件`、
+    `sessions/`、`config.json`——一个都不许。
+    """
+    ok = ["crawled/mfindgzyykj.libsp.cn/library.db",
+          "crawled/mfindgzyykj.libsp.cn/library.db.stamp.json",
+          "ms-playwright/chromium-1234/chrome-win/chrome.exe",
+          "browser-kernel.stamp.json"]
+    bad = ["crawled/library.db",
+           "crawled/mfindgzyykj.libsp.cn/notes.txt",
+           "crawled/mfindgzyykj.libsp.cn/library.db.bak",
+           "sessions/2026.jsonl", "config.json", "token-usage.db"]
+    for p in ok:
+        assert fu.data_path_ok(p), p
+    for p in bad:
+        assert not fu.data_path_ok(p), p
+        # 同一批路径塞进清单:产品数据被收下,其余必须变成 problems
+        files, _drop, problems = fu.validate_manifest(
+            {"files": [{"p": p, "s": 1, "h": _h(b"x")}], "drop": [p]})
+        if fu.data_path_ok(p):
+            assert not problems, (p, problems)
+        else:
+            assert problems and not files, (p, problems)
+
+
+def test_data_files_are_hashed_staged_and_diffed_like_any_other(tmp_path):
+    """数据件在清单里就是普通文件:变了才 fetch、没变算 same。"""
+    root = tmp_path / "install"
+    (root / "crawled" / "site").mkdir(parents=True)
+    (root / "crawled" / "site" / "library.db").write_bytes(b"OLD-DB")
+    (root / "ms-playwright" / "k" / "x.bin").parent.mkdir(parents=True)
+    (root / "ms-playwright" / "k" / "x.bin").write_bytes(b"SAME")
+    man = _manifest([("crawled/site/library.db", b"NEW-DB"),
+                     ("ms-playwright/k/x.bin", b"SAME")])
+    files, _drop, problems = fu.validate_manifest(man)
+    assert not problems
+    diff = fu.diff_install(files, root)
+    assert [f["p"] for f in diff["fetch"]] == ["crawled/site/library.db"]
+    assert diff["same"] == ["ms-playwright/k/x.bin"]
+
+
+def test_a_changed_library_is_swapped_in_by_the_apply_script(tmp_path):
+    """数据件换位走同一个应用器:原件进回滚目录,新件进安装树,drop 也照走。"""
+    install = tmp_path / "install"
+    libdir = install / "crawled" / "site"
+    libdir.mkdir(parents=True)
+    (libdir / "library.db").write_bytes(b"OLD-LIB")
+    (install / "browser-kernel.stamp.json").write_bytes(b'{"old":1}')
+    updates = tmp_path / "updates"
+    staged = fu.staged_root(updates, "9.9.9")
+    (staged / "crawled" / "site").mkdir(parents=True)
+    (staged / "crawled" / "site" / "library.db").write_bytes(b"NEW-LIB")
+    (staged / "browser-kernel.stamp.json").write_bytes(b'{"new":1}')
+    files = [{"p": "crawled/site/library.db", "s": 7, "h": _h(b"NEW-LIB")},
+             {"p": "browser-kernel.stamp.json", "s": 7, "h": _h(b'{"new":1}')}]
+    ps1 = fu.write_apply_script(updates, "9.9.9", install, files, [])
+    r = subprocess.run(fu.apply_command(ps1), capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert (libdir / "library.db").read_bytes() == b"NEW-LIB"
+    assert (install / "browser-kernel.stamp.json").read_bytes() == b'{"new":1}'
+    rb = fu.staged_root(updates, "9.9.9") / "_apply" / "rollback"
+    assert (rb / "crawled" / "site" / "library.db").read_bytes() == b"OLD-LIB"
+
+
+def test_the_patch_is_skipped_when_it_is_not_smaller_than_the_whole_package():
+    """两块数据同时变时补丁可能比整包还大 —— 那时按整包下才对。"""
+    assert fu.patch_worth_it(100, 200) is True
+    assert fu.patch_worth_it(200, 200) is False
+    assert fu.patch_worth_it(300, 200) is False
+    assert fu.patch_worth_it(0, 200) is True, "不知道补丁多大就不拦"
+    assert fu.patch_worth_it(100, 0) is True, "不知道整包多大就不拦"
+
+
+def test_full_size_picks_the_real_setup_not_the_appupdate():
+    rel = {"assets": [
+        {"name": "yinlu-xuezhang-9.9.9-appupdate.exe", "size": 135},
+        {"name": "yinlu-xuezhang-9.9.9-setup.exe", "size": 878},
+    ]}
+    assert fu._full_size(rel) == 878
+
+
+def test_the_build_manifest_carries_data_files_but_not_user_data(tmp_path):
+    """构建端与客户端用**同一个** data_path_ok 说了算:数据件进清单,用户数据不进。"""
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import build_exe
+
+    dist = tmp_path / "dist" / "引路学长"
+    (dist / "crawled" / "site").mkdir(parents=True)
+    (dist / "crawled" / "site" / "library.db").write_bytes(b"LIB")
+    (dist / "crawled" / "site" / "library.db.stamp.json").write_bytes(b"{}")
+    (dist / "ms-playwright" / "k").mkdir(parents=True)
+    (dist / "ms-playwright" / "k" / "chrome.exe").write_bytes(b"EXE")
+    (dist / "browser-kernel.stamp.json").write_bytes(b"{}")
+    (dist / "sessions").mkdir()
+    (dist / "sessions" / "s.jsonl").write_bytes(b"USER")
+    (dist / "config.json").write_bytes(b"USER")
+    (dist / "app.txt").write_bytes(b"APP")
+
+    _path, files = build_exe.files_manifest(dist)
+    names = {f["p"] for f in files}
+    assert names == {"crawled/site/library.db",
+                     "crawled/site/library.db.stamp.json",
+                     "ms-playwright/k/chrome.exe",
+                     "browser-kernel.stamp.json",
+                     "app.txt"}, names
+
+
+def test_prune_also_reclaims_old_staged_dirs(tmp_path):
+    """数据件更新会在 staged/<版本>/ 里留一份旧库副本 —— 那是回滚本钱,不是永久留档。
+
+    漏了这一条的表现:每升一次级盘上多 0.8 GB,而「清理旧安装包」报出来的字节数
+    只有安装包那几件(用户以为清干净了)。
+    """
+    from minicode import proactive
+    cur = proactive._cur_version()
+    keep = tmp_path / "staged" / "9.9.100"
+    old = tmp_path / "staged" / "0.9.100"
+    curdir = tmp_path / "staged" / cur
+    for d in (keep, old, curdir):
+        (d / "_apply").mkdir(parents=True)
+        (d / "crawled" / "site").mkdir(parents=True)
+        (d / "crawled" / "site" / "library.db").write_bytes(b"x" * 100)
+    stranger = tmp_path / "staged" / "not-a-version"
+    stranger.mkdir(parents=True)
+    (stranger / "keep.txt").write_bytes(b"y")
+    r = proactive.prune_updates(tmp_path, keep_version="9.9.100")
+    assert r["ok"]
+    assert not old.exists(), "被取代那一版的暂存目录没清掉(旧库副本会一直攒)"
+    assert keep.exists() and curdir.exists(), "keep_version 与正在跑的这一版要留下"
+    assert stranger.exists(), "不是版本形状的子目录一概不碰"
+    assert r["freed"] == 100, r
+
+
+def test_prune_recognizes_patch_zips_written_by_this_channel(tmp_path):
+    """补丁 zip 也是这条通道写下来的 —— v0.9.183 起就有,而当年那道文件名闸漏了它。
+
+    现在补丁里会带数据件(几百 MB 一件),漏认一个字就是每升一次级在盘上攒一份。
+    """
+    from minicode import proactive
+    cur = proactive._cur_version()
+    old_patch = tmp_path / "yinlu-xuezhang-0.9.100-patch-from-0.9.99.zip"
+    cur_patch = tmp_path / f"yinlu-xuezhang-{cur}-patch-from-0.9.100.zip"
+    half = tmp_path / "yinlu-xuezhang-0.9.100-patch-from-0.9.99.zip.part"
+    for p in (old_patch, cur_patch, half):
+        p.write_bytes(b"z" * 10)
+    r = proactive.prune_updates(tmp_path, keep_version="")
+    removed = {x["name"] for x in r["removed"]}
+    assert "yinlu-xuezhang-0.9.100-patch-from-0.9.99.zip" in removed
+    assert "yinlu-xuezhang-0.9.100-patch-from-0.9.99.zip.part" in removed
+    assert cur_patch.exists(), "正在跑的这一版的补丁要留着"
+    assert r["freed"] == 20, r

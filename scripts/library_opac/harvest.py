@@ -317,6 +317,16 @@ def tdb():
 def init_db():
     c = db()
     c.executescript(SCHEMA)
+    # v0.9.187:迁移过的库是 unicode61 逐字 FTS(contentless,列里没有 abstract),
+    # 而上面那条 books_ai 触发器按旧列写 —— 留着它,下一次增量插书就会当场报错。
+    # 迁移库的索引由 `migrate` 命令在收尾时整表重建,不需要触发器。
+    try:
+        row = c.execute("SELECT sql FROM sqlite_master WHERE name='books_fts'").fetchone()
+        if row and "unicode61" in (row[0] or "").lower():
+            c.execute("DROP TRIGGER IF EXISTS books_ai")
+            c.commit()
+    except Exception:                                      # noqa: BLE001
+        pass
     c.close()
 
 
@@ -642,10 +652,18 @@ def status():
     conn.close()
 
 
+def migrate_index():
+    """v0.9.187:把库迁到 title_norm + unicode61 逐字索引(显式脚本,不在启动路)。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from migrate_library_fts import migrate
+    migrate(DB_PATH)
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
     {"preflight": preflight, "discover": discover, "harvest": harvest,
      "all": lambda: (discover(), harvest(), save_locations()),
+     "migrate": migrate_index,
      "enrich": lambda: enrich(int(sys.argv[2]) if len(sys.argv) > 2 else 500),
      "supplement": lambda: supplement(
          (sys.argv[2] if len(sys.argv) > 2 else "0123456789").split(",")),

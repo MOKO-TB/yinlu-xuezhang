@@ -150,6 +150,77 @@ def _fts_expr(query: str) -> str | None:
     return " AND ".join('"%s"' % t for t in toks)
 
 
+# --------------------------------------------------------------- v0.9.187 检索归一化
+# 迁移后的库(v0.9.187+)有三样新东西:books.title_norm 归一化列、unicode61 逐字
+# FTS、以及**逐字短语**查询法。三条口径:
+#
+# 1. **归一化只用于匹配,不改展示**。NFKC(全角→半角)、大小写折叠、去掉书名号/
+#    引号、去掉空白与连字符/间隔号;括号、点、加号、井号保留(「(第5版)」「3.0」
+#    「C++」「C#」都是书名的一部分,抹掉就会把两本书归一成同一本)。
+# 2. **逐字建索引**:每个字符一个 token(unicode61 按空格切),查询用**短语**
+#    `"数 学"` —— 短语 = 连续子串,所以 1 字、2 字、3 字以上全走索引。
+#    旧 trigram 只有 ≥3 字有索引,2 字只能前缀或全表 LIKE(实测 3.4 s)。
+# 3. **旧库照旧**:没迁移过的库(trigram、没有 title_norm)走原来的变体阶梯,
+#    不因为代码升级就把同学手上的旧库判死。
+
+def norm_title(s) -> str:
+    """标题/字段的检索归一化。只用于**比对**,绝不写回展示字段。"""
+    import unicodedata
+    s = unicodedata.normalize("NFKC", str(s or "")).casefold()
+    s = _WRAP_RE.sub("", s)                       # 《》〈〉「」『』 与引号
+    s = _NORM_DROP_RE.sub("", s)                  # 空白、连字符、间隔号
+    return s.strip()
+
+
+# 归一化要**去掉**的字符:空白与各种横线、间隔号。括号/点/加号/井号保留。
+_NORM_DROP_RE = re.compile(r"[\s\u00a0·・\-–—_]+")
+
+
+def _spaced(s: str) -> str:
+    """逐字加空格:unicode61 把每个字切成一个 token,短语查询等价于子串匹配。"""
+    return " ".join(ch for ch in str(s or "") if not ch.isspace())
+
+
+def _phrase_expr(query: str) -> str | None:
+    """unicode61 逐字表的查询式:空白分隔的词各归一化、逐字加空格、包成短语,AND 相连。
+
+    例:「余华 活着」→ `"余 华" AND "活 着"` —— 与旧 trigram 的「空格视为 AND」
+    语义一致;区别是每个词是**短语**,所以 2 字词也走索引。
+    """
+    terms: list[str] = []
+    for raw in str(query or "").replace('"', " ").split():
+        n = norm_title(raw)
+        if n:
+            terms.append('"%s"' % _spaced(n))
+    if not terms:
+        n = norm_title(query)
+        if n:
+            terms.append('"%s"' % _spaced(n))
+    return " AND ".join(terms) if terms else None
+
+
+def _fts_flavor(c: sqlite3.Connection) -> str:
+    """这个库的 books_fts 是哪种分词:"unicode61"(迁移后)还是 "trigram"(旧库)。
+
+    读 sqlite_master 里那条建表 SQL 判断 —— 不拿版本号猜,库文件自己说什么就是什么。
+    """
+    try:
+        row = _read(c, "SELECT sql FROM sqlite_master WHERE name='books_fts'", one=True)
+    except sqlite3.Error:
+        return "trigram"
+    sql = (row[0] if row else "") or ""
+    return "unicode61" if "unicode61" in sql.lower() else "trigram"
+
+
+def _has_norm_column(c: sqlite3.Connection) -> bool:
+    """books 有没有 title_norm 列(迁移库才有;旧库返回 False,一切照旧)。"""
+    try:
+        cols = _read(c, "PRAGMA table_info(books)")
+    except sqlite3.Error:
+        return False
+    return any(str(r[1]) == "title_norm" for r in cols)
+
+
 def _kind_clause(kind: str) -> str:
     if kind == "paper":
         return " AND b.p_count>0"
@@ -242,9 +313,36 @@ def _variants(query: str) -> list[str]:
     return out
 
 
+def _norm_rows(c: sqlite3.Connection, variant: str, top_k: int,
+               kind: str, errors: list[str] | None = None) -> list[sqlite3.Row]:
+    """归一化书名的**精确**命中(title_norm 索引,迁移库才有)。
+
+    「《三体》」「三体」「三　体」归一化之后是同一个键;全角半角、书名号、空格、
+    连字符的差异都在这一层被吃掉,不必落到 FTS。返回的是"用户要的那本书"
+    这一档,排序按馆藏册数多、书名短优先(与既有口径一致)。
+    """
+    n = norm_title(variant)
+    if not n:
+        return []
+    try:
+        return _read(c,
+                     SEL + "WHERE (b.title_norm=? OR b.title_norm=?)"
+                     + _kind_clause(kind)
+                     + " ORDER BY b.p_count DESC, length(b.title) LIMIT 5",
+                     (n, n + "."))
+    except sqlite3.Error as exc:
+        _note_error(errors, exc)
+        return []
+
+
 def _fts_rows(c: sqlite3.Connection, variant: str, top_k: int,
-              kind: str, errors: list[str] | None = None) -> list[sqlite3.Row]:
-    """精确书名 + FTS5 trigram(仅 ≥3 字,毫秒级)。"""
+              kind: str, errors: list[str] | None = None,
+              flavor: str = "trigram") -> list[sqlite3.Row]:
+    """精确书名 + FTS 命中(毫秒级)。
+
+    两种库:旧库是 trigram(只有 ≥3 字有索引);迁移库是 unicode61 逐字表,
+    用**短语**查询,1 字、2 字、多字都一样走索引。
+    """
     kc = _kind_clause(kind)
     rows: list[sqlite3.Row] = []
     # 1) 精确书名(含「书名.」这类带后缀的写法)
@@ -254,17 +352,17 @@ def _fts_rows(c: sqlite3.Connection, variant: str, top_k: int,
                       (variant, variant + "."))
     except sqlite3.Error as exc:
         _note_error(errors, exc)
-    # 2) FTS5;?1=MATCH ?2..?4=排序 ?5=limit
-    if len(variant) >= 3:
-        expr = _fts_expr(variant)
-        if expr:
-            try:
-                rows += _read(c,
-                              SEL + "JOIN books_fts f ON f.rowid=b.record_id "
-                              "WHERE (books_fts MATCH ?1)" + kc + _rank_sql(2),
-                              tuple([expr] + _rank_vals(variant) + [top_k]))
-            except sqlite3.Error as exc:
-                _note_error(errors, exc)
+    # 2) FTS;?1=MATCH ?2..?4=排序 ?5=limit
+    expr = _phrase_expr(variant) if flavor == "unicode61" else (
+        _fts_expr(variant) if len(variant) >= 3 else None)
+    if expr:
+        try:
+            rows += _read(c,
+                          SEL + "JOIN books_fts f ON f.rowid=b.record_id "
+                          "WHERE (books_fts MATCH ?1)" + kc + _rank_sql(2),
+                          tuple([expr] + _rank_vals(variant) + [top_k]))
+        except sqlite3.Error as exc:
+            _note_error(errors, exc)
     return rows
 
 
@@ -335,24 +433,30 @@ def search(workspace: Path | None, query: str, top_k: int = DEFAULT_TOP_K,
             f"打开 {path.name} 失败({type(exc).__name__}: {exc})") from exc
     variants = _variants(query)
     errors: list[str] = []
+    flavor = _fts_flavor(c)
+    migrated = flavor == "unicode61" and _has_norm_column(c)
 
     rows: list[sqlite3.Row] = []
     for v in variants:
-        if len(v) < 3:
-            # 1-2 字 FTS5 trigram 建不出索引:先走书名前缀索引(毫秒级),
-            # 落空再 LIKE 全表兜(1.3 s 的那笔钱只在真落空时付)
-            rows = _prefix_rows(c, v, top_k, kind, errors)
-            if not rows:
-                rows = _like_rows(c, v, top_k, kind, errors)
-        else:
-            rows = _fts_rows(c, v, top_k, kind, errors)
-            if rows and len(rows) < top_k:
-                rows += _like_rows(c, v, top_k, kind, errors)   # 命中不足时补足(与旧行为一致)
+        rows = _norm_rows(c, v, top_k, kind, errors) if migrated else []
+        if not rows:
+            rows = _fts_rows(c, v, top_k, kind, errors, flavor=flavor)
+        if flavor == "trigram":
+            # 旧库保持逐字不变的阶梯:1-2 字先前缀后 LIKE;≥3 字命中不足时补扫。
+            if len(v) < 3:
+                if not rows:
+                    rows = _prefix_rows(c, v, top_k, kind, errors)
+                if not rows:
+                    rows = _like_rows(c, v, top_k, kind, errors)
+            elif rows and len(rows) < top_k:
+                rows += _like_rows(c, v, top_k, kind, errors)
+        # 迁移库(unicode61 逐字短语)对**任意长度**都有索引,落空就是没有:
+        # 不再对 LIKE 全表扫,也不做"命中不足时补扫"—— 那 1.3 s 的扫只在旧库付。
         if rows:
             break
 
-    if not rows and variants and len(variants[-1]) >= 3:
-        rows = _like_rows(c, variants[-1], top_k, kind, errors)   # 全落空:对最宽的变体扫一次
+    if not rows and flavor == "trigram" and variants and len(variants[-1]) >= 3:
+        rows = _like_rows(c, variants[-1], top_k, kind, errors)   # 旧库全落空:对最宽的变体扫一次
 
     if not rows and errors:
         # 库在,但查不了:这是环境问题,不能回给用户“没有这本书”
@@ -481,7 +585,7 @@ def library_search(ctx, query: str, top_k: int = DEFAULT_TOP_K,
             pass
         return (
             f"错误: 本地馆藏书目库读不出来({exc})。\n"
-            f"库文件: {p}({size};完整版应为 1.31 GB / 133 万条书目)。\n"
+            f"库文件: {p}({size};完整版约 133 万条书目)。\n"
             "⚠ 这是**检索数据没加载起来**,不是“馆里没有这本书”。\n"
             "请告诉用户「图书馆检索数据这次没读出来,请稍后重试或到检索台查」,\n"
             "**不要**说成“图书馆没有这本书”;同时把上面这行错误原文附给用户/开发者。")
@@ -620,7 +724,7 @@ def catalog_health(workspace: Path | None = None) -> dict:
 
 
 # 完整版参照值(仅用于给用户一句可核对的期望值,不做判定 —— 真正的判定走凭证)
-FULL_SIZE_TEXT = "约 1.31 GB / 133 万条书目"
+FULL_SIZE_TEXT = "约 133 万条书目"
 REINSTALL_HINT = ("图书馆搜书会不可用。请腾出磁盘空间后重新运行安装包/重新解压一次。")
 
 
