@@ -100,6 +100,7 @@ def test_every_exception_reason_is_real():
     ("update_skip_version", "0.9.999"),
     ("subagent_nesting", True),       # v0.9.155 那枚默认关的开关
     ("shadow_git", False),            # v0.9.157 那枚
+    ("summon_hotkey", "Ctrl+Alt+M"),  # v0.9.186 那枚(手改的键位经一次保存还在)
 ])
 def test_a_switch_set_by_hand_survives_one_save(tmp_path, field, value):
     """写进 config.json 的开关,经过一次"程序存配置"之后**还得是它**。
@@ -118,3 +119,24 @@ def test_a_switch_set_by_hand_survives_one_save(tmp_path, field, value):
     back = load_config(path)
     assert getattr(back, field) == value, (
         f"{field} 存了又读不回来(或被洗成别的值)—— 那就是第二处真相")
+
+
+def test_summon_hotkey_defaults_on_and_explicit_empty_means_off(tmp_path):
+    """热键的默认语义钉死:**没写这个键 = 默认开**,显式写 "" 才是关。
+
+    落地时第一版把 `raw.get("summon_hotkey") or ""` 写在了解析里 —— 没写键的
+    用户会静默得到"关",而 config 注释承诺的是默认开。这一支就是钉这个的。
+    """
+    from minicode.config import DEFAULT_SUMMON_HOTKEY
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "providers": [], "active_provider": "", "mcp_servers": [], "sandbox": {},
+    }), encoding="utf-8")
+    assert load_config(path).summon_hotkey == DEFAULT_SUMMON_HOTKEY
+
+    path.write_text(json.dumps({
+        "providers": [], "active_provider": "", "mcp_servers": [], "sandbox": {},
+        "summon_hotkey": "",
+    }), encoding="utf-8")
+    assert load_config(path).summon_hotkey == ""

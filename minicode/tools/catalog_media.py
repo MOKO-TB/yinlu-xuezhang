@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from minicode import charts, images, ocr, view_image
+from minicode import charts, images, ocr, pdf as pdf_mod, view_image
 from minicode.tools.base import Tool
 
 
@@ -107,5 +107,42 @@ def tools() -> list[Tool]:
             },
             handler=view_image.view_image,
             read_only=True,
+        ),
+        Tool(
+            name="pdf",
+            description=(
+                "PDF 页级操作(合并/抽页/旋转/提取文字层),pypdf 本地完成,不联网。"
+                "多份材料要合成一份上传、从几百页课件里抽出要交的那几页、扫描件"
+                "方向倒了要转正 —— 用它,不要让用户去现写脚本。四条边界:"
+                "①加密 PDF 一律不做也不猜密码(让用户自己另存不加密的那份);"
+                "②页码从 1 数起,越界会点名这份总共几页,绝不就近取;"
+                "③输出默认不覆盖已有文件,要覆盖必须显式 overwrite=true;"
+                "④action=text 只提取文字层 —— 一页字都提不出来就说明这是扫描图,"
+                "该走 ocr_image(那只吃 .pdf 抽内嵌图再识别),不要把空结果当成功。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "description": "merge(合并)/ extract(抽页)/ rotate(旋转)/ text(提取文字层)"},
+                    "sources": {"type": "array",
+                                "description": "merge 用:PDF 路径列表,按给出顺序合成一份"},
+                    "src": {"type": "string",
+                            "description": "extract/rotate/text 用:源 PDF 路径(相对工作区或绝对)"},
+                    "pages": {"type": "string",
+                              "description": "页码,如「1,3,5-8」;text 可写 all(默认全部)"},
+                    "degrees": {"type": "integer",
+                                "description": "rotate 用:顺时针 90 / 180 / 270"},
+                    "out": {"type": "string",
+                            "description": "输出文件名;不给就按「原名_后缀.pdf」落在同一处"},
+                    "overwrite": {"type": "boolean",
+                                  "description": "输出已存在时要不要覆盖,默认 false(拒绝并让改名)"},
+                    "max_chars": {"type": "integer",
+                                  "description": "text 的返回文本上限,默认 6000"},
+                },
+                "required": ["action"],
+            },
+            handler=pdf_mod.pdf_tool,
+            read_only=False,
         ),
     ]

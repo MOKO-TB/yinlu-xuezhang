@@ -26,6 +26,8 @@ ENV_API_KEY = "YINLUXS_LLM_API_KEY"
 
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 DEFAULT_MODEL = "glm-4.6"
+# 全局唤起热键的默认值(v0.9.186,唯一真相在 config 这边;hotkey 模块不带默认)。
+DEFAULT_SUMMON_HOTKEY = "Ctrl+Alt+Y"
 
 # 「常用供应商」预设:一键把地址与几个常见模型名填进表单。
 #
@@ -326,6 +328,11 @@ class Config:
     #   而新文件要交四处登记税(SHIP_NEVER / .gitignore / 我的数据 / 打包清理)。
     update_popup: bool = True
     update_skip_version: str = ""
+    # 全局唤起热键(v0.9.186):在任何应用里按下它,把主窗口带到眼前(走托盘
+    # 「显示主窗口」同一条路)。**置空 = 关**。主键只认字母/数字/F1~F12,且必须
+    # 带修饰键(不带修饰的全局热键等于把那个键从全系统手里占走);被别的程序
+    # 占用时启动日志(tray.log)里如实说,其余一切不受影响。改了要重启生效。
+    summon_hotkey: str = "Ctrl+Alt+Y"
     # 按档位分模型(v0.9.95):{"explore": "deepseek-v4-flash", "code": "..."}。
     # **只换模型名,不换供应商** —— 跨供应商要另一份 Key,那一层不在这里做
     # (会话级切供应商已有界面路径,这里要解决的是"侦察用便宜的、实现用硬的")。
@@ -664,6 +671,9 @@ def _config_from_raw(raw: dict) -> Config:
         update_check=bool(raw.get("update_check", True)),
         update_popup=bool(raw.get("update_popup", True)),
         update_skip_version=str(raw.get("update_skip_version") or "").strip(),
+        # 没写这个键 = 默认开;显式写 "" 才是关 —— `or ""` 会把「没写」也变关,
+        # 默认值就丢了,所以这里必须用 get 的三参形式。
+        summon_hotkey=str(raw.get("summon_hotkey", DEFAULT_SUMMON_HOTKEY) or "").strip(),
         # 按档位分模型的原始配置:一律转成"字符串→字符串",空值丢掉。
         # 写成列表/嵌套/数字都不崩(这份要拿去查表),但不认的条目就是不生效 ——
         # 具体能不能用交给 subagents.model_choice 去对着供应商的启用模型核,那才是真相。
@@ -814,6 +824,7 @@ def save_config(path: Path, cfg: Config) -> None:
         "update_check": cfg.update_check,
         "update_popup": cfg.update_popup,
         "update_skip_version": cfg.update_skip_version,
+        "summon_hotkey": cfg.summon_hotkey,
     }
     if cfg.mcp_servers:
         data["mcp_servers"] = cfg.mcp_servers

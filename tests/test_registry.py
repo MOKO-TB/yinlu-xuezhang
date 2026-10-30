@@ -35,6 +35,8 @@ def test_registry_contents():
                      "ocr_image", "render_chart", "generate_image",
                      # v0.9.173:看图 —— 只读,只是把工作区里已有的图发给模型自己看
                      "view_image",
+                     # v0.9.186:PDF 页级操作(合并/抽页/旋转/提文字),pypdf 本地做
+                     "pdf",
                      "campus_calendar", "calendar_edit", "gpa_calc",
                      "scores",
                      "kb_suggest", "library_search", "library_guide", "memory",
@@ -139,6 +141,9 @@ def test_read_only_flags():
         "show_chart": True,
         "show_table": True,
         "show_checklist": True,
+        # v0.9.186:PDF 操作 —— merge/extract/rotate 都往工作区写输出文件,
+        # 与 render_chart 同档(不联网、不读本机数据,但写盘要过确认)。
+        "pdf": False,
         "campus_calendar": True,      # 校历查询:只读本地数据文件
         "gpa_calc": True,             # 绩点计算:纯计算,不落盘
         "kb_suggest": False,          # 写候选文件:确认框就是"用户同意存入"那一步

@@ -86,6 +86,8 @@ ORDER = [
     "ocr_image", "render_chart", "generate_image",
     # v0.9.173:看图,挨着它对着的那三只"出图/取字"的工具
     "view_image",
+    # v0.9.186:PDF 页级操作,媒体组的收尾(pypdf 本地做,输出写工作区)
+    "pdf",
     "campus_calendar",
     # v0.9.62:校历补录(贴通知→核对→入库),挨着它读写的 campus_calendar
     "calendar_edit",
@@ -149,7 +151,7 @@ def test_order_pin_is_not_stale():
     v0.9.96 加 `ask_user` 时它的位置就钉在 `plan` 后面 —— 模型每轮拿到的 tools 数组
     是这个顺序,挪位置等于改行为面,所以新工具插在谁后面都要在这里写明。
     """
-    assert len(ORDER) == len(set(ORDER)) == 78      # v0.9.185:+show_chart/show_table/show_checklist
+    assert len(ORDER) == len(set(ORDER)) == 79      # v0.9.185:+show_chart/show_table/show_checklist
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 

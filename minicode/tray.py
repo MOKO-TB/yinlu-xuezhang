@@ -1105,8 +1105,12 @@ class TrayController:
         except Exception as e:
             log(f"托盘消息循环退出: {type(e).__name__}: {e}")
 
-    def _tray_show(self, icon=None, item=None) -> None:
+    def show_main(self) -> None:
+        """把主窗口带到眼前 —— 托盘菜单与全局热键(v0.9.186)共用的同一条唤起路。"""
         self._on_ui_thread(self._show_form)
+
+    def _tray_show(self, icon=None, item=None) -> None:
+        self.show_main()
 
     def _tray_reset_ask(self, icon=None, item=None) -> None:
         """勾过「不再询问」之后,这里是唯一的反悔入口(托盘菜单)。"""

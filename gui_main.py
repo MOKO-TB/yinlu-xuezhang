@@ -153,10 +153,11 @@ def _reveal_window() -> None:
         tray.log(f"显示窗口失败: {type(e).__name__}: {e}")
 
 
-def post_startup(ui) -> None:
+def post_startup(ui, summon_hotkey: str = "") -> None:
     """webview.start 的回调(独立线程):补开右键菜单 + 接管关窗 + 自启进托盘。"""
     _enable_native_context_menu()
     install_tray(ui)
+    _start_summon_hotkey(summon_hotkey)
     # 无边框窗的"最大化让出任务栏"要在窗口起来之后补(实测不设会盖住任务栏,
     # 那时候人连开始菜单都点不到 —— 比不能最大化坏得多)。
     from minicode import window_chrome
@@ -172,6 +173,30 @@ def post_startup(ui) -> None:
     import threading
     threading.Thread(target=tray.check_stale_startup, args=(ui,),
                      daemon=True, name="startup-stale-check").start()
+
+
+def _start_summon_hotkey(combo: str) -> None:
+    """全局唤起热键(v0.9.186):在任何应用里按热键把窗口带到眼前。
+
+    唤起动作不做第二份:托盘在就走到 `TrayController.show_main()`(与托盘菜单
+    「显示主窗口」同一条路);托盘没起来就退回 `_reveal_window`(那种情况下
+    窗口本来就显示着,热键只是兜底)。注册结果只进 tray.log —— 被占用是
+    一件如实说就够的事,不值得为它打断启动。
+    """
+    if not str(combo or "").strip():
+        return                                  # 显式置空 = 关,一行都不留痕
+    from minicode import hotkey
+
+    def _summon() -> None:
+        c = tray.controller()
+        if c is not None:
+            c.show_main()
+        else:
+            _reveal_window()
+
+    r = hotkey.start(_summon, combo, log=tray.log)
+    if not r.get("ok") and r.get("msg"):
+        tray.log(r["msg"])
 
 
 def _start_activate_listener(ui) -> None:
@@ -289,7 +314,8 @@ def main() -> None:
 
     try:
         # func 在 GUI 线程启动后于独立线程执行:补开 WebView2 右键菜单 + 接管关窗
-        webview.start(post_startup, (ui,), debug=False)
+        # + 全局唤起热键(config.summon_hotkey,置空即关)
+        webview.start(post_startup, (ui, config.summon_hotkey), debug=False)
     finally:
         # 关掉所有会话与 MCP 子进程,不留孤儿(多会话后台任务也一并停)
         try:

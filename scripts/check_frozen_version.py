@@ -996,6 +996,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
     # 表现是"它凭代码猜图表对不对",而不是报错) ----
     "minicode.view_image": ("view_image",),
 
+    # ---- v0.9.186:PDF 页级操作(漏收 = 装好的包里模型没有这只工具,
+    # "合并成一份上传"又退回让用户现写脚本,而现写脚本是最容易翻车的那条路) ----
+    "minicode.pdf": ("pdf_tool", "merge", "extract", "rotate", "extract_text",
+                     "parse_pages", "PdfError", "ACTIONS", "TEXT_LIMIT",
+                     "ROTATE_DEGREES"),
+
     "minicode.ocr": ("recognize", "ocr_image", "ocr_probe", "recognize_system",
                      "recognize_vision", "system_ready", "vision_ready",
                      "normalize_system_text", "SYSTEM_WARN", "VISION_PROMPT",
