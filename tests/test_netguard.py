@@ -129,7 +129,7 @@ def test_tools_outside_its_reach_are_not_touched(name):
     assert netguard.gate(cfg, name, {"url": EVIL}) == (netguard.ALLOW, "")
 
 
-def test_the_three_covered_tools_read_their_real_parameter_names():
+def test_the_covered_tools_read_their_real_parameter_names():
     """键名与注册表里的真实签名对账。
 
     手写一份参数名名单最容易坏的形状是"拼错了但永远匹配不上"—— 于是策略
@@ -140,7 +140,10 @@ def test_the_three_covered_tools_read_their_real_parameter_names():
         assert name in reg, f"{name} 这只工具不存在了,策略名单该跟着退"
         props = reg[name].parameters.get("properties") or {}
         assert key in props, f"{name} 的参数里没有 {key}(真实:{list(props)})"
-    assert set(netguard.URL_TOOLS) == {"web_crawl", "page_parse", "browser_open"}
+    # v0.9.189:加了 fetch_image(网页图片抓取也由模型填网址)。名单要与注册表
+    # 一一对上:多一只不存在 = 策略白配;少一只 = 那条路整条不受策略。
+    assert set(netguard.URL_TOOLS) == {"web_crawl", "page_parse",
+                                       "browser_open", "fetch_image"}
 
 
 @pytest.mark.parametrize("name", ["explore·web_crawl", "implement·page_parse"])

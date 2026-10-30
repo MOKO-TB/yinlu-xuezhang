@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from minicode import charts, images, ocr, pdf as pdf_mod, view_image
+from minicode import charts, imgfetch, images, ocr, pdf as pdf_mod, view_image
 from minicode.tools.base import Tool
 
 
@@ -107,6 +107,33 @@ def tools() -> list[Tool]:
             },
             handler=view_image.view_image,
             read_only=True,
+        ),
+        Tool(
+            name="fetch_image",
+            description=(
+                "把网页里的一张图抓到工作区 uploads/(校园卡样图、通知里的表格截图、"
+                "课件封面)。**只认位图**(png/jpg/gif/webp/bmp),SVG 与网页一律拒;"
+                "单张上限默认 10 MB。安全边界在工具里:只认 http/https、"
+                "**每一跳重定向都验主机**(回环/私网/云元数据地址一律拒,域名先解析"
+                "再看指向)、按文件头认图而不信后缀。抓回来**不会自动发给我看** —— "
+                "要看用 view_image(把 uploads/ 里那个路径发过来)、要取字用 ocr_image;"
+                "旁边一份 .source.json 记着来源与 sha256。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string",
+                            "description": "图片地址(http/https);网页地址会被拒"},
+                    "name": {"type": "string",
+                             "description": "可选:文件名(不含扩展名),默认用主机名+时间"},
+                    "max_mb": {"type": "integer",
+                               "description": "单张大小上限(MB),默认 10,最大 30"},
+                },
+                "required": ["url"],
+            },
+            handler=imgfetch.fetch_image,
+            trust="external",
+            read_only=False,
         ),
         Tool(
             name="pdf",

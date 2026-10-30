@@ -998,6 +998,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
 
     # ---- v0.9.186:PDF 页级操作(漏收 = 装好的包里模型没有这只工具,
     # "合并成一份上传"又退回让用户现写脚本,而现写脚本是最容易翻车的那条路) ----
+    # v0.9.189:网页图片抓取(漏收 = 包里这只工具没有安全闸:SSRF 校验、
+    # 逐跳重定向与文件头识别全在模块里,工具在而闸不在是最坏的一种)
+    "minicode.imgfetch": ("fetch", "fetch_image", "check_url", "host_blocked",
+                          "sniff_image", "FetchError", "MAX_BYTES",
+                          "MAX_REDIRECTS"),
     "minicode.pdf": ("pdf_tool", "merge", "extract", "rotate", "extract_text",
                      "parse_pages", "PdfError", "ACTIONS", "TEXT_LIMIT",
                      "ROTATE_DEGREES"),

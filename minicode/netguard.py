@@ -42,7 +42,9 @@ ALLOW, ASK, REJECT = "allow", "ask", "reject"
 # (固定源,属于"你选的源"那一类)、不含 `web_search`(出机器的是查询词)。
 # `page_parse` 的参数叫 `url_like`(它是一句"像 URL 的提示",不是规范 URL)——
 # 写错这个键名,这一格就永远是 ALLOW 而没人会发现,所以它和工具签名一起有针钉着。
-URL_TOOLS = {"web_crawl": "url", "page_parse": "url_like", "browser_open": "url"}
+URL_TOOLS = {"web_crawl": "url", "page_parse": "url_like", "browser_open": "url",
+             # v0.9.189:网页图片抓取也由模型填网址,同一道策略要管到它
+             "fetch_image": "url"}
 
 
 def host_of(url: str) -> str:

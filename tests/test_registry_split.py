@@ -66,7 +66,8 @@ ORDER = [
     "hooks", "hooks_apply",
     # v0.9.98:git 工作副本(隔离工作区 W1),挨着项目权限那组
     "worktree", "worktree_apply",
-    "web_crawl", "web_search", "browser_open", "browser_eval", "browser_snapshot",
+    "web_crawl", "web_search",
+    "browser_open", "browser_eval", "browser_snapshot",
     "browser_click", "browser_fill", "browser_screenshot", "browser_close",
     "browser_status", "page_parse",
     # v0.9.61:MCP 自助管理,挨着它服务的外接家族(web/浏览器)
@@ -86,6 +87,8 @@ ORDER = [
     "ocr_image", "render_chart", "generate_image",
     # v0.9.173:看图,挨着它对着的那三只"出图/取字"的工具
     "view_image",
+    # v0.9.189:从网页抓一张图到 uploads(图片进出的那一族)
+    "fetch_image",
     # v0.9.186:PDF 页级操作,媒体组的收尾(pypdf 本地做,输出写工作区)
     "pdf",
     "campus_calendar",
@@ -151,7 +154,7 @@ def test_order_pin_is_not_stale():
     v0.9.96 加 `ask_user` 时它的位置就钉在 `plan` 后面 —— 模型每轮拿到的 tools 数组
     是这个顺序,挪位置等于改行为面,所以新工具插在谁后面都要在这里写明。
     """
-    assert len(ORDER) == len(set(ORDER)) == 79      # v0.9.185:+show_chart/show_table/show_checklist
+    assert len(ORDER) == len(set(ORDER)) == 80      # v0.9.185:+show_chart/show_table/show_checklist
     assert sorted(_catalog_tool_names()) == sorted(ORDER), \
         "目录里的工具集合与 ORDER 不一致(加了工具忘了钉顺序,或删了没同步)"
 
