@@ -4255,6 +4255,27 @@ $("updGo").addEventListener("click", () => {
 /* 历史更新内容(v0.9.176 那一屏;v0.9.177 抽成具名函数):更新卡里那颗按钮和
    **侧栏那串版本号**共用这一个出口。抽出来的原因就是这一轮的需求本身 —— 点版本号
    不再"手动查一次",而是直接看历史,所以两处必须落进同一个弹窗,不许各写一份渲染。 */
+/* 历史更新正文简化(v0.9.197):只留"这版做了什么"的要点,去标题/表格/技术细节。
+   **不改后端数据**(GitHub 上仍是全文)。 */
+function simplifyNotes(text) {
+  if (!text) return "(这一版没写说明)";
+  const out = [];
+  for (const line of String(text).split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#") || t.startsWith("|") || t.startsWith("```")
+        || t.startsWith("<!--") || t.startsWith("---")) continue;
+    const clean = t.replace(/^- /, "").replace(/[*_`]/g, "");
+    const parts = clean.split(/(?<=[。;；!?])/).map(x => x.trim()).filter(x => x.length > 4);
+    for (const p of parts) {
+      out.push(p.length > 150 ? p.slice(0, 148) + "…" : p);
+    }
+    if (out.length >= 12) break;
+  }
+  out.length = Math.min(out.length, 12);
+  return out.length ? out.map(x => "· " + x).join("\n")
+                    : String(text).trim().slice(0, 300) + "(全文见 GitHub)";
+}
+
 function openHistoryDlg() {
   const api = (window.pywebview && pywebview.api) || {};
   if (!api.update_history) { toast("这一屏只在桌面版能看历史", true); return; }
@@ -4300,9 +4321,8 @@ function openHistoryDlg() {
       }
       const body = document.createElement("div");
       body.className = "hist-body";
-      // 正文一律 textContent:发布说明是**远端字符串**,这里不第二次走 innerHTML
-      body.textContent = String(it.notes || "(这一版没写说明)").trim()
-        + (it.truncated ? "\n\n(日志太长,这里只显示了前半段)" : "");
+      // 正文简化(v0.9.197):只留要点,去标题/表格/技术细节
+      body.textContent = simplifyNotes(it.notes);
       head.addEventListener("click", () => row.classList.toggle("open"));
       row.appendChild(head); row.appendChild(body);
       box.appendChild(row);

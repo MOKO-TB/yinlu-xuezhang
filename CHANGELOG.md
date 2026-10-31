@@ -6,7 +6,12 @@
 
 想看某一轮**为什么**长成这样、踩了什么坑:读 `HANDOFF.md` §2 与 `docs/handoff/milestones.md`(那里是按轮写的流水账,这里是索引)。
 
+## v0.9.196
+- v0.9.196 阶段 6 ConPTY 探索轮(未接线,留卡点):完整 ctypes 实现(available/spawn/write/resize/close/读泵/Job Object),真机实测 ConPTY 创建成功但伪控制台未真生效(子进程渲染到父控制台而非读管);五条已试未通(全 argtypes/关管父端/UTF-8/UTF-16LE/win32-input-mode/bInheritHandles=TRUE/原始字节缓冲)与深度诊断(attr 列表非零、UpdateProcThreadAttribute 成功、hpc 有效)全部记录在 §6 #102;下一轮该做:pywin32 或 windows-conpty 绕 ctypes,或写最小 C 编译样本对照  · 2026-10-31
+- v0.9.196 阶段 6 ConPTY 探索轮(未接线,留卡点):minicode/conpty.py 完整 ctypes 实现(available/spawn/write/resize/close/读泵/Job Object),真机实测 ConPTY 创建成功但伪控制台未真生效(子进程渲染到父控制台而非读管)——三条已试未通的路(全 argtypes/关管父端/win32-input-mode)与全部线索记在 §6 #102;阶段 2 拆 PYZ 本体已在本轮完成(§6 #101)  · 2026-10-31
+
 ## v0.9.195
+- docs(changelog): 收进 v0.9.195 那一笔(生成器的输出,不手抄)  · 2026-10-31
 - v0.9.195 拆 PYZ 本体(计划书阶段 2 第 2-5 步):spec 的 _common_split 给 onedir 两份产物摘除 minicode(hiddenimports 两条强收项同步摘,单文件版保持整装)+ 根目录 yzboot.py 启动挂载(三入口最先跑,缺失/损坏/版本不符三种拒绝启动,版本对账用 _internal/app_version.txt)+ build_exe 产 minicode.zip(138 模块 1.18MB)与版本戳;**修 zipimport 不支持命名包子包的真 bug**(minicode/tools 补 __init__.py,包内首启 ModuleNotFoundError);真出包验证:双读 1558 针全由 zip 源命中、e2e_headless 24 项 PASS(顺手修一支 v0.9.144 起过期的断言:stream-json 是合法格式不当参数错,NDJSON 契约另立两条);test_yzboot 7 支  · 2026-10-31
 
 ## v0.9.194
@@ -732,4 +737,4 @@
 ## v0.3.0
 - 初始提交:引路学长 v0.3.0 —— Windows 桌面编程引路智能体(GUI+CLI 同核引擎)  · 2026-09-12
 
-<!-- 生成自 git 提交 b8c73a0;此后的提交还没收进来 -->
+<!-- 生成自 git 提交 d964e45;此后的提交还没收进来 -->
