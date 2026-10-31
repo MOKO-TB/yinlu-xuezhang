@@ -578,13 +578,25 @@ def _children(kids) -> list[dict]:
         else:
             status = "failed"
         summary = str(k.get("summary") or "")
-        out.append({"tool": name, "verb": toolsum.verb(name),
-                    "route": str(k.get("route") or ""),
-                    "title": _clip(summary) or toolsum.verb(name),
-                    "status": status, "badge": _badge(status),
-                    "time": _clock(k.get("start")), "dur": _dur(k),
-                    "dur_text": _dur_text(k),
-                    "progress": str(k.get("progress") or "")})
+        # 嵌套(v0.9.192,计划书阶段 5):子行下面可能还有子行(孙层),递归带上 ——
+        # 此前只拷标量,第二层开始的时间线是凭空消失的。身份(lane/depth)一起给,
+        # 前端按这份数据缩进与折叠,不按标题猜父子。
+        kids2 = _children(k.get("children"))
+        row = {"tool": name, "verb": toolsum.verb(name),
+               "route": str(k.get("route") or ""),
+               "title": _clip(summary) or toolsum.verb(name),
+               "status": status, "badge": _badge(status),
+               "time": _clock(k.get("start")), "dur": _dur(k),
+               "dur_text": _dur_text(k),
+               "progress": str(k.get("progress") or ""),
+               "lane": str(k.get("lane") or ""),
+               "depth": int(k.get("depth") or 0),
+               "children": kids2,
+               "children_dropped": int(k.get("children_dropped") or 0)}
+        # 父级收了、后代还开着(嵌套超时的形状):如实说,不假装还在正常跑。
+        if k.get("abandoned") and k.get("end") is None:
+            row["note"] = "父级已放弃等待,后代仍在运行"
+        out.append(row)
     return out
 
 

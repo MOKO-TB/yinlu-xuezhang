@@ -68,6 +68,9 @@ class GuiUI:
         # 上一版程序记的)一律不给时间 —— 面板宁可少说,不许编。
         self._live: list[dict] = []
         self._live_open: list[dict] = []   # 栈:子代理的工具套在外面那层里面
+        # 行身份(v0.9.192,计划书阶段 5):lane 唯一、depth 栈深、parent/root
+        # 是父行/根行的 lane —— 前端按这份数据组织树形行,不按标题猜父子。
+        self._live_seq = 0
         # 每一路子代理当前开着的那一步(键=路标签)。一路同一时刻只跑一个工具,
         # 所以这一个键就够 —— 不需要每路一个栈,那会把"嵌套"演成真的复杂。
         self._child_open: dict[str, dict] = {}
@@ -362,9 +365,16 @@ class GuiUI:
     # ------------------------------------------------------------ 实时表
 
     def _live_begin(self, name: str, summary: str) -> None:
-        row = {"name": str(name or ""), "summary": str(summary or ""),
-               "start": time.time(), "end": None, "ok": None, "progress": ""}
         with self._live_lock:
+            lane = "L%d" % (self._live_seq + 1)
+            self._live_seq += 1
+            row = {"name": str(name or ""), "summary": str(summary or ""),
+                   "start": time.time(), "end": None, "ok": None, "progress": "",
+                   "lane": lane, "depth": len(self._live_open),
+                   "parent": (self._live_open[-1].get("lane")
+                              if self._live_open else ""),
+                   "root": (self._live_open[0].get("lane")
+                            if self._live_open else lane)}
             self._live.append(row)
             self._live_open.append(row)
 
@@ -386,6 +396,15 @@ class GuiUI:
             target["end"] = now
             target["ok"] = bool(ok)
             stack.remove(target)
+            # 父级收了、后代还开着(嵌套超时的形状:等报告的那一层到点走了,
+            # 孙子还在跑)—— 给每一个还开着的后代打上 abandoned,前端据此
+            # 显示「父级已放弃等待,后代仍在运行」,而不是让它假装还在正常跑。
+            def _abandon(row):
+                for kid in row.get("children") or []:
+                    if kid.get("end") is None:
+                        kid["abandoned"] = True
+                    _abandon(kid)
+            _abandon(target)
             # 只丢已完成的最老行:在跑的行丢了面板就再也找不到它了
             if len(self._live) > LIVE_CAP:
                 for row in list(self._live):
@@ -434,15 +453,22 @@ class GuiUI:
                 return                      # 父行都没开着就没处挂:不硬造一行
             parent = self._live_open[-1]
             kids = parent.setdefault("children", [])
+            lane = "L%d" % (self._live_seq + 1)
+            self._live_seq += 1
             row = {"name": str(name or ""), "summary": str(summary or ""),
                    "route": str(route or ""), "start": time.time(),
-                   "end": None, "ok": None, "progress": ""}
+                   "end": None, "ok": None, "progress": "",
+                   "lane": lane, "depth": int(parent.get("depth") or 0) + 1,
+                   "parent": str(parent.get("lane") or ""),
+                   "root": str(parent.get("root") or parent.get("lane") or lane)}
             kids.append(row)
             while len(kids) > CHILD_CAP:
                 kids.pop(0)
                 parent["children_dropped"] = int(parent.get("children_dropped") or 0) + 1
             self._child_open[str(route or "")] = row
-        self.push("child_step", state="start", route=row["route"], name=row["name"])
+        self.push("child_step", state="start", route=row["route"], name=row["name"],
+                  lane=row["lane"], depth=row["depth"], parent=row["parent"],
+                  root=row["root"])
 
     def live_child_progress(self, route: str, text: str) -> None:
         """长命令的进度落到**它那一路的那一行**上,不再盖住父会话那一行。"""
@@ -452,7 +478,9 @@ class GuiUI:
                 return
             row["progress"] = str(text or "")
         self.push("child_step", state="progress", route=str(route or ""),
-                  name=row.get("name", ""))
+                  name=row.get("name", ""), lane=row.get("lane", ""),
+                  depth=int(row.get("depth") or 0), parent=row.get("parent", ""),
+                  root=row.get("root", ""))
 
     def live_child_end(self, route: str, ok: bool) -> None:
         """收掉这一路当前开着的那一步。找不到就什么都不做(不拿别的行凑数)。"""
@@ -463,7 +491,9 @@ class GuiUI:
             row["end"] = time.time()
             row["ok"] = bool(ok)
         self.push("child_step", state="end", route=str(route or ""),
-                  name=row["name"], ok=bool(ok))
+                  name=row["name"], ok=bool(ok), lane=row.get("lane", ""),
+                  depth=int(row.get("depth") or 0), parent=row.get("parent", ""),
+                  root=row.get("root", ""), abandoned=bool(row.get("abandoned")))
 
     def live_reset(self) -> None:
         """清空实时表:清空会话/换会话时调,别让上一段任务的"在跑"挂在这一栏。"""

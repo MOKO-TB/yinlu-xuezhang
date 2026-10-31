@@ -11836,13 +11836,14 @@ function buildPlan(parent) {
 // 这些数据出自实时表而不是会话消息 —— 子代理的调用留在它自己的会话里,主会话只有
 // 一条 task 报告。这些行**刻意不可点**:那一步的原文我们根本没拿到,给一个点不开、
 // 点开是空的行比不给更坏(与「产出」行文件没了就变灰字同一口径)。
-function actKidsEl(item) {
+function actKidsEl(item, level) {
   const kids = item.children || [];
   if (!kids.length && !item.children_dropped) return null;
   const box = actEl({ cls: "act-kids" });
   for (const k of kids) {
     const row = actEl({ cls: "act-row act-kid " + (k.status || "ok") });
     row.classList.add("plain");
+    if (level) row.style.marginLeft = (level * 14) + "px";
     // W8:归类子行带着自己的 key —— 定位现场按 key 点灯,被归并走的
     // 原始调用照样逐行点亮,不因归类失明。
     if (k.key) row.dataset.k = String(k.key);
@@ -11852,6 +11853,7 @@ function actKidsEl(item) {
     if (k.time) bits.push(k.time);
     if (k.dur_text) bits.push("用时 " + k.dur_text);
     if (k.progress) bits.push("↳ " + k.progress);
+    if (k.note) bits.push("⚠ " + k.note);   // 父级已放弃等待,后代仍在运行
     if (bits.length) mid.appendChild(actEl("act-s", bits.join(" · ")));
     row.appendChild(actEl({ cls: "act-dot" }));
     row.appendChild(mid);
@@ -11859,6 +11861,25 @@ function actKidsEl(item) {
     row.appendChild(actEl("act-badge",
       (k.verb || "") + (abnormal ? ((k.verb ? " · " : "") + k.badge) : "")));
     box.appendChild(row);
+    // 嵌套树(v0.9.192,计划书阶段 5):孙层递归渲染,按 depth 缩进 ——
+    // 身份在 lane/parent/root 里,不按标题猜父子。有的行才给折叠把手,
+    // 单层界面一个把手都不多,与旧形状逐字一致。
+    const grand = actKidsEl(k, (level || 0) + 1);
+    if (grand) {
+      const n = (k.children || []).length
+        + (k.children_dropped ? "+" + k.children_dropped : "");
+      const tg = actEl({ cls: "act-toggle" });
+      tg.textContent = "▾ 子步骤 " + n;
+      tg.style.cssText = "cursor:pointer;font-size:11px;color:var(--text-3);"
+        + "margin-left:" + ((level || 0) * 14 + 14) + "px";
+      tg.addEventListener("click", () => {
+        const off = grand.style.display === "none";
+        grand.style.display = off ? "" : "none";
+        tg.textContent = tg.textContent.replace(off ? "▸" : "▾", off ? "▾" : "▸");
+      });
+      box.appendChild(tg);
+      box.appendChild(grand);
+    }
   }
   if (item.children_dropped) {
     box.appendChild(actEl("act-more",
@@ -11947,7 +11968,7 @@ function buildTimeline(parent, tl) {
     for (const item of t.items || []) {
       actRows[String(item.key || "")] = item;
       rows.appendChild(actTlRowEl(item));
-      const kids = actKidsEl(item);          // 子代理内部的每一步挂在父行下面
+      const kids = actKidsEl(item, 0);       // 子代理内部的每一步挂在父行下面
       if (kids) rows.appendChild(kids);
     }
     if (t.more) rows.appendChild(actEl("act-more", `另有 ${t.more} 次没列出(这一轮共 ${t.calls} 次)`));

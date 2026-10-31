@@ -190,7 +190,7 @@
 - 出站策略为 deny 时根本不发请求。
 - 网页内容不能通过图片 URL 绕过系统代理或敏感路径围栏。
 
-### 阶段 5：嵌套子代理树形视图
+### 阶段 5：嵌套子代理树形视图 —— **v0.9.192 已完成**
 
 **问题**：嵌套机制已存在，但前端仍把子代理当成平铺任务，默认关闭时也没有可视化入口。
 
@@ -374,7 +374,8 @@
 
 - 路 2b（拆 PYZ）：硬前置是**冻结验证先双读**，没做前置就拆等于让包里两份来源互相冒充。
 - `fetch_image`：**v0.9.189 已完成**
-- MCP elicitation 表单：**v0.9.191 已完成**（`minicode/elicitation.py` 安全子集编译/校验 + Bridge 握手(`_wait_event` 加 `max_s` 只有 elicitation 用)+ 前端表单卡 + 10 断言 e2e;CLI/网页/子代理仍自动 decline;内容只回当次请求)。（`minicode/imgfetch.py`：SSRF 逐跳、文件头认图、大小双闸、策略零请求、`.source.json` 记来源；测试 14 支走 MockTransport）。
+- MCP elicitation 表单：**v0.9.191 已完成**
+- 嵌套子代理树形视图：**v0.9.192 已完成**（行身份 lane/depth/parent/root、activity._children 递归带孙层、收栈 abandoned 标记与时间线注记、前端缩进树与折叠;深层记账接线仍以 depth-1 为界,如实记账）。（`minicode/elicitation.py` 安全子集编译/校验 + Bridge 握手(`_wait_event` 加 `max_s` 只有 elicitation 用)+ 前端表单卡 + 10 断言 e2e;CLI/网页/子代理仍自动 decline;内容只回当次请求)。（`minicode/imgfetch.py`：SSRF 逐跳、文件头认图、大小双闸、策略零请求、`.source.json` 记来源；测试 14 支走 MockTransport）。
 - 馆藏 FTS 与 `title_norm`：**v0.9.187 已完成**（真库副本实测：迁移 + VACUUM 77 s、1.31 GB → 0.82 GB、2 字查询 3.4 s → 7 ms；迁移是显式脚本 `scripts/migrate_library_fts.py`，单事务可重入并重写凭证；旧库照旧可用）。
 - `fetch_image` / 子代理树 / ConPTY / elicitation 表单 / 校历地图数据 / e2e fallback 收口：
   各自是独立大项，本文 §三 的排序不变。

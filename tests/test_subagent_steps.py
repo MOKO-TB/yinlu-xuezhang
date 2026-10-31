@@ -266,16 +266,18 @@ def _hd_js(marker: str, end_marker: str) -> str:
 
 def test_frontend_renders_children_and_never_makes_them_clickable():
     html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
-    assert "function actKidsEl(item)" in html
-    assert "actKidsEl(item)" in _hd_js("for (const item of t.items || [])", "act-more")
+    assert "function actKidsEl(item, level)" in html
+    assert "actKidsEl(item, 0)" in _hd_js("for (const item of t.items || [])", "act-more")
     assert ".act-kids{" in html
-    block = _hd_js("function actKidsEl(item)", "function actTlRowEl")
+    block = _hd_js("function actKidsEl(item, level)", "function actTlRowEl")
     assert 'classList.add("plain")' in block or 'add("plain")' in block
     # 子行**没有可点的原文**:不进 actRows 索引、不挂点击 —— 子代理内部
     # 步骤的老规矩。W8 起归类子行要带自己的 key(dataset.k):定位现场按
     # key 逐行点亮被归并走的原始调用 —— 带 key ≠ 可点,可点看的是 action。
     assert "actRows[" not in block, "子行不该进 actRows 索引(它没有可点的原文)"
-    assert "addEventListener" not in block, "子行不挂点击:没有可点的原文"
+    # v0.9.192:嵌套树给"有孙层的行"加了一个折叠把手(tg.addEventListener)——
+    # 但**子行本身**仍旧不挂点击:没有可点的原文,给一个点开是空的行比不给更坏。
+    assert "row.addEventListener" not in block and "row.onclick" not in block,         "子行本身不许可点(折叠把手挂在独立的 tg 上,不是把子行变成可点)"
     assert "dataset.k" in block, "W8 归类子行带 key,定位现场要点得亮"
 
 
@@ -292,3 +294,86 @@ def test_frozen_needles_cover_the_accounting_channel():
     for name in ("live_child_begin", "live_child_end", "live_child_progress", "CHILD_CAP"):
         assert name in TARGETS["minicode.gui_ui"], f"gui_ui 的 {name} 没进冻结针"
     assert "_children" in TARGETS["minicode.activity"]
+
+
+# ---------------------------------------------------------------- 嵌套树(计划书阶段 5,v0.9.192)
+
+class _Rec(gui_ui.GuiUI):
+    """把 push 记下来的 GuiUI:child_step 事件的身份字段直接断言。"""
+
+    def __init__(self):
+        super().__init__()
+        self.seen = []
+
+    def push(self, t, **k):
+        self.seen.append((t, k))
+
+
+def test_live_rows_carry_lane_depth_parent_root():
+    ui = gui_ui.GuiUI()
+    ui._live_begin("task", "派 2 路")
+    ui.live_child_begin("第1路[explore]", "explore·grep", "上限")
+    rows = ui.live_rows()
+    top = rows[0]
+    assert top["lane"] and top["depth"] == 0 and top["parent"] == ""
+    assert top["root"] == top["lane"], "根行的 root 就是它自己的 lane"
+    kid = rows[0]["children"][0]
+    assert kid["lane"] != top["lane"]
+    assert kid["depth"] == 1 and kid["parent"] == top["lane"]
+    assert kid["root"] == top["lane"], "后代的 root 指回根任务,跨会话不串"
+
+
+def test_child_step_events_carry_the_identity():
+    ui = _Rec()
+    ui._live_begin("task", "派 1 路")
+    ui.live_child_begin("第1路[explore]", "explore·grep", "上限")
+    ui.live_child_progress("第1路[explore]", "跑到一半")
+    ui.live_child_end("第1路[explore]", True)
+    kinds = [k for k, _ in ui.seen if k == "child_step"]
+    assert len(kinds) == 3
+    start = dict(ui.seen[0][1])
+    assert start["lane"] and start["depth"] == 1 and start["root"]
+    end = dict(ui.seen[2][1])
+    assert end["state"] == "end" and "abandoned" in end
+
+
+def test_parent_close_marks_running_descendants_abandoned(tmp_path):
+    """父级收了、后代还开着(嵌套超时的形状):实时表侧打 abandoned,
+    时间线侧活着的那一层如实说「父级已放弃等待,后代仍在运行」。"""
+    from tests.test_activity import _rows, _session
+    from minicode import toolsum
+    args = {"type": "explore", "prompt": "侦察仓库结构"}
+    ui = gui_ui.GuiUI()
+    ui._live_begin("task", toolsum.summarize("task", args))
+    ui.live_child_begin("第1路[explore]", "explore·grep", "上限")
+    ui._live_end("task", True)          # 等报告的那一层到点走了(超时形状)
+    kid = ui.live_rows()[0]["children"][0]
+    assert kid["abandoned"] is True and kid["end"] is None
+    s = _session(tmp_path, [[{"id": "t", "name": "task", "args": args, "result": "报告"}]])
+    live = [{"name": "task", "summary": toolsum.summarize("task", args),
+             "start": 1.0, "end": 2.0, "ok": True,
+             "lane": "L1", "depth": 0, "parent": "", "root": "L1",
+             "children": [dict(kid)]}]
+    rows = _rows(activity.session_activity(s.messages, workspace=tmp_path, live=live))
+    kids = rows[0]["children"]
+    assert kids and kids[0]["status"] == "running"
+    assert kids[0].get("note") == "父级已放弃等待,后代仍在运行"
+
+
+def test_activity_children_recursion_keeps_grandchildren():
+    """孙层此前在 _children 里被整层丢掉 —— 递归之后才谈得上"树形视图"。"""
+    live = [{"name": "task", "summary": "派 1 路", "start": 1.0, "end": 2.0, "ok": True,
+             "lane": "L1", "depth": 0, "parent": "", "root": "L1",
+             "children": [{"name": "explore·grep", "summary": "上限", "route": "第1路",
+                           "start": 1.1, "end": 1.5, "ok": True,
+                           "lane": "L2", "depth": 1, "parent": "L1", "root": "L1",
+                           "children": [{"name": "explore·read", "summary": "读文件",
+                                         "route": "第1路", "start": 1.2, "end": 1.4,
+                                         "ok": True, "lane": "L3", "depth": 2,
+                                         "parent": "L2", "root": "L1"}]}]}]
+    row = {"tool": "task", "raw": "派 1 路"}
+    activity._pair_times([row], live)
+    kids = row["children"]
+    assert kids[0]["lane"] == "L2" and kids[0]["depth"] == 1
+    assert kids[0]["children"][0]["tool"] == "explore·read"
+    assert kids[0]["children"][0]["depth"] == 2, "孙层不许再被丢掉"
