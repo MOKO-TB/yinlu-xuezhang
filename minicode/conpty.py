@@ -287,15 +287,23 @@ class PtySession:
                 k.CloseHandle(h)
             raise PtyError("绑定伪控制台失败")
 
-        siex = _STARTUPINFOEXW()
-        siex.StartupInfo.cb = ctypes.sizeof(_STARTUPINFOEXW)
-        siex.lpAttributeList = ctypes.addressof(attr)
+        # 原始字节缓冲:sizeof(STARTUPINFOW) + 8 字节的 lpAttributeList ——
+        # 消除所有 ctypes 结构对齐/layout 疑问(上一轮量到 PSEUDOCONSOLE 没生效)。
+        import struct as _s
+        _si_size = ctypes.sizeof(STARTUPINFOW)
+        _ex_size = _si_size + 8
+        buf = ctypes.create_string_buffer(_ex_size)
+        _s.pack_into("I", buf, 0, _ex_size)                    # cb
+        _s.pack_into("Q", buf, _si_size, ctypes.addressof(attr))  # lpAttributeList
         pi = _PROCESS_INFORMATION()
         cmdline = ctypes.c_wchar_p(" ".join('"%s"' % a for a in argv))
         creflags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT
         cwdp = ctypes.c_wchar_p(cwd) if cwd else None
-        ok = k.CreateProcessW(None, cmdline, None, None, False, creflags,
-                              None, cwdp, ctypes.byref(siex), ctypes.byref(pi))
+        # bInheritHandles 必须是 **True**(MS 样本同款):PSEUDOCONSOLE 属性靠
+        # 句柄继承把伪控制台给到子进程。
+        ok = k.CreateProcessW(None, cmdline, None, None, True, creflags,
+                              None, cwdp, ctypes.cast(buf, ctypes.c_void_p),
+                              ctypes.byref(pi))
         k.DeleteProcThreadAttributeList(attr)
         if not ok:
             k.ClosePseudoConsole(hpc)

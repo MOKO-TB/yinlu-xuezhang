@@ -958,7 +958,7 @@ cd /d/game/mini-code
     - **出包数字**:归档 138 模块 / 1.18 MB(纯代码更新量级达成);两件补丁(vs 0.9.183/184)各 ~496 MB(含 0.82 GB 馆藏库 + 内核,老清单没数据文件全算"变了" —— 客户端 `patch_worth_it` 会自己退回整包,按设计);三件产物 setup/app-setup/win64.zip 齐,`BUILD_EXIT=0`。
     - **没做/没动**:没推远端、没发 Release;阶段 6(ConPTY)、8 地图数据与 e2e fallback 收口未动。
 
-102. **v0.9.196 阶段 6 ConPTY:探索轮,未接线(2026-10-31,本会话)** —— `minicode/conpty.py` 写了完整的 ctypes 实现(available/spawn/write/resize/close/读泵/Job Object 接入),真机实测:**ConPTY 创建成功、子进程启动成功、VT 序列能读到**,但**伪控制台未真生效** —— 子进程渲染到父进程的真控制台而非 ConPTY 的读管(证据:PS 的 `PS D:\...>` 提示符出现在 python 自己的 stdout 上,读管里只有 `[?9001h[?1004h` 两行 VT 初始化)。三条已试未通的路:①全部 kernel32 函数设 argtypes(64 位句柄截断的教训,照做了但不是根因);②关掉 ConPTY 那两根管的父端(MS 样本同款);③输入编码试了 UTF-8/UTF-16LE/win32-input-mode 序列(ConPTY 输出里的 `?9001h` = 宿主要求终端按 win32-input-mode 编码输入,纯文本被忽略;写 `?9001l` 到输入管 opt-out 也无效)。**不接线就是不让用户撞到半个交互式终端** —— 留给下一轮的线索全部在上面,加上一句:对照 MS 官方 ConPTY 样本逐行比(它 C 里能跑,ctypes 哪一步不一样要抓),或者改用 `pywin32` 的封装绕 ctypes。阶段 2 拆 PYZ 本体已在本轮完成(§6 #101)。
+102. **阶段 6 ConPTY:探索轮,未接线(2026-10-31→11-01,两轮)** —— `minicode/conpty.py` 完整 ctypes 实现(available/spawn/write/resize/close/读泵/Job Object),真机实测:**ConPTY 创建成功、子进程启动成功、VT 序列能读到,但伪控制台未真生效**(子进程渲染到父控制台而非读管;读管里只有 `[?9001h[?1004h`)。五条已试未通:①全 argtypes(64 位句柄截断教训);②关 ConPTY 管的父端;③输入编码 UTF-8/UTF-16LE/win32-input-mode(宿主开了 9001h,纯文本被忽略,opt-out 无效);④`bInheritHandles=TRUE`(MS 样本同款);⑤原始字节缓冲替代结构体(消除 layout 疑问)。**深度诊断实锤:attr 列表内容非零、UpdateProcThreadAttribute 成功、hpc 句柄有效** —— 问题在 CreateProcess 层之上(可能:conhost 侧未接管/STARTUPINFOEX 传参被 ctypes 层扭曲)。**下一轮该做的:用 pip 装 `pywin32` 或 `windows-conpty` 绕 ctypes,或写一个最小 C 编译样本对照。不接线 = 不让用户撞到半个交互式终端**。阶段 2 拆 PYZ 本体已在本轮完成(§6 #101)。
 ## 7. 新会话上手指南
 
 1. 读本文档 + `README.md`(能力/配置/命令全集)。
