@@ -6,7 +6,11 @@
 
 想看某一轮**为什么**长成这样、踩了什么坑:读 `HANDOFF.md` §2 与 `docs/handoff/milestones.md`(那里是按轮写的流水账,这里是索引)。
 
+## v0.9.192
+- v0.9.192 嵌套子代理树形视图(计划书阶段 5):实时表每行带 lane/depth/parent/root 身份(child_step 三事件全带),前端按数据组织树形行不按标题猜父子;activity._children 递归带孙层(此前第二层开始整层丢);收栈时给还开着的后代打 abandoned,时间线如实标注「父级已放弃等待,后代仍在运行」;actKidsEl 按 depth 缩进+折叠把手(单层零把手,旧形状逐字一致);深层记账接线仍 depth-1 为界如实记账;e2e_ui_tree 8 断言 + 测试 4 支;手册 171 条  · 2026-10-31
+
 ## v0.9.191
+- docs(changelog): 收进 v0.9.191 那一笔(生成器的输出,不手抄)  · 2026-10-31
 - v0.9.191 MCP elicitation 表单(计划书阶段 7):minicode/elicitation.py 安全子集编译/校验(string+枚举/maxLength、number/integer+min/max、boolean;≤8 字段;array/object/未知类型/format/pattern 整卡拒),Bridge _elicit/elicit_reply 照 ask_user 握手(_wait_event 加 max_s 只有 elicitation 用——300 秒超时,校验不过卡不下错误贴回重填),create_app 用 holder 转发(WebBridge/CLI 不装=decline 逐字回旧形状),前端 #elicitOverlay 表单卡(下拉/是否/数字带 min/max),内容只回当次请求不落盘不进日志;e2e_ui_elicit 10 断言 + 测试 14 支;手册 170 条,冻结针 6 根  · 2026-10-31
 
 ## v0.9.190
@@ -716,4 +720,4 @@
 ## v0.3.0
 - 初始提交:引路学长 v0.3.0 —— Windows 桌面编程引路智能体(GUI+CLI 同核引擎)  · 2026-09-12
 
-<!-- 生成自 git 提交 6ddf5d8;此后的提交还没收进来 -->
+<!-- 生成自 git 提交 d851531;此后的提交还没收进来 -->
