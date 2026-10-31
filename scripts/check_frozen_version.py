@@ -1767,6 +1767,117 @@ def _code_names(code) -> str:
     return "\n".join(chunks)
 
 
+# ------------------------------------------- 路 2b 硬前置:双读(v0.9.194)
+#
+# 拆 PYZ 之后,`minicode.*` 会从 exe 内嵌的 PYZ 搬进 exe 旁的 `minicode.zip`
+# (启动时挂 sys.path)。计划书写死的前置:「先改冻结验证,再改容器 —— 同时支持
+# 读取 PYZ 与新的 minicode.zip;双读过渡期必须在包里证明两份来源逐字一致」。
+# 这一段就是那个前置:三种源(PYZ/zip/内存),针在**每一个装着它的源**里都要
+# 命中,两份源还在时再对一次版本号 —— 「逐字一致」的可操作口径就是
+# 「同一版本号 + 共管模块的针在两边全中」。拆分落地前 zip 不存在,行为与
+# 旧版逐字一致(纯 PYZ 单源)。
+import zipfile as _zipfile
+
+
+class _MemSource:
+    """内存源(测试用):modules = {点分模块名: code 对象}。"""
+
+    def __init__(self, label, modules):
+        self.label = label
+        self._modules = modules
+
+    def has(self, mod):
+        return mod in self._modules
+
+    def code_of(self, mod):
+        return self._modules[mod]
+
+
+class _ZipSource:
+    """`minicode.zip` 源:里面是 minicode 包的 .py 源码,读出来现场 compile。"""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.label = self.path.name
+        with _zipfile.ZipFile(self.path) as zf:
+            names = zf.namelist()
+        self._entries: dict = {}
+        for n in names:
+            n = n.replace("\\", "/")
+            if n.startswith("minicode/") and n.endswith(".py")                     and "__pycache__" not in n:
+                self._entries[n[:-3].replace("/", ".")] = n
+
+    def has(self, mod):
+        return mod in self._entries
+
+    def code_of(self, mod):
+        with _zipfile.ZipFile(self.path) as zf:
+            src = zf.read(self._entries[mod]).decode("utf-8")
+        return compile(src, self._entries[mod], "exec")
+
+
+class _PyzSource:
+    """exe 内嵌 PYZ 源(拆分落地前的唯一来源;标签保持旧输出的样子)。"""
+
+    def __init__(self, pyz):
+        self.label = "PYZ"
+        self._pyz = pyz
+
+    def has(self, mod):
+        return mod in self._pyz.toc
+
+    def code_of(self, mod):
+        return self._pyz.extract(mod)
+
+
+def check_module(sources, mod: str, needles) -> "tuple[list[str], list[str]]":
+    """一条模块的针检查:**每一个装着它的源**都要全中(双读对账)。
+
+    没有任何源装着它 → 失败;只在一部分源里 → 其余源不检查(拆分落地的
+    中间态允许"搬了一半",但搬过的那半必须对得上)。单源时输出与旧版逐字一致
+    (`mod:needle`),多源才带源标签(`mod(源):needle`)。
+    """
+    holders = [src for src in sources if src.has(mod)]
+    if not holders:
+        return [], ["%s:不在任何来源里" % mod]
+    multi = len(sources) > 1
+    oks: list[str] = []
+    fails: list[str] = []
+    for src in holders:
+        names = _code_names(src.code_of(mod))
+        tag = "%s(%s)" % (mod, src.label) if multi else mod
+        for needle in needles:
+            if needle in names:
+                oks.append("%s: %s" % (tag, needle))
+            else:
+                fails.append("%s: %s" % (tag, needle))
+    return oks, fails
+
+
+def check_version_identity(sources) -> list[str]:
+    """两份以上来源必须自称同一个版本号 —— 「两份来源逐字一致」的可操作口径。
+
+    从 `minicode.__init__` 的常量里挑版本号形状的串;挑不到的源跳过(单文件版
+    本来就没有 minicode,那种源不该进这里的列表)。
+    """
+    fails: list[str] = []
+    versions: dict = {}
+    for src in sources:
+        if not src.has("minicode.__init__"):
+            continue
+        names = _code_names(src.code_of("minicode.__init__"))
+        found = sorted(set(re.findall(
+            r"'(\d+\.\d+\.\d+[^']*)'", names)))
+        if found:
+            versions[src.label] = found
+    if len(versions) >= 2:
+        vals = set(tuple(v) for v in versions.values())
+        if len(vals) > 1:
+            fails.append("版本号不一致:%s"
+                         % "; ".join("%s=%s" % (k, v) for k, v in versions.items()))
+    return fails
+
+
 def main() -> int:
     # 逐针打印 ✓/✗:Windows 默认控制台是 GBK,print 当场 UnicodeEncodeError ——
     # 出包后这道验证闸照文档跑就是 traceback(check_docs.py / check_frontend_js.py
@@ -1788,21 +1899,28 @@ def main() -> int:
     if pyz_name is None:
         print(f"CArchive 里没有 PYZ,条目: {list(car.toc)[:10]}")
         return 2
-    pyz = car.open_embedded_archive(pyz_name)     # 已定位好的子归档读取器
+    # 双读(v0.9.194,路 2b 硬前置):PYZ 永远在场;exe 旁有 minicode.zip 就
+    # 并成第二份源 —— 共管模块逐源对针,两份源再对一次版本号。拆分落地前
+    # zip 不存在,这里就是纯 PYZ 单源,输出与旧版逐字一致。
+    sources: list = [_PyzSource(car.open_embedded_archive(pyz_name))]
+    zip_path = exe.parent / "minicode.zip"
+    if zip_path.exists():
+        sources.append(_ZipSource(zip_path))
+        print(f"双读:{zip_path.name} 在场,共 "
+              f"{len(sources)} 份源(共管模块逐源对针 + 版本号对账)")
 
     failures: list[str] = []
     for mod, needles in TARGETS.items():
-        if mod not in pyz.toc:
-            print(f"  ✗ {mod} 不在 PYZ 里")
-            failures.append(mod)
-            continue
-        code = pyz.extract(mod)
-        haystack = _code_names(code)
-        for needle in needles:
-            ok = needle in haystack
-            print(("  ✓ " if ok else "  ✗ ") + f"{mod}: {needle}")
-            if not ok:
-                failures.append(f"{mod}:{needle}")
+        oks, fails = check_module(sources, mod, needles)
+        for line in oks:
+            print("  ✓ " + line)
+        for line in fails:
+            print("  ✗ " + line)
+        failures.extend(fails)
+    if len(sources) > 1:
+        for f in check_version_identity(sources):
+            print("  ✗ " + f)
+            failures.append(f)
 
     # 包内前端:界面那半边不在 PYZ 里(由 spec 的 datas 整目录收进去),对着文件核。
     html = next((c for c in (exe.parent / "_internal" / "frontend" / "index.html",
