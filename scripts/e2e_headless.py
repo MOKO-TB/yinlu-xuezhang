@@ -141,10 +141,24 @@ def main() -> int:
         ]
 
         # ---- 结局 2:参数不对,stdout 必须一个字都没有
-        bad = _run(["--output-format", "stream-json", "任务"], ws2, env)
+        # v0.9.195 修正一支过期断言:这里原来用 `stream-json` 当"参数错"的样本,
+        # 但 v0.9.144 起 stream-json 是**合法格式**(这条断言因此从那时起就该红,
+        # 一直没跑包内 e2e 所以没人看见)。参数错的样本改成真不认的 `bogus`;
+        # stream-json 的真契约(合法运行、模型故障退出 1、stdout 是 NDJSON)另立两条。
+        bad = _run(["--output-format", "bogus", "任务"], ws2, env)
         checks += [
             ("2 参数错:退出码 2", bad.returncode == EXIT_ARGS),
             ("2 参数错:stdout 全空(错话说给 stderr)", bad.stdout.strip() == b""),
+        ]
+        sj = _run(["--output-format", "stream-json", "任务"], ws2, env)
+        lines_out = [x for x in sj.stdout.split(b"\n") if x.strip()]
+        checks += [
+            # 对面的模型是**假 SSE 服务器**(会按剧本真回话),结局取决于剧本 ——
+            # 能钉死的只有 NDJSON 契约本身:首行 stream_start、末行 result。
+            ("stream-json 合法:stdout 首行是 stream_start 的 NDJSON",
+             bool(lines_out) and b'"type": "stream_start"' in lines_out[0]),
+            ("stream-json 合法:末行是 result 的 NDJSON",
+             bool(lines_out) and b'"type": "result"' in lines_out[-1]),
         ]
 
         # ---- 结局 1:模型根本没答上话(端点指向一个没人听的端口)

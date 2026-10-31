@@ -193,9 +193,20 @@ common = dict(
     noarchive=False,
 )
 
+# 路 2b(v0.9.195):onedir 的两份产物不再把 minicode 封进 PYZ —— 它以
+# minicode.zip(源码归档)随包走,启动时由根目录 yzboot.py 挂上 sys.path。
+# 上面两条 minicode.* 的 hiddenimports 必须从 onedir 的分析里摘掉,否则
+# PYZ 与 zip 各一份,谁生效看装载顺序(两份来源互相冒充)。单文件版保持
+# 整装:旁边多一个 zip 会毁掉"免解压"的承诺,它的 PYZ 里仍是整装的 minicode。
+hiddenimports_split = [h for h in hiddenimports
+                       if not str(h).startswith("minicode")]
+_common_split = dict(common)
+_common_split["excludes"] = list(common["excludes"]) + ["minicode"]
+_common_split["hiddenimports"] = hiddenimports_split
+
 ICON = os.path.join(ROOT, "assets", "gcode.ico")
 
-a_cli = Analysis([os.path.join(ROOT, "main.py")], **common)
+a_cli = Analysis([os.path.join(ROOT, "main.py")], **_common_split)
 pyz_cli = PYZ(a_cli.pure)
 exe_cli = EXE(
     pyz_cli, a_cli.scripts, [],
@@ -206,7 +217,7 @@ exe_cli = EXE(
     icon=ICON,
 )
 
-a_gui = Analysis([os.path.join(ROOT, "gui_main.py")], **common)
+a_gui = Analysis([os.path.join(ROOT, "gui_main.py")], **_common_split)
 pyz_gui = PYZ(a_gui.pure)
 exe_gui = EXE(
     pyz_gui, a_gui.scripts, [],

@@ -295,6 +295,34 @@ def build_patches(dist: Path, files: list) -> dict:
     return patches
 
 
+def build_code_archive(dist: Path) -> Path:
+    """路 2b(v0.9.195)拆 PYZ 本体:把 minicode 源码收进 exe 旁的 minicode.zip。
+
+    onedir 的两份产物在 spec 里已把 minicode 从分析摘除(启动由 yzboot 挂载);
+    归档顺序确定(按相对路径排序),同一次构建必然同一次字节 —— files.json
+    与补丁 zip 的差分因此可复现。单文件版不拆(它的分析用 **common,不带
+    excludes 追加),PYZ 里仍是整装的 minicode。
+    """
+    import zipfile
+    out = dist / "minicode.zip"
+    files = sorted(
+        p for p in (ROOT / "minicode").rglob("*.py")
+        if "__pycache__" not in p.parts)
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in files:
+            z.write(f, f.relative_to(ROOT).as_posix())
+    print("代码归档: %s(%d 个模块,%s B)"
+          % (out, len(files), out.stat().st_size))
+    return out
+
+
+def write_app_version(dist: Path) -> None:
+    """exe 构建时写下的期望版本:yzboot 启动时与 zip 自称的版本对账。"""
+    d = dist / "_internal"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "app_version.txt").write_text(__version__ + "\n", encoding="utf-8")
+
+
 def write_user_files(dist: Path) -> None:
     """把面向用户的文件放到 exe 旁边(清理冒烟残留 + config 样例 + 使用说明)。
 
@@ -1390,6 +1418,10 @@ def main() -> None:
     assert (dist / "引路学长-CLI.exe").exists(), "构建产物缺失(CLI 版)"
     onefile = ROOT / "dist" / "引路学长-单文件版.exe"
     assert onefile.exists(), "构建产物缺失(单文件版)"
+
+    # 路 2b(v0.9.195):代码归档与版本戳要在打安装包/zip 之前(它们随包走)
+    build_code_archive(dist)
+    write_app_version(dist)
 
     # 内置离线馆藏库:必须在打安装包/zip 之前,否则分发出去不带图书馆数据
     bundle_library_db(dist)

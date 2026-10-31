@@ -9,6 +9,15 @@ import os
 import sys
 import time
 
+import yzboot
+
+_boot_err = yzboot.mount()
+if _boot_err:                     # 路 2b:代码归档缺失/损坏/版本不符 —— 拒绝启动
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(
+        None, "引路学长:" + _boot_err, "引路学长", 0x10)
+    raise SystemExit(3)
+
 import webview
 
 from minicode import APP_NAME

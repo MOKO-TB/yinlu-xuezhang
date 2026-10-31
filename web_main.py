@@ -9,6 +9,14 @@
 from __future__ import annotations
 
 import argparse
+import sys
+
+import yzboot
+
+_boot_err = yzboot.mount()
+if _boot_err:                     # 路 2b:代码归档缺失/损坏/版本不符 —— 拒绝启动
+    sys.stderr.write("引路学长:" + _boot_err + "\n")
+    raise SystemExit(3)
 
 from minicode.config import ensure_config
 from minicode.paths import app_path
