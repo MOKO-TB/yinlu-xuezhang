@@ -111,6 +111,32 @@ class _BoomWindow:
         raise RuntimeError("COM 还没起来")
 
 
+def test_apply_edge_corners_move_two_sides_at_once():
+    """四角对角线缩放(v0.9.193):角 = 两条边同时动,方向由名字里那两个字母决定。
+
+    矩形用 900×600(≥ MIN_W/MIN_H),不然夹持会先把窗口"撑回"最小尺寸,
+    测的就不再是角的方向了。
+    """
+    from minicode.window_chrome import _apply_edge
+    rect = [100, 100, 1000, 700]
+    assert _apply_edge(rect, "nw", -30, -20) == [70, 80, 1000, 700]
+    assert _apply_edge(rect, "ne", 30, -20) == [100, 80, 1030, 700]
+    assert _apply_edge(rect, "sw", -30, 20) == [70, 100, 1000, 720]
+    assert _apply_edge(rect, "se", 30, 20) == [100, 100, 1030, 720]
+
+
+def test_apply_edge_corner_clamps_at_minimum_without_pushing_the_far_side():
+    """向内拖过头:被拖的两条边各自停在最小尺寸,对边不被推走。
+
+    向外拖没有下界(窗口合法地长大)—— 夹持只管"缩不能缩过 MIN"。
+    """
+    from minicode.window_chrome import _apply_edge, MIN_W, MIN_H
+    rect = [100, 100, 1000, 700]
+    got = _apply_edge(rect, "nw", 500, 500)
+    assert got[0] == 1000 - MIN_W and got[1] == 700 - MIN_H, "左/上停在最小尺寸"
+    assert got[2] == 1000 and got[3] == 700, "对边不被推走"
+
+
 def test_hwnd_of_tolerates_windows_that_are_not_ready():
     assert wc._hwnd_of(_FakeWindow(1234)) == 1234
     assert wc._hwnd_of(_FakeWindow(None)) == 0

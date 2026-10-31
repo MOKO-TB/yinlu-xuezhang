@@ -638,15 +638,20 @@ try {
   .rz{ position:fixed; inset:0; pointer-events:none; z-index:96; }
   .rz[hidden]{ display:none; }
   .rz-b,.rz-c{ position:absolute; pointer-events:auto; }
-  .rz-b[data-e=n],.rz-c[data-e=nw],.rz-c[data-e=ne]{ top:0; left:0; right:0; height:5px; cursor:ns-resize; }
-  .rz-b[data-e=s],.rz-c[data-e=sw],.rz-c[data-e=se]{ bottom:0; left:0; right:0; height:5px; cursor:ns-resize; }
+  /* 四条边:各管一边(v0.9.186 起) */
+  .rz-b[data-e=n]{ top:0; left:0; right:0; height:5px; cursor:ns-resize; }
+  .rz-b[data-e=s]{ bottom:0; left:0; right:0; height:5px; cursor:ns-resize; }
   .rz-b[data-e=w]{ top:0; bottom:0; left:0; width:5px; cursor:ew-resize; }
   .rz-b[data-e=e]{ top:0; bottom:0; right:0; width:5px; cursor:ew-resize; }
-  .rz-c[data-e=nw],.rz-c[data-e=sw]{ left:0; width:14px; }
-  .rz-c[data-e=ne],.rz-c[data-e=se]{ right:0; width:14px; }
-  .rz-c[data-e=nw],.rz-c[data-e=ne]{ top:0; height:14px; cursor:nwse-resize; }
-  .rz-c[data-e=sw],.rz-c[data-e=se]{ bottom:0; height:14px; cursor:nesw-resize; }
-  .rz-c[data-e=ne],.rz-c[data-e=sw]{ cursor:nesw-resize; }
+  /* 四个角(v0.9.193 修):**各自定位,不与边共用 left/right** —— 原写法把
+     left:0;right:0 一起设给了 ne/se,过度约束下 left 赢过 right,ne/se 被钉死在
+     左边把 nw/sw 盖住(实测:左上拖动触发的是 ne、右侧两角没有角条)。对角线
+     缩放要的就是"两条边同时动",14×14 的角比 5px 的边好够得着。 */
+  .rz-c{ width:14px; height:14px; }
+  .rz-c[data-e=nw]{ top:0; left:0; cursor:nwse-resize; }
+  .rz-c[data-e=ne]{ top:0; right:0; cursor:nesw-resize; }
+  .rz-c[data-e=sw]{ bottom:0; left:0; cursor:nesw-resize; }
+  .rz-c[data-e=se]{ bottom:0; right:0; cursor:nwse-resize; }
   /* 模型标识:可点开「添加模型」弹窗(内置模型 key 永不展示) */
   .topbar .modelpill{ background:var(--primary-light); color:var(--primary-text);
                       border:1px solid var(--primary); border-radius:var(--r-full);
