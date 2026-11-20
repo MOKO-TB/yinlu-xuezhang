@@ -440,12 +440,12 @@ def format_wiki_view(data: dict[str, Any], action: str = "summary", target: str 
 
     # 默认 summary
     lines = [
-        f"## 📚 代码库全景百科: {name}",
+        f"## 代码库全景百科: {name}",
         f"- **技术栈**: {langs} (收录约 {data.get('total_files', 0)} 个源码文件)",
         f"- **项目定位**: {overview}" + (f" (来源: {data['overview_source']})" if data.get("overview_source") else ""),
         f"- **更新时间**: {updated}",
         "",
-        "### 📁 核心模块分工",
+        "### 核心模块分工",
     ]
     if modules:
         for m in modules[:12]:
@@ -456,13 +456,13 @@ def format_wiki_view(data: dict[str, Any], action: str = "summary", target: str 
 
     if cmds:
         lines.append("")
-        lines.append("### 🛠 常用命令")
+        lines.append("### 常用命令")
         for k, v in list(cmds.items())[:4]:
             lines.append(f"- **{k}**: `{v}`")
 
     if conventions and "暂无" not in conventions:
         lines.append("")
-        lines.append("### 📋 工程约定摘要")
+        lines.append("### 工程约定摘要")
         lines.append(conventions)
         if data.get("conventions_source"):
             lines.append(f"来源: {data['conventions_source']}")

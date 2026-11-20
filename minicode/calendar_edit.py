@@ -139,7 +139,7 @@ def preview_text(clean: list[dict], problems: list[str]) -> str:
             lines.append(f"- {e['name']} [{e['kind']}] {span}")
             lines.append(f"  依据:{e['quote']}")
             lines.append(f"  来源:{e['source']}(可信度 {e['credibility']})")
-    lines += [f"⚠ {p}" for p in problems]
+    lines += [f"注意:{p}" for p in problems]
     if clean:
         lines.append("确认无误请明确说「确认入库」;有错的条目现在提出来,修正后重新预览。")
     return "\n".join(lines)
@@ -307,7 +307,7 @@ def remove_preview_text(targets) -> str:
         lines.append("确认无误请明确说「确认删除」;")
     else:
         lines.append("没有匹配的条目。")
-    lines += [f"⚠ {m}" for m in missing]
+    lines += [f"注意:{m}" for m in missing]
     return "\n".join(lines)
 
 
@@ -352,12 +352,12 @@ def revise_preview_text(targets, patch) -> str:
         if merged is not None:
             lines.append("修订后:")
             lines += _entry_lines(merged)
-        lines += [f"⚠ {p}" for p in problems]
+        lines += [f"注意:{p}" for p in problems]
         if merged is not None and not problems:
             lines.append("确认无误请明确说「确认修订」。")
     else:
         lines.append("没有匹配的条目。")
-    lines += [f"⚠ {m}" for m in missing]
+    lines += [f"注意:{m}" for m in missing]
     return "\n".join(lines)
 
 

@@ -50,11 +50,11 @@ MEMORY_LABELS = {"save": "记住", "forget": "忘记", "dream": "整理去重"}
 _URL_RE = re.compile(r"https?://[^\s\"'<>）)】\]]+")
 _KB_URL_RE = re.compile(r"来源网址[:：]\s*(\S+)")
 
-GROUPS = (("subagents", "子代理", "🤖"),
-          ("files", "产出", "📝"),
-          ("web", "网页查阅", "🌐"),
-          ("sources", "来源", "🔗"),
-          ("memory", "记忆", "🧠"))
+GROUPS = (("subagents", "子代理"),
+          ("files", "产出"),
+          ("web", "网页查阅"),
+          ("sources", "来源"),
+          ("memory", "记忆"))
 
 
 # ------------------------------------------------------------------ 小工具
@@ -1050,14 +1050,14 @@ def session_activity(messages, workspace=None, live=None, now=None, busy=True,
     # 是一句只能看不能办的死话 —— 而这一栏每一行都该点得动是它存在的理由。
     cap = GROUP_LIMIT if group_limit is None else max(0, int(group_limit))
     out, total = [], 0
-    for key, label, icon in GROUPS:
+    for key, label in GROUPS:
         rows = list(reversed(groups[key]))
         if not busy:
             for r in rows:
                 if r.get("status") == "running":
                     r["status"], r["badge"] = "stale", "已中断"
         total += len(rows)
-        out.append({"key": key, "label": label, "icon": icon,
+        out.append({"key": key, "label": label,
                     "count": len(rows), "items": rows[:cap or None],
                     "more": max(0, len(rows) - cap) if cap else 0})
     errors = sum(1 for cid in order if cid in results and _failed(results[cid]))

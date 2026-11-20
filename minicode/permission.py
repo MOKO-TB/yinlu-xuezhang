@@ -289,7 +289,7 @@ class PermissionGate:
             return ""
 
     def _unread_note(self, path) -> str:
-        return (f"⚠ 这一步要改的 {path} 本会话还没读过 —— 学长手上没有它现在的内容,"
+        return (f"注意:这一步要改的 {path} 本会话还没读过 —— 学长手上没有它现在的内容,"
                 "要替换的那段文字是按印象写的概率不低(改错了会直接落进你的文件)。"
                 "拿不准就点「拒绝」,让我先 read_file 一遍再来;确认这么改就点「允许」。")
 
@@ -673,12 +673,12 @@ class PermissionGate:
                 if level == OUTSIDE and not self.sandbox.path_allowed(path):
                     return self._ask("outside_path")
             if self._credential_hit("write_file", {"path": raw}) is not None:
-                return self._ask("credential", f"⚠ 这包补丁要动 {raw} —— 那是含密钥/凭据"
+                return self._ask("credential", f"注意:这包补丁要动 {raw} —— 那是含密钥/凭据"
                                  "的文件。模型读它能带出去的只有密钥本身;如果这一步不是"
                                  "你要求的,请点拒绝。")
             git_hit = self._git_hit("write_file", {"path": raw})
             if git_hit is not None:
-                return self._ask("git", f"⚠ 这包补丁动的是仓库的 `.git`(命中:{git_hit})"
+                return self._ask("git", f"注意:这包补丁动的是仓库的 `.git`(命中:{git_hit})"
                                  " —— 那里放的不是代码,是仓库历史与**每次提交/合并都会"
                                  "自动执行的钩子**。写进去等于给以后每次 git 操作装一个"
                                  "自动入口,权限档位、项目白名单、「本轮总是允许」都不替"
@@ -725,7 +725,7 @@ class PermissionGate:
             # "本轮总是允许"而连续静默放行 —— 每个动作都重新确认。
             cred = self._credential_hit(name, args)
             if cred is not None:
-                return self._ask("credential", "⚠ 这是一个含密钥/凭据的文件——模型读它,能带出去的只有"
+                return self._ask("credential", "注意:这是一个含密钥/凭据的文件——模型读它,能带出去的只有"
                            "密钥本身。如果这一步不是你要求的,请点拒绝。")
             if name == "bash":
                 level, why = check_command(self.sandbox.policy,
@@ -769,7 +769,7 @@ class PermissionGate:
         # 只读不算:看提交历史、读 HEAD 是正常需求,拦了只会把日常用法变吵。
         git_hit = self._git_hit(name, args)
         if git_hit is not None:
-            return self._ask("git", f"⚠ 这一步动的是仓库的 `.git`(命中:{git_hit})—— 那里放的不是代码,"
+            return self._ask("git", f"注意:这一步动的是仓库的 `.git`(命中:{git_hit})—— 那里放的不是代码,"
                        "是仓库历史与**每次提交/合并都会自动执行的钩子**。写进去等于给以后每次 "
                        "git 操作装一个自动入口,权限档位、项目白名单、「本轮总是允许」都不替它"
                        "背书。不是你要的请点拒绝。")
@@ -778,7 +778,7 @@ class PermissionGate:
         if self._touched_external:
             why = self._is_sensitive_action(name, args)
             if why:
-                return self._ask("external", f"⚠ 本回合此前接触过外部内容({self._external_source}),"
+                return self._ask("external", f"注意:本回合此前接触过外部内容({self._external_source}),"
                            f"{why}。这一步可能是外部内容诱导的,请确认它确实是你要的。")
         # 项目规则里的 ask 排在**档位之前、红线与升级门之后**:.git 与"接触过外部
         # 内容"那两句警告比"这条规则要我确认"更该让用户看到,所以不抢在它们前面;

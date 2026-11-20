@@ -7,7 +7,7 @@ stub 记账,事件用 window.__gcodeEvent 按后端真实事件序推),只断言
     2. 其他工作区的会话归进「📁 工作区名」组;旧留档(无 workspace)归「未记录」
     3. 组头点击 → 折叠/展开(组内 .sess 随 display 切换)
     4. 组内会话行点击 → resume_session(传入该行的 index)
-    5. turn_stats 事件 → 最近一条助手消息下出现「⏱ 耗时 · ⚡ N token · x token/秒」
+    5. turn_stats 事件 → 最近一条助手消息下出现「耗时 · N token · x token/秒」
     6. tokens 缺失 → 显示"速度未知",不显示编造的数字
     7. 纯工具调用段(无正文)不挂 meta 行
     8. reasoning=true → 出现「已思考」标
@@ -189,7 +189,7 @@ def main() -> int:
                 ".some(s => !s.hidden && s.textContent.includes('12.3 秒'))")
             stat_text = page.eval_on_selector(
                 ".msg.assistant .stats", "el => el.textContent")
-            check("⏱" in stat_text and "12.3 秒" in stat_text,
+            check("耗时" in stat_text and "12.3 秒" in stat_text,
                   f"耗时显示(实际 {stat_text!r})")
             check("456" in stat_text and "37.1 token/秒" in stat_text,
                   f"token 数与每秒速度显示({stat_text!r})")

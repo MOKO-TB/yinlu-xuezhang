@@ -222,7 +222,7 @@ def calendar_fetch(ctx, action: str = "find", url: str = "",
             if got["images"]:
                 cand.append(f"(正文里还有 {got['images']} 张图;文字版优先,"
                             "没有文字版时把图发我)")
-            cand.append("⚠ 这些只是原文里的行,不是已经核对的条目:"
+            cand.append("注意:这些只是原文里的行,不是已经核对的条目:"
                         "录入请走 calendar_edit 的 preview → commit,"
                         "没有具体日子的(如「9月下旬」)不要编成某一天。")
             return "\n".join(head + body + cand)

@@ -2844,7 +2844,6 @@ try {
                      border-radius:var(--r-m); cursor:pointer; }
 .perm-menu .at-item:hover, .perm-menu .at-item.on{ background:var(--glass-lite); }
 .perm-menu .at-item.on .pm-check{ opacity:1; }
-.pm-ic{ flex:none; font-size:15px; }
 .pm-body{ min-width:0; display:flex; flex-direction:column; gap:1px; }
 .pm-body b{ font-size:12.5px; color:var(--text-1); }
 .pm-desc{ font-size:11px; color:var(--text-3); }
@@ -2948,6 +2947,598 @@ try {
     width:100%; max-width:var(--chat-measure);
     margin-left:auto; margin-right:auto;
   }
+
+  /* ============================================================
+     v0.9.197 素纸 Paper —— 主屏极简重绘(用户图 p1 点名)
+     旧的那套是「暮色玻璃」:航拍照片打底、青金渐变、每块表面都半透明 + 阴影 +
+     主题色描边。用户的原话是"太复杂会显得很难看",给的参照 p2(Qoder)/
+     p3(ZCode)共同点很清楚:纯色纸面、1px 细线、单色线性图标,强调色只出现在
+     "当前在哪"和"主操作"两处。
+     这里**不改 id、不改任何点击绑定**(入口栏仍是 16 格、仍是两行),只把表面/
+     图标/层级重新画一遍;布局上唯一的一处调整在 §11(顶栏横跨右栏)。原始规则
+     保留在上面,方便对照回退。
+     ============================================================ */
+
+  /* ---- 1. 纸面配色 ---- */
+  :root{
+    --bg:#F4F4F1;
+    --glass:#F7F7F4;              /* 入口栏/侧栏/顶栏:比纸面稍亮一档 */
+    --glass-strong:#FFFFFF;
+    --glass-lite:#ECEDE8;
+    --surface:#FFFFFF;
+    --surface-2:#F7F7F3;
+
+    --line:#E1E2DC;
+    --line-soft:#EAEAE5;
+
+    --text-1:#1B211E;
+    --text-2:#58625D;
+    --text-3:#8B948F;
+
+    --primary:#1B7F74;            /* 只在"当前/主操作"出现 */
+    --primary-light:rgba(27,127,116,.075);
+    --primary-text:#166B62;
+    --accent:#1B7F74;
+    --gold:#A57B3C;
+    --bubble-user:#F4F4F1;        /* 用户气泡里的字色(气泡本身是墨色) */
+
+    --danger:#C4453F; --danger-bg:rgba(196,69,63,.08);
+    --warning:#9A6A12; --warning-bg:rgba(154,106,18,.08);
+    --success:#2E7D5B; --success-bg:rgba(46,125,91,.08);
+    --rail-tick:rgba(27,33,30,.28);
+
+    --code-bg:#1C211F; --code-text:#E7EFEA;
+
+    --r-s:7px; --r-m:10px; --r-l:14px;
+    --blur:none;
+    --shadow:0 8px 24px rgba(20,28,24,.10);
+    --shadow-sm:0 1px 2px rgba(20,28,24,.05);
+    --shadow-lg:0 16px 40px rgba(20,28,24,.16);
+
+    --glass-soft:rgba(255,255,255,.50);
+    --text-soft:#4A5550;
+    --text-bright:#111614;
+    --text:#1B211E;
+    --kbd-bg:#FFFFFF;
+    --border-soft:#D8D9D3;
+    --ok:#2E7D5B; --warn:#9A6A12;
+
+    --hero-img:none;
+    --hero-dim:none;
+  }
+  html.dark{
+    --bg:#161817;
+    --glass:#191B1A;
+    --glass-strong:#1E201F;
+    --glass-lite:#242725;
+    --surface:#1E201F;
+    --surface-2:#232624;
+
+    --line:#2E322F;
+    --line-soft:#262A27;
+
+    --text-1:#E8EAE7;
+    --text-2:#A3ABA7;
+    --text-3:#727B76;
+
+    --primary:#51BFAF;
+    --primary-light:rgba(81,191,175,.12);
+    --primary-text:#7FD5C9;
+    --accent:#51BFAF;
+    --gold:#C9A26B;
+    --bubble-user:#161817;
+
+    --danger:#E57066; --danger-bg:rgba(229,112,102,.12);
+    --warning:#D6A24A; --warning-bg:rgba(214,162,74,.10);
+    --success:#5FBE93; --success-bg:rgba(95,190,147,.10);
+    --rail-tick:rgba(232,234,231,.25);
+
+    --code-bg:#101312; --code-text:#DCE8E3;
+
+    --shadow:0 10px 28px rgba(0,0,0,.45);
+    --shadow-sm:0 1px 2px rgba(0,0,0,.25);
+    --shadow-lg:0 18px 44px rgba(0,0,0,.55);
+
+    --glass-soft:rgba(255,255,255,.06);
+    --text-soft:#A3ABA7;
+    --text-bright:#F2F5F2;
+    --text:#E8EAE7;
+    --kbd-bg:#2A2E2B;
+    --border-soft:#343935;
+    --ok:#5FBE93; --warn:#D6A24A;
+
+    --hero-img:none;
+    --hero-dim:none;
+  }
+
+  /* ---- 2. 画布:不再用照片打底 ---- */
+  body{
+    background-image:none;
+    background-color:var(--bg);
+    font-family:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",
+                system-ui,sans-serif;
+    font-size:13.5px; line-height:1.65;
+    transition:none;
+  }
+  body::before{ display:none; }
+  ::-webkit-scrollbar{ width:8px; height:8px; }
+  ::-webkit-scrollbar-thumb{ background:rgba(130,140,135,.32);
+                             border-radius:99px; border:2px solid transparent;
+                             background-clip:padding-box; }
+  ::-webkit-scrollbar-thumb:hover{ background:var(--text-3); }
+
+  /* ---- 3. 入口栏:单色线性图标 + 小字 ---- */
+  .rail{ padding:8px 0; gap:1px; background:var(--glass);
+         border-right:1px solid var(--line);
+         backdrop-filter:none; -webkit-backdrop-filter:none; }
+  .rail button{ width:46px; min-height:42px; padding:3px 0 2px; gap:2px;
+                border-radius:9px; font-size:15px; line-height:1; }
+  .rail svg.ri{ display:block; width:17px; height:17px; flex:none; margin:0 auto;
+                fill:none; stroke:currentColor; stroke-width:1.6;
+                stroke-linecap:round; stroke-linejoin:round;
+                color:var(--text-2); }
+  .rail button:hover svg.ri{ color:var(--text-1); }
+  .rail button .cap{ padding:0; border:none; background:none;
+                     border-radius:0; line-height:1.25;
+                     font-size:10px; font-weight:500; letter-spacing:.02em;
+                     color:var(--text-2); }
+  .rail button:hover{ background:var(--glass-lite); border-color:transparent;
+                      color:var(--text-1); }
+  .rail button:hover .cap{ color:var(--text-2); }
+  .rail button[aria-expanded="true"], .rail button.on{
+    background:var(--primary-light); border-color:transparent;
+    color:var(--text-1); }
+  .rail button[aria-expanded="true"] .cap, .rail button.on .cap{
+    color:var(--primary-text); font-weight:600; }
+  .rail button[aria-expanded="true"] svg.ri, .rail button.on svg.ri{
+    color:var(--primary); opacity:1; }
+  .rail .sep{ width:20px; height:1px; margin:5px 0; background:var(--line); }
+  .rail button .pl-n{ top:1px; right:7px; font-size:8.5px; font-weight:600;
+                      color:var(--text-3); }
+  /* 主题那一格:月亮/太阳两枚 SVG,CSS 跟着 html.dark 换 */
+  .rail .ic-sun{ display:none; }
+  html.dark .rail .ic-moon{ display:none; }
+  html.dark .rail .ic-sun{ display:block; }
+
+  /* ---- 4. 侧栏 ---- */
+  .sidebar{ background:var(--glass); border-right:1px solid var(--line);
+            backdrop-filter:none; -webkit-backdrop-filter:none; }
+  .logo{ padding:15px 14px 4px; gap:9px; font-size:15px; font-weight:700;
+         text-shadow:none; }
+  .logo .m{ width:28px; height:28px; border-radius:8px; box-shadow:none; }
+  .logo small{ font-size:10px; font-weight:500; color:var(--text-3); }
+  .school{ padding:0 16px 12px 51px; border-bottom:none; text-align:left;
+           opacity:.5; }
+  .school img{ height:24px; width:auto; }
+  html.dark .school img{ filter:invert(1) brightness(1.1); opacity:1; }
+
+  .side-title{ display:flex; align-items:center; padding:16px 14px 5px;
+               font-size:11px; font-weight:600; letter-spacing:.05em;
+               color:var(--text-3); }
+  .side-title #btnBoard{ margin-left:auto; padding:1px 6px; border-radius:6px;
+    background:transparent; border:none; color:var(--text-3);
+    font-size:10.5px; font-weight:500; letter-spacing:0; }
+  .side-title #btnBoard:hover{ background:var(--glass-lite); color:var(--text-1);
+    border-color:transparent; }
+
+  .side-newtask{ width:calc(100% - 8px); margin:0 0 2px; padding:7px 8px;
+    border:1px solid transparent; border-radius:8px;
+    background:transparent; color:var(--text-1);
+    font-size:12.5px; font-weight:600; text-align:left; }
+  .side-newtask:hover{ background:var(--glass-lite); border-color:transparent;
+                       filter:none; }
+
+  .projects{ max-height:42%; padding:0 8px 6px;
+             border-bottom:1px solid var(--line-soft); }
+  .proj{ margin-bottom:1px; padding:7px 38px 7px 8px;
+         border:1px solid transparent; border-radius:8px; background:transparent; }
+  .proj:hover{ background:var(--glass-lite); border-color:transparent;
+               box-shadow:none; }
+  .proj.current{ background:var(--primary-light); border-color:transparent;
+                 box-shadow:none; }
+  .proj .row1{ gap:7px; }
+  .proj .ic{ width:15px; height:15px; font-size:0; line-height:0;
+             color:var(--text-3); }
+  .proj .ic svg{ width:14px; height:14px; display:block; fill:none;
+                 stroke:currentColor; stroke-width:1.6;
+                 stroke-linecap:round; stroke-linejoin:round; }
+  .proj.current .ic{ color:var(--primary); }
+  .proj .n{ font-size:12.5px; font-weight:500; color:var(--text-2); }
+  .proj.current .n{ color:var(--text-1); font-weight:600; }
+  .proj .curtag{ width:6px; height:6px; padding:0; border:none; border-radius:50%;
+                 background:var(--primary); font-size:0; line-height:0;
+                 overflow:hidden; flex:none; }
+  .proj .p{ display:none; }             /* 路径进 title,列表只留名字 */
+  .proj .ops{ top:6px; right:7px; gap:2px; }
+  .proj .op{ width:21px; height:20px; background:var(--surface);
+             border:1px solid var(--line); border-radius:6px;
+             font-size:11px; color:var(--text-3); }
+  .proj .op:hover{ border-color:var(--text-3); color:var(--text-1); }
+  .proj .newhere{ width:auto; margin:3px 0 1px 22px; padding:2px 0;
+                  border:none; border-radius:0; background:transparent;
+                  color:var(--text-3); font-size:11px; font-weight:500;
+                  text-align:left; }
+  .proj .newhere:hover{ background:transparent; color:var(--primary-text); }
+  .proj-add{ width:100%; margin:2px 0 2px; padding:5px 8px;
+             border:1px solid transparent; border-radius:7px; background:transparent;
+             color:var(--text-3); font-size:11.5px; font-weight:500;
+             text-align:left; }
+  .proj-add:hover{ background:var(--glass-lite); border-color:transparent;
+                   color:var(--text-1); }
+
+  .sess-search{ padding:0 8px 8px; gap:6px; }
+  .sess-search input{ background:var(--glass-lite); border:1px solid var(--line);
+    border-radius:8px; padding:5px 10px; height:30px;
+    font-size:12px; color:var(--text-1); }
+  .sess-search input::placeholder{ color:var(--text-3); }
+  .sess-search input:focus{ border-color:var(--text-3); }
+  .sess-search button{ width:30px; height:30px; flex:none;
+    display:inline-flex; align-items:center; justify-content:center;
+    background:transparent; border:1px solid transparent; border-radius:8px;
+    color:var(--text-3); padding:0; }
+  .sess-search button:hover{ background:var(--glass-lite); color:var(--text-1);
+                             border-color:transparent; }
+  .sess-search button svg{ width:14px; height:14px; fill:none; stroke:currentColor;
+                           stroke-width:1.8; stroke-linecap:round; }
+
+  .sessions{ padding:0 8px 8px; }
+  .ws-group{ margin-bottom:2px; }
+  .ws-group-head{ padding:6px 8px 3px; gap:6px; font-size:11px; font-weight:500;
+                  color:var(--text-3); border-radius:6px; }
+  .ws-group-head .gt{ flex:none; width:11px; height:11px; display:inline-flex;
+                      align-items:center; justify-content:center; }
+  .ws-group-head .gt svg{ width:11px; height:11px; fill:none; stroke:currentColor;
+                          stroke-width:2; stroke-linecap:round;
+                          stroke-linejoin:round; }
+  .ws-group.closed .gt{ transform:rotate(-90deg); }
+  .ws-group-head:hover{ background:var(--glass-lite); color:var(--text-1); }
+  .ws-group-head.here{ color:var(--text-2); }
+  .ws-group-head .gc{ background:transparent; padding:0; font-weight:500;
+                      color:var(--text-3); font-size:10.5px; }
+  .sess{ padding:7px 40px 7px 9px; margin-bottom:1px;
+         border:1px solid transparent; border-radius:8px; }
+  .sess:hover{ background:var(--glass-lite); box-shadow:none; }
+  .sess.current{ background:var(--primary-light); border-color:transparent; }
+  .sess .t{ font-size:12.5px; font-weight:500; color:var(--text-2); }
+  .sess.current .t{ color:var(--text-1); font-weight:600; }
+  .sess .m{ font-size:10.5px; color:var(--text-3); margin-top:1px; }
+  .sess .sx, .sess .sm{ color:var(--text-3); }
+  .sess .sx:hover{ background:var(--danger-bg); color:var(--danger); }
+  .sess .sm:hover{ background:var(--glass-lite); color:var(--text-1); }
+  .sess-empty{ background:transparent; border:1px dashed var(--line);
+               border-radius:8px; color:var(--text-3); font-size:12px; }
+  .side-mcp{ border-top:1px solid var(--line-soft); font-size:10.5px;
+             color:var(--text-3); }
+
+  /* ---- 5. 顶栏:状态是文字,按钮是幽灵 ---- */
+  .topbar{ padding:8px 14px; gap:6px; background:var(--glass);
+           border-bottom:1px solid var(--line);
+           backdrop-filter:none; -webkit-backdrop-filter:none; }
+  .topbar button, .topbar select{
+    background:transparent; color:var(--text-2);
+    border:1px solid transparent; border-radius:7px;
+    padding:4px 8px; font-size:12px; font-weight:500; }
+  .topbar button:hover{ background:var(--glass-lite); border-color:transparent;
+                        color:var(--text-1); transform:none; }
+  html.dark .topbar button, html.dark .topbar select{
+    border-color:transparent; color:var(--text-2); }
+  html.dark .topbar button:hover{ border-color:transparent;
+                                  box-shadow:none; color:var(--text-1); }
+  .topbar .wspill{ display:inline-flex; align-items:center; gap:6px;
+                   padding:4px 8px; max-width:34%; color:var(--text-2);
+                   font-size:12px; }
+  .topbar .wspill svg.wi{ width:14px; height:14px; flex:none; fill:none;
+                          stroke:currentColor; stroke-width:1.6;
+                          stroke-linecap:round; stroke-linejoin:round; }
+  .topbar .wspill span{ min-width:0; overflow:hidden; text-overflow:ellipsis;
+                        white-space:nowrap; }
+  .topbar .modelpill{ display:inline-flex; align-items:center;
+    background:transparent; border:1px solid var(--line); border-radius:999px;
+    padding:3px 10px; color:var(--text-2); font-size:11.5px; font-weight:500; }
+  .topbar .modelpill::before{ content:""; width:6px; height:6px; margin-right:6px;
+    border-radius:50%; background:var(--primary); flex:none; }
+  .topbar .modelpill:hover{ border-color:var(--text-3); color:var(--text-1);
+                            filter:none; transform:none; }
+  .perm-pill{ background:transparent; border:1px solid transparent;
+              border-radius:7px; padding:4px 8px; color:var(--text-3);
+              font-size:11.5px; font-weight:500; }
+  .perm-pill::after{ content:"▾"; margin-left:5px; font-size:9px; opacity:.55; }
+  .perm-pill:hover{ background:var(--glass-lite); border-color:transparent;
+                    color:var(--text-1); }
+  .topbar .tb-ico{ width:30px; height:28px; border-radius:7px; padding:0;
+                   background:transparent; border:1px solid transparent;
+                   color:var(--text-2); }
+  .topbar .tb-ico:hover{ background:var(--glass-lite); color:var(--text-1);
+                         border-color:transparent; }
+  .wb{ border-radius:7px; color:var(--text-2); }
+  .wb:hover{ background:var(--glass-lite); color:var(--text-1); }
+  .wb-x:hover{ background:var(--danger-bg); color:var(--danger);
+               border-color:transparent; }
+
+  /* ---- 6. 首页:没有卡片,只有一句话和几行字 ---- */
+  #chat{ background:var(--bg); padding:24px 28px 32px; }
+  html.dark #chat{ background:var(--bg); }
+  #chat .placeholder{ max-width:780px; margin:0 auto;
+                      padding:12vh 0 24px; color:var(--text-2);
+                      line-height:1.65; }
+  #chat .placeholder .hero{ background:none; border:none; border-radius:0;
+    box-shadow:none; backdrop-filter:none; -webkit-backdrop-filter:none;
+    padding:0; margin:0 0 28px; text-align:center; overflow:visible; }
+  #chat .placeholder .hero::before{ display:none; }
+  #chat .placeholder .hero .greet{ font-size:30px; font-weight:600;
+    letter-spacing:-.02em; line-height:1.35; color:var(--text-1);
+    text-shadow:none; margin:0; }
+  #chat .placeholder .hero .greet b{ color:var(--text-1); font-weight:600; }
+  html.dark #chat .placeholder .hero .greet{ text-shadow:none; }
+  #chat .placeholder .hero .sub{ color:var(--text-3); font-size:13.5px;
+    margin:8px auto 0; max-width:560px; line-height:1.7; }
+  #chat .placeholder .wx-line{ display:inline-flex; align-items:center;
+    margin-top:8px; padding:0; border:none; background:none; cursor:pointer;
+    color:var(--text-3); font:inherit; font-size:11.5px; }
+  #chat .placeholder .wx-line:hover{ color:var(--text-1); }
+  #chat .placeholder .home-tray{ background:none; border:none; box-shadow:none;
+    backdrop-filter:none; -webkit-backdrop-filter:none; padding:0; }
+  html.dark #chat .placeholder .home-tray{ background:none;
+    border-color:transparent; }
+  #chat .placeholder .chips{ display:flex; flex-wrap:wrap;
+    justify-content:center; align-items:center; gap:8px;
+    max-width:none; padding:0; margin-bottom:12px; }
+  #chat .placeholder .chips>span{ flex:0 0 100%; text-align:center;
+    font-size:11px; font-weight:500; color:var(--text-3);
+    letter-spacing:.03em; text-shadow:none; margin-bottom:1px; }
+  html.dark #chat .placeholder .chips>span{ text-shadow:none; color:var(--text-3); }
+  #chat .placeholder .chip{ background:transparent; border:1px solid var(--line);
+    border-radius:999px; padding:6px 14px; font-size:12.5px; font-weight:500;
+    color:var(--text-2); box-shadow:none;
+    backdrop-filter:none; -webkit-backdrop-filter:none;
+    display:inline-flex; align-items:center; gap:6px; }
+  #chat .placeholder .chip:hover{ border-color:var(--text-3); color:var(--text-1);
+    background:var(--surface); transform:none; }
+  #chat .placeholder .chip svg.ci{ width:14px; height:14px; flex:none;
+    fill:none; stroke:currentColor; stroke-width:1.6;
+    stroke-linecap:round; stroke-linejoin:round; color:var(--text-3); }
+  #chat .placeholder .chip:hover svg.ci{ color:var(--text-1); }
+  html.dark #chat .placeholder .chip{ background:transparent;
+    border-color:var(--line); color:var(--text-2); box-shadow:none; }
+  html.dark #chat .placeholder .chip:hover{ border-color:var(--text-3);
+    background:var(--surface); color:var(--text-1); box-shadow:none; }
+  #chat .placeholder .chip-map, #chat .placeholder .chip-lib{
+    background:var(--surface); border-color:var(--line); color:var(--text-1);
+    font-weight:500; }
+  #chat .placeholder .chip-cd, #chat .placeholder .chip-wx{
+    background:transparent; border-color:var(--line); color:var(--text-2);
+    font-weight:500; }
+  html.dark #chat .placeholder .chip-cd{ color:var(--text-2);
+    background:transparent; border-color:var(--line); box-shadow:none; }
+  .go-chips .chip-go{ border-color:var(--line); }
+  .go-chips .chip-go.urgent{ border-color:var(--text-3); color:var(--text-1); }
+  #chat .placeholder .tip{ max-width:620px; margin:10px auto 0; padding:0;
+    color:var(--text-3); font-size:11.5px; line-height:1.7; text-align:center; }
+  .tip .tip-x{ background:transparent; border:none; padding:0 4px;
+    color:var(--text-3); font:inherit; text-decoration:underline;
+    cursor:pointer; }
+  .tip .tip-x:hover{ color:var(--text-1); }
+
+  /* ---- 7. 消息:墨色用户气泡 + 白纸回答 ---- */
+  .msg .who{ display:none; }
+  .msg.user .bubble{ background:var(--text-1); border:1px solid transparent;
+    color:var(--bg); border-radius:14px 14px 4px 14px;
+    padding:10px 15px; font-weight:500; box-shadow:none; }
+  html.dark .msg.user .bubble{ background:#E8EAE7; border-color:transparent;
+    color:#161817; }
+  .msg.assistant .body{ background:var(--surface); border:1px solid var(--line-soft);
+    border-radius:12px; padding:15px 18px; box-shadow:none;
+    font-size:14.2px; line-height:1.75; }
+  html.dark .msg.assistant .body{ background:var(--surface);
+    border-color:var(--line-soft); }
+  .trace, .think{ background:transparent; border:1px solid var(--line-soft);
+    border-radius:10px; box-shadow:none; }
+  html.dark .trace, html.dark .think{ background:transparent;
+    border-color:var(--line-soft); }
+  .trace .tr-head, .think .th-head{ font-size:11.5px; font-weight:500;
+    color:var(--text-3); }
+  .trace .tr-head:hover, .think .th-head:hover{ background:var(--glass-lite);
+    color:var(--text-1); }
+  .toolcard{ background:var(--surface-2); border-radius:10px; }
+  html.dark .toolcard{ background:var(--surface-2); }
+  .stats{ font-size:10.5px; color:var(--text-3); }
+  .stats .st{ background:transparent; border-color:var(--line-soft); }
+  .att{ background:var(--surface-2); border:1px solid var(--line-soft);
+        backdrop-filter:none; -webkit-backdrop-filter:none; }
+  .att .ph{ color:var(--text-3); }
+  .att .ph svg{ width:17px; height:17px; fill:none; stroke:currentColor;
+                stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+  .fi-svg{ width:14px; height:14px; display:inline-block; vertical-align:-2px;
+           fill:none; stroke:currentColor; stroke-width:1.6;
+           stroke-linecap:round; stroke-linejoin:round; color:var(--text-3); }
+  .sc-walkmap{ flex:none; border:1px solid var(--line-soft); background:transparent;
+               color:var(--text-3); font-size:11px; line-height:1; padding:3px 6px;
+               border-radius:7px; cursor:pointer; }
+  .sc-walkmap:hover{ color:var(--primary-text); border-color:var(--primary); }
+  .keywrap .eye svg{ width:15px; height:15px; display:block; fill:none;
+    stroke:currentColor; stroke-width:1.6; stroke-linecap:round;
+    stroke-linejoin:round; }
+  .act-ib svg{ width:14px; height:14px; display:block; fill:none;
+    stroke:currentColor; stroke-width:1.6; stroke-linecap:round;
+    stroke-linejoin:round; }
+  .chat-rail .tick-head{ width:16px; height:16px; flex:none; margin:0 0 4px;
+    display:flex; align-items:center; justify-content:center; padding:0;
+    border:1px solid var(--line-soft); border-radius:5px; background:var(--glass-lite);
+    color:var(--text-3); cursor:pointer; }
+  .chat-rail .tick-head:hover{ width:16px; background:var(--surface);
+    color:var(--text-1); box-shadow:none; }
+  .chat-rail .tick-head svg{ width:11px; height:11px; fill:none;
+    stroke:currentColor; stroke-width:2; stroke-linecap:round; }
+  .acts button{ background:transparent; border:1px solid transparent;
+    border-radius:7px; color:var(--text-3); }
+  .acts button:hover{ background:var(--glass-lite); border-color:transparent;
+    color:var(--text-1); }
+  .acts button svg{ display:block; width:13px; height:13px; margin:auto;
+    fill:none; stroke:currentColor; stroke-width:1.7;
+    stroke-linecap:round; stroke-linejoin:round; }
+  .selbar{ border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
+
+  /* ---- 8. 输入区:白纸输入框 + 一枚方形主按钮 ---- */
+  .composer{ background:var(--bg); border-top:1px solid var(--line);
+             padding:12px 16px 10px;
+             backdrop-filter:none; -webkit-backdrop-filter:none; }
+  .composer .box{ background:var(--surface); border:1px solid var(--line);
+    border-radius:14px; padding:7px 7px 7px 12px; gap:6px;
+    box-shadow:0 1px 2px rgba(20,28,24,.04); }
+  html.dark .composer .box{ border-color:var(--line); box-shadow:none; }
+  .composer .box:focus-within{ border-color:var(--text-3); }
+  .box .attach{ width:32px; height:32px; flex:none; font-size:0;
+    display:inline-flex; align-items:center; justify-content:center;
+    border-radius:8px; color:var(--text-3); }
+  .box .attach svg{ width:17px; height:17px; fill:none; stroke:currentColor;
+    stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
+  .box .attach:hover{ background:var(--glass-lite); color:var(--text-1);
+                      transform:none; }
+  textarea{ font-size:13.5px; line-height:1.6; padding:6px 0; }
+  .send, .stop{ width:32px; height:32px; flex:none; padding:0; border-radius:8px;
+    align-items:center; justify-content:center;
+    font-size:0; box-shadow:none; }
+  .send{ display:inline-flex; background:var(--primary); color:#fff; }
+  .send:hover{ background:var(--primary-text); transform:none; box-shadow:none; }
+  .send:disabled{ opacity:.35; cursor:default; }
+  .send svg{ width:16px; height:16px; fill:none; stroke:currentColor;
+             stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  .stop{ display:none; background:var(--danger); color:#fff; }
+  .stop svg{ width:18px; height:18px; fill:currentColor; stroke:none; }
+  .composer .hint{ font-size:10.5px; margin-top:6px; color:var(--text-3); }
+
+  .taskbar{ margin-top:7px; gap:8px; font-size:11px; color:var(--text-3); }
+  .task-model{ background:transparent; border:1px solid transparent;
+    border-radius:6px; padding:2px 6px; font-size:11px; font-weight:500;
+    color:var(--text-3); }
+  .task-model:hover{ background:var(--glass-lite); border-color:transparent;
+                     color:var(--text-1); }
+  .task-model .think-ico{ width:13px; height:13px; flex:none; fill:none;
+    stroke:currentColor; stroke-width:1.6; stroke-linecap:round;
+    stroke-linejoin:round; }
+  .task-sep{ background:var(--line); }
+  .task-metric b{ color:var(--text-2); font-weight:600; }
+  .cap{ font-weight:500; }
+  .cap.multi{ background:transparent; border-color:var(--line);
+              color:var(--text-2); }
+  .cap.text{ background:transparent; border-color:var(--line);
+             color:var(--text-3); }
+  .cap.win{ background:transparent; border-color:var(--line); color:var(--text-3); }
+
+  /* ---- 9. 输入框上方的提示条 ---- */
+  .proactivebar{ background:var(--surface); border:1px solid var(--line);
+    border-radius:10px; color:var(--text-2); font-size:11.5px; }
+  html.dark .proactivebar{ background:var(--surface); border-color:var(--line); }
+  .proactivebar .pi-ico{ display:inline-flex; align-items:center;
+                         color:var(--text-3); }
+  .proactivebar .pi-ico svg{ width:15px; height:15px; fill:none;
+    stroke:currentColor; stroke-width:1.6; stroke-linecap:round;
+    stroke-linejoin:round; }
+  .proactivebar .pi-btn{ background:transparent; border:1px solid var(--line);
+    border-radius:7px; color:var(--text-1); font-size:11px; font-weight:500;
+    padding:2px 10px; }
+  html.dark .proactivebar .pi-btn{ background:transparent; border-color:var(--line);
+                                   color:var(--text-1); }
+  .proactivebar .pi-btn:hover{ background:var(--glass-lite);
+                               border-color:var(--text-3); }
+  .proactivebar .pi-mute{ color:var(--text-3); text-decoration:none;
+                          font-size:10.5px; }
+  .proactivebar .pi-x{ color:var(--text-3); }
+
+  /* ---- 10. 右侧底座与终端坞:同一套纸面 ---- */
+  .activity{ background:var(--surface); border-left:1px solid var(--line); }
+  .term-dock{ background:#141716; border-top:1px solid var(--line); }
+  .sp-tabs{ padding:6px 8px; gap:2px; border-bottom:1px solid var(--line);
+            overflow-x:auto; scrollbar-width:none; }
+  .sp-tabs::-webkit-scrollbar{ display:none; }
+  .sp-tab{ border:none; background:transparent; color:var(--text-3);
+           cursor:pointer; font:inherit; font-size:11.5px; font-weight:500;
+           padding:4px 8px; border-radius:6px; line-height:1.4;
+           white-space:nowrap; }
+  .sp-tab:hover{ background:var(--glass-lite); color:var(--text-1); }
+  .sp-tab.on{ background:var(--primary-light); color:var(--primary-text);
+              font-weight:600; }
+
+  /* ---- 11. 顶栏横跨主列与右栏,右栏从顶栏**下面**开始 ----
+     旧结构里顶栏长在主列内部,右侧底座却是同一网格行的第四列:右栏的标签条
+     和顶栏最右那几颗按钮(命令面板/窗口钮)落在同一条线上。WebView2 里点击
+     会先命中顶栏那颗「命令面板」,于是"点右栏标签却弹出命令台"。
+     现在顶栏是 .app 的直接子项,横跨主列+右栏(row 1);主区与右栏都在 row 2,
+     标签条永远在顶栏下面,点击不会串到顶栏。 */
+  .app{ grid-template-rows:auto minmax(0,1fr) auto; }
+  .rail{ grid-row:1 / 4; }
+  .sidebar{ grid-column:2; grid-row:1 / 3; }
+  .topbar{ grid-column:3 / -1; grid-row:1; }
+  .main{ grid-column:3; grid-row:2; }
+  .activity{ grid-column:4; grid-row:2; }
+  .term-dock{ grid-column:2 / -1; grid-row:3; }
+
+  /* ---- 12. 聊天过程:一行「已工作 X · N 步」,细节点开才看 ----
+     ZCode 的聊天框把整轮工作收成一条可点的小行;这里照同一口径:
+     - 那一行没有边框/底色,只有状态点、耗时和一个小箭头;
+     - 思考原文默认收起,工具调用是细线小行,不是一张张大卡片;
+     - 展开区有左细线和最大高度,工具多也不会把回答顶下去。 */
+  .msg .trace{ border:none; background:transparent; margin:0 0 6px; padding:0; }
+  html.dark .msg .trace{ background:transparent; }
+  .msg .trace .tr-head{ display:inline-flex; width:auto; max-width:100%;
+    align-items:center; gap:6px; padding:3px 7px 3px 2px; margin:0;
+    border-radius:6px; cursor:pointer; font-size:11.5px; font-weight:500;
+    color:var(--text-2); user-select:none; }
+  .msg .trace .tr-head:hover{ background:var(--glass-lite); color:var(--text-1); }
+  .msg .trace .tr-head:focus-visible{ outline:2px solid var(--primary);
+    outline-offset:2px; }
+  .msg .trace .tr-dot{ width:5px; height:5px; border-radius:50%;
+    background:var(--text-3); flex:none; }
+  .msg .trace:not([data-done]) .tr-dot{ background:var(--warning);
+    animation:tracePulse 1.2s ease-in-out infinite; }
+  .msg .trace[data-done] .tr-dot{ background:var(--primary); }
+  @keyframes tracePulse{ 50%{ opacity:.3; } }
+  .msg .trace .tr-head .arr{ margin-left:1px; font-size:11px; opacity:.55;
+    transition:transform .15s; }
+  .msg .trace.open .tr-head .arr{ transform:rotate(90deg); }
+  .msg .trace .tr-body{ display:none; padding:2px 0 4px 11px; margin:1px 0 2px 2px;
+    border-left:1px solid var(--line-soft); max-height:300px; overflow-y:auto; }
+  .msg .trace.open .tr-body{ display:block; }
+  .msg .trace .think{ border:none; background:transparent;
+    margin:1px 0 2px 12px; padding:0; }
+  .msg .trace .think .th-head{ display:inline-flex; width:auto; max-width:100%;
+    align-items:center; gap:5px; padding:2px 6px 2px 2px; border-radius:5px;
+    font-size:11px; font-weight:500; color:var(--text-3); cursor:pointer;
+    user-select:none; }
+  .msg .trace .think .th-head:hover{ background:var(--glass-lite); color:var(--text-1); }
+  .msg .trace .think .th-head:focus-visible{ outline:2px solid var(--primary);
+    outline-offset:2px; }
+  .msg .trace .think .th-head .arr{ margin-left:1px; font-size:10px; opacity:.55;
+    transition:transform .15s; }
+  .msg .trace .think.open .th-head .arr{ transform:rotate(90deg); }
+  .msg .trace .think .th-body{ display:none; padding:3px 0 5px 8px;
+    margin:0 0 3px 1px; border-left:1px solid var(--line-soft);
+    max-height:180px; overflow-y:auto; font-size:11.5px; line-height:1.65;
+    color:var(--text-3); font-style:normal; }
+  .msg .trace .think.open .th-body{ display:block; }
+  .msg .trace .toolcard{ display:flex; align-items:center; gap:6px;
+    background:transparent; border:none; border-bottom:1px solid var(--line-soft);
+    border-radius:0; box-shadow:none; backdrop-filter:none;
+    -webkit-backdrop-filter:none; padding:4px 2px; margin:0; font-size:11.5px; }
+  .msg .trace .toolcard:last-child{ border-bottom:none; }
+  html.dark .msg .trace .toolcard{ background:transparent; }
+  .msg .trace .toolcard:hover{ background:var(--glass-lite); }
+  .msg .trace .toolcard .dot{ width:5px; height:5px; }
+  .msg .trace .toolcard .name{ font-weight:600; color:var(--text-2);
+    font-size:11.5px; white-space:nowrap; }
+  .msg .trace .toolcard .sum{ font-size:10.5px; color:var(--text-3);
+    font-family:Consolas,monospace; }
+  .msg .trace .toolcard .el{ display:none; }
+  .msg .trace .toolcard .err{ font-size:10.5px; max-width:42%; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; }
+  .msg .trace .toolcard .ext{ font-size:9px; padding:0 6px; }
+  .msg .trace .toolcard.run, html.dark .msg .trace .toolcard.run,
+  .msg .trace .toolcard.bad, html.dark .msg .trace .toolcard.bad{
+    background:transparent; }
+  /* 只有过程、没有正文的那条消息:不再占一条隐藏的操作栏,并把行与下面的回答贴紧 */
+  .msg.assistant.trace-only .acts{ display:none; }
+  .msg.assistant.trace-only{ margin-bottom:8px; }
+  .msg.assistant.trace-only .trace{ margin-bottom:0; }
 </style>
 </head>
 <body>
@@ -2964,23 +3555,56 @@ try {
   <!-- 最左入口栏(p3):顶栏原来平铺 16 个控件,面板入口全部搬到这里。
        id 一个没改、点击行为一行没动 —— 换的是位置,不是功能。 -->
   <nav class="rail" aria-label="面板入口">
-    <button id="btnMap" title="打开/收起校园地图(肇庆校区)">🗺<span class="cap">地图</span></button>
-    <button id="btnSchedule" title="查看/导入我的课表(本机存储)">📅<span class="cap">课表</span></button>
-    <button id="btnMood" title="情绪日记:一句话记一下,每周回头看看(只回读、不诊断;数据只在本机)。也可以直接在对话里说「今天 3 分,因为…」">🌱<span class="cap">心情</span></button>
-    <button id="btnPlan" title="查看当前任务计划(plans/plan.md):做到哪步、哪几步能接着做">🗂<span class="cap">计划</span><span class="pl-n" id="plPill"></span></button>
-    <button id="btnActivity" aria-expanded="false" title="右侧「任务监控」栏(Ctrl+Shift+M):此刻在跑哪一步、计划做到哪、按先后排的时间线、产出的文件与查过的网页(每一行都点得动)">🛰<span class="cap">监控</span><span class="pl-n" id="actPill"></span></button>
-    <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">⭐<span class="cap">技能</span></button>
-    <button id="btnMemory" title="整理长期记忆">🧠<span class="cap">记忆</span></button>
-    <button id="btnUsage" title="查看每日 token 消耗">📊<span class="cap">用量</span></button>
-    <button id="btnTerminal" title="终端:学长丢到后台的命令与你自己跑的命令都在底部终端里(Ctrl+`)">🖥<span class="cap">终端</span></button>
-    <button id="btnAutomate" title="自动化:本机登记了哪几个定时任务、下一次什么时候跑、上次跑出什么,以及关掉/开回来">⏱<span class="cap">自动化</span></button>
-    <button id="btnMyData" title="我的数据:都存在哪台目录、都有哪些文件,以及导出/导入迁移包(密钥与教务登录态永不外发)">💾<span class="cap">数据</span></button>
-    <button id="btnSandbox" style="display:none" title="沙箱状态">🛡<span class="cap">沙箱</span></button>
+    <button id="btnMap" title="打开/收起校园地图(肇庆校区)">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 4 6.2v13.6L9 17.6l6 2.2 5-2.2V4l-5 2.2L9 4Z"/><path d="M9 4v13.6M15 6.2v13.6"/></svg>
+      <span class="cap">地图</span></button>
+    <button id="btnSchedule" title="查看/导入我的课表(本机存储)">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 9.8h17M8 3v4M16 3v4"/></svg>
+      <span class="cap">课表</span></button>
+    <button id="btnMood" title="情绪日记:一句话记一下,每周回头看看(只回读、不诊断;数据只在本机)。也可以直接在对话里说「今天 3 分,因为…」">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.6"/><path d="M9.2 14.4s1 1.4 2.8 1.4 2.8-1.4 2.8-1.4M9.6 9.8h.01M14.4 9.8h.01"/></svg>
+      <span class="cap">心情</span></button>
+    <button id="btnPlan" title="查看当前任务计划(plans/plan.md):做到哪步、哪几步能接着做">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l1.4 1.4L8 5.8M4 13l1.4 1.4L8 11.8M4 19l1.4 1.4L8 17.8M11 7h9M11 13h9M11 19h9"/></svg>
+      <span class="cap">计划</span><span class="pl-n" id="plPill"></span></button>
+    <button id="btnActivity" aria-expanded="false" title="右侧「任务监控」栏(Ctrl+Shift+M):此刻在跑哪一步、计划做到哪、按先后排的时间线、产出的文件与查过的网页(每一行都点得动)">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h3.6l2.6-5.6 4.2 11.2 2.4-5.6H21"/></svg>
+      <span class="cap">监控</span><span class="pl-n" id="actPill"></span></button>
+    <button id="btnSkills" title="查看技能与技能渠道,也可以自己添加技能">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6l2.2 5.9 5.9 2.2-5.9 2.2L12 19.8l-2.2-5.9-5.9-2.2 5.9-2.2L12 3.6Z"/></svg>
+      <span class="cap">技能</span></button>
+    <button id="btnMemory" title="整理长期记忆">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.2 20 8.3l-8 4.1-8-4.1 8-4.1Z"/><path d="M4 12.2l8 4.1 8-4.1M4 16.1l8 4.1 8-4.1"/></svg>
+      <span class="cap">记忆</span></button>
+    <button id="btnUsage" title="查看每日 token 消耗">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20v-8.5M12 20V4.5M19 20v-5.5"/></svg>
+      <span class="cap">用量</span></button>
+    <button id="btnTerminal" title="终端:学长丢到后台的命令与你自己跑的命令都在底部终端里(Ctrl+`)">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M7 9.5l3 2.8-3 2.8M12.6 15.2H17"/></svg>
+      <span class="cap">终端</span></button>
+    <button id="btnAutomate" title="自动化:本机登记了哪几个定时任务、下一次什么时候跑、上次跑出什么,以及关掉/开回来">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.6"/><path d="M12 7.4V12l3.2 2"/></svg>
+      <span class="cap">自动化</span></button>
+    <button id="btnMyData" title="我的数据:都存在哪台目录、都有哪些文件,以及导出/导入迁移包(密钥与教务登录态永不外发)">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg>
+      <span class="cap">数据</span></button>
+    <button id="btnSandbox" style="display:none" title="沙箱状态">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2 19 6v6.1c0 4.4-3 7.4-7 8.9-4-1.5-7-4.5-7-8.9V6l7-2.8Z"/><path d="M9.1 12.2l2 2 3.9-4"/></svg>
+      <span class="cap">沙箱</span></button>
     <div class="sep"></div>
-    <button id="btnExport" title="把当前会话导出成 Markdown(方便贴进文档或发给同学)">⬇<span class="cap">导出</span></button>
-    <button id="btnUndo" title="撤销最近一次文件改动">↶<span class="cap">撤销</span></button>
-    <button id="btnCompact" title="立即压缩上下文">🗜<span class="cap">压缩</span></button>
-    <button id="btnTheme" title="切换深色/浅色主题(系统标题栏跟着一起换)">🌙<span class="cap" id="themeCap">深色</span></button>
+    <button id="btnExport" title="把当前会话导出成 Markdown(方便贴进文档或发给同学)">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v11.8M7.6 11l4.4 4.4L16.4 11"/><path d="M4 17v2.3A1.7 1.7 0 0 0 5.7 21h12.6a1.7 1.7 0 0 0 1.7-1.7V17"/></svg>
+      <span class="cap">导出</span></button>
+    <button id="btnUndo" title="撤销最近一次文件改动">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7 4.2 12 9 17"/><path d="M4.2 12H13a6.3 6.3 0 0 1 6.3 6.3V19"/></svg>
+      <span class="cap">撤销</span></button>
+    <button id="btnCompact" title="立即压缩上下文">
+      <svg class="ri" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5 9 9.5M9.4 4.6v4.8H4.6M20 4.5l-5 5M14.6 4.6v4.8h4.8M4 19.5l5-5M9.4 19.4v-4.8H4.6M20 19.5l-5-5M14.6 19.4v-4.8h4.8"/></svg>
+      <span class="cap">压缩</span></button>
+    <button id="btnTheme" title="切换深色/浅色主题(系统标题栏跟着一起换)">
+      <svg class="ri ic-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13.4A8.2 8.2 0 0 1 10.6 4a8.4 8.4 0 1 0 9.4 9.4Z"/></svg>
+      <svg class="ri ic-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.1"/><path d="M12 2.8v2.3M12 18.9v2.3M2.8 12h2.3M18.9 12h2.3M5.5 5.5l1.6 1.6M16.9 16.9l1.6 1.6M18.5 5.5l-1.6 1.6M7.1 16.9l-1.6 1.6"/></svg>
+      <span class="cap" id="themeCap">深色</span></button>
   </nav>
   <aside class="sidebar">
     <div class="logo"><img class="m" src="img/cube.png" alt="引路学长">引路学长<small id="ver"></small></div>
@@ -2991,94 +3615,96 @@ try {
     <button class="side-newtask" id="btnNewTask" title="开一个新会话（Ctrl+N）；正在后台跑的任务不会被打断">＋ 新建任务</button>
     <div class="projects" id="projects"></div>
     <div class="side-title">历史会话
-      <button id="btnBoard" title="跨会话看板:几件事在跑、哪几件在等你决定、最近做完了什么(只读,不改任何东西)">📋 看板</button>
+      <button id="btnBoard" title="跨会话看板:几件事在跑、哪几件在等你决定、最近做完了什么(只读,不改任何东西)">看板</button>
     </div>
     <div class="sess-search">
       <input id="sessSearch" placeholder="搜索历史会话…"
              title="在所有历史会话的内容里搜关键词(Enter 搜索)">
-      <button id="btnSessSearch" title="搜索">🔍</button>
+      <button id="btnSessSearch" title="搜索" aria-label="搜索">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.4"/><path d="M15.8 15.8 20 20"/></svg>
+      </button>
     </div>
     <div class="sessions" id="sessions"><div style="color:var(--text-3);padding:8px 10px">暂无</div></div>
     <!-- L3(v0.9.101):这一轮真读到了哪几层指令文件。没读到就整行不出现,不摆"未配置" -->
     <div class="side-mcp" id="instrLine" hidden></div>
   </aside>
 
-  <section class="main">
-    <div class="topbar">
-      <!-- p1/p2:「收起左侧栏」原来埋在入口栏最下面一颗,人看不见 —— 搬到对话区左上角,
-           与 Qoder 同一处。窗口三颗(−□✕)只在**真的没有系统标题栏**时才摆:
-           开机问一次 win_state(读窗口的样式位),配置里写了无边框不等于这台机器真去掉了。
-           中间那段空的是唯一的拖拽区(.pywebview-drag-region):整条都能拖的话,
-           选一行文字就变成了挪窗口。 -->
-      <button class="tb-ico" id="btnSideToggle" title="收起/展开左侧栏(Ctrl+B)"
-              aria-label="收起/展开左侧栏">
+  <div class="topbar">
+    <!-- p1/p2:「收起左侧栏」原来埋在入口栏最下面一颗,人看不见 —— 搬到对话区左上角,
+         与 Qoder 同一处。窗口三颗(−□✕)只在**真的没有系统标题栏**时才摆:
+         开机问一次 win_state(读窗口的样式位),配置里写了无边框不等于这台机器真去掉了。
+         中间那段空的是唯一的拖拽区(.pywebview-drag-region):整条都能拖的话,
+         选一行文字就变成了挪窗口。 -->
+    <button class="tb-ico" id="btnSideToggle" title="收起/展开左侧栏(Ctrl+B)"
+            aria-label="收起/展开左侧栏">
+      <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
+        <rect x="1.6" y="3" width="14.8" height="12" rx="2.4"
+              fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <path class="pane" d="M6.6 3.4H4.1A2.2 2.2 0 0 0 1.9 5.6v6.8a2.2 2.2 0 0 0 2.2 2.2h2.5Z"
+              fill="currentColor" opacity=".72"/>
+      </svg></button>
+    <button class="wspill" id="wsPill" title="当前工作区(点击切换)">…</button>
+    <span class="spacer tb-drag pywebview-drag-region" id="tbDrag"
+          title="按住这里可以挪动窗口"></span>
+    <span class="modelpill" id="modelPill"></span>
+    <button class="perm-pill" id="permPill" title="权限模式(点开选择)">变更前确认</button>
+    <!-- v0.9.162:ZCode 同款的两颗面板开关 —— 切换右侧底座(Ctrl+Alt+B)、
+         切换底部终端坞(Ctrl+`),摆在窗口钮左边同一簇,常驻(不随 winBtns 的
+         无边框判定隐藏:非无边框机器上快捷键之外也得有地方点)。 -->
+    <span class="topToggles" id="topToggles">
+      <button class="tb-ico" id="btnPanelToggle" title="切换面板(Ctrl+Alt+B)"
+              aria-label="切换面板">
         <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
           <rect x="1.6" y="3" width="14.8" height="12" rx="2.4"
                 fill="none" stroke="currentColor" stroke-width="1.5"/>
-          <path class="pane" d="M6.6 3.4H4.1A2.2 2.2 0 0 0 1.9 5.6v6.8a2.2 2.2 0 0 0 2.2 2.2h2.5Z"
+          <path class="pane" d="M11.4 3.4h2.5a2.2 2.2 0 0 1 2.2 2.2v6.8a2.2 2.2 0 0 1-2.2 2.2h-2.5Z"
                 fill="currentColor" opacity=".72"/>
         </svg></button>
-      <button class="wspill" id="wsPill" title="当前工作区(点击切换)">📁 …</button>
-      <span class="spacer tb-drag pywebview-drag-region" id="tbDrag"
-            title="按住这里可以挪动窗口"></span>
-      <span class="modelpill" id="modelPill"></span>
-      <button class="perm-pill" id="permPill" title="权限模式(点开选择)">变更前确认</button>
-      <!-- v0.9.162:ZCode 同款的两颗面板开关 —— 切换右侧底座(Ctrl+Alt+B)、
-           切换底部终端坞(Ctrl+`),摆在窗口钮左边同一簇,常驻(不随 winBtns 的
-           无边框判定隐藏:非无边框机器上快捷键之外也得有地方点)。 -->
-      <span class="topToggles" id="topToggles">
-        <button class="tb-ico" id="btnPanelToggle" title="切换面板(Ctrl+Alt+B)"
-                aria-label="切换面板">
-          <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
-            <rect x="1.6" y="3" width="14.8" height="12" rx="2.4"
-                  fill="none" stroke="currentColor" stroke-width="1.5"/>
-            <path class="pane" d="M11.4 3.4h2.5a2.2 2.2 0 0 1 2.2 2.2v6.8a2.2 2.2 0 0 1-2.2 2.2h-2.5Z"
-                  fill="currentColor" opacity=".72"/>
-          </svg></button>
-        <button class="tb-ico" id="btnTermToggle" title="切换终端(Ctrl+`)"
-                aria-label="切换终端">
-          <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
-            <rect x="1.6" y="3" width="14.8" height="12" rx="2.4"
-                  fill="none" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M4.6 6.6 7 9l-2.4 2.4M8.8 11.6h4.6" fill="none"
-                  stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg></button>
-        <button class="tb-ico" id="btnCmdPalette" title="全局命令面板(Ctrl+Shift+P / Ctrl+P)"
-                aria-label="全局命令面板">
-          <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
-            <path d="M4.5 5.5l4 3.5-4 3.5M9.5 12.5h4" fill="none"
-                  stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg></button>
-        <button class="tb-ico" id="btnShortcuts" title="快捷键速查(Ctrl+/)"
-                aria-label="快捷键速查">
-          <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
-            <rect x="1.6" y="4" width="14.8" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/>
-            <path d="M4 7h1.5M7.5 7h1.5M11 7h1.5M5 10.5h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-          </svg></button>
-      </span>
-      <!-- 三颗一律画 SVG(不用 −□✕ 三个字符):字符各自的基线与字宽不同,
-           摆在同一行就是"没居中",用户图 p1 点的正是这个。 -->
-      <span class="winbtns" id="winBtns" hidden>
-        <button class="wb" id="winMin" title="最小化" aria-label="最小化">
-          <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
-            <line x1="2.6" y1="7.4" x2="11.4" y2="7.4" stroke="currentColor" stroke-width="1.4"/></svg></button>
-        <button class="wb" id="winMax" title="最大化" aria-label="最大化">
-          <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
-            <rect class="r1" x="3" y="3" width="8" height="8" rx="1.6" fill="none"
+      <button class="tb-ico" id="btnTermToggle" title="切换终端(Ctrl+`)"
+              aria-label="切换终端">
+        <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
+          <rect x="1.6" y="3" width="14.8" height="12" rx="2.4"
+                fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M4.6 6.6 7 9l-2.4 2.4M8.8 11.6h4.6" fill="none"
+                stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg></button>
+      <button class="tb-ico" id="btnCmdPalette" title="全局命令面板(Ctrl+Shift+P / Ctrl+P)"
+              aria-label="全局命令面板">
+        <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
+          <path d="M4.5 5.5l4 3.5-4 3.5M9.5 12.5h4" fill="none"
+                stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg></button>
+      <button class="tb-ico" id="btnShortcuts" title="快捷键速查(Ctrl+/)"
+              aria-label="快捷键速查">
+        <svg viewBox="0 0 18 18" width="17" height="17" aria-hidden="true">
+          <rect x="1.6" y="4" width="14.8" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M4 7h1.5M7.5 7h1.5M11 7h1.5M5 10.5h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg></button>
+    </span>
+    <!-- 三颗一律画 SVG(不用 −□✕ 三个字符):字符各自的基线与字宽不同,
+         摆在同一行就是"没居中",用户图 p1 点的正是这个。 -->
+    <span class="winbtns" id="winBtns" hidden>
+      <button class="wb" id="winMin" title="最小化" aria-label="最小化">
+        <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
+          <line x1="2.6" y1="7.4" x2="11.4" y2="7.4" stroke="currentColor" stroke-width="1.4"/></svg></button>
+      <button class="wb" id="winMax" title="最大化" aria-label="最大化">
+        <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
+          <rect class="r1" x="3" y="3" width="8" height="8" rx="1.6" fill="none"
+                stroke="currentColor" stroke-width="1.4"/>
+          <g class="r2">
+            <rect x="2" y="4.6" width="6.6" height="6.6" rx="1.4" fill="none"
                   stroke="currentColor" stroke-width="1.4"/>
-            <g class="r2">
-              <rect x="2" y="4.6" width="6.6" height="6.6" rx="1.4" fill="none"
-                    stroke="currentColor" stroke-width="1.4"/>
-              <path d="M5.2 4.6V2h6.8v6.8h-2.4" fill="none" stroke="currentColor"
-                    stroke-width="1.4"/>
-            </g></svg></button>
-        <button class="wb wb-x" id="winClose" title="关闭" aria-label="关闭">
-          <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
-            <line x1="3.6" y1="3.6" x2="10.4" y2="10.4" stroke="currentColor" stroke-width="1.5"/>
-            <line x1="10.4" y1="3.6" x2="3.6" y2="10.4" stroke="currentColor" stroke-width="1.5"/></svg></button>
-      </span>
-    </div>
+            <path d="M5.2 4.6V2h6.8v6.8h-2.4" fill="none" stroke="currentColor"
+                  stroke-width="1.4"/>
+          </g></svg></button>
+      <button class="wb wb-x" id="winClose" title="关闭" aria-label="关闭">
+        <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
+          <line x1="3.6" y1="3.6" x2="10.4" y2="10.4" stroke="currentColor" stroke-width="1.5"/>
+          <line x1="10.4" y1="3.6" x2="3.6" y2="10.4" stroke="currentColor" stroke-width="1.5"/></svg></button>
+    </span>
+  </div>
 
+  <section class="main">
     <div class="chat-wrap">
       <div id="chat"></div>
       <div class="chat-rail" id="chatRail" hidden></div>
@@ -3097,7 +3723,9 @@ try {
 
     <div class="composer">
       <div class="proactivebar" id="proactiveBar" style="display:none">
-        <span class="pi-ico">🔔</span>
+        <span class="pi-ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 3.6a5.4 5.4 0 0 0-5.4 5.4c0 4.2-1.6 5.4-1.6 5.4h14s-1.6-1.2-1.6-5.4A5.4 5.4 0 0 0 12 3.6Z"/><path d="M10 18.2a2.2 2.2 0 0 0 4 0"/></svg>
+        </span>
         <span class="pi-text" id="proactiveText"></span>
         <button class="pi-btn" id="proactiveGo">去看看</button>
         <button class="pi-mute" id="proactiveMute" title="不再检查官网新通知">不再提醒</button>
@@ -3110,17 +3738,23 @@ try {
         <button class="ab-btn" id="askBarGo">去回答</button>
       </div>
       <div class="editbar" id="editBar" style="display:none">
-        ✎ 编辑重发:发送后将替换该条消息及其后的全部对话
+        编辑重发:发送后将替换该条消息及其后的全部对话
         <button id="btnEditCancel">取消编辑</button>
       </div>
       <div class="attachbar" id="attachBar" style="display:none"></div>
       <div class="box" style="position:relative">
         <div class="at-menu" id="atMenu" style="display:none"></div>
         <div class="at-menu" id="slashMenu" style="display:none"></div>
-        <button class="attach" id="btnAttach" title="上传文件或图片(会复制到工作区 uploads/)">📎</button>
+        <button class="attach" id="btnAttach" title="上传文件或图片(会复制到工作区 uploads/)" aria-label="添加附件">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.3 12.6 18.7a5 5 0 0 1-7.1-7.1l7.8-7.8a3.4 3.4 0 0 1 4.8 4.8l-7.8 7.8a1.8 1.8 0 0 1-2.5-2.5l7-7"/></svg>
+        </button>
         <textarea id="input" rows="1" placeholder="描述任务，Enter 发送，Shift+Enter 换行"></textarea>
-        <button class="send" id="btnSend">发送</button>
-        <button class="stop" id="btnStop">停止</button>
+        <button class="send" id="btnSend" title="发送(Enter)" aria-label="发送">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6.5 10.5 12 5l5.5 5.5"/></svg>
+        </button>
+        <button class="stop" id="btnStop" title="停止当前任务" aria-label="停止">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.6"/></svg>
+        </button>
       </div>
       <div class="taskbar" id="taskbar">
         <button class="task-model" id="taskModelBtn"
@@ -3131,7 +3765,7 @@ try {
         <span class="menu-anchor">
         <button class="task-model" id="thinkBtn" title="思考档位:控制模型的思考开关与深度"
                 style="display:none">
-          <span>🧠</span><span id="thinkLabel">思考</span><span class="tm-caret">▾</span>
+          <svg class="think-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.8l1.7 4.6 4.6 1.7-4.6 1.7L12 16.4l-1.7-4.6L5.7 10l4.6-1.7L12 3.8Z"/><path d="M18.4 15.2l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z"/></svg><span id="thinkLabel">思考</span><span class="tm-caret">▾</span>
         </button>
         <div class="task-menu" id="thinkMenu" style="min-width:180px"></div>
         </span>
@@ -3150,7 +3784,7 @@ try {
   <section class="term-dock" id="termDock" hidden>
     <div class="td-head">
       <b>终端</b><span class="td-note" id="tdNote"></span>
-      <button class="act-ib" id="tpRunTests" title="运行项目测试套件(/test)">🧪 跑测试</button>
+      <button class="act-ib" id="tpRunTests" title="运行项目测试套件(/test)">跑测试</button>
       <button class="act-ib" id="tpRefresh" title="重新读一遍">↻</button>
       <span class="td-tab"><span class="td-shellname" id="tdTabName">…</span>
         <button class="act-ib" id="tdClose" title="收起(Ctrl+`)">✕</button></span>
@@ -3173,7 +3807,7 @@ try {
     <div class="sp-pages" id="spPages">
       <div class="sp-page" data-sp="activity">
         <div class="act-head">
-          <b>🛰 任务监控</b>
+          <b>任务监控</b>
           <span class="act-sum" id="actSum"></span>
           <button class="act-ib" id="btnActRefresh" title="重新统计一遍">↻</button>
           <button class="act-ib" id="btnActClose" title="收起这一栏(Ctrl+Shift+M 再展开)">✕</button>
@@ -3191,7 +3825,7 @@ try {
 <aside class="map-panel" id="mapPanel" aria-hidden="true">
   <div class="map-head">
     <div class="map-titles">
-      <b id="mapTitle">🗺 校园地图 · 肇庆校区</b>
+      <b id="mapTitle">校园地图 · 肇庆校区</b>
       <span class="map-sub" id="mapSub">手绘地图 · 滚轮缩放 · 拖动平移 · 点框看大图</span>
     </div>
     <div class="map-tools">
@@ -3247,7 +3881,7 @@ try {
 
 <div class="overlay" id="confirmOverlay">
   <div class="dialog">
-    <h3 id="confirmTitle">⚠ 权限确认</h3>
+    <h3 id="confirmTitle">权限确认</h3>
     <div class="why-box" id="confirmWhy" style="display:none">
       <div class="wy-t">这一步为什么要做</div>
       <div class="wy-v" id="confirmWhyText"></div>
@@ -3283,7 +3917,7 @@ try {
 <!-- 长期记忆:记一条 + 整理(v0.9.97:以前界面上只能"整理",想主动记一条只有 CLI /remember) -->
 <div class="overlay" id="memoryOverlay">
   <div class="dialog" style="width:520px">
-    <h3>🧠 长期记忆</h3>
+    <h3>长期记忆</h3>
     <div class="mem-count" id="memCount"></div>
     <textarea class="ask-free" id="memText" rows="3"
       placeholder="要记住的一句话,如:我讨厌用表格讲数据 / 这个项目跑测试别加 -n auto"></textarea>
@@ -3299,7 +3933,7 @@ try {
 </div>
 <div class="overlay" id="boardOverlay">
   <div class="dialog" style="width:520px">
-    <h3>📋 跨会话看板</h3>
+    <h3>跨会话看板</h3>
     <p id="boardNote" style="color:var(--text-2);font-size:12.5px"></p>
     <div id="boardBody" style="max-height:56vh;overflow:auto"></div>
     <div class="btns">
@@ -3383,7 +4017,7 @@ try {
 <div class="overlay" id="shortcutsOverlay">
   <div class="dialog sc-dlg" style="max-width:580px;max-height:85vh;display:flex;flex-direction:column;border-radius:12px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;border-bottom:1px solid var(--border-soft, rgba(127,127,127,0.15));padding-bottom:8px;">
-      <h3 style="margin:0;font-size:15px;display:flex;align-items:center;gap:6px;">⌨️ 快捷键速查中心</h3>
+      <h3 style="margin:0;font-size:15px;display:flex;align-items:center;gap:6px;">快捷键速查中心</h3>
       <button class="b-no" id="btnShortcutsClose" style="padding:2px 10px;font-size:12px;cursor:pointer;">✕</button>
     </div>
     <div id="shortcutsBody" style="overflow-y:auto;padding-right:4px;flex:1;display:flex;flex-direction:column;gap:14px;"></div>
@@ -3393,7 +4027,6 @@ try {
 <div class="overlay" id="cmdPaletteOverlay">
   <div class="dialog cmd-dlg" style="max-width:560px;width:90%;max-height:80vh;display:flex;flex-direction:column;border-radius:12px;padding:12px;gap:10px;box-shadow:var(--shadow);">
     <div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border-soft, rgba(127,127,127,0.15));padding-bottom:8px;">
-      <span style="font-size:14px;opacity:0.75;">⌨️</span>
       <input id="cmdPaletteInput" type="text" placeholder="输入命令名称或搜索动作..." style="flex:1;background:transparent;border:none;outline:none;font-size:14px;color:var(--text-1,#fff);" autocomplete="off" />
       <kbd style="font-size:11px;opacity:0.6;background:var(--kbd-bg, rgba(255,255,255,0.08));border:1px solid var(--border-soft, rgba(255,255,255,0.15));padding:2px 6px;border-radius:4px;">ESC</kbd>
     </div>
@@ -3426,7 +4059,7 @@ try {
 
 <div class="overlay" id="filesOverlay">
   <div class="dialog" style="width:560px">
-    <h3 id="filesTitle">📁 项目文件</h3>
+    <h3 id="filesTitle">项目文件</h3>
     <div class="fcrumb" id="filesCrumb"></div>
     <div class="flist" id="filesList"></div>
     <div class="btns"><button class="b-no" id="btnFilesClose">关闭</button></div>
@@ -3437,7 +4070,7 @@ try {
 <div class="overlay" id="scheduleOverlay">
   <div class="dialog" style="width:600px">
     <div class="sc-head">
-      <h3>📅 我的课表</h3>
+      <h3>我的课表</h3>
       <span class="sc-week" id="scWeek"></span>
     </div>
     <div class="sc-tabs" id="scTabs">
@@ -3468,7 +4101,7 @@ try {
 <div class="overlay" id="myDataOverlay">
   <div class="dialog" style="width:620px">
     <div class="sc-head">
-      <h3>💾 我的数据</h3>
+      <h3>我的数据</h3>
       <span class="sc-week" id="mdTotals"></span>
     </div>
     <div class="sc-body" id="mdBody"></div>
@@ -3490,7 +4123,7 @@ try {
 <div class="overlay" id="moodOverlay">
   <div class="dialog" style="width:620px">
     <div class="sc-head">
-      <h3>🌱 情绪日记</h3>
+      <h3>情绪日记</h3>
       <span class="sc-week" id="moMeta"></span>
     </div>
     <div class="sc-body">
@@ -3523,7 +4156,7 @@ try {
 <div class="overlay" id="planOverlay">
   <div class="dialog" style="width:620px">
     <div class="pl-head">
-      <h3>🗂 任务计划</h3>
+      <h3>任务计划</h3>
       <span class="pl-prog" id="plProg"></span>
     </div>
     <div class="pl-bar"><i id="plBar"></i></div>
@@ -3544,7 +4177,7 @@ try {
 <div class="overlay" id="jwOverlay">
   <div class="dialog" style="width:640px">
     <div class="sc-head">
-      <h3 id="jwTitle">🎓 从教务系统导入课表</h3>
+      <h3 id="jwTitle">从教务系统导入课表</h3>
       <span class="sc-week" id="jwTerm"></span>
     </div>
     <div class="jw-steps" id="jwSteps">
@@ -3566,7 +4199,7 @@ try {
 <div class="overlay" id="firstRun">
   <div class="dialog" style="width:540px">
     <div class="sc-head">
-      <h3 id="frTitle">👋 第一次打开引路学长</h3>
+      <h3 id="frTitle">第一次打开引路学长</h3>
       <span class="sc-week" id="frStep"></span>
     </div>
     <div class="jw-steps" id="frSteps"></div>
@@ -3585,11 +4218,11 @@ try {
   <button data-act="undo"><span>↶</span>撤销<kbd>Ctrl+Z</kbd></button>
   <button data-act="redo"><span>↷</span>重做<kbd>Ctrl+Y</kbd></button>
   <hr>
-  <button data-act="cut"><span>✂</span>剪切<kbd>Ctrl+X</kbd></button>
+  <button data-act="cut">剪切<kbd>Ctrl+X</kbd></button>
   <button data-act="copy"><span>⧉</span>复制<kbd>Ctrl+C</kbd></button>
-  <button data-act="paste"><span>📋</span>粘贴<kbd>Ctrl+V</kbd></button>
+  <button data-act="paste">粘贴<kbd>Ctrl+V</kbd></button>
   <hr>
-  <button data-act="all"><span>☑</span>全选<kbd>Ctrl+A</kbd></button>
+  <button data-act="all">全选<kbd>Ctrl+A</kbd></button>
 </div>
 
 
@@ -3604,7 +4237,7 @@ try {
     </div>
     <div class="mcf-hint" style="margin-left:0">
       填了的数**真的生效**:窗口决定什么时候压缩、最大输出决定请求里的
-      <code>max_tokens</code>、推理档位决定 🧠 按钮上那几个选项怎么发。
+      <code>max_tokens</code>、推理档位决定「思考」按钮上那几个选项怎么发。
       留空的项走原行为(探测 / 内置目录 / 服务端默认)。
     </div>
     <div class="mcf-row"><label>上下文窗口</label>
@@ -3684,7 +4317,7 @@ try {
 <div class="overlay" id="usageOverlay">
   <div class="dialog">
     <div class="usage-head">
-      <h3>📊 Token 用量</h3>
+      <h3>Token 用量</h3>
       <div class="usage-range" id="usageRange">
         <button data-rk="day">日</button>
         <button data-rk="week" class="on">周</button>
@@ -3720,7 +4353,7 @@ try {
         <div><span>单日峰值</span><b id="plPeak">—</b></div>
       </div>
       <div class="pl-ach">
-        <h4>🏅 等级与贺辞</h4>
+        <h4>等级与贺辞</h4>
         <div id="plAch" class="pl-ach-text">—</div>
       </div>
       <div class="pl-foot">
@@ -3749,7 +4382,7 @@ try {
 <div class="overlay" id="skillsOverlay">
   <div class="dialog">
     <div class="skills-head">
-      <h3>⭐ 技能与渠道</h3>
+      <h3>技能与渠道</h3>
       <div class="skill-tabs" id="skillTabs">
         <button data-tab="skills" class="on">技能</button>
         <button data-tab="channels">渠道</button>
@@ -3783,7 +4416,7 @@ try {
       <button class="b-no" id="btnSkillAdd">＋ 添加技能</button>
       <button class="b-no" id="btnSkillPackImport"
               title="选一份同学发你的技能分享包(*.zip):先给你看会写哪些文件、会不会覆盖本机已有的,你点头才落盘(同名那份会先备份)">
-        📥 导入分享包</button>
+        导入分享包</button>
       <button class="b-no" id="btnSkillsClose">关闭</button>
       <button class="b-yes" id="btnSkillSave" style="display:none">保存技能</button>
     </div>
@@ -3792,7 +4425,7 @@ try {
 
 <div class="overlay" id="wsOverlay">
   <div class="dialog">
-    <h3>📁 工作区</h3>
+    <h3>工作区</h3>
     <p class="ws-note">工作区是 Agent 的「工作台」：读写围栏、附件、计划、长期记忆都落在这个文件夹里。切到新工作区会开一个新会话（原会话留档不丢）。</p>
     <div class="ws-cur" id="wsCurrent"></div>
     <div class="ws-sub">最近用过（点一下切过去）</div>
@@ -3815,6 +4448,9 @@ try {
 "use strict";
 window.onerror = function(msg, src, line){ const el = document.querySelector(".logo small"); if (el) el.textContent = "E:" + String(msg).slice(0,40) + "@" + line; };
 window.onunhandledrejection = function(e){ const el = document.querySelector(".logo small"); if (el) el.textContent = "R:" + String(e.reason).slice(0,55); };
+/* 文件树共用的一对单色图标(项目文件弹窗 / 右侧文件页都用它) */
+const FI_DIR = '<svg class="fi-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.6 6.6h6l2 2h8.8v9.8a1.6 1.6 0 0 1-1.6 1.6H5.2a1.6 1.6 0 0 1-1.6-1.6Z"/></svg>';
+const FI_FILE = '<svg class="fi-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h7l4 4v13a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 20.5v-15a1.5 1.5 0 0 1 1.5-2Z"/><path d="M13.5 3.5V8h4.5"/></svg>';
 const $ = (id) => document.getElementById(id);
 const chat = $("chat");
 let busy = false;
@@ -3937,10 +4573,12 @@ function markHintSeen(id) {
   } catch (e) {}
 }
 function renderHome() {
-  const chips = homeSuggestions.map(t => `<button class="chip">${esc(t)}</button>`).join("");
-  // 天气 chip:一句话实况 + 带伞建议进 title,点击直接问学长;拿不到(断网)整枚不出现
+  // 建议只摆前六条:首屏是"今天先做什么",不是把后端给的一整页都铺开
+  const chips = homeSuggestions.slice(0, 6)
+    .map(t => `<button class="chip">${esc(t)}</button>`).join("");
+  // 天气:一句话实况,放在问候语下面当一行小字;拿不到(断网)就整行不出现
   const wxChip = homeWeather
-    ? `<button class="chip chip-wx" title="${esc(homeWeather.tip || "点击问天气")}">${esc(homeWeather.icon + " " + homeWeather.text)}</button>`
+    ? `<button class="wx-line chip-wx" title="${esc(homeWeather.tip || "点击问天气")}">${esc(homeWeather.text)}</button>`
     : "";
   // 校历倒计时:有数据才出这一行(距中秋/四六级还有 N 天),点一下直接问它的安排
   const cdHtml = homeCountdowns.length
@@ -3948,27 +4586,29 @@ function renderHome() {
         `<button class="chip chip-cd" data-ask="${esc("「" + c.name + "」的具体时间和注意事项有哪些?")}"
            title="${esc((c.start || "") + (c.note ? " · " + c.note : ""))}">${esc(c.name)} · 还有 ${c.days_left} 天</button>`).join("")}`
     : "";
-  const cdRow = (wxChip || cdHtml) ? `<div class="chips cd-chips">${wxChip}${cdHtml}</div>` : "";
+  const cdRow = cdHtml ? `<div class="chips cd-chips">${cdHtml}</div>` : "";
   // 「接着做」:打开应用第一眼给的是"有什么在做/到期",不是"可以问什么"。
   // 一枚都不自己造 —— 后端 continue_chips 读不到计划也读不到临期待办时返回空,这行整行不出。
+  // 标签里的「接着做：」去掉:分组标题已经是这四个字了,再念一遍像复读。
   const goHtml = homeContinue.length
     ? homeContinue.map(c =>
         `<button class="chip chip-go${c.urgent ? " urgent" : ""}" data-ask="${esc(c.ask)}"
-           title="${esc((c.note || "") + " · 点一下填进输入框(不自动发)")}">${esc(c.label)}</button>`
+           title="${esc((c.note || "") + " · 点一下填进输入框(不自动发)")}">${esc(String(c.label || "").replace(/^接着做[：:]\s*/, ""))}</button>`
       ).join("")
     : "";
   const goRow = goHtml ? `<div class="chips go-chips"><span>接着做：</span>${goHtml}</div>` : "";
   // 地图入口放在首位:不用先学会怎么问,点一下就能自己找楼
-  const mapChip = `<button class="chip chip-map" title="打开手绘校园地图,可以搜楼名/俗称,或按类别看">🗺 打开校园地图</button>`;
+  const mapChip = `<button class="chip chip-map" title="打开手绘校园地图,可以搜楼名/俗称,或按类别看"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 4 6.2v13.6L9 17.6l6 2.2 5-2.2V4l-5 2.2L9 4Z"/><path d="M9 4v13.6M15 6.2v13.6"/></svg>打开校园地图</button>`;
   // 图书馆固定功能模块入口:点一下直接进图书馆导览(查书/找书/借还流程)
-  const libChip = `<button class="chip chip-lib" title="图书馆导览:查馆藏、按索书号找楼层书库、借还流程,带新生走一遍">📚 图书馆导览</button>`;
+  const libChip = `<button class="chip chip-lib" title="图书馆导览:查馆藏、按索书号找楼层书库、借还流程,带新生走一遍"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.2A1.7 1.7 0 0 1 6.2 3.5h4.3v17H6.2a1.7 1.7 0 0 1-1.7-1.7Z"/><path d="M19.5 5.2a1.7 1.7 0 0 0-1.7-1.7h-4.3v17h4.3a1.7 1.7 0 0 0 1.7-1.7Z"/></svg>图书馆导览</button>`;
   // 那坨「小提示」以前永远坐在首屏底下(p12 用户原话:占地方、天天看)。
   // 现在点「知道了」就记进本机偏好,之后不再出现 —— 与主题那条同一个 localStorage。
-  const tipHtml = hintSeen("home-tip") ? "" : `<div class="tip">小提示：找楼可以直接问我「图书馆在哪」，也可以点上面的地图自己搜（支持 E栋、s5 这类俗称）；聊天里用鼠标选中文字会出现「复制选区」按钮；思考过程与工具卡片在最终回复给出后会自动收起，点击可重新展开。<button class="tip-x" data-hint="home-tip">知道了</button></div>`;
+  const tipHtml = hintSeen("home-tip") ? "" : `<div class="tip">找楼可以直接问我，也可以点上面的地图；选中聊天里的文字会出现「复制选区」。<button class="tip-x" data-hint="home-tip">知道了</button></div>`;
   chat.innerHTML = `<div class="placeholder">
     <div class="hero">
-      <div class="greet"><b>${esc(timeGreeting())}</b>，同学！</div>
+      <div class="greet"><b>${esc(timeGreeting())}</b>，同学</div>
       <div class="sub">我是引路学长，你的校园 AI 助手 —— 学习、考试、活动、校园生活，都可以问我。</div>
+      ${wxChip}
     </div>
     <div class="home-tray">
       ${goRow}
@@ -3982,7 +4622,7 @@ function renderHome() {
     const box = el.closest(".tip");
     if (box) box.remove();
   }));
-  chat.querySelectorAll(".chip").forEach(el => el.addEventListener("click", () => {
+  chat.querySelectorAll(".chip, .wx-line").forEach(el => el.addEventListener("click", () => {
     if (el.classList.contains("chip-map")) {
       if (window.CampusMap) window.CampusMap.toggle(true);   // 打开面板并聚焦搜索框
       return;
@@ -4195,7 +4835,7 @@ function openUpdateDlg(payload) {
     pl.hidden = false;
     const skip = plan.choice === "app_setup";
     pl.className = "upd-plan" + (skip ? " skip" : "");
-    pl.textContent = (skip ? "⚡ " : "") + plan.reason + " · 这次要下 " + fmtMB(bytes);
+    pl.textContent = plan.reason + " · 这次要下 " + fmtMB(bytes);
   }
   body.scrollTop = 0;
   updRender();
@@ -4452,7 +5092,8 @@ function applyTheme(dark, persist) {
   // p3:主题键在最左入口栏里,是"图标 + 小标签"两行结构 —— 只改标签那行,
   // 整颗按钮的 textContent 一写就会把图标和标签结构一起抹掉。
   $("themeCap").textContent = dark ? "浅色" : "深色";
-  $("btnTheme").firstChild.textContent = dark ? "☀️" : "🌙";
+  // 图标由 CSS 跟着 html.dark 切(月亮/太阳两枚 SVG),不再写 firstChild ——
+  // 那颗子节点现在是 <svg>,改它的 textContent 会把图形抹掉。
   if (persist) {
     try { localStorage.setItem("gcode-theme", dark ? "dark" : "light"); } catch (e) {}
   }
@@ -4503,7 +5144,7 @@ function bindCopy(btn, get) {
    避免某一路在 WebView2 里丢事件导致工具条不出现。 */
 const selBar = document.createElement("div");
 selBar.className = "selbar";
-selBar.innerHTML = `<button title="复制选中的文字(Ctrl+C 也可以)">📋 复制选区</button>`;
+selBar.innerHTML = `<button title="复制选中的文字(Ctrl+C 也可以)">复制选区</button>`;
 document.body.appendChild(selBar);
 const selBtn = selBar.querySelector("button");
 selBtn.addEventListener("mousedown", ev => ev.preventDefault());   // 保住选区不被点击清空
@@ -4617,7 +5258,20 @@ function revealFind() {
   const host = r.startContainer.parentElement;
   if (!host) return;
   const trace = host.closest(".trace");
-  if (trace && !trace.classList.contains("open")) trace.classList.add("open");
+  if (trace && !trace.classList.contains("open")) {
+    trace.classList.add("open");
+    const th = trace.querySelector(".tr-head");
+    if (th) th.setAttribute("aria-expanded", "true");
+  }
+  // 命中可能落在收起的原始思考里:只展开 trace 不够,还要把 think 那块也打开,
+  // 否则滚过去看到的是一条空行。手动搜过就算"用户碰过",收尾时不再自动收起。
+  const think = host.closest(".think");
+  if (think) {
+    think.classList.add("open");
+    think.dataset.touched = "1";
+    const th = think.querySelector(".th-head");
+    if (th) th.setAttribute("aria-expanded", "true");
+  }
   paintFind();
   showFindCount();          // 计数跟着当前那条走:只在 runFind 里写死 "1 / N"
                             // 会让跳了半天数字一动不动,用户以为按键没生效
@@ -5218,15 +5872,15 @@ function addUserMsg(text, atts) {
   wrap.dataset.uord = ord;
   wrap.innerHTML = `<div class="col"><div class="bubble"></div>
     <div class="atts"></div>
-    <div class="acts"><button class="cp" title="复制">⧉</button>
-    <button class="ed" title="编辑重发">✎</button>
-    <button class="fk" title="从这里分叉:保留到此为止的对话,开一份新会话换个思路走">⑂</button></div></div>`;
+    <div class="acts"><button class="cp" title="复制" aria-label="复制"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6A1.5 1.5 0 0 0 14 4.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></svg></button>
+    <button class="ed" title="编辑重发" aria-label="编辑重发"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.2-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z"/><path d="M13.5 7.5l3 3"/></svg></button>
+    <button class="fk" title="从这里分叉:保留到此为止的对话,开一份新会话换个思路走" aria-label="从这里分叉"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="5" r="1.8"/><circle cx="17" cy="5" r="1.8"/><circle cx="12" cy="19" r="1.8"/><path d="M7 6.8v2.5A3.2 3.2 0 0 0 10.2 12h3.6A3.2 3.2 0 0 1 17 15.2v.5M12 12v5.2"/></svg></button></div></div>`;
   wrap.querySelector(".bubble").textContent = text;
   const attBox = wrap.querySelector(".atts");
   (atts || []).forEach(a => {
     const el = document.createElement("div");
     el.className = "att" + (a.missing ? " missing" : "");
-    el.innerHTML = `${a.preview ? '<img alt="">' : '<span class="ph">📄</span>'}
+    el.innerHTML = `${a.preview ? '<img alt="">' : '<span class="ph"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h7l4 4v13a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 20.5v-15a1.5 1.5 0 0 1 1.5-2Z"/><path d="M13.5 3.5V8h4.5"/></svg></span>'}
       <span class="meta"><span class="nm"></span><span class="sz"></span></span>`;
     if (a.preview) {
       const im = el.querySelector("img");
@@ -5266,18 +5920,20 @@ function ensureAssistant() {
   wrap.className = "msg assistant trace-only";
   wrap.innerHTML = `<div class="who">广州应用科技学院</div>
     <div class="trace" hidden>
-      <div class="tr-head" title="点击展开 / 收起思考与工具调用过程">💭 工作过程 · <span class="tr-sum">进行中…</span><span class="arr">▾</span></div>
+      <div class="tr-head" role="button" tabindex="0" aria-expanded="false"
+           title="点击展开 / 收起工作过程"><span class="tr-dot"></span><span class="tr-sum">正在工作…</span><span class="arr">›</span></div>
+      <div class="think" hidden><div class="th-head" role="button" tabindex="0" aria-expanded="false"
+           title="点击展开 / 收起思考原文"><span class="th-time">思考中…</span><span class="arr">›</span></div><div class="th-body"></div></div>
       <div class="tr-body">
-        <div class="think" hidden><div class="th-head" title="点击展开 / 收起思考原文">💭 思考 · <span class="th-time">进行中…</span><span class="arr">▾</span></div><div class="th-body"></div></div>
         <div class="tr-tools"></div>
       </div>
     </div>
     <div class="body" hidden></div>
     <div class="stats" hidden title="本次输出的实测耗时与速度(服务端返回 token 数才显示速度)"></div>
-    <div class="acts"><button class="cp" title="复制回复">⧉</button>
-      <button class="shr" title="把这段回答排成一张能发群的图片（带来源出处）">🖼</button>
-      <button class="shrc" title="把刚生成的那张分享图复制到剪贴板（不用再去找文件，Ctrl+V 直接粘）">📋</button>
-      <span class="rate"><button class="rt-up" title="这个回答有帮助">👍</button><button class="rt-dn" title="这个回答不对/没帮助">👎</button><button class="rt-re" title="撤掉这段回答,照原样再答一次">↻</button></span></div>`;
+    <div class="acts"><button class="cp" title="复制回复" aria-label="复制回复"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6A1.5 1.5 0 0 0 14 4.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></svg></button>
+      <button class="shr" title="把这段回答排成一张能发群的图片（带来源出处）" aria-label="生成分享图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-5 4 4 2-2 5 5"/></svg></button>
+      <button class="shrc" title="把刚生成的那张分享图复制到剪贴板（不用再去找文件，Ctrl+V 直接粘）" aria-label="复制分享图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5.5" y="5" width="13" height="16" rx="2"/><path d="M9 5V3.8h6V5M9 10h6M9 14h6"/></svg></button>
+      <span class="rate"><button class="rt-up" title="这个回答有帮助" aria-label="有帮助"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 10.5v9M7.5 19.5H5.2a1.2 1.2 0 0 1-1.2-1.2v-6.6a1.2 1.2 0 0 1 1.2-1.2h2.3M7.5 10.5l3.3-6.2a1.5 1.5 0 0 1 2.6 1.4l-1 4.8h5.3a1.7 1.7 0 0 1 1.7 2l-1.2 5.8a2 2 0 0 1-2 1.6H7.5"/></svg></button><button class="rt-dn" title="这个回答不对/没帮助" aria-label="没帮助"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 13.5v-9M16.5 4.5h2.3A1.2 1.2 0 0 1 20 5.7v6.6a1.2 1.2 0 0 1-1.2 1.2h-2.3M16.5 13.5l-3.3 6.2a1.5 1.5 0 0 1-2.6-1.4l1-4.8H6.3a1.7 1.7 0 0 1-1.7-2l1.2-5.8a2 2 0 0 1 2-1.6h8.7"/></svg></button><button class="rt-re" title="撤掉这段回答,照原样再答一次" aria-label="重新生成"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v4.5h-4.5"/></svg></button></span></div>`;
   chat.appendChild(wrap);
   bindCopy(wrap.querySelector(".cp"), () => wrap.dataset.raw);
   // 消息级反馈:👍/👎 只在带正文的助手消息上出现(纯工具调用消息的 .acts 会被整条移除)
@@ -5349,17 +6005,28 @@ function ensureAssistant() {
     }).catch(() => { done(); toast("重新生成没送到后端", true); });
   });
   const trace = wrap.querySelector(".trace");
-  trace.querySelector(".tr-head").addEventListener("click", () => {
-    trace.classList.toggle("open");
+  const traceHead = trace.querySelector(".tr-head");
+  const toggleTrace = () => {
+    const open = trace.classList.toggle("open");
+    traceHead.setAttribute("aria-expanded", open ? "true" : "false");
     trace.dataset.touched = "1";            // 用户手动开合过,就不再自动折叠
+  };
+  traceHead.addEventListener("click", toggleTrace);
+  traceHead.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggleTrace(); }
   });
-  // 思考那一块自己也要能开合:它嵌在 trace 里面,外层展开≠里层展开 —— 原来这里没接
-  // 任何监听,而 CSS 的 `.think.open .th-body{display:block}` 因此永远不生效,
-  // 用户看到的就是"思考 · 进行中…"一行字,正文一个字都看不见(2026-10-09 用户截图指的就是这个)。
+  // 思考那一块自己也要能开合:它嵌在 trace 里面,外层展开≠里层展开。
+  // 新交互里它默认是收起的(只占一行),点开才看原始思考正文。
   const think = wrap.querySelector(".think");
-  think.querySelector(".th-head").addEventListener("click", () => {
-    think.classList.toggle("open");
+  const thinkHead = think.querySelector(".th-head");
+  const toggleThink = () => {
+    const open = think.classList.toggle("open");
+    thinkHead.setAttribute("aria-expanded", open ? "true" : "false");
     think.dataset.touched = "1";            // 手动开合过之后,答完不再自动收起它
+  };
+  thinkHead.addEventListener("click", toggleThink);
+  thinkHead.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggleThink(); }
   });
   cur = { wrap, body: wrap.querySelector(".body"),
           trace, trSum: wrap.querySelector(".tr-sum"),
@@ -5367,7 +6034,7 @@ function ensureAssistant() {
           think, thTime: wrap.querySelector(".th-time"),
           stats: wrap.querySelector(".stats"),
           text: "", reasoningText: "", reasonStart: 0, toolCount: 0,
-          lastRender: 0, timer: null, thTick: null };
+          lastRender: 0, timer: null, thTick: null, workTimer: null };
   lastTraceTurn = cur;                      // 本轮的工具卡片都落进这个 trace
   return cur;
 }
@@ -5385,100 +6052,120 @@ function renderTurnStats(c, e) {
   if (!el) return;
   const bits = [];
   const sec = fmtStats(e.elapsed_ms);
-  if (sec) bits.push(`<span class="st">⏱ <b>${sec}</b></span>`);
+  if (sec) bits.push(`<span class="st">耗时 <b>${sec}</b></span>`);
   if (e.tokens > 0) {
     const spd = e.tps > 0 ? ` · ${e.tps} token/秒` : "";
-    bits.push(`<span class="st">⚡ <b>${e.tokens}</b> token${spd}</span>`);
+    bits.push(`<span class="st"><b>${e.tokens}</b> token${spd}</span>`);
   } else if (sec) {
-    bits.push(`<span class="st">⚡ 速度未知(服务端未返回 token 数)</span>`);
+    bits.push(`<span class="st">速度未知(服务端未返回 token 数)</span>`);
   }
   // 缓存命中(prompt 的一部分由服务端 KV 缓存返回):端点没给就不显示这一格
   if (e.cached_tokens > 0) {
-    bits.push(`<span class="st">📦 命中缓存 <b>${e.cached_tokens}</b> token</span>`);
+    bits.push(`<span class="st">命中缓存 <b>${e.cached_tokens}</b> token</span>`);
   }
-  if (e.reasoning) bits.push(`<span class="st">🧠 已思考</span>`);
+  if (e.reasoning) bits.push(`<span class="st">已思考</span>`);
   if (!bits.length) { el.hidden = true; return; }
   el.innerHTML = bits.join("");
   el.hidden = false;
 }
 
-/* ---------------- 工作过程区(思考 + 工具调用收成一行) ---------------- */
-function traceSummary(c, done) {
+/* ---------------- 工作过程区(收成一行「已工作 X · N 步」) ----------------
+   ZCode 的做法:过程只占一行,点开才看思考原文与每一步工具。这里按同一口径:
+   - 行上只写总耗时与步数;运行中每秒往前走;
+   - 思考块默认收起,展开后才显示原始 reasoning;
+   - 工具行是一条条细线小行,不再是一张张带底色的卡片。 */
+function fmtWork(ms) {
+  const total = Math.max(1, Math.round((Number(ms) || 0) / 1000));
+  if (total < 60) return total + " 秒";
+  const m = Math.floor(total / 60), s = total % 60;
+  return m + " 分" + (s ? " " + s + " 秒" : "");
+}
+function traceSummaryEl(el, done) {
+  if (!el) return done ? "已完成" : "正在工作…";
+  const tools = parseInt(el.dataset.tools || "0", 10) || 0;
+  const ws = parseInt(el.dataset.workStart || "0", 10) || 0;
   const bits = [];
-  if (c.toolCount) bits.push(`${c.toolCount} 个工具调用`);
-  if (done && c.reasonStart) {
-    bits.push("思考 " + Math.max(1, Math.round((Date.now() - c.reasonStart) / 1000)) + " 秒");
-  }
-  if (!bits.length) return done ? "已完成" : "进行中…";
+  if (ws) bits.push((done ? "已工作 " : "正在工作 · ") + fmtWork(Date.now() - ws));
+  if (tools) bits.push(tools + " 步");
+  if (!bits.length) return done ? "已完成" : "正在工作…";
   return bits.join(" · ");
 }
+function traceSummary(c, done) {
+  return traceSummaryEl(c && c.trace, done);
+}
+function startWorkTick(c) {
+  if (!c || !c.trace || c.trace._workTimer) return;
+  c.trace._workTimer = setInterval(() => {
+    if (!c.trace || !document.contains(c.trace) || c.trace.dataset.done) {
+      if (c.trace && c.trace._workTimer) clearInterval(c.trace._workTimer);
+      if (c.trace) c.trace._workTimer = null;
+      return;
+    }
+    if (c.trSum) c.trSum.textContent = traceSummary(c, false);
+  }, 1000);
+}
 function showTrace(c) {
-  if (c.trace.hidden) {
-    c.trace.hidden = false;
-    c.trace.classList.add("open");          // 干活时展开,过程可见
-    c.trace.dataset.reasonStart = String(Date.now());
-  }
-  if (!c.reasonStart) c.reasonStart = Date.now();
-  if (!c.trace.dataset.reasonStart) c.trace.dataset.reasonStart = String(Date.now());
+  if (!c || !c.trace) return;
+  c.trace.hidden = false;
+  if (!c.trace.dataset.workStart) c.trace.dataset.workStart = String(Date.now());
+  if (c.trSum && !c.trace.dataset.done) c.trSum.textContent = traceSummary(c, false);
+  startWorkTick(c);
 }
 /* ---------------- 思考中那一行的实时读数 ---------------- */
-/* token 数在服务器回报 usage 之前拿不到,只能按字符估(CJK 一字约一 token,
-   其余四个字符约一 token)。所以这一行**永远带一个「约」字** —— 答完之后
-   下面那行 ⚡ 用的是服务端真数,两者不是一回事,不能拿估算冒充实测。 */
-function isWideCp(cp) {
-  /* 中日韩文字与全角标点:一个字约一 token。写成码位区间而不是正则里的字面汉字 ——
-     这份 HTML 的 JS 段保持 ASCII,免得第三种编码在 Windows 上咬人。 */
-  return (cp >= 0x3000 && cp <= 0x303f) || (cp >= 0x3040 && cp <= 0x30ff)
-      || (cp >= 0x3400 && cp <= 0x4dbf) || (cp >= 0x4e00 && cp <= 0x9fff)
-      || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xac00 && cp <= 0xd7af)
-      || (cp >= 0xff00 && cp <= 0xffef);
-}
-function estTokens(s) {
-  let wide = 0, other = 0;
-  const str = String(s || "");
-  for (let i = 0; i < str.length; i++) {
-    if (isWideCp(str.codePointAt(i))) wide++; else other++;
-  }
-  return Math.max(1, Math.round(wide + other / 4));
-}
 function thinkLine(c, done) {
-  if (!c || !c.reasonStart) return done ? "已思考" : "进行中…";
-  const sec = Math.max(1, Math.round((Date.now() - c.reasonStart) / 1000));
-  const rate = (estTokens(c.reasoningText) / sec).toFixed(1);
-  return (done ? "已思考 " : "思考中 ") + sec + " 秒 · 约 " + rate + " token/秒";
+  if (!c || !c.reasonStart) return done ? "思考" : "思考中…";
+  return (done ? "思考 " : "思考中 ") + fmtWork(Date.now() - c.reasonStart);
 }
 function thinkTick(c) {
   if (!c || !c.think || c.think.dataset.stopped) return;
   if (c.thTime) c.thTime.textContent = thinkLine(c, false);
-  if (!c.thTick) c.thTick = setInterval(() => {
-    // 节点被摘掉(重新生成会整段摘)或这块已经不再显示,计时器就该自己死 ——
-    // 留着它既费 CPU,又会往一个没人看的节点上写字。
-    if (!c.thTime || !c.think || !document.contains(c.think) || c.think.hidden
-        || c.think.dataset.stopped) {
-      clearInterval(c.thTick); c.thTick = null; return;
-    }
-    c.thTime.textContent = thinkLine(c, false);
-  }, 500);
+  if (!c.thTick) {
+    c.thTick = setInterval(() => {
+      // 节点被摘掉(重新生成会整段摘)或这块已经不再显示,计时器就该自己死 ——
+      // 留着它既费 CPU,又会往一个没人看的节点上写字。
+      if (!c.thTime || !c.think || !document.contains(c.think) || c.think.hidden
+          || c.think.dataset.stopped) {
+        clearInterval(c.thTick); c.thTick = null;
+        if (c.think) c.think._thTimer = null;
+        return;
+      }
+      c.thTime.textContent = thinkLine(c, false);
+    }, 500);
+    c.think._thTimer = c.thTick;
+  }
+}
+/* 把思考行定稿并停表。foldTraceEl 拿不到 assistant 的 c(工具调用会把 cur 清掉),
+   所以计时器也挂在 .think 节点上,按 DOM 收尾时照样能停。 */
+function finalizeThinkEl(el, done) {
+  const th = el && el.querySelector(".think");
+  if (!th || th.dataset.stopped) return;
+  if (th._thTimer) { clearInterval(th._thTimer); th._thTimer = null; }
+  th.dataset.stopped = "1";
+  const rs = parseInt(th.dataset.reasonStart || "0", 10);
+  const time = th.querySelector(".th-time");
+  if (time && rs) time.textContent = (done ? "思考 " : "思考中 ") + fmtWork(Date.now() - rs);
+  if (done && !th.dataset.touched) {
+    th.classList.remove("open");
+    const h = th.querySelector(".th-head");
+    if (h) h.setAttribute("aria-expanded", "false");
+  }
 }
 function thinkStop(c) {
-  if (!c || !c.think || c.think.dataset.stopped) return;
-  c.think.dataset.stopped = "1";
-  if (c.thTick) { clearInterval(c.thTick); c.thTick = null; }
-  if (c.thTime) c.thTime.textContent = thinkLine(c, true);
-  // 答完了收回成一行,除非用户自己点开过(他要留着看就留着)。
-  if (!c.think.dataset.touched) c.think.classList.remove("open");
+  if (!c || !c.trace) return;
+  finalizeThinkEl(c.trace, true);
 }
-function foldTraceEl(el) {
-  if (!el || el.hidden || el.dataset.touched || el.dataset.done) return;
+function foldTraceEl(el, force) {
+  if (!el || el.hidden || el.dataset.done) return;
   el.dataset.done = "1";
-  el.classList.remove("open");              // 正文开始输出即收成一行
-  const tools = parseInt(el.dataset.tools || "0", 10);
-  const rs = parseInt(el.dataset.reasonStart || "0", 10);
-  const bits = [];
-  if (tools) bits.push(`${tools} 个工具调用`);
-  if (rs) bits.push("思考 " + Math.max(1, Math.round((Date.now() - rs) / 1000)) + " 秒");
+  if (el._workTimer) { clearInterval(el._workTimer); el._workTimer = null; }
+  finalizeThinkEl(el, true);
   const sum = el.querySelector(".tr-sum");
-  if (sum) sum.textContent = bits.length ? bits.join(" · ") : "已完成";
+  if (sum) sum.textContent = traceSummaryEl(el, true);
+  if (!el.dataset.touched || force) {
+    el.classList.remove("open");
+    const head = el.querySelector(".tr-head");
+    if (head) head.setAttribute("aria-expanded", "false");
+  }
 }
 function foldTrace(c) {
   foldTraceEl(c && c.trace);
@@ -5487,9 +6174,9 @@ function foldTrace(c) {
    注意:工具调用所在的那条消息和正文所在的那条往往不是同一个 wrap,
    所以按 DOM 折最稳。 */
 function foldAllTraces(force) {
-  chat.querySelectorAll(".trace.open").forEach(el => {
+  chat.querySelectorAll(".trace").forEach(el => {
     if (force) el.dataset.touched = "";   // 回合结束:不管是否被手动点开过,一律收起
-    foldTraceEl(el);
+    foldTraceEl(el, force);
   });
   // 空思考体(有些厂商只给空的 reasoning)整条隐藏,不留空白条
   chat.querySelectorAll(".trace .think").forEach(t => {
@@ -5515,7 +6202,7 @@ function fixImages(root) {
       if (r && r.ok && r.data_url) { img.src = r.data_url; return; }
       const tip = document.createElement("span");
       tip.className = "img-miss";
-      tip.textContent = "🖼️ " + (img.alt || "图片未能加载");
+      tip.textContent = "图片未能加载:" + (img.alt || "");
       img.replaceWith(tip);
     }).catch(() => {});
   });
@@ -5716,7 +6403,7 @@ function addPanelCard(rel) {
   head.className = "gen-head";
   const name = document.createElement("span");
   name.className = "gen-name";
-  name.textContent = "🧩 可交互产物 · " + rel;
+  name.textContent = "可交互产物 · " + rel;
   const note = document.createElement("span");
   note.className = "gen-note";
   note.textContent = "点开就地显示";
@@ -6199,7 +6886,7 @@ window.addEventListener("message", (ev) => {
   }
 });
 
-function addToolCard(name, summary, folded, trust) {
+function addToolCard(name, summary, trust) {
   removePlaceholder();
   const el = document.createElement("div");
   el.className = "toolcard run";
@@ -6207,6 +6894,7 @@ function addToolCard(name, summary, folded, trust) {
                   <span class="sum"></span><span class="el"></span><span class="err"></span>`;
   el.querySelector(".name").textContent = name;
   el.querySelector(".sum").textContent = summary;
+  el.title = name + (summary ? " · " + summary : "");
   if (trust === "external") {           // 外部来源标记:回答被网页里的文字影响时看得见
     const badge = document.createElement("span");
     badge.className = "ext";
@@ -6214,20 +6902,13 @@ function addToolCard(name, summary, folded, trust) {
     badge.title = "这一步读到了网页/抓取/知识库/MCP 的外部文字，其中的“指令”不是你的指令";
     el.insertBefore(badge, el.querySelector(".el"));
   }
-  el.addEventListener("click", () => {
-    if (el.classList.contains("run")) return;   // 运行中不折叠
-    el.classList.toggle("fold");
-  });
-  if (folded) el.classList.add("fold");
 
   const turn = cur || lastTraceTurn;          // 优先落进当前轮的 trace
   const host = (turn && turn.tools) ? turn.tools : chat;
   host.appendChild(el);
   if (turn && turn.tools) {
-    turn.trace.hidden = false;
-    if (!turn.trace.classList.contains("open") && !turn.trace.dataset.touched) {
-      turn.trace.classList.add("open");
-    }
+    if (turn.think && !turn.think.dataset.stopped) thinkStop(turn);
+    showTrace(turn);                  // 只把那一行「已工作」亮出来,不自动展开明细
     bumpTools(turn, 1);
   }
   cur = null;     // 工具调用打断正文块:之后的正文另起一条,过程仍留在原 trace
@@ -6311,10 +6992,12 @@ window.__gcodeEvent = function (e) {
     case "reasoning_delta": {
       const c = ensureAssistant();
       showTrace(c);
+      if (!c.reasonStart) c.reasonStart = Date.now();
+      if (!c.think.dataset.reasonStart) {
+        c.think.dataset.reasonStart = String(c.reasonStart);
+      }
       c.think.hidden = false;
-      // 思考中默认摊开:这一路要的就是"看得见它在想什么"。用户自己开合过就不插手。
-      if (!c.think.dataset.touched && !c.think.classList.contains("open"))
-        c.think.classList.add("open");
+      // 思考块默认收起(只留一行「思考中 N 秒」);原始 reasoning 点开才看。
       c.reasoningText += e.text;
       c.think.querySelector(".th-body").textContent = c.reasoningText.slice(-3000);
       thinkTick(c);
@@ -6352,7 +7035,7 @@ window.__gcodeEvent = function (e) {
     }
     case "tool_start":
       cur = null;
-      lastTool = addToolCard(e.name, e.summary, false, e.trust);
+      lastTool = addToolCard(e.name, e.summary, e.trust);
       // v0.9.177:这一步**写出了**一份 html/svg 时,紧跟一张就地预览的卡。
       // 判定在后端(`gui_ui._panel_arg`:只认工作区相对路径 + 那几个扩展名),
       // 这里只看有没有带过来 —— 两份判据会漂,一份不会。
@@ -6375,7 +7058,7 @@ window.__gcodeEvent = function (e) {
       break;
     }
     case "confirm_request": {
-      $("confirmTitle").textContent = "⚠ 权限确认 · " + e.tool
+      $("confirmTitle").textContent = "权限确认 · " + e.tool
         + (e.label ? " · " + e.label : "");   // v0.9.60:并发子代理路的标签
       $("confirmDetail").textContent = e.detail;
       const risks = e.risks || [];
@@ -6493,7 +7176,7 @@ window.__gcodeEvent = function (e) {
         card.className = "shotcard";
         card.innerHTML = `<div class="cap"></div><img alt="页面截图">`;
         card.querySelector(".cap").textContent =
-          "🖼️ " + (e.title || "页面截图") + (e.url ? "  ·  " + e.url : "");
+          (e.title || "页面截图") + (e.url ? "  ·  " + e.url : "");
         const img = card.querySelector("img");
         img.setAttribute("src", e.path);
         // **这里从前还挂着一句 `img.classList.toggle("zoom")`(v0.9.05 的行内放大)。**
@@ -6663,8 +7346,8 @@ window.__gcodeEvent = function (e) {
 
 function setBusy(v) {
   busy = v;
-  $("btnSend").style.display = v ? "none" : "block";
-  $("btnStop").style.display = v ? "block" : "none";
+  $("btnSend").style.display = v ? "none" : "inline-flex";
+  $("btnStop").style.display = v ? "inline-flex" : "none";
   // 跑着的时候输入框本来就能打字(那条路是插话),但没人知道要按 Enter —— 提示语替它说话。
   // 有提问卡在等时,提示语要让位给"先回答上面的问题"(那条比插话更要紧)。
   updateComposerPlaceholder();
@@ -6784,7 +7467,7 @@ function renderHistory(messages) {
                  || m.name === "show_checklist") {
         // 组件卡片已在 assistant 的 ui_calls 里画过,不再多一张"工具结果"
       } else {
-        const el = addToolCard("工具结果", m.text.replace(/\n/g, " ").slice(0, 160), true);
+        const el = addToolCard("工具结果", m.text.replace(/\n/g, " ").slice(0, 160));
         el.classList.remove("run");      // 历史消息无法得知当时状态,用中性灰
       }
     }
@@ -6842,7 +7525,7 @@ function renderSessions(items) {
     const head = document.createElement("div");
     head.className = "ws-group-head" + (g.here ? " here" : "");
     const label = g.here ? "本项目" : g.name;
-    head.innerHTML = `<span class="gt">▾</span><span>📁</span>`
+    head.innerHTML = `<span class="gt"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span>`
       + `<span class="gn"></span><span class="gc">${g.items.length}</span>`;
     head.querySelector(".gn").textContent = label;
     head.title = g.here
@@ -6907,7 +7590,7 @@ function openSessMenu(ev, s, row) {
   const items = [
     { label: "打开这条会话",
       on: () => pywebview.api.resume_session(id).then(r => { if (r && r.ok === false) toast(r.msg, true); }) },
-    { label: "🌿 分叉此会话 (Fork)",
+    { label: "分叉此会话 (Fork)",
       on: () => {
         if (busy) { toast("当前有任务正在进行中,分叉要等它停", true); return; }
         appConfirm("分叉此会话并开辟新分支任务?\n\n原会话原样保留在侧栏,新会话接管当前上下文。", () => {
@@ -7212,14 +7895,14 @@ function renderProvMain() {
       <input id="pvName" placeholder="供应商名称,如 DeepSeek">
       <label class="sw" title="停用后不出现在可切列表里(配置保留,随时可再开)">
         <input type="checkbox" id="pvEnabled"><span></span></label>
-      <button class="eye" id="btnDelProv" title="删除这个供应商">🗑</button>
+      <button class="eye" id="btnDelProv" title="删除这个供应商" aria-label="删除这个供应商"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V5.2A1.2 1.2 0 0 1 10.2 4h3.6A1.2 1.2 0 0 1 15 5.2V7M6.5 7l.8 12.2A1.8 1.8 0 0 0 9.1 21h5.8a1.8 1.8 0 0 0 1.8-1.8L17.5 7M10 11v6M14 11v6"/></svg></button>
     </div>
     <div class="frow"><label>接口地址</label>
       <input id="pvBase" placeholder="https://api.deepseek.com/v1"></div>
     <div class="frow"><label>API Key</label>
       <div class="keywrap">
         <input id="pvKey" type="password" placeholder="供应商控制台申请的密钥">
-        <button class="eye" id="btnKeyEye" title="显示/隐藏密钥">👁</button>
+        <button class="eye" id="btnKeyEye" title="显示/隐藏密钥" aria-label="显示/隐藏密钥"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.8 12S6.2 5.8 12 5.8 21.2 12 21.2 12 17.8 18.2 12 18.2 2.8 12 2.8 12Z"/><circle cx="12" cy="12" r="2.8"/></svg></button>
       </div>
     </div>
     <div class="mm-head">
@@ -7864,7 +8547,7 @@ function renderCtxPanel() {
     <div class="ctx-bar"><div class="ctx-fill${pct >= mark ? " hot" : ""}" style="width:${pct}%"></div><div class="ctx-mark" style="left:${mark}%"></div></div>
     <span class="ctx-src">${src}</span>
     <div class="ctx-rows">${rows}</div>
-    <button class="ctx-btn" id="btnCtxCompact">🗜 压缩上下文</button>${res}`;
+    <button class="ctx-btn" id="btnCtxCompact">压缩上下文</button>${res}`;
   $("btnCtxCompact").addEventListener("click", doCompactContext);
 }
 function doCompactContext(ev) {
@@ -7872,10 +8555,10 @@ function doCompactContext(ev) {
   const btn = $("btnCtxCompact");
   if (!btn || btn.disabled) return;
   btn.disabled = true;
-  btn.textContent = "🗜 压缩中…(模型正在摘编早期内容)";
+  btn.textContent = "压缩中…(模型正在摘编早期内容)";
   pywebview.api.compact_now().then(r => {
     btn.disabled = false;
-    btn.textContent = "🗜 压缩上下文";
+    btn.textContent = "压缩上下文";
     if (r && r.ok === false) toast(r.msg, true);
     // 压成了:前→后写在面板里(占用与压缩同一屏);失败只走 toast,那句多半与数字无关
     if (r && r.ok === true) { ctxResult = r.msg || "已压缩"; ctxResultUsed = Number(r.after); }
@@ -7883,7 +8566,7 @@ function doCompactContext(ev) {
     // 成功时后端会推 compacted 提示与 session_metrics,数字由事件刷新
   }).catch(e => {
     btn.disabled = false;
-    btn.textContent = "🗜 压缩上下文";
+    btn.textContent = "压缩上下文";
     toast("压缩失败:" + String(e).slice(0, 60), true);
   });
 }
@@ -7996,7 +8679,9 @@ function renderProjects(d) {
     const el = document.createElement("div");
     el.className = "proj" + (isCur ? " current" : "");
     el.innerHTML = `
-      <div class="row1"><span class="ic">${r.is_default ? "🏠" : "📁"}</span>
+      <div class="row1"><span class="ic">${r.is_default
+        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10.4 12 4l8 6.4V20a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1Z"/></svg>'
+        : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.6 6.6h6l2 2h8.8v9.8a1.6 1.6 0 0 1-1.6 1.6H5.2a1.6 1.6 0 0 1-1.6-1.6Z"/></svg>'}</span>
         <span class="n"></span>${isCur ? '<span class="curtag">当前</span>' : ""}</div>
       <div class="p"></div>
       <div class="ops">
@@ -8058,9 +8743,9 @@ function openProjMenu(r, anchor, isCur) {
   projMenuCtx = { path: r.path, name: r.name, isCur };
   const menu = $("projMenu");
   menu.innerHTML = `
-    <button data-act="files">📄 查看文件</button>
-    <button data-act="rename">✎ 重命名</button>
-    <button data-act="del" class="danger">🗑 删除项目</button>`;
+    <button data-act="files">查看文件</button>
+    <button data-act="rename">重命名</button>
+    <button data-act="del" class="danger">删除项目</button>`;
   menu.classList.add("show");
   const rect = anchor.getBoundingClientRect();
   const mw = 140, mh = 120;
@@ -8128,7 +8813,7 @@ function loadProjectFiles(subdir) {
 function renderFiles(r) {
   const rel = r.rel || "";                      // 当前列出目录相对项目根的路径
   const parentRel = rel ? rel.split("/").slice(0, -1).join("/") : null;
-  $("filesTitle").textContent = `📁 ${filesCtx.name}`;
+  $("filesTitle").textContent = `${filesCtx.name}`;
   const crumb = $("filesCrumb");
   crumb.innerHTML = "";
   const mk = (label, sub) => {
@@ -8163,7 +8848,7 @@ function renderFiles(r) {
   for (const it of r.items) {
     const row = document.createElement("div");
     row.className = "frow" + (it.is_dir ? " dir" : "");
-    row.innerHTML = `<span class="fi">${it.is_dir ? "📁" : "📄"}</span>
+    row.innerHTML = `<span class="fi">${it.is_dir ? FI_DIR : FI_FILE}</span>
       <span class="fn"></span>
       <span class="fs">${it.is_dir ? "" : fmtSize(it.size)}</span>`;
     row.querySelector(".fn").textContent = it.name;
@@ -8363,13 +9048,13 @@ function championCards(models) {
   if (timed.length) {
     const fast = timed.reduce((a, b) => (b.ttft_ms < a.ttft_ms ? b : a));
     const slow = timed.reduce((a, b) => (b.ttft_ms > a.ttft_ms ? b : a));
-    cards.push({icon: "⚡", title: "极致打字机", tag: "首字最快",
+    cards.push({title: "极致打字机", tag: "首字最快",
                 model: fast.model || fast.key,
                 line: `首字均值 ${fmtDur(fast.ttft_ms)}`,
                 sub: `${fast.ttft_samples} 次实测`,
                 tip: `${fast.model || fast.key} · ${fast.ttft_samples} 次请求的首字延迟均值`});
     if (slow.ttft_ms !== fast.ttft_ms)
-      cards.push({icon: "🦥", title: "最慢树懒", tag: "排队最久",
+      cards.push({title: "最慢树懒", tag: "排队最久",
                   model: slow.model || slow.key,
                   line: `首字均值 ${fmtDur(slow.ttft_ms)}`,
                   sub: `${slow.ttft_samples} 次实测`,
@@ -8381,7 +9066,7 @@ function championCards(models) {
   if (thinkers.length) {
     const top = thinkers.reduce((a, b) =>
       (b.reasoning_tokens / b.completion > a.reasoning_tokens / a.completion ? b : a));
-    cards.push({icon: "🧠", title: "深度沉思狂", tag: "思考占比最高",
+    cards.push({title: "深度沉思狂", tag: "思考占比最高",
                 model: top.model || top.key,
                 line: `思考占比 ${Math.round(top.reasoning_tokens / top.completion * 100)}%`,
                 sub: `思考 ${fmtTok(top.reasoning_tokens)} / 正文 ${fmtTok(top.completion)} token`,
@@ -8390,7 +9075,7 @@ function championCards(models) {
   const ranked = models.filter(m => m.reasoning_samples > 0 && m.reasoning_tokens > 0)
     .sort((a, b) => b.reasoning_tokens - a.reasoning_tokens);
   if (ranked.length)
-    cards.push({icon: "📊", title: "算力明细", tag: "思考 token 降序",
+    cards.push({title: "算力明细", tag: "思考 token 降序",
                 model: `${ranked[0].model || ranked[0].key} 居首`,
                 line: `${ranked.length} 个模型在思考`,
                 sub: "悬停看完整排名",
@@ -8398,7 +9083,7 @@ function championCards(models) {
   return cards.length ? `
     <div class="usage-cards">${cards.map(c => `
       <div class="usage-card" title="${esc(c.tip || c.line)}">
-        <div class="uc-head"><span>${c.icon}</span><i>${esc(c.tag)}</i></div>
+        <div class="uc-head"><i>${esc(c.tag)}</i></div>
         <b>${esc(c.title)}</b>
         <div class="uc-line">${esc(c.model)}</div>
         <div class="uc-line" style="font-weight:700">${esc(c.line)}</div>
@@ -8858,7 +9543,7 @@ function renderSkillCards(skills) {
   }
   $("skillsBody").innerHTML = `<div class="skill-grid">${skills.map(s => `
     <button class="skillcard" data-name="${esc(s.name)}" title="点开查看技能全文">
-      <div class="sname">⭐ ${esc(s.name)}
+      <div class="sname">${esc(s.name)}
         ${s.channel ? `<span class="chtag">${esc(s.channel)}</span>` : ""}</div>
       ${s.description ? `<div class="sdesc">${esc(s.description)}</div>`
                       : '<div class="snodesc">(没有简介)</div>'}
@@ -8872,10 +9557,10 @@ function openSkillDetail(name) {
   pywebview.api.get_skill_body(name).then(r => {
     if (!r.ok) { toast(r.msg || "读取技能失败", true); return; }
     $("skillsBody").innerHTML = `
-      <div class="fcrumb"><a id="skBack">← 返回技能列表</a> / ⭐ ${esc(name)}</div>
+      <div class="fcrumb"><a id="skBack">← 返回技能列表</a> / ${esc(name)}</div>
       <div class="sk-pack-row">
         <button class="b-no" id="btnSkillPack" title="把这个技能连它的资料打成一份 zip,发给同学">
-          📦 打包分享这一份</button>
+          打包分享这一份</button>
         <span class="sk-pack-hint">分享包里只有这个技能的目录:没有你的账号、密钥与任何本机数据。</span>
       </div>
       <pre id="skBodyPre" style="margin-top:10px"></pre>`;
@@ -8891,7 +9576,7 @@ function skPackExport(name) {
   api.export_skill_pack(name).then(r => {
     if (!r || !r.ok) { toast((r && r.msg) || "没打成包", true); return; }
     $("skillsBody").insertAdjacentHTML("beforeend",
-      `<div class="sk-pack-done">✅ ${esc(r.msg)}
+      `<div class="sk-pack-done">${esc(r.msg)}
          <button class="b-no" id="btnPackReveal">在文件夹里显示</button></div>`);
     const rv = $("btnPackReveal");
     if (rv) rv.addEventListener("click", () =>
@@ -8905,7 +9590,7 @@ function skPackImport() {
   api.import_skill_pack().then(r => {
     if (!r || !r.ok) { toast((r && r.msg) || "没读到这份包", true); return; }
     $("skillsBody").innerHTML = `<div class="sk-pack-prev">
-      <h4>📥 这一包会写成技能「${esc(r.name)}」</h4>
+      <h4>这一包会写成技能「${esc(r.name)}」</h4>
       <div class="sk-pack-meta">共 ${r.count} 个文件 · 包作者创建于 ${esc(r.created || "?")}
         ${r.conflict ? '· <b class="warn">本机已有同名技能,导入前会先备份</b>' : ""}</div>
       <ul class="sk-pack-files">${(r.files || []).slice(0, 40)
@@ -8931,10 +9616,8 @@ function renderChannels(channels) {
     $("skillsBody").innerHTML = '<div class="usage-empty">读取渠道失败。</div>';
     return;
   }
-  const icons = { builtin: "📦", app: "🗂", workspace: "📁" };
   $("skillsBody").innerHTML = channels.map(c => `
     <div class="skch">
-      <div class="ic">${icons[c.key] || "🗂"}</div>
       <div class="info">
         <b>${esc(c.label)}</b>
         <span class="note">${esc(c.note)}</span>
@@ -8972,11 +9655,11 @@ function renderCandidates(items, pending) {
       const url = String(it.source_url || "");
       return `
       <div class="cand ${st}">
-        <div class="cand-q">❓ ${esc(it.question || "(无问题)")}
+        <div class="cand-q">${esc(it.question || "(无问题)")}
           <span class="cand-badge b-${st}">${badge[st] || st}</span></div>
         <div class="cand-a">${esc(it.answer || "")}</div>
         <div class="cand-meta">
-          ${url ? `<a class="cand-src" href="${esc(url)}" target="_blank" rel="noopener">🔗 ${esc(it.source_title || url)}</a>`
+          ${url ? `<a class="cand-src" href="${esc(url)}" target="_blank" rel="noopener">${esc(it.source_title || url)}</a>`
                 : `<span class="cand-src">(无来源)</span>`}
           <span class="cand-ts">#${esc(String(it.index ?? ""))} · ${esc(it.ts || "")}</span>
         </div>
@@ -9072,8 +9755,8 @@ function renderDrafts() {
       acts.appendChild(b);
     };
     mk("↵ 插话", "现在就并进这一轮:学长做完手头这一步就把它读进去", "go", sendDraft);
-    mk("✎", "拿回输入框改一改", "", editDraft);
-    mk("🗑", "不要这句了", "rm", dropDraft);
+    mk("改", "拿回输入框改一改", "", editDraft);
+    mk("删", "不要这句了", "rm", dropDraft);
     chip.appendChild(t);
     chip.appendChild(acts);
     bar.appendChild(chip);
@@ -10612,7 +11295,7 @@ function scList(classes, emptyText) {
       <span class="sc-nm">${esc(c.name)}</span>
       <span class="sc-loc" title="${esc(c.location || "")}">${esc(c.location || "")}</span>
       ${c.location ? `<button class="sc-map" data-loc="${esc(c.location)}"
-        title="在校园地图上看看">🗺</button>` : ""}
+        title="在校园地图上看看">地图</button>` : ""}
     </div>`).join("");
 }
 /* 空档全部用后端 free_slots 的结果(面板与 schedule(action=free) 同一份算法),
@@ -10637,9 +11320,9 @@ function scGapChips(day, maxN) {
 function scTail(day) {
   // 格子里的待办与校历:短,且一眼能分清"这天的课"和"这天要交的东西"
   const items = (day.items || []).map(it =>
-    `<div class="sc-todo" title="${esc(it.title)}">⚑ ${esc(it.title)}</div>`).join("");
+    `<div class="sc-todo" title="${esc(it.title)}">${esc(it.title)}</div>`).join("");
   const events = (day.events || []).map(ev =>
-    `<div class="sc-evt" title="${esc(ev.span || ev.name)}">📌 ${esc(ev.name)}</div>`).join("");
+    `<div class="sc-evt" title="${esc(ev.span || ev.name)}">${esc(ev.name)}</div>`).join("");
   return items + events;
 }
 /* ---- v0.9.35 走堂换楼 ----
@@ -10655,13 +11338,13 @@ function scWalkTitle(it) {
   return bits.join(" · ");
 }
 function scWalkRow(it, title) {
-  return `<div class="sc-walk" title="${esc(title)}"><span class="w-txt">⚠ `
+  return `<div class="sc-walk" title="${esc(title)}"><span class="w-txt">注意:`
     + `${esc(it.prev.span)}→${esc(it.curr.span)} `
     + `${it.no_gap ? "<b>紧接着换楼</b>" : "<b>要换楼</b>"} `
     + `${esc(it.prev.building)} → ${esc(it.curr.building)}`
     + ` <em>${it.clock ? `中间 ${it.minutes} 分钟` : "只按节次"}</em></span>`
     + `<button class="sc-walkmap" data-a="${esc(it.prev.building)}" data-b="${esc(it.curr.building)}" `
-    + `title="在地图上把这两栋一起框出来">🗺</button></div>`;
+    + `title="在地图上把这两栋一起框出来">地图</button></div>`;
 }
 function scWalkRows(day) {
   const walks = day.walks || [];
@@ -10671,7 +11354,7 @@ function scWalkRows(day) {
     rows.push(`<div class="sc-more">另有 ${total - rows.length} 处换楼没列出</div>`);
   const clash = (day.clashes || []).slice(0, 3).map(c =>
     `<div class="sc-clash" title="同一节排了两门课:这是课表本身撞了,不是走路问题">`
-    + `⚡ ${esc(c.label)}:${esc(c.a.name)} / ${esc(c.b.name)}</div>`).join("");
+    + `撞课:${esc(c.label)}:${esc(c.a.name)} / ${esc(c.b.name)}</div>`).join("");
   const skipped = (day.walk_skipped || []).length
     ? `<div class="sc-skipped">有 ${day.walk_skipped.length} 门课的地点判不出是哪栋楼,`
       + `没参与换楼判断(${esc(day.walk_skipped.map(s => s.name).join("、"))})。`
@@ -10688,14 +11371,14 @@ function scWalkChip(col) {
   const max = sum.worst_date && col.date === sum.worst_date && sum.worst_count > 1;
   return `<div class="sc-walkchip${max ? " max" : ""}" `
     + `title="${esc(scWalkTitle(walks[0]))}${max ? "(本周最多的一天)" : ""}">`
-    + `⚠ ${col.walk_total || walks.length} 处换楼</div>`;
+    + `注意:${col.walk_total || walks.length} 处换楼</div>`;
 }
 /* 周视图顶部那句汇总:整周一个视角,先知道"这周几天要换楼、哪天最多"再逐天看。
    一天都没有就不画(不摆"0 处"占位);索引缺失时后端给的 days 就是 0,这里也不硬解释。 */
 function scWalkWeek() {
   const s = (scheduleData && scheduleData.walk_week) || {};
   if (!s.days) return "";
-  return `<div class="sc-walksum">⚠ 本周 ${s.days} 天要换教学楼、共 ${s.total} 处,`
+  return `<div class="sc-walksum">本周 ${s.days} 天要换教学楼、共 ${s.total} 处,`
     + `周${esc(s.worst_weekday)}最多(${s.worst_count} 处)`
     + `${scheduleData.clock ? "" : "(只按节次说,没编分钟)"}</div>`;
 }
@@ -10707,7 +11390,7 @@ function scDayPanel(day, emptyText) {
       ? `<div class="sc-note">有 ${day.unknown.length} 节课没写节次(${esc(day.unknown.join("、"))}),
           它可能正落在你以为的空档里,所以今天<b>一条空档都不报</b>。把节次补进课表就准了。</div>`
       : day.all_day_free
-        ? `<div class="sc-freebig">🌴 这天没课${
+        ? `<div class="sc-freebig">这天没课${
             gaps[0] && gaps[0].clock ? ` · ${esc(gaps[0].start)}~${esc(gaps[0].end)} 全空` : ""}</div>`
         : gaps.length
           ? `<div class="sc-freehead">空档</div>` + gaps.map(g =>
@@ -10716,11 +11399,11 @@ function scDayPanel(day, emptyText) {
           : `<div class="sc-note">这天 ${day.class_count} 节课排满,没有空档。</div>`;
   const todos = (day.items || []).length
     ? `<div class="sc-freehead">这天要交</div>` + (day.items || []).map(it =>
-        `<div class="sc-freerow"><span>⚑ ${esc(it.title)}</span><b>截止今天</b></div>`
+        `<div class="sc-freerow"><span>${esc(it.title)}</span><b>截止今天</b></div>`
       ).join("") : "";
   const evts = (day.events || []).length
     ? `<div class="sc-freehead">校历安排</div>` + (day.events || []).map(ev =>
-        `<div class="sc-freerow"><span>📌 ${esc(ev.name)}</span>
+        `<div class="sc-freerow"><span>${esc(ev.name)}</span>
            <b>${esc(ev.span || "")}</b></div>`).join("") : "";
   const walkPart = day.walk_index_ready === false && day.class_count
     ? `<div class="sc-skipped">地图建筑索引不在,这天判不了要不要换楼(课程清单本身不受影响)。</div>`
@@ -10888,7 +11571,7 @@ function renderSchedule() {
   }
   const day = scheduleTab === "tomorrow" ? scheduleData.tomorrow : scheduleData.today;
   if (!day) { body.innerHTML = ""; return; }
-  body.innerHTML = scDayPanel(day, day === scheduleData.today ? "今天没有课 🎈" : "那天没有课");
+  body.innerHTML = scDayPanel(day, day === scheduleData.today ? "今天没有课" : "那天没有课");
 }
 function openScheduleDlg() {
   pywebview.api.get_schedule_view().then(r => {
@@ -11557,7 +12240,7 @@ function renderPlanCard(r) {
   card.classList.toggle("idle", false);
   card.classList.toggle("full", settled && !failed.length);
   card.classList.toggle("broken", !!failed.length);
-  card.querySelector(".tk-goal").textContent = "🗂 " + (r.goal || "未命名计划");
+  card.querySelector(".tk-goal").textContent = (r.goal || "未命名计划");
   card.querySelector(".tk-pct").textContent = `${r.done}/${r.total}`;
   card.querySelector(".tk-bar i").style.width
     = Math.round(r.done * 100 / r.total) + "%";
@@ -11878,7 +12561,7 @@ function actKidsEl(item, level) {
     if (k.time) bits.push(k.time);
     if (k.dur_text) bits.push("用时 " + k.dur_text);
     if (k.progress) bits.push("↳ " + k.progress);
-    if (k.note) bits.push("⚠ " + k.note);   // 父级已放弃等待,后代仍在运行
+    if (k.note) bits.push("注意:" + k.note);   // 父级已放弃等待,后代仍在运行
     if (bits.length) mid.appendChild(actEl("act-s", bits.join(" · ")));
     row.appendChild(actEl({ cls: "act-dot" }));
     row.appendChild(mid);
@@ -11974,7 +12657,7 @@ function buildTimeline(parent, tl) {
       const rsec = actEl("act-reason");
       const rcap = actEl("act-cap fold act-reason-cap");
       rcap.appendChild(actEl("act-caret", ropen ? "▾" : "▸"));
-      rcap.appendChild(actEl({ tag: "b" }, `💭 思考 ${t.reasoning.chars} 字`));
+      rcap.appendChild(actEl({ tag: "b" }, `思考 ${t.reasoning.chars} 字`));
       rcap.title = ropen ? "收起这一轮的思考记录"
                          : "展开这一轮的思考记录(各步拼接,截断有标记)";
       rcap.addEventListener("click", () => {
@@ -12190,7 +12873,7 @@ function buildChanges(parent, data) {
     const row = actEl({ cls: "act-row" });
     row.dataset.k = "change:" + item.seq;
     const mid = actEl({ cls: "act-m" });
-    mid.appendChild(actEl("act-t", (item.kind === "新建" ? "✚ " : "✎ ") + item.path));
+    mid.appendChild(actEl("act-t", (item.kind === "新建" ? "+ " : "") + item.path));
     const bits = [item.kind + "于 " + item.at];
     if (item.newer) bits.push("这之后还有 " + item.newer + " 处没退");
     if (item.drift) bits.push("我改过之后还被别的工具动过");
@@ -12430,10 +13113,10 @@ function buildEnv(box, e) {
   const jobs = e.jobs || [];
   if (jobs.length) {
     box.appendChild(actEl("act-cap env-cap",
-      "🖥 后台命令 " + jobs.length + " 条(这一程的临时账,重启就没了)"));
+      "后台命令 " + jobs.length + " 条(这一程的临时账,重启就没了)"));
     for (const j of jobs) {
       const el = actEl("act-row plain env-job");
-      el.innerHTML = `<span class="env-k">${j.running ? "🟢 在跑" : "⚪ 已退"}</span>`
+      el.innerHTML = `<span class="env-k">${j.running ? "在跑" : "已退"}</span>`
         + `<span class="env-v">${esc(j.command)}</span>`
         + `<span class="env-n">${esc(j.running ? j.elapsed + "s" : "码 " + j.exit_code)}`
         + ` · ${j.chars} 字</span>`;
@@ -12475,29 +13158,29 @@ function renderActivity(data) {
   const tl = data.timeline || {};
   const sa = subagentRows(data);
   const secs = [
-    actSect("now", "⏱ 此刻", data.now ? "正在执行" : "", b => buildNow(b, data)),
-    actSect("plan", "🗂 计划", actPlan && actPlan.total ? `${actPlan.done}/${actPlan.total}` : "",
+    actSect("now", "此刻", data.now ? "正在执行" : "", b => buildNow(b, data)),
+    actSect("plan", "计划", actPlan && actPlan.total ? `${actPlan.done}/${actPlan.total}` : "",
       b => buildPlan(b)),
-    actSect("timeline", "🧾 时间线", tl.calls ? tl.calls + " 次调用" : "",
+    actSect("timeline", "时间线", tl.calls ? tl.calls + " 次调用" : "",
       b => buildTimeline(b, tl)),
     // 翻车排查(W1/W4):报错与重试的总数 + 重复失败卡。紧跟时间线 ——
     // 它是时间线的"哪儿不对劲"摘要,不是又一类产出。
-    actSect("failures", "🛑 翻车排查", failCount(sum, data.findings),
+    actSect("failures", "翻车排查", failCount(sum, data.findings),
       b => buildFailures(b, data)),
     // 子智能体:从「产出与来源」里提出来单独一节(用户看图 p9/p10 点名的那一节)。
     // 它回答的是"谁去干的、干成没有",和"产出了哪些文件"不是一回事,混在一起
     // 就要滚到第四屏才看见那几行。
-    (sa ? actSect("subagents", "🤖 子智能体",
+    (sa ? actSect("subagents", "子智能体",
       `${sa.count} 个` + (sa.items.some(x => x.status === "running") ? " · 有在跑" : ""),
       b => buildSubagents(b, sa)) : null),
-    actSect("groups", "📦 产出与来源", "", b => buildGroups(b, data)),
-    actSect("changes", "🛠 本轮改动", (data.changes && data.changes.total)
+    actSect("groups", "产出与来源", "", b => buildGroups(b, data)),
+    actSect("changes", "本轮改动", (data.changes && data.changes.total)
       ? data.changes.total + " 处可退"
         + ((data.changes.turns || 1) > 1 ? " · 跨 " + data.changes.turns + " 问" : "")
         : "", b => buildChanges(b, data)),
     // 环境信息:数据不在 activity 里(那要每次推送都跑三条 git 命令),单独问一次、
     // 2 秒缓存,只在开栏 / 点 ↻ / 切工作区时刷新 —— 用户刚报过切换卡顿,不能再加一刀。
-    (actEnv ? actSect("env", "🖥 环境信息", actEnvSummary(actEnv),
+    (actEnv ? actSect("env", "环境信息", actEnvSummary(actEnv),
       b => buildEnv(b, actEnv)) : null),
   ].filter(Boolean);
   for (const s of secs) body.appendChild(s);
@@ -12610,7 +13293,7 @@ function openJwDlg(mode) {
   jwParsed = null;
   jwMode = mode === "scores" ? "scores" : "schedule";
   const isScores = jwMode === "scores";
-  $("jwTitle").textContent = isScores ? "📊 从教务系统导入成绩" : "🎓 从教务系统导入课表";
+  $("jwTitle").textContent = isScores ? "从教务系统导入成绩" : "从教务系统导入课表";
   const steps = $("jwSteps").querySelectorAll(".jw-step");
   steps[1].textContent = isScores ? "② 学长读成绩" : "② 学长读课表";
   $("btnJwRead").textContent = isScores ? "② 读取成绩" : "② 读取课表";
@@ -12782,7 +13465,7 @@ function jwRenderScores() {
     </div>`).join("")}</div>
     ${s.no_credit && s.no_credit.length ? `<div class="jw-warn">这些行没有学分(算绩点时会跳过):${esc(s.no_credit.join("、"))}</div>` : ""}
     ${s.odd_score && s.odd_score.length ? `<div class="jw-warn">这些行的成绩既不是 0-100 的数,也不是优/良/中/及格(存档照原样收,算绩点时按学校规定核对):${esc(s.odd_score.join("、"))}</div>` : ""}
-    ${(r.notes || []).map(n => `<div class="jw-warn">⚠ ${esc(n)}</div>`).join("")}
+    ${(r.notes || []).map(n => `<div class="jw-warn">注意:${esc(n)}</div>`).join("")}
     <div class="sc-note">确认后会<b>整表覆盖</b>本机成绩存档(scores.json,不上传);
       点「③ 确认导入」之前,学长不会写任何文件。</div>`);
 }
@@ -12807,7 +13490,7 @@ function jwRenderPreview() {
       ${esc(cc.name)}${cc.teacher ? " · " + esc(cc.teacher) : ""}${cc.location ? " @ " + esc(cc.location) : ""}
       ${cc.weeks && cc.weeks !== "1-25" ? " <span style=\"opacity:.6\">" + esc(cc.weeks) + "</span>" : ""}
     </div>`).join("")}</div>
-    ${(r.notes || []).map(n => `<div class="jw-warn">⚠ ${esc(n)}</div>`).join("")}
+    ${(r.notes || []).map(n => `<div class="jw-warn">注意:${esc(n)}</div>`).join("")}
     ${s.no_location && s.no_location.length ? `<div class="jw-warn">没读到上课地点:${esc(s.no_location.join("、"))}</div>` : ""}
     ${(r.unparsed || []).length ? `<div class="jw-warn">这几条学长没认出来(不会偷偷编):${esc(r.unparsed.join(" | "))}</div>` : ""}
     <div class="jw-term">第 1 周周一是哪天?教务页上没有这一项,只能你填:
@@ -12897,7 +13580,7 @@ let frData = null, frIdx = 0, infoPaths = null;
 // v0.9.67:同一弹层两副面孔 —— "first_run"(配密钥向导) 与 "tour"(功能导览,
 // 独立 dismiss key、面向所有人一次;配好密钥的同学也能看到)。
 let frMode = "first_run";
-const FR_TITLES = { first_run: "👋 第一次打开引路学长", tour: "🧭 上手小抄" };
+const FR_TITLES = { first_run: "第一次打开引路学长", tour: "上手小抄" };
 
 function pathsLine(p) {
   if (!p || !p.app_dir) return "";
@@ -12905,7 +13588,7 @@ function pathsLine(p) {
                 p.backend === "local" ? "状态存用户目录" : "状态随程序目录"];
   return "数据目录:" + p.app_dir + " · " + bits.join(" · ")
     + (p.writable === false
-        ? " · ⚠ 这里写不进去:设置就算点了保存也不会生效(给这个文件夹加写权限,或换到文档盘安装)"
+        ? " · 注意:这里写不进去,设置就算点了保存也不会生效(给这个文件夹加写权限,或换到文档盘安装)"
         : "");
 }
 
@@ -13150,13 +13833,13 @@ function uploadDroppedFiles(files, label) {
 
 /* ---------------- 权限模式:自定义浮层菜单(v0.9.94,p5) ----------------
    原生 <select> 展开的 option 列表是 OS 画的,深色模式下白底白字(p3)——
-   换成与 UI 同色的浮层菜单(图标 + 名称 + 说明 + 当前档勾选),深浅都协调。 */
+   换成与 UI 同色的浮层菜单(名称 + 说明 + 当前档勾选),深浅都协调。 */
 const PERM_META = {
-  plan: { icon: "💡", desc: "编辑前先出计划。" },
-  confirm: { icon: "✋", desc: "改文件先问我。" },
-  accept_edits: { icon: "🛡", desc: "自动编辑文件。" },
-  accept_all: { icon: "✓", desc: "减少确认次数。" },
-  full: { icon: "🔓", desc: "沙箱内全放,敏感路径仍拦。" },
+  plan: { desc: "编辑前先出计划。" },
+  confirm: { desc: "改文件先问我。" },
+  accept_edits: { desc: "自动编辑文件。" },
+  accept_all: { desc: "减少确认次数。" },
+  full: { desc: "沙箱内全放,敏感路径仍拦。" },
 };
 let permModes = [{ value: "confirm", label: "变更前确认" }, { value: "accept_all", label: "自动放行" }];
 let permCurrent = "confirm";
@@ -13171,8 +13854,7 @@ function renderPermOptions(info) {
 
 function renderPermPill() {
   const m = permModes.find(x => x.value === permCurrent) || permModes[0];
-  const meta = PERM_META[m.value] || {};
-  $("permPill").textContent = `${meta.icon || "✋"} ${m.label}`;
+  $("permPill").textContent = m.label;
   $("permPill").title = "权限模式:" + permModes.map(x => x.label).join(" / ")
     + "\n变更前确认=变更要逐次确认;自动编辑=工作区内普通编辑放行;"
     + "完全访问=沙箱内全放(敏感路径仍硬拒)";
@@ -13184,11 +13866,10 @@ function permMenuToggle(force) {
   if (!show) { menu.hidden = true; return; }
   menu.innerHTML = "";
   permModes.forEach(m => {
-    const meta = PERM_META[m.value] || { icon: "✋", desc: "" };
+    const meta = PERM_META[m.value] || { desc: "" };
     const el = document.createElement("div");
     el.className = "at-item" + (m.value === permCurrent ? " on" : "");
-    el.innerHTML = `<span class="pm-ic">${meta.icon || ""}</span>`
-      + `<span class="pm-body"><b>${esc(m.label)}</b>`
+    el.innerHTML = `<span class="pm-body"><b>${esc(m.label)}</b>`
       + `<span class="pm-desc">${esc(meta.desc)}</span></span>`
       + (m.value === permCurrent ? '<span class="pm-check">✓</span>' : "");
     el.addEventListener("click", () => {
@@ -13228,7 +13909,7 @@ function rebuildChatRail() {
   // 用户看图 p2 说的「太难看到」就是这个 —— 给一个带字的东西当入口,刻度继续当尺子。
   const head = document.createElement("button");
   head.className = "tick tick-head";
-  head.textContent = "☰";
+  head.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
   head.title = `跳到某一问(这一条对话共 ${users.length} 问)`;
   head.addEventListener("click", (ev) => { ev.stopPropagation(); turnPopToggle(); });
   rail.appendChild(head);
@@ -13410,13 +14091,13 @@ $("chat").addEventListener("click", (e) => {
 const atState = { active: false, tokenStart: -1, items: [], sel: 0, timer: null };
 
 const BUILTIN_MENTIONS = [
-  { path: "@plan", name: "任务计划", desc: "当前任务执行计划与步骤状态", icon: "🗂️", isMention: true },
-  { path: "@todo", name: "待办提醒", desc: "今日待办清单与临期催办事项", icon: "⏰", isMention: true },
-  { path: "@schedule", name: "课表作息", desc: "今日课程节次与空闲时段安排", icon: "📅", isMention: true },
-  { path: "@git", name: "Git 状态", desc: "工作区未提交改动与分支概况", icon: "🌿", isMention: true },
-  { path: "@wiki", name: "项目百科", desc: "代码库全景架构与技术栈摘要", icon: "📖", isMention: true },
-  { path: "@test", name: "测试报告", desc: "最近一次测试套件执行结论", icon: "🧪", isMention: true },
-  { path: "@problems", name: "代码诊断", desc: "工作区语法检查与类型报错诊断", icon: "🩺", isMention: true },
+  { path: "@plan", name: "任务计划", desc: "当前任务执行计划与步骤状态", isMention: true },
+  { path: "@todo", name: "待办提醒", desc: "今日待办清单与临期催办事项", isMention: true },
+  { path: "@schedule", name: "课表作息", desc: "今日课程节次与空闲时段安排", isMention: true },
+  { path: "@git", name: "Git 状态", desc: "工作区未提交改动与分支概况", isMention: true },
+  { path: "@wiki", name: "项目百科", desc: "代码库全景架构与技术栈摘要", isMention: true },
+  { path: "@test", name: "测试报告", desc: "最近一次测试套件执行结论", isMention: true },
+  { path: "@problems", name: "代码诊断", desc: "工作区语法检查与类型报错诊断", isMention: true },
 ];
 
 function atMenuClose() {
@@ -13453,7 +14134,7 @@ function atMenuRender() {
     const el = document.createElement("div");
     el.className = "at-item" + (i === atState.sel ? " on" : "");
     if (it.isMention) {
-      el.innerHTML = `<span style="margin-right:6px">${it.icon}</span><span style="font-weight:600;color:var(--primary,#3fbdae)">${it.path}</span> <span style="font-size:11px;color:var(--text-3,rgba(255,255,255,0.5));margin-left:4px">${it.name} · ${it.desc}</span>`;
+      el.innerHTML = `<span style="font-weight:600;color:var(--primary,#3fbdae)">${it.path}</span> <span style="font-size:11px;color:var(--text-3,rgba(255,255,255,0.5));margin-left:4px">${it.name} · ${it.desc}</span>`;
     } else {
       el.textContent = it.path;
     }
@@ -13713,7 +14394,7 @@ function renderAttachments() {
   attachments.forEach((a, i) => {
     const el = document.createElement("div");
     el.className = "att";
-    el.innerHTML = `${a.preview ? '<img alt="">' : '<span class="ph">📄</span>'}
+    el.innerHTML = `${a.preview ? '<img alt="">' : '<span class="ph"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h7l4 4v13a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 20.5v-15a1.5 1.5 0 0 1 1.5-2Z"/><path d="M13.5 3.5V8h4.5"/></svg></span>'}
       <span class="meta"><span class="nm"></span><span class="sz"></span></span>
       <button class="rm" title="移除">✕</button>`;
     if (a.preview) el.querySelector("img").src = a.preview;
@@ -13829,7 +14510,11 @@ function renderWorkspacePill(info) {
     return;
   }
   pill.style.display = "";
-  pill.textContent = "📁 " + (wsInfo.name || "工作区");
+  pill.innerHTML = '<svg class="wi" viewBox="0 0 24 24" aria-hidden="true">'
+    + '<path d="M3.6 6.6h6l2 2h8.8v9.8a1.6 1.6 0 0 1-1.6 1.6H5.2a1.6 1.6 0 0 1-1.6-1.6Z"/></svg>';
+  const nm = document.createElement("span");
+  nm.textContent = wsInfo.name || "工作区";
+  pill.appendChild(nm);
   pill.title = `当前工作区：${wsInfo.path}\n（Agent 的读写、附件、计划、记忆都在这里；点击切换）`;
 }
 
@@ -14025,7 +14710,7 @@ function renderInstrLine(info) {
   const d = info || {};
   if (!d.line) { el.hidden = true; el.textContent = ""; return; }
   el.hidden = false;
-  el.textContent = "📐 指令:" + d.line;
+  el.textContent = "指令:" + d.line;
   el.title = (d.layers || []).map(i =>
     `${i.scope} ${i.name}:${i.lines} 行${i.truncated ? "(注入时被截过)" : ""}`).join("\n")
     + "\n安全边界不吃这两份文件:沙箱、敏感路径、确认门由代码把守。";
@@ -14116,7 +14801,7 @@ async function loadBoard() {
     let prevWs = null;
     for (const r of rows) {
       if (wss.length > 1 && r.ws !== prevWs) {
-        body.appendChild(boardEl("act-ws", "🗂 " + (r.ws || "全局")));
+        body.appendChild(boardEl("act-ws", (r.ws || "全局")));
         prevWs = r.ws;
       }
       body.appendChild(boardRow(r)); shown++;
@@ -14251,7 +14936,7 @@ function rzBind(dollar) {
    注册没有插件运行时,扩展 = 数据目录里用户亲手放的一份 manifest + page.js,
    信任面与"装了一个软件"同级,工作区带来的扩展一个字都不读)。
 
-   descriptor:{ id, title, icon, setup(el), onShow(), onHide() }
+   descriptor:{ id, title, setup(el), onShow(), onHide() }
    - setup 在注册时跑一次,把页面骨架搭进自己的容器;
    - onShow/onHide 在切页时跑(轮询、刷新都挂在这里,别在 setup 里挂定时器);
    - register 返回注销函数(disposer),与 DSH 的 disposer 语义一致。 */
@@ -14281,9 +14966,16 @@ const SidePages = {
     if (d.el) { d.el.classList.add("sp-page"); }
     const tab = document.createElement("button");
     tab.className = "sp-tab"; tab.type = "button";
-    tab.textContent = d.icon || "▫"; tab.title = title;
+    // 标签条写**文字**不写 emoji:图标只剩一个符号时,用户分不清这是导航还是
+    // 顶栏那排状态钮(图 p2 的"点右栏却弹命令台"就是从这种混淆里来的)。
+    tab.textContent = title; tab.title = title;
+    tab.dataset.spId = id;
     tab.setAttribute("aria-label", title);
-    tab.addEventListener("click", () => SidePages.open(id));
+    tab.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      SidePages.open(id);
+    });
     $("spTabs").appendChild(tab);
     this._els.set(id, page); this._tabs.set(id, tab);
     if (typeof d.setup === "function") {
@@ -14309,7 +15001,13 @@ const SidePages = {
     }
     this._active = id;
     const el = this._els.get(id); if (el) el.hidden = false;
-    const tb = this._tabs.get(id); if (tb) tb.classList.add("on");
+    const tb = this._tabs.get(id);
+    if (tb) {
+      tb.classList.add("on");
+      // 标签条现在装的是文字(比 emoji 宽),扩展页多起来会横向滚。
+      // 深链接/还原切页时把当前这格滚进视野,不然"打开了但看不见在哪一页"。
+      try { tb.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch (e) {}
+    }
     try { localStorage.setItem("sp.active", id); } catch (e) {}
     this._fire(id);
   },
@@ -14327,27 +15025,27 @@ const SidePages = {
 window.MiniCodePages = { register: (d) => SidePages.register(d) };   // 三方扩展的唯一入口
 
 /* 活动页(迁入的第一页):骨架在 HTML 里,绑已有容器,这里只登记 tab 与首刷。 */
-SidePages.register({ id: "activity", title: "任务监控", icon: "🛰",
+SidePages.register({ id: "activity", title: "任务监控",
   el: document.querySelector('.sp-page[data-sp="activity"]'),
   onShow() { if (!actData) activityRefresh(); } });
 
 /* ---------------- Git 页 ---------------- */
 let gpDiffFor = "";
 SidePages.register({
-  id: "git", title: "Git", icon: "🌿",
+  id: "git", title: "Git",
   setup(el) {
     el.innerHTML = `
-      <div class="sp-head"><b>🌿 Git</b>
+      <div class="sp-head"><b>Git</b>
         <span class="gp-branch" id="gpBranch"></span>
         <span class="gp-sync" id="gpSync"></span>
-        <button class="act-ib" id="gpTest" title="运行项目测试套件(/test)">🧪 测试</button>
-        <button class="act-ib" id="gpReview" title="AI 深度审查未提交改动(/review)">✨ 审查</button>
+        <button class="act-ib" id="gpTest" title="运行项目测试套件(/test)">测试</button>
+        <button class="act-ib" id="gpReview" title="AI 深度审查未提交改动(/review)">审查</button>
         <button class="act-ib" id="gpRefresh" title="重新读一遍状态">↻</button></div>
       <div class="sp-body" id="gpBody"></div>
       <div class="gp-commit" id="gpCommitBox" hidden>
         <textarea class="gp-msg" id="gpMsg" placeholder="提交说明(只提交上面已暂存的那些)…"></textarea>
         <div class="gp-bar"><span class="st" id="gpStaged"></span>
-          <button class="act-ib" id="gpGenMsg" title="智能生成规范提交说明">✨ 生成说明</button>
+          <button class="act-ib" id="gpGenMsg" title="智能生成规范提交说明">生成说明</button>
           <button class="b-yes" id="gpDoCommit">提交</button></div>
       </div>
       <div class="gp-diff" id="gpDiff" hidden><pre id="gpDiffText"></pre></div>`;
@@ -14357,7 +15055,7 @@ SidePages.register({
       if (!api || !api.git_suggest_commit) return;
       const btn = $("gpGenMsg");
       const oldText = btn.textContent;
-      btn.textContent = "⏳ 分析中...";
+      btn.textContent = "分析中…";
       btn.disabled = true;
       api.git_suggest_commit().then(r => {
         btn.textContent = oldText;
@@ -14712,7 +15410,8 @@ function gpIsPage(id) { return SidePages._active === id && actOpen; }
   $("btnTermToggle").addEventListener("click", () => toggleTermDock());
   $("btnPanelToggle").addEventListener("click", () => setActivityOpen(!actOpen));
   try {
-    if (localStorage.getItem("dock.open") === "1") toggleTermDock(true);
+    // 终端坞**不再开机自动恢复**:它是"要用才叫出来"的东西,不是常驻面板。
+    // 上次开着不代表这次也要弹出来;高度偏好保留,开关只认本次点击/Ctrl+`。
     const h = parseInt(localStorage.getItem("dock.h") || "", 10);
     if (h >= 200 && h <= 560) {
       document.documentElement.style.setProperty("--dock-h", h + "px");
@@ -14752,10 +15451,10 @@ function gpIsPage(id) { return SidePages._active === id && actOpen; }
    渲染复用 actRowEl / buildSubagents:多出来的只有整列显示与一键看报告 ——
    不另造一套口径。点击委托与活动页共用同一个 actPanelClick。 */
 SidePages.register({
-  id: "subagents", title: "子代理", icon: "🤖",
+  id: "subagents", title: "子代理",
   setup(el) {
     el.innerHTML = `
-      <div class="sp-head"><b>🤖 子代理</b>
+      <div class="sp-head"><b>子代理</b>
         <span class="gp-sync" id="spSubSum"></span>
         <button class="act-ib" id="spSubRefresh" title="重新统计">↻</button></div>
       <div class="sp-body act-body" id="spSubBody"></div>`;
@@ -14777,7 +15476,7 @@ function spRenderSubs() {
       + "报告写了什么,都会整列出现在这里。"));
     return;
   }
-  body.appendChild(actSect("subagents", "🤖 子智能体", `${sa.count} 个`
+  body.appendChild(actSect("subagents", "子智能体", `${sa.count} 个`
     + (sa.items.some(x => x.status === "running") ? " · 有在跑" : ""),
     b => buildSubagents(b, sa)));
 }
@@ -14788,16 +15487,16 @@ function spRenderSubs() {
    (磁盘被别的来源改过就拒,提示重新载入,绝不静默覆盖)。 */
 let fpDir = "", fpOpenPath = "", fpSha = "", fpOriginal = "";
 SidePages.register({
-  id: "files", title: "文件", icon: "📄",
+  id: "files", title: "文件",
   setup(el) {
     el.innerHTML = `
-      <div class="sp-head"><b>📄 文件</b>
+      <div class="sp-head"><b>文件</b>
         <button class="act-ib" id="fpNew" title="新建一个文本文件">＋</button>
         <button class="act-ib" id="fpRefresh" title="刷新目录">↻</button></div>
       <div class="sp-body" id="fpTree"></div>
       <div class="fp-bar" id="fpBar" hidden>
         <span class="path" id="fpPath"></span>
-        <button class="act-ib" id="fpEdit" title="编辑这个文件">✎</button>
+        <button class="act-ib" id="fpEdit" title="编辑这个文件" aria-label="编辑这个文件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.2-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z"/><path d="M13.5 7.5l3 3"/></svg></button>
         <button class="act-ib" id="fpClose" title="关掉这一份">✕</button>
       </div>
       <div class="fp-view" id="fpView" hidden></div>
@@ -14817,7 +15516,7 @@ SidePages.register({
 function fpCrumb(rel) {
   const box = $("fpTree");
   const parts = rel ? rel.split("/") : [];
-  let html = `<div class="fp-crumb"><button data-rel="">🏠 根目录</button>`;
+  let html = `<div class="fp-crumb"><button data-rel="">根目录</button>`;
   let acc = "";
   for (const p of parts) {
     acc += (acc ? "/" : "") + p;
@@ -14843,7 +15542,7 @@ async function fpLoad() {
   if (!r || !r.ok) { list.innerHTML = `<div class="sp-empty">${esc((r && r.msg) || "读不出目录")}</div>`; return; }
   const items = r.items || [];
   list.innerHTML = items.map(x => `<div class="fp-row" data-name="${esc(x.name)}" data-dir="${x.is_dir ? 1 : 0}">
-      <span>${x.is_dir ? "📁" : "📄"}</span>
+      <span>${x.is_dir ? FI_DIR : FI_FILE}</span>
       <span class="n">${esc(x.name)}</span>
       <span class="s">${x.is_dir ? "" : (x.size >= 1024 ? Math.round(x.size / 1024) + "K" : x.size + "B")}</span>
     </div>`).join("")
@@ -14999,10 +15698,10 @@ $("btnTerminal").addEventListener("click", () => toggleTermDock());
    轻量是刻意的:气泡只认正文与工具行,工作过程的全套卡片留在主聊天区。 */
 const SC = { keys: new Set(), activeKey: "", activeFile: "", busy: false, bubble: null };
 SidePages.register({
-  id: "sidechat", title: "侧聊", icon: "💬",
+  id: "sidechat", title: "侧聊",
   setup(el) {
     el.innerHTML = `
-      <div class="sp-head"><b>💬 侧聊</b>
+      <div class="sp-head"><b>侧聊</b>
         <select class="sc-thread" id="scThread" title="换一条线程"></select>
         <button class="act-ib" id="scNew" title="开一条新线程">＋</button></div>
       <div class="sp-body chatflow" id="scBody"></div>
@@ -15099,7 +15798,7 @@ function scBubble(cls, text) {
 function scToolLine(text, done) {
   const t = document.createElement("div");
   t.className = "sc-t" + (done ? " done" : "");
-  t.textContent = (done ? "🔧 " : "⏳ ") + text;
+  t.textContent = (done ? "" : "… ") + text;
   $("scBody").appendChild(t);
   return t;
 }
@@ -15159,7 +15858,7 @@ function SideChatFeed(e) {
       break;
     }
     case "tool_done": {
-      if (SC._pendingTool) { SC._pendingTool.textContent = "🔧 " + (e.name || "工具") + " · 完成"; SC._pendingTool.classList.add("done"); SC._pendingTool = null; }
+      if (SC._pendingTool) { SC._pendingTool.textContent = (e.name || "工具") + " · 完成"; SC._pendingTool.classList.add("done"); SC._pendingTool = null; }
       scScroll();
       break;
     }
@@ -15192,12 +15891,12 @@ function scRefreshSoon() {
    发生,也不知道为什么。只读展示 + 打开数据目录;不造启停开关(没有运行时
    语义的开关就是装饰板),不改信任模型(见 SECURITY.md 专节)。 */
 SidePages.register({
-  id: "extensions", title: "扩展", icon: "🧩",
+  id: "extensions", title: "扩展",
   setup(el) {
     el.innerHTML = `
-      <div class="sp-head"><b>🧩 扩展</b>
+      <div class="sp-head"><b>扩展</b>
         <span class="gp-sync" id="extSum"></span>
-        <button class="act-ib" id="extOpenDir" title="在资源管理器里打开数据目录(扩展放在它的 extensions/ 下)">📂</button>
+        <button class="act-ib" id="extOpenDir" title="在资源管理器里打开数据目录(扩展放在它的 extensions/ 下)">目录</button>
         <button class="act-ib" id="extRefresh" title="重新读一遍">↻</button></div>
       <div class="sp-body" id="extBody"></div>`;
     $("extRefresh").addEventListener("click", () => extLoad());
@@ -15247,7 +15946,7 @@ async function extLoad() {
   const items = side.items || [];
   $("extSum").textContent = `${skills.length} 技能 · ${items.length} 页 · ${(r.mcp || []).length} MCP`;
   // ① 侧边栏扩展(放最前:装了没生效的原因在这里)
-  const sec1 = extSection("🧩 侧边栏扩展", items.length + " 个已装"
+  const sec1 = extSection("侧边栏扩展", items.length + " 个已装"
     + (skipped.length ? ` · ${skipped.length} 个没装上` : ""));
   for (const it of items) {
     sec1.appendChild(extRow(it.title || it.id, `${it.id}${it.version ? " · v" + it.version : ""}`));
@@ -15271,7 +15970,7 @@ async function extLoad() {
   }
   body.appendChild(sec1);
   // ② 技能(按渠道归组)
-  const sec2 = extSection("⭐ 技能", skills.length + " 个");
+  const sec2 = extSection("技能", skills.length + " 个");
   const byChannel = {};
   for (const s of skills) {
     const c = s.channel || "其他";
@@ -15290,7 +15989,7 @@ async function extLoad() {
   body.appendChild(sec2);
   // ③ 技能渠道
   const chans = r.skill_channels || [];
-  const sec3 = extSection("📚 技能渠道", chans.length + " 个");
+  const sec3 = extSection("技能渠道", chans.length + " 个");
   for (const c of chans) {
     sec3.appendChild(extRow(c.label + (c.exists ? "" : "(这个渠道不存在)"),
       `${c.count} 个技能 · ${c.path || "—"}`, c.exists ? "" : "dim"));
@@ -15299,7 +15998,7 @@ async function extLoad() {
   // ④ MCP
   const mcp = r.mcp || [];
   if (mcp.length) {
-    const sec4 = extSection("🔌 MCP 服务器", mcp.length + " 台");
+    const sec4 = extSection("MCP 服务器", mcp.length + " 台");
     for (const m of mcp) {
       const name = m.name || m.id || "?";
       let state = m.connected ? `已连${m.tools ? " · " + m.tools + " 只工具" : ""}`
@@ -15324,7 +16023,7 @@ async function extLoad() {
   }
   // ⑤ 钩子
   const hooks = r.hooks || {count: 0, events: []};
-  const sec5 = extSection("🪝 工具钩子", hooks.count + " 条");
+  const sec5 = extSection("工具钩子", hooks.count + " 条");
   if (hooks.count) {
     sec5.appendChild(extRow((hooks.events || []).join(" / ") || "—",
       "事件钩子(改写在 config.json 的 hooks 里配)"));
@@ -15538,7 +16237,7 @@ window.addEventListener("DOMContentLoaded", () => {
       // 数据目录写不进去 = "配了不保存"那类反馈的唯一真相来源,直接摆在明面上
       infoPaths = info.paths || null;
       if (infoPaths && infoPaths.writable === false) {
-        $("hint").textContent = "⚠ " + pathsLine(infoPaths);
+        $("hint").textContent = "注意:" + pathsLine(infoPaths);
         $("hint").classList.add("warn");
       }
       showFirstRun();

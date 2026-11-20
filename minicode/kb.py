@@ -409,9 +409,9 @@ def format_results(results: list, snippet_chars: int = SNIPPET_LIMIT,
         if e.credible:
             mark = ""
         elif "抓取" in cred:
-            mark = "⚠ 此条是网页抓取内容且来源不在学校白名单,引用时必须说明「未核实,以链接原文为准」"
+            mark = "注意:此条是网页抓取内容且来源不在学校白名单,引用时必须说明「未核实,以链接原文为准」"
         else:
-            mark = "⚠ 此条为演示/待核实数据,引用时必须向用户注明"
+            mark = "注意:此条为演示/待核实数据,引用时必须向用户注明"
         lines = [f"[{i}] {e.title}  (可信度: {cred}){(' ' + mark) if mark else ''}"]
         meta_bits = []
         if e.tags:
@@ -545,10 +545,10 @@ def _appraisal_note(hits: list) -> str:
             continue
         title = str(getattr(entry, "title", "") or hid)[:40]
         lines.append(f"- 《{title}》(id {hid}):引用它的回答近 30 天被点过 "
-                     f"{row['down']} 次 👎(该条被引用 {row['uses']} 次)")
+                     f"{row['down']} 次差评(该条被引用 {row['uses']} 次)")
     if not lines:
         return ""
-    return ("\n⚠ 差评提示(引用前多核对,不是这条不能用):以下本次命中的条目"
+    return ("\n注意:差评提示(引用前多核对,不是这条不能用):以下本次命中的条目"
             "带着差评记录 —— 差评是对**当时那次回答**的(可能因为答得不全、过时或"
             "问法没接住),不是对知识本身的判决。引用它们时:①注明来源与日期让用户"
             "可核实;②与官方渠道(如 campus_notices 现拉)互相印证后再下结论:\n"

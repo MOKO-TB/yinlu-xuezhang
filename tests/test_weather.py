@@ -67,8 +67,8 @@ def test_umbrella_tip_empty_when_benign():
 
 
 def test_wmo_unknown_code_falls_back():
-    assert weather._wmo(999) == ("🌡", "天气变化")
-    assert weather._wmo(None)[1] == "天气变化"
+    assert weather._wmo(999) == "天气变化"
+    assert weather._wmo(None) == "天气变化"
 
 
 # ---------------------------------------------------------------- 文本表述
@@ -82,8 +82,8 @@ def test_describe_day_includes_span_and_probability():
 
 def test_card_text_shape():
     text = weather.card_text(_data(temp=26.6), TODAY)
-    assert text.startswith("⛅")
-    assert "27℃" in text
+    assert text.startswith("27℃")
+    assert "今天" in text
     assert "今天" in text
 
 

@@ -382,7 +382,7 @@ class CodeOutlineExtractor:
     def format_outline(self, data: dict[str, Any]) -> str:
         """将大纲数据渲染为优雅可读的 ASCII 树。"""
         if not data.get("ok"):
-            return f"❌ 无法提取大纲: {data.get('error', '未知错误')}"
+            return f"无法提取大纲: {data.get('error', '未知错误')}"
 
         rel_path = data.get("path", "")
         language = data.get("language", "")
@@ -394,12 +394,12 @@ class CodeOutlineExtractor:
         syntax_err = data.get("syntax_error")
 
         out: list[str] = [
-            f"📄 文件大纲: {rel_path} ({language}, 共 {total_lines} 行)",
+            f"文件大纲: {rel_path} ({language}, 共 {total_lines} 行)",
             "━" * 60,
         ]
 
         if syntax_err:
-            out.append(f"⚠️ {syntax_err}")
+            out.append(f"注意:{syntax_err}")
 
         if not items:
             out.append("  (未检测到类、函数、接口或顶级符号)")
@@ -408,7 +408,7 @@ class CodeOutlineExtractor:
         out.append(self._render_tree(items, current_depth=1, max_depth=max_depth, show_sigs=show_sigs, show_docs=show_docs))
         out.append("━" * 60)
         total_syms = self._count_items(items)
-        out.append(f"📊 统计: 共提取 {total_syms} 个符号节点 (展开深度: {max_depth})")
+        out.append(f"统计: 共提取 {total_syms} 个符号节点 (展开深度: {max_depth})")
         return "\n".join(out)
 
     def _render_tree(
@@ -428,11 +428,9 @@ class CodeOutlineExtractor:
             branch = "└── " if is_last else "├── "
             child_prefix = prefix + ("    " if is_last else "│   ")
 
-            # 图标与类型标识
-            icon = self._get_icon(item.kind)
             line_range = f"#L{item.line}" if item.line == item.end_line else f"#L{item.line}-L{item.end_line}"
 
-            title_parts = [f"{prefix}{branch}{icon} {item.kind} {item.name}"]
+            title_parts = [f"{prefix}{branch}{item.kind} {item.name}"]
             if item.bases:
                 title_parts.append(f"({', '.join(item.bases)})")
             title_parts.append(f"[{line_range}]")
@@ -442,7 +440,7 @@ class CodeOutlineExtractor:
             # 装饰器
             if item.decorators and current_depth <= max_depth:
                 for dec in item.decorators:
-                    lines.append(f"{child_prefix}🔖 @{dec}")
+                    lines.append(f"{child_prefix}@{dec}")
 
             # 签名
             if show_sigs and item.signature and item.kind in ("function", "method", "async_func"):
@@ -450,14 +448,14 @@ class CodeOutlineExtractor:
                 sig_short = item.signature
                 if len(sig_short) > 90:
                     sig_short = sig_short[:87] + "..."
-                lines.append(f"{child_prefix}📝 {sig_short}")
+                lines.append(f"{child_prefix}{sig_short}")
 
             # 文档摘要
             if show_docs and item.docstring:
                 doc_short = item.docstring
                 if len(doc_short) > 80:
                     doc_short = doc_short[:77] + "..."
-                lines.append(f"{child_prefix}💬 \"{doc_short}\"")
+                lines.append(f"{child_prefix}\"{doc_short}\"")
 
             # 子条目递归 (当 current_depth < max_depth)
             if item.children:
@@ -475,24 +473,6 @@ class CodeOutlineExtractor:
                     lines.append(f"{child_prefix}└── ... 包含 {len(item.children)} 个子成员 (深度折叠)")
 
         return "\n".join(lines)
-
-    def _get_icon(self, kind: str) -> str:
-        mapping = {
-            "class": "🏛️",
-            "interface": "📐",
-            "struct": "🧱",
-            "enum": "📑",
-            "trait": "🧬",
-            "impl": "🔨",
-            "function": "⚙️",
-            "async_func": "⚡",
-            "method": "🔹",
-            "field": "🔸",
-            "const": "📌",
-            "var": "📍",
-            "imports": "📦",
-        }
-        return mapping.get(kind, "•")
 
     def _count_items(self, items: list[OutlineItem]) -> int:
         total = len(items)
@@ -516,7 +496,7 @@ def code_outline_tool(*args, path: str = "", depth: int = 2, show_signatures: bo
         ctx = kwargs["ctx"]
 
     if not target_path:
-        return "❌ 请指定要提取大纲的文件路径 (参数: path='...')"
+        return "请指定要提取大纲的文件路径 (参数: path='...')"
 
     ws = ctx.workspace if ctx and ctx.workspace else Path.cwd()
     extractor = CodeOutlineExtractor(ws)

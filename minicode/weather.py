@@ -26,18 +26,20 @@ CACHE_FILE = "weather-cache.json"
 CACHE_TTL = 30 * 60                    # 首页 chip 半小时内的结果算新鲜
 FETCH_TIMEOUT = 8.0
 DEFAULT_CITY = {"lat": 23.15, "lon": 112.57, "label": "肇庆·鼎湖"}
-# WMO 天气代码 → (图标, 中文)。只列 Open-Meteo 常见值,认不出的回"变化"。
+# WMO 天气代码 → 中文描述。只列 Open-Meteo 常见值,认不出的回"天气变化"。
+# 不在这里放 emoji:天气会同时出现在首页 chip 与 get_weather 工具结果里,
+# 那两个地方都按纯文字渲染。
 _WMO = {
-    0: ("☀️", "晴"), 1: ("🌤", "基本晴朗"), 2: ("⛅", "多云"), 3: ("☁️", "阴"),
-    45: ("🌫", "雾"), 48: ("🌫", "雾凇"),
-    51: ("🌦", "毛毛雨"), 53: ("🌦", "毛毛雨"), 55: ("🌧", "毛毛雨"),
-    56: ("🌧", "冻毛毛雨"), 57: ("🌧", "冻毛毛雨"),
-    61: ("🌧", "小雨"), 63: ("🌧", "中雨"), 65: ("🌧", "大雨"),
-    66: ("🌧", "冻雨"), 67: ("🌧", "冻雨"),
-    71: ("🌨", "小雪"), 73: ("🌨", "中雪"), 75: ("❄️", "大雪"), 77: ("❄️", "雪粒"),
-    80: ("🌦", "阵雨"), 81: ("🌧", "强阵雨"), 82: ("⛈", "暴雨"),
-    85: ("🌨", "阵雨夹雪"), 86: ("❄️", "阵雪"),
-    95: ("⛈", "雷阵雨"), 96: ("⛈", "雷雨伴冰雹"), 99: ("⛈", "雷雨伴强冰雹"),
+    0: "晴", 1: "基本晴朗", 2: "多云", 3: "阴",
+    45: "雾", 48: "雾凇",
+    51: "毛毛雨", 53: "毛毛雨", 55: "毛毛雨",
+    56: "冻毛毛雨", 57: "冻毛毛雨",
+    61: "小雨", 63: "中雨", 65: "大雨",
+    66: "冻雨", 67: "冻雨",
+    71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
+    80: "阵雨", 81: "强阵雨", 82: "暴雨",
+    85: "阵雨夹雪", 86: "阵雪",
+    95: "雷阵雨", 96: "雷雨伴冰雹", 99: "雷雨伴强冰雹",
 }
 
 _refresh_lock = threading.Lock()
@@ -211,9 +213,9 @@ def refresh_async(name: str = "") -> None:
 
 def _wmo(code):
     try:
-        return _WMO.get(int(code), ("🌡", "天气变化"))
+        return _WMO.get(int(code), "天气变化")
     except (TypeError, ValueError):
-        return ("🌡", "天气变化")
+        return "天气变化"
 
 
 def _today_index(data: dict, today: date | None = None) -> int:
@@ -269,20 +271,20 @@ def describe_day(data: dict, i: int, label: str = "") -> str:
     row = _day_row(data, i)
     if not row:
         return ""
-    icon, name = _wmo(row["code"])
+    name = _wmo(row["code"])
     span = ""
     if row.get("t_min") is not None and row.get("t_max") is not None:
         span = f" {row['t_min']}~{row['t_max']}℃"
     rain = (f" · 降水概率 {int(float(row['rain_pct']))}%"
             if row.get("rain_pct") is not None else "")
     head = label or row["date"]
-    return f"{head}: {icon} {name}{span}{rain}"
+    return f"{head}: {name}{span}{rain}"
 
 
 def card_text(data: dict, today: date | None = None) -> str:
-    """chip 上那半行短语:"⛅ 27℃ · 今天 24~31℃"。"""
+    """chip 上那半行短语:"27℃ · 今天 24~31℃"。"""
     cur = data.get("current") or {}
-    icon, name = _wmo((data.get("daily") or {}).get("weather_code", [None])[
+    name = _wmo((data.get("daily") or {}).get("weather_code", [None])[
         _today_index(data, today)] if (data.get("daily") or {}).get("weather_code") else None)
     try:
         temp = f"{round(float(cur['temperature_2m']))}℃"
@@ -292,7 +294,7 @@ def card_text(data: dict, today: date | None = None) -> str:
     span = ""
     if d0 and d0.get("t_min") is not None and d0.get("t_max") is not None:
         span = f" · 今天 {d0['t_min']}~{d0['t_max']}℃"
-    return f"{icon} {temp}{span}"
+    return f"{temp}{span}"
 
 
 # ---------------------------------------------------------------- 出口
@@ -310,11 +312,9 @@ def weather_card(today: date | None = None) -> dict | None:
         refresh_async(city["name"])
     if data is None:
         return None
-    icon_text = card_text(data, today)
-    icon = icon_text.split(" ")[0] if icon_text else "🌡"
-    rest = icon_text[len(icon):].strip()
+    text = card_text(data, today)
     ago = "" if fresh else f"(缓存于 {time.strftime('%H:%M', time.localtime(ts or 0))})"
-    return {"icon": icon, "text": rest,
+    return {"icon": "", "text": text,
             "tip": " · ".join(x for x in (umbrella_tip(data, today),
                                           city.get("label", "") + ago) if x),
             "umbrella": "带伞" in umbrella_tip(data, today),

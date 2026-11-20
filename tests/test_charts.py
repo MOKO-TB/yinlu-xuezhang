@@ -129,7 +129,7 @@ def test_same_name_does_not_overwrite_the_previous_chart(tmp_path):
 
 def test_missing_source_is_flagged_in_the_reply(tmp_path):
     out = chart_file(_Ctx(tmp_path), "line", DATA, title="趋势")
-    assert "没写 source" in out and "⚠" in out
+    assert "没写 source" in out and "注意:" in out
 
 
 def test_bad_data_writes_no_file(tmp_path):

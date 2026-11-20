@@ -586,7 +586,7 @@ def library_search(ctx, query: str, top_k: int = DEFAULT_TOP_K,
         return (
             f"错误: 本地馆藏书目库读不出来({exc})。\n"
             f"库文件: {p}({size};完整版约 133 万条书目)。\n"
-            "⚠ 这是**检索数据没加载起来**,不是“馆里没有这本书”。\n"
+            "注意:这是**检索数据没加载起来**,不是“馆里没有这本书”。\n"
             "请告诉用户「图书馆检索数据这次没读出来,请稍后重试或到检索台查」,\n"
             "**不要**说成“图书馆没有这本书”;同时把上面这行错误原文附给用户/开发者。")
     if not hits:
@@ -606,7 +606,7 @@ def library_search(ctx, query: str, top_k: int = DEFAULT_TOP_K,
             f"本地馆藏书目库没有匹配「{query}」的记录。"
             f"(已自动放宽重试:{tried})\n"
             f"本次对照的是 {db_path(ctx.workspace)}(库内共 {total} 条书目)。\n"
-            "⚠ 这只说明**库里没有这种书名写法**,不等于馆里没有这本书。\n"
+            "注意:这只说明**库里没有这种书名写法**,不等于馆里没有这本书。\n"
             "若上面这个总条数是 0 或明显偏小,说明库没装好——那就别说“没检索到”,\n"
             "直接告诉用户检索数据没加载起来。\n"
             "否则请先用**更短的书名关键词**(2-6 字,去掉《》、“（第N版）”这类\n"
@@ -737,18 +737,18 @@ def health_notice(health: dict) -> str | None:
     size = health.get("size")
     size_txt = f"{size / 1e9:.2f} GB" if isinstance(size, int) else "未知"
     if st == "missing":
-        return (f"⚠ 图书馆馆藏数据未安装({path})。"
+        return (f"注意:图书馆馆藏数据未安装({path})。"
                 f"图书馆搜书不可用。完整版包内自带 {FULL_SIZE_TEXT}。")
     if st == "incomplete":
         want = health.get("expected")
         want_txt = f"{want / 1e9:.2f} GB" if isinstance(want, int) else FULL_SIZE_TEXT
-        return (f"⚠ 图书馆馆藏数据不完整:现为 {size_txt},应为 {want_txt}。"
+        return (f"注意:图书馆馆藏数据不完整:现为 {size_txt},应为 {want_txt}。"
                 + REINSTALL_HINT)
     if st == "empty":
-        return (f"⚠ 图书馆馆藏数据是空的(库内 0 条书目,文件 {size_txt})。"
+        return (f"注意:图书馆馆藏数据是空的(库内 0 条书目,文件 {size_txt})。"
                 + REINSTALL_HINT)
     detail = health.get("detail") or "未知错误"
-    return (f"⚠ 图书馆馆藏数据读不出来({detail};文件 {size_txt})。"
+    return (f"注意:图书馆馆藏数据读不出来({detail};文件 {size_txt})。"
             + REINSTALL_HINT)
 
 

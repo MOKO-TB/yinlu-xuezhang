@@ -474,7 +474,7 @@ def symbol_definition_tool(
     )
 
     if not res.get("ok"):
-        return f"❌ 查找失败: {res.get('msg', '未知错误')}"
+        return f"查找失败: {res.get('msg', '未知错误')}"
 
     defs = res.get("definitions", [])
     if not defs:
@@ -482,7 +482,7 @@ def symbol_definition_tool(
         return f"未找到符号 `{target_sym}` 的定义{target_info}。建议使用 `symbol_search` 进行模糊搜索。"
 
     output_lines: list[str] = [
-        f"📍 找到 {len(defs)} 处符号 `{target_sym}` 的定义与实现位置:"
+        f"找到 {len(defs)} 处符号 `{target_sym}` 的定义与实现位置:"
     ]
 
     for i, d in enumerate(defs, 1):
@@ -497,12 +497,12 @@ def symbol_definition_tool(
 
         output_lines.append("")
         output_lines.append(f"### {i}. `{d['name']}` ({kind}){resolved_note}")
-        output_lines.append(f"- 📄 位置: `{rel_f}:{line_start}` (行 {line_start} ~ {line_end})")
+        output_lines.append(f"- 位置: `{rel_f}:{line_start}` (行 {line_start} ~ {line_end})")
         if sig:
-            output_lines.append(f"- 🏷 签名: `{sig}`")
+            output_lines.append(f"- 签名: `{sig}`")
         if doc:
             doc_preview = doc.splitlines()[0][:100]
-            output_lines.append(f"- 📝 说明: {doc_preview}")
+            output_lines.append(f"- 说明: {doc_preview}")
 
         if peek and code:
             ext = Path(rel_f).suffix.lstrip(".")

@@ -374,7 +374,7 @@ def check_command(policy: SandboxPolicy, command: str) -> tuple[str, str]:
         # "两层都扫不到"那一类:与网络那条同一位置(命令层),但只到 ASK 为止
         stealth = command_hits_stealth(cmd)
         if stealth:
-            return ASK, ("⚠ 这一步会" + stealth
+            return ASK, ("注意:这一步会" + stealth
                          + "。确认框之外跑起来的东西，我看不到它的输出，也退不回它做的事。")
 
     if policy.enabled and not policy.allow_network:

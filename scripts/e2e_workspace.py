@@ -155,8 +155,9 @@ def _boot(page, url, with_workspace=True):
     page.goto(url, wait_until="load")
     if with_workspace:
         page.wait_for_function(
-            "() => document.getElementById('wsPill')"
-            " && document.getElementById('wsPill').textContent.includes('📁')")
+            "() => { const p = document.getElementById('wsPill');"
+            " const s = p && p.querySelector('span');"
+            " return !!(p && p.querySelector('svg.wi') && s && s.textContent.trim()); }")
     else:
         page.wait_for_function(
             "() => { const p = document.getElementById('wsPill');"

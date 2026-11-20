@@ -154,7 +154,7 @@ def _warning_from(r: dict) -> str:
         bits.append("Python 库没装:" + "、".join(r["missing_libs"]))
     if not bits:
         return ""
-    return ("(⚠ 依赖缺:" + ";".join(bits) + " —— 这份技能里有一部分代码/工具用不了。"
+    return ("(注意:依赖缺:" + ";".join(bits) + " —— 这份技能里有一部分代码/工具用不了。"
             "把缺的**照实**告诉用户并给安装/替代办法,不要照模板硬跑,更不要假装跑过。)")
 
 

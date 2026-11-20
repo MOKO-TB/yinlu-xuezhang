@@ -2636,7 +2636,7 @@ class Agent:
         try:
             ast.parse(source, filename=str(p))
         except SyntaxError as e:
-            return (result + f"\n\n⚠ 语法自检:这个 Python 文件现在解析不过 —— "
+            return (result + f"\n\n注意:语法自检:这个 Python 文件现在解析不过 —— "
                     f"第 {e.lineno} 行:{e.msg}。请立刻修好它再继续做别的,"
                     "不要留着一个解析不过的文件。")
         return result

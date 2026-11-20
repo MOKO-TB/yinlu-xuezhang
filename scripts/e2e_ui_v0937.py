@@ -326,7 +326,7 @@ def main() -> int:
 
             # ---- 3. 段结构与真数字 ----
             caps = texts(".act-cap.fold b")
-            check(caps == ["⏱ 此刻", "🗂 计划", "🧾 时间线", "📦 产出与来源"],
+            check(caps == ["此刻", "计划", "时间线", "产出与来源"],
                   f"四段按此刻/计划/时间线/产出排,空的段不占位:{caps}")
             s = BUSY["summary"]
             sumtxt = page.locator("#actSum").inner_text().strip()
@@ -482,7 +482,7 @@ def main() -> int:
             page.click("#btnActRefresh")
             page.wait_for_timeout(200)
             caps2 = texts(".act-cap.fold b")
-            check(caps2 == ["⏱ 此刻"], f"空会话只剩「此刻」一段(其余段整段不出现):{caps2}")
+            check(caps2 == ["此刻"], f"空会话只剩「此刻」一段(其余段整段不出现):{caps2}")
             check(page.locator("#actBody .act-empty").count() == 1,
                   "补一句「这一轮还没有要汇报的动作」")
             check(page.locator("#actBody .act-row").count() == 0,

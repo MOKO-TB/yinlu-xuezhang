@@ -117,7 +117,7 @@ def view() -> str:
     """给模型的存档清单(每行:课程 成绩 学分 学期),带绩点工具的指路。"""
     data = load()
     if not data:
-        return ("还没有成绩存档。要导入:点「📅 课表」面板的「从教务导入成绩」"
+        return ("还没有成绩存档。要导入:点「课表」面板的「从教务导入成绩」"
                 "(登录由同学本人在弹出的浏览器里完成);或让同学直接贴成绩文字,"
                 "整理后用 gpa_calc 算。")
     rows = data["rows"]
@@ -462,7 +462,7 @@ def trend(ctx=None) -> str:
     from minicode import gpa
     data = load()
     if not data:
-        return ("还没有成绩存档。要导入:点「📅 课表」面板的「从教务导入成绩」"
+        return ("还没有成绩存档。要导入:点「课表」面板的「从教务导入成绩」"
                 "(登录由同学本人在弹出的浏览器里完成)。")
     groups: "dict[str, list]" = {}
     order: "list[str]" = []
@@ -519,7 +519,7 @@ def scores_tool(ctx, action: str = "view") -> str:
         from minicode import gpa
         courses = courses_for_gpa()
         if not courses:
-            return "还没有成绩存档,先用「📅 课表」面板的「从教务导入成绩」导一次。"
+            return "还没有成绩存档,先用「课表」面板的「从教务导入成绩」导一次。"
         return gpa.gpa_calc(None, courses=courses)
     if action == "trend":
         return trend(ctx)
@@ -528,4 +528,4 @@ def scores_tool(ctx, action: str = "view") -> str:
     return ("错误: 未知 action。可用: view(看存档)/gpa(按存档算绩点,"
             "两种常见算法 + 「以学校教务处为准」口径)/trend(按学期加权平均分,"
             "≥2 学期画折线图)/clear(清空存档)。"
-            "导入成绩走「📅 课表」面板的「从教务导入成绩」三步向导。")
+            "导入成绩走「课表」面板的「从教务导入成绩」三步向导。")

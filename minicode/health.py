@@ -36,9 +36,9 @@ OK, WARN, BAD, UNKNOWN, SKIP = "ok", "warn", "bad", "unknown", "skip"
 
 BADGE = {OK: "正常", WARN: "要注意", BAD: "有问题", UNKNOWN: "没查成", SKIP: "不适用"}
 
-GROUPS = (("local", "本机状态", "🖥"),
-          ("deep", "联网与外部进程", "🌐"),
-          ("repo", "源码仓库闸", "🧪"))
+GROUPS = (("local", "本机状态"),
+          ("deep", "联网与外部进程"),
+          ("repo", "源码仓库闸"))
 
 # 装好的包里 scripts/ 不存在,这一组整组不出现。每项:(键, 标题, 脚本, 参数, 秒)
 # 秒是**等它的上限**,不是预期用时:check_docs --collect 要跑一遍 pytest 收集(实测 20~30 s),
@@ -325,7 +325,9 @@ def _run_gate(root: Path, name: str, args: tuple, timeout: float) -> tuple[int, 
     """真跑那支脚本,原样把退出码与尾部输出带回来(判定仍在脚本自己那里)。"""
     proc = subprocess.run([sys.executable, str(root / "scripts" / name), *args],
                           cwd=str(root), capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", timeout=timeout)
+                          encoding="utf-8", errors="replace", timeout=timeout,
+                          creationflags=(subprocess.CREATE_NO_WINDOW
+                                         if sys.platform == "win32" else 0))
     text = (proc.stdout or "") + (proc.stderr or "")
     tail = "\n".join(ln for ln in text.splitlines() if ln.strip())[-600:]
     return proc.returncode, tail
@@ -451,9 +453,9 @@ def report(workspace: Any = None, config: Any = None, project: Any = None,
     summary = {s: sum(1 for r in rows if r["status"] == s)
                for s in (OK, WARN, BAD, UNKNOWN, SKIP)}
     return {"ok": True, "deep": bool(deep), "repo": bool(repo),
-            "groups": [{"key": k, "label": lb, "icon": ic,
+            "groups": [{"key": k, "label": lb,
                         "rows": [r for r in rows if r["group"] == k]}
-                       for k, lb, ic in GROUPS],
+                       for k, lb in GROUPS],
             "summary": summary, "total": len(rows),
             "attention": [r["label"] for r in rows if r["status"] in (BAD, UNKNOWN)],
             "verdict": _verdict(summary, rows, len(rows)),

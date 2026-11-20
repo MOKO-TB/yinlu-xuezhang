@@ -110,7 +110,7 @@ def test_ledger_records_the_dependency_check(ctx, tmp_path, monkeypatch):
     monkeypatch.setattr(sk, "usage_path", lambda: usage)
 
     out = sk.use_skill(ctx, "pptx-doc")
-    assert "⚠ 依赖缺" in out                      # 原来那句给模型看的警语一字没动
+    assert "注意:依赖缺" in out                      # 原来那句给模型看的警语一字没动
     rec = _json.loads(usage.read_text(encoding="utf-8").splitlines()[-1])
     assert rec["miss_libs"] == ["ghostlib", "nosuchlib"]
     assert rec["miss_tools"] == []               # 核对过、工具那头齐 —— 空表也是信息
@@ -243,7 +243,7 @@ def test_use_skill_prepends_warning_when_deps_missing(ctx, tmp_path, monkeypatch
     monkeypatch.setattr(sk, "skill_dirs", lambda ws=None: [tmp_path / "skills"])
     monkeypatch.setattr(sk, "usage_path", lambda: tmp_path / "usage.jsonl")
     out = sk.use_skill(ctx, "dep-skill")
-    assert out.index("⚠ 依赖缺") < out.index("正文第一行"), "警语必须在正文之前"
+    assert out.index("注意:依赖缺") < out.index("正文第一行"), "警语必须在正文之前"
     assert "ghostlib、nosuchlib" in out and "照实" in out
     # 齐了(或没声明)时输出与旧版逐字一致
     (d / "SKILL.md").write_text("---\nname: dep-skill\ndescription: 测试\n---\n正文第一行",

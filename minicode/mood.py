@@ -334,7 +334,7 @@ def mood_prompt_section(today: date | None = None) -> str:
         note = str(e.get("note") or "").strip()
         lines.append(f"- {e['date']} {mark}" + (f":{note}" if note else ""))
     if any(_is_crisis(e.get("note")) for e in rows):
-        lines.append("- ⚠ 这一周里有记录写到了自伤/活不下去这类话。这一条**优先于**其它"
+        lines.append("- 注意:这一周里有记录写到了自伤/活不下去这类话。这一条**优先于**其它"
                      "所有回答风格:先接住人,再把下面这段求助去处**照原样**说给他"
                      "(号码那行照实说没存到,**不要**自己编一个号码),"
                      "不要讲道理、不要分析原因、不要建议「想开点」。\n" + HELP_BLOCK)

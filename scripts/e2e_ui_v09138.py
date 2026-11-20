@@ -6,16 +6,15 @@
 有没有人给上 `.open`。v0.9.137 之前的形状正是"字都写进了 DOM,而那块永远 display:none" ——
 读源码看不出来,截图才看得出来(2026-10-09 用户就是拿截图指这件事的)。
 
-要钉的十件事:
-1. 第一条思考增量之后那块**在屏上摊开**(不是 hidden、也不是折叠着);
-2. 思考正文真的看得见(不是只有"进行中…"那一行);
-3. 实时那一行写的是「思考中 N 秒 · 约 X token/秒」——**带「约」字**,
-   token 数在服务端回报 usage 之前只能按字符估,拿估算冒充实测是这一族最坏的骗法;
-4. 那一行会往前走(计时器真在跑);
-5. 点头部能折叠;
+要钉的十件事(2026-11-20 起按 ZCode 的「一行已工作」交互):
+1. 过程行出现在屏上,但**默认收起成一行**(不是 hidden,也不是摊开铺满屏幕);
+2. 点过程行能展开;工具调用是细线小行(高度 <= 30px、透明底),不是大卡片;
+3. 思考块默认收起,只显示「思考中 N 秒」;点开才看见原始思考正文;
+4. 思考计时器真在跑;
+5. 点思考行能折叠;
 6. 再点能展开;
 7. 用户手动开合过之后,正文开始输出时**不擅自**收起它;
-8. 没碰过的情况下,答完自动收成一行,且那一行定稿成「已思考 …」;
+8. 没碰过的情况下,收尾后过程行定稿成「已工作 … · N 步」、思考行定稿成「思考 N 秒」;
 9. 回合结束后计时器自己死掉(节点还在,字不再变 —— 僵尸计时器会一直往没人看的节点上写);
 10. 全程零页面错误。
 
@@ -79,8 +78,26 @@ window.pywebview = {api: new Proxy(base, {
 })};
 // 与真机同一条入口:一帧事件直接喂给 __gcodeEvent,不另写一份渲染路径。
 window.__ev = (o) => window.__gcodeEvent(o);
+window.__visible = (sel) => [...document.querySelectorAll(sel)]
+  .filter(e => !e.hidden);
+window.__trace = () => {
+  const t = window.__visible(".msg.assistant .trace").pop();
+  return {exists: !!t, hidden: !t || t.hidden,
+          open: !!t && t.classList.contains("open"),
+          touched: !!(t && t.dataset.touched),
+          done: !!(t && t.dataset.done),
+          sum: t ? t.querySelector(".tr-sum").textContent : ""};
+};
+window.__clickTrace = () => {
+  const t = window.__visible(".msg.assistant .trace").pop();
+  if (t) t.querySelector(".tr-head").click();
+};
+window.__clickThink = () => {
+  const t = window.__visible(".msg.assistant .think").pop();
+  if (t) t.querySelector(".th-head").click();
+};
 window.__think = () => {
-  const t = document.querySelector(".msg.assistant:last-of-type .think");
+  const t = window.__visible(".msg.assistant .think").pop();
   const b = t && t.querySelector(".th-body");
   const h = t && t.querySelector(".th-time");
   return {
@@ -132,22 +149,36 @@ def main() -> int:
         page.goto(url)
         page.wait_for_selector("#ver", timeout=15000)
 
-        # ---- 1-3. 思考增量进来:那块摊开、正文看得见、那一行带「约」----
+        # ---- 1. 过程行出现,但默认收起 ----
         page.evaluate("(t) => __ev({type:'reasoning_delta', text: t})", REASON_A)
         page.wait_for_timeout(120)
         page.evaluate("(t) => __ev({type:'reasoning_delta', text: t})", REASON_B)
         page.wait_for_timeout(120)
         th = page.evaluate("() => __think()")
-        check(th["exists"] and not th["hidden"], "思考中那块在屏上(不是 hidden)")
-        check(th["open"] and th["bodyShown"],
-              "思考中那块是**摊开**的,正文可见(旧形状:字在 DOM 里却 display:none)")
-        check(REASON_A[:8] in th["body"] and REASON_B[:8] in th["body"],
-              f"两段思考正文都看得见(实测 {th['body'][:24]}…)")
+        trace = page.evaluate("() => __trace()")
+        check(trace["exists"] and not trace["hidden"], "工作过程那一行在屏上")
+        check(not trace["open"], "默认收起成一行,不再把过程铺满屏幕")
+        check(trace["sum"].startswith("正在工作") and "秒" in trace["sum"],
+              f"行上写的是「正在工作 · N 秒」(实测:{trace['sum']})")
+        check(th["exists"] and not th["hidden"] and not th["open"]
+              and not th["bodyShown"],
+              "思考块也在,但同样默认收起(原始思考不占屏)")
         check(th["time"].startswith("思考中") and "秒" in th["time"]
-              and "约" in th["time"] and "token/秒" in th["time"],
-              f"实时那一行是「思考中 N 秒 · 约 X token/秒」(实测:{th['time']})")
+              and "约" not in th["time"],
+              f"思考行只写「思考中 N 秒」(实测:{th['time']})")
 
-        # ---- 4. 那一行会往前走 ----
+        # ---- 2. 点开过程行,再点开思考行:原始正文看得见 ----
+        page.evaluate("() => __clickTrace()")
+        page.wait_for_timeout(80)
+        check(page.evaluate("() => __trace()['open']"), "点过程行能展开")
+        page.evaluate("() => __clickThink()")
+        page.wait_for_timeout(80)
+        th = page.evaluate("() => __think()")
+        check(th["open"] and th["bodyShown"], "点思考行后原始正文可见")
+        check(REASON_A[:8] in th["body"] and REASON_B[:8] in th["body"],
+              f"两段思考正文都在(实测 {th['body'][:24]}…)")
+
+        # ---- 3. 那一行会往前走 ----
         # 比的是**秒数这个数**,不是整串字:秒数被 max(1, round(…)) 夹过,
         # 等 1.2 秒可能两次都落在"1 秒"上(我自己就是这么把它跑成一红 —— 判据错,不是产品错)。
         def think_secs() -> float:
@@ -160,43 +191,66 @@ def main() -> int:
         s1 = think_secs()
         check(s1 > s0, f"计时器真在跑(思考秒数 {s0} → {s1})")
 
-        # ---- 5/6. 点头部折叠再展开 ----
-        page.evaluate("() => document.querySelector('.msg.assistant:last-of-type "
-                      ".think .th-head').click()")
+        # ---- 4. 点思考行折叠,再点展开 ----
+        page.evaluate("() => __clickThink()")
         page.wait_for_timeout(80)
         th = page.evaluate("() => __think()")
         check((not th["open"]) and (not th["bodyShown"]) and th["touched"],
-              "点一下头部能折叠(且记下'被人手动开合过')")
-        page.evaluate("() => document.querySelector('.msg.assistant:last-of-type "
-                      ".think .th-head').click()")
+              "点一下思考行能折叠(且记下'被人手动开合过')")
+        page.evaluate("() => __clickThink()")
         page.wait_for_timeout(80)
         th = page.evaluate("() => __think()")
         check(th["open"] and th["bodyShown"], "再点一下又展开,正文重新可见")
 
-        # ---- 7. 手动开合过 → 正文开始输出时不擅自收起 ----
+        # ---- 5. 工具调用只给过程行加一步;工具行是细线小行,不是大卡片 ----
+        page.evaluate("() => __ev({type:'tool_start', name:'read_file', summary:'pytest.ini'})")
+        page.evaluate("() => __ev({type:'tool_done', ok:true})")
+        page.wait_for_timeout(100)
+        tool = page.evaluate("""() => {
+            const t = window.__visible('.msg.assistant .trace').pop();
+            const c = t && t.querySelector('.toolcard');
+            return {n: t ? t.querySelectorAll('.toolcard').length : 0,
+                    sum: t ? t.querySelector('.tr-sum').textContent : '',
+                    h: c ? Math.round(c.getBoundingClientRect().height) : 0,
+                    bg: c ? getComputedStyle(c).backgroundColor : ''};
+        }""")
+        check(tool["n"] == 1 and "1 步" in tool["sum"],
+              f"过程行只多一步(实测:{tool['sum']})")
+        check(tool["h"] <= 30 and tool["bg"].replace(" ", "") in
+              ("rgba(0,0,0,0)", "transparent"),
+              f"工具行是细线小行(高度 {tool['h']}px,底色 {tool['bg']})")
+
+        # ---- 6. 手动开合过 → 正文开始输出时不擅自收起 ----
         page.evaluate("(t) => __ev({type:'text_delta', text: t})", "答案是 8。")
         page.wait_for_timeout(120)
         th = page.evaluate("() => __think()")
         check(th["open"] and th["bodyShown"],
               "用户自己点开着的时候,开始输出正文不会把它收走")
-        check(th["time"].startswith("已思考"),
-              f"思考结束那一行定稿成「已思考 …」(实测:{th['time']})")
+        check(th["time"].startswith("思考") and "秒" in th["time"],
+              f"思考结束那一行定稿成「思考 N 秒」(实测:{th['time']})")
         page.evaluate("() => __ev({type:'finish_stream'})")
         page.wait_for_timeout(120)
+        final = page.evaluate("() => __trace()")
+        check(final["done"] and final["sum"].startswith("已工作")
+              and "1 步" in final["sum"],
+              f"收尾后过程行定稿成「已工作 … · 1 步」(实测:{final['sum']})")
 
-        # ---- 8. 没碰过的新一轮:答完自动收成一行 ----
+        # ---- 7. 没碰过的新一轮:默认还是收起的 ----
         page.evaluate("(t) => __ev({type:'reasoning_delta', text: t})", REASON_A)
         page.wait_for_timeout(120)
-        check(page.evaluate("() => __think()['open']"), "新一轮里那块默认还是摊开的")
+        th = page.evaluate("() => __think()")
+        check(not th["open"], "新一轮里思考块默认还是收起的")
         page.evaluate("(t) => __ev({type:'text_delta', text: t})", "重答一次。")
         page.wait_for_timeout(120)
         th = page.evaluate("() => __think()")
         check((not th["open"]) and (not th["bodyShown"]) and (not th["touched"]),
-              "没人碰过就自动收成一行(不占地方)")
+              "没人碰过就一直收着(不占地方)")
+        check(th["time"].startswith("思考") and "秒" in th["time"],
+              f"收尾后思考行是「思考 N 秒」(实测:{th['time']})")
         page.evaluate("() => __ev({type:'finish_stream'})")
         page.wait_for_timeout(120)
 
-        # ---- 9. 回合结束后计时器自己死 ----
+        # ---- 8. 回合结束后计时器自己死 ----
         done = page.evaluate("() => __think()['time']")
         page.wait_for_timeout(1300)
         check(page.evaluate("() => __think()['time']") == done,

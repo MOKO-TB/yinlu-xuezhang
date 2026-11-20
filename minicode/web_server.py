@@ -622,12 +622,12 @@ def serve(config: Config, workspace: Path, host: str = "0.0.0.0",
         print(f"  局域网访问:http://{ip}:{real_port}", flush=True)
     if not any(ip.startswith("10.") for ip in ips):
         # 本机没有校园网地址:同网段设备能开,校园网里的同学打不开
-        print("  ⚠ 本机没有校园网(10.x)地址 —— 上面这些地址只有与之处于同一局域网"
+        print("  注意:本机没有校园网(10.x)地址 —— 上面这些地址只有与之处于同一局域网"
               "的设备能打开。", flush=True)
         print("    要让同学从校园网访问,需把服务跑在校园网内的机器上,"
               "并在那台机器上放行本端口。", flush=True)
     if host not in ("127.0.0.1", "localhost"):
-        print("  ⚠ 已监听非本机地址:同网段任何人都能用本服务,并消耗校园模型额度。", flush=True)
+        print("  注意:已监听非本机地址:同网段任何人都能用本服务,并消耗校园模型额度。", flush=True)
         print("    同学可用的能力已限制在只读白名单(见 minicode/web_profile.py 的 PUBLIC_TOOLS);", flush=True)
         print("    发问记录与来源 IP 写在 web-usage.log。按 Ctrl+C 停止。", flush=True)
     if not resource_path("frontend", "index.html").is_file():

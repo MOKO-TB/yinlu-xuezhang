@@ -44,6 +44,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -261,7 +262,11 @@ def run_hook(kind: str, hooks_cfg: dict | None, tool: str = "",
     try:
         r = subprocess.run(cmd, shell=True, capture_output=True,
                            text=True, timeout=seconds,
-                           encoding="utf-8", errors="replace")
+                           encoding="utf-8", errors="replace",
+                           # 钩子可能在每一步工具调用后都跑一次:桌面版是 GUI
+                           # 子系统,不挂这个标志每次都会闪一个 cmd 黑框。
+                           creationflags=(subprocess.CREATE_NO_WINDOW
+                                          if sys.platform == "win32" else 0))
         exit_code = r.returncode
         raw = ((r.stdout or "") + (r.stderr or ""))[:HOOK_STDOUT_CHARS]
     except subprocess.TimeoutExpired:

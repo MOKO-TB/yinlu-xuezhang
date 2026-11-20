@@ -141,9 +141,9 @@ def test_list_marks_the_items_that_will_be_timed():
     reminders.add("按钟点催", due=soon, at="17:00")
     reminders.add("按天催", due=later)
     out = reminders.reminder(None, action="list")
-    assert "17:00" in out and "⏰" in out
+    assert "17:00" in out and "[按钟点]" in out
     assert out.index("按钟点催") < out.index("按天催")      # 临期排前面
-    assert "⏰" not in out.split("按天催")[1]                # 只有日期的不带钟点
+    assert "[按钟点]" not in out.split("按天催")[1]                # 只有日期的不带钟点
 
 
 def test_due_soon_orders_and_filters():

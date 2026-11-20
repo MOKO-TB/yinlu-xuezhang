@@ -59,7 +59,9 @@ root = sys.argv[2] if len(sys.argv) > 2 else "."
 try:
     r = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=root,
                        capture_output=True, text=True, timeout=110,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace",
+                       creationflags=(subprocess.CREATE_NO_WINDOW
+                                      if sys.platform == "win32" else 0))
 except FileNotFoundError as e:
     out({"context": "这台机器上跑不起 python(-m pytest),测试没执行:%s" % e})
 except subprocess.TimeoutExpired:

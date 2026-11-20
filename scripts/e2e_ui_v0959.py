@@ -166,7 +166,7 @@ def main() -> int:
             page.wait_for_selector("#scheduleOverlay.show")
             page.click("#btnScoresImport")
             page.wait_for_selector("#jwOverlay.show")
-            check(page.inner_text("#jwTitle") == "📊 从教务系统导入成绩",
+            check(page.inner_text("#jwTitle") == "从教务系统导入成绩",
                   "向导标题切到成绩面孔")
             check(page.inner_text("#btnJwRead") == "② 读取成绩",
                   "第②步按钮文案跟着切(不残留课表的「读取课表」)")
@@ -202,7 +202,7 @@ def main() -> int:
             page.wait_for_selector("#scheduleOverlay.show")
             page.click("#btnScheduleImport")
             page.wait_for_selector("#jwOverlay.show")
-            check(page.inner_text("#jwTitle") == "🎓 从教务系统导入课表",
+            check(page.inner_text("#jwTitle") == "从教务系统导入课表",
                   "课表面孔的标题回来(模式不残留)")
             check(page.inner_text("#btnJwRead") == "② 读取课表",
                   "课表面孔的按钮文案回来")

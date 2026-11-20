@@ -129,7 +129,7 @@ class TerminalUI:
     def tool_rejected_hard(self, tool: Tool, args: dict) -> None:
         self.console.print(Panel(
             f"命令: {escape(args.get('command', ''))}",
-            title="[red]🚫 安全策略硬拒绝[/red]",
+            title="[red]安全策略硬拒绝[/red]",
             border_style="red",
         ))
 
@@ -157,9 +157,9 @@ class TerminalUI:
         from minicode.explain import permission_why
         why = permission_why(tool.name, args, reason)
         self.console.print()
-        title = f"[yellow]⚠ 权限确认 · {tool.name}[/yellow]"
+        title = f"[yellow]权限确认 · {tool.name}[/yellow]"
         if label:
-            title = f"[yellow]⚠ 权限确认 · {tool.name} · {label}[/yellow]"
+            title = f"[yellow]权限确认 · {tool.name} · {label}[/yellow]"
         self.console.print(Panel(
             self._permission_detail(tool, args, why),
             title=title,
@@ -206,7 +206,7 @@ class TerminalUI:
         self.console.print()
         self.console.print(Panel(
             Text(detail),
-            title="[yellow]⚠ 这一步会改磁盘上的文件[/yellow]",
+            title="[yellow]这一步会改磁盘上的文件[/yellow]",
             border_style="yellow",
         ))
         while True:
@@ -377,7 +377,7 @@ class TerminalUI:
         self.console.print(Panel("\n".join(lines), border_style="cyan"))
         if not key_ok:
             self.console.print(
-                "[bold red]⚠ 尚未配置 api_key:[/bold red]请编辑项目根目录的 "
+                "[bold red]尚未配置 api_key:[/bold red]请编辑项目根目录的 "
                 "[bold]config.json[/bold] 填入密钥后重启。"
             )
 
@@ -428,7 +428,7 @@ class TerminalUI:
 
     def compacted(self, before: int, after: int) -> None:
         self.console.print(
-            f"[yellow]✳ 上下文已压缩:{before} 条消息 → 摘要 + 最近几轮原文"
+            f"[yellow]上下文已压缩:{before} 条消息 → 摘要 + 最近几轮原文"
             f"(现共 {after} 条)[/yellow]"
         )
 
@@ -439,7 +439,7 @@ class TerminalUI:
         lines = ["[bold]最近会话[/bold] [dim](用 /resume <序号> 恢复)[/dim]"]
         for i, s in enumerate(summaries, 1):
             preview = escape(s.last_user_text or "(无用户消息)")
-            ws_hint = f"  [dim]📁 {escape(str(s.workspace))}[/dim]" if s.workspace else ""
+            ws_hint = f"  [dim]{escape(str(s.workspace))}[/dim]" if s.workspace else ""
             lines.append(
                 f"  [cyan]{i}[/cyan]) {escape(s.time)}  {s.n_messages} 条消息  最后任务: {preview}{ws_hint}"
             )
@@ -463,7 +463,7 @@ class TerminalUI:
 
     def turn_interrupted(self) -> None:
         self.finish_stream()
-        self.console.print("[yellow]⚠ 已中断当前回合[/yellow]")
+        self.console.print("[yellow]已中断当前回合[/yellow]")
 
     def llm_error(self, e: Exception) -> None:
         self.finish_stream()
@@ -476,7 +476,7 @@ class TerminalUI:
         # 不承诺"接下来会给一段收尾":那次收尾调用可能失败(失败就静默退回原样),
         # 承诺了却没兑现,这条提示自己就成了假话。
         self.console.print(
-            f"[yellow]⚠ 本回合工具调用已达 {limit} 轮上限,已停止调用工具。"
+            f"[yellow]本回合工具调用已达 {limit} 轮上限,已停止调用工具。"
             f"想接着做直接说「继续」。[/yellow]"
         )
 
@@ -488,27 +488,27 @@ class TerminalUI:
 
     def fail_streak_limit(self, tool: str, limit: int) -> None:
         self.console.print(
-            f"[yellow]⚠ 「{tool}」已连续 {limit} 次以同样方式失败,"
+            f"[yellow]「{tool}」已连续 {limit} 次以同样方式失败,"
             f"本轮先停在这里,不再原样重试。换个做法或说「继续」。[/yellow]"
         )
 
     def token_limit_reached(self, limit: int, used: int) -> None:
         self.console.print(
-            f"[yellow]💰 本会话累计消耗约 {used} token,已到 "
+            f"[yellow]本会话累计消耗约 {used} token,已到 "
             f"session_token_limit({limit})上限,本轮先停在这里"
             f"(正在执行的那一步不会被强杀)。可提高上限或新开会话再继续。[/yellow]"
         )
 
     def task_budget_reached(self, limit: int, used: int) -> None:
         self.console.print(
-            f"[yellow]💰 本回合累计消耗约 {used} token,已到 "
+            f"[yellow]本回合累计消耗约 {used} token,已到 "
             f"task_token_budget({limit})上限,本轮先停在这里"
             f"(正在执行的那一步不会被强杀)。说「继续」会重新起算一格。[/yellow]"
         )
 
     def daily_budget_reached(self, limit: int, used: int) -> None:
         self.console.print(
-            f"[yellow]💰 今天累计消耗约 {used} token,已到 "
+            f"[yellow]今天累计消耗约 {used} token,已到 "
             f"daily_token_budget({limit})上限,本轮先停在这里"
             f"(正在执行的那一步不会被强杀)。可等明天,或显式选择今天继续。[/yellow]"
         )

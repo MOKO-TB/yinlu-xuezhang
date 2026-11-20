@@ -142,7 +142,7 @@ TABLE: tuple[Entry, ...] = (
           note="本机成长日志,新机器重新积累即可"),
     Entry("kb-candidates.jsonl", "候选知识", PERSONAL, False,
           note="本机成长日志,不随包外发"),
-    Entry("message-feedback.jsonl", "回答的 👍/👎 反馈", PERSONAL, False,
+    Entry("message-feedback.jsonl", "回答的赞/踩反馈", PERSONAL, False,
           note="本机成长日志,含对话摘要"),
     Entry("kb-hits.jsonl", "知识库检索命中账", PERSONAL, False,
           note="问句 + 命中的条目 id,供评价绑条目;含本机提问记录"),

@@ -502,7 +502,7 @@ def term_alignment(data: dict | None = None) -> dict | None:
             "calendar_name": str(e.get("name") or ""),
             "calendar_source": str(e.get("source") or ""),
             "days_off": days_off,
-            "msg": (f"⚠ 对账:课表里第 1 周周一 = {term.isoformat()},校历里的学期节点"
+            "msg": (f"注意:对账:课表里第 1 周周一 = {term.isoformat()},校历里的学期节点"
                     f"「{e.get('name')}」= {cal_day.isoformat()},差 {days_off} 天"
                     "(正负号:校历比课表晚为正)。周次判断全看这个日子,"
                     "请核对哪边是对的 —— 课表存错了就重新 save,校历没录就补录校历。")}

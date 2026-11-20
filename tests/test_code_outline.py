@@ -275,7 +275,7 @@ def test_nonexistent_file_handling(tmp_path: Path):
     assert "文件不存在" in data["error"]
 
     formatted = extractor.format_outline(data)
-    assert "❌ 无法提取大纲" in formatted
+    assert "无法提取大纲" in formatted
 
 
 def test_tool_invocation(tmp_path: Path):
@@ -293,13 +293,13 @@ def test_tool_invocation(tmp_path: Path):
     ctx = FakeCtx()
     # 正常调用
     out = code_outline_tool(ctx, path="test_tool.py")
-    assert "📄 文件大纲: test_tool.py" in out
+    assert "文件大纲: test_tool.py" in out
     assert "hello_world" in out
     assert "打招呼函数" in out
 
     # 缺省路径调用
     err_out = code_outline_tool(ctx, path="")
-    assert "❌ 请指定要提取大纲的文件路径" in err_out
+    assert "请指定要提取大纲的文件路径" in err_out
 
 
 def test_gui_bridge_get_code_outline(tmp_path: Path):

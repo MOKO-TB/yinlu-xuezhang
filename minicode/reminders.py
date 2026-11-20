@@ -511,7 +511,7 @@ def _fmt_item(item: dict) -> str:
     tag = ("(每周)" if rep == REPEAT_WEEKLY
            else f"(每 {rep.split(':', 1)[1]} 天)" if rep.startswith("every:") else "")
     return (f"[{item['id']}] {item['title']}{tag}(截止 {when}){note}"
-            + ("⏰" if clock else ""))
+            + (" [按钟点]" if clock else ""))
 
 
 def _repeat_note(result: dict) -> str:

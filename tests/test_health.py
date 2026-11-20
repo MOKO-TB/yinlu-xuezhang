@@ -112,7 +112,7 @@ def test_empty_groups_render_nothing_and_badges_come_from_backend():
     rep = make(config=FakeConfig(), project=FakeSpec(), mcp_rows=[])
     for r in rows_of(rep):
         assert r["badge"] == health.BADGE[r["status"]]
-        assert r["group"] in {k for k, _l, _i in health.GROUPS}
+        assert r["group"] in {k for k, _l in health.GROUPS}
 
 
 def test_verdict_names_the_bad_row_and_counts_match():

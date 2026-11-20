@@ -350,17 +350,17 @@ def find_symbol_references(
 def format_references_view(data: dict[str, Any]) -> str:
     """将引用查找结果格式化为清晰易读的 Markdown 文本。"""
     if not data.get("ok"):
-        return f"❌ 引用查找失败: {data.get('msg', '未知错误')}"
+        return f"引用查找失败: {data.get('msg', '未知错误')}"
 
     sym = data.get("symbol", "")
     refs = data.get("references", [])
     impact = data.get("impact", {})
 
     if not refs:
-        return f"🔍 代码库中未找到符号 `{sym}` 的任何调用或引用位置。"
+        return f"代码库中未找到符号 `{sym}` 的任何调用或引用位置。"
 
     lines: list[str] = [
-        f"### 📍 符号引用检索: `{sym}` (共命中 {len(refs)} 处引用)",
+        f"### 符号引用检索: `{sym}` (共命中 {len(refs)} 处引用)",
         f"- **影响面评级**: `{impact.get('level', 'INFO')}`",
         f"- **影响分布**: {impact.get('summary', '')}",
         "",
@@ -370,18 +370,18 @@ def format_references_view(data: dict[str, Any]) -> str:
 
     for r in refs:
         kind_tag = {
-            "call": "📞 调用",
-            "import": "📦 导入",
-            "inherit": "🏛️ 继承",
-            "type": "🏷️ 类型",
-            "assign": "✏️ 写入",
-            "read": "📖 读取",
+            "call": "调用",
+            "import": "导入",
+            "inherit": "继承",
+            "type": "类型",
+            "assign": "写入",
+            "read": "读取",
         }.get(r["kind"], r["kind"])
         snip = r["snippet"].replace("|", "\\|")
         lines.append(f"| `{r['file']}` | {r['line']} | {kind_tag} | `{snip}` |")
 
     if data.get("truncated"):
-        lines.append(f"\n> ⚠️ 引用过多，已截断显示前 {len(refs)} 项。")
+        lines.append(f"\n> 注意:引用过多，已截断显示前 {len(refs)} 项。")
 
     return "\n".join(lines)
 

@@ -128,15 +128,12 @@ def main() -> int:
                 "() => document.documentElement.classList.contains('dark')")
 
         def theme_text(page):
-            # 原本量的是整颗按钮的 textContent("☀️ 浅色"),断的是"这一格给的是
-            # 下一步能切去的那一档"。p3 之后它变成"图标一行 + 标签一行"两行结构,
-            # 所以这里把两行拼回原来那句话再比 —— **期望串一个字没改**,改的是取法;
-            # 若哪天只剩图标、标签丢了,拼出来就不等于"☀️ 浅色",这条照样红。
+            # v0.9.197:图标换成月亮/太阳两枚 SVG(由 CSS 跟着 html.dark 切),
+            # 可读的文字只剩「下一步能切去的那一档」。这里仍要求标签在:
+            # 哪天标签被抹掉、只剩图标,拿到的就是空串,这条照样红。
             return page.evaluate("""() => {
-                const b = document.getElementById('btnTheme');
-                const glyph = (b.firstChild.textContent || '').trim();
-                const cap = b.querySelector('.cap');
-                return cap ? glyph + ' ' + cap.textContent.trim() : glyph;
+                const cap = document.querySelector('#btnTheme .cap');
+                return cap ? cap.textContent.trim() : '';
             }""")
 
         # ---- 1) 开机浅色:桥要被问到一次,且问的是 false
@@ -152,16 +149,16 @@ def main() -> int:
         check(dark(page) is True, "② 上次留下深色 → 界面是深色")
         check(page.evaluate("window.__CHROME__") == [True],
               f"② 深色也报了,报的是 true:{page.evaluate('window.__CHROME__')}")
-        check(theme_text(page) == "☀️ 浅色",
+        check(theme_text(page) == "浅色",
               "② 按钮给的是「下一步能切去的那一档」:" + repr(theme_text(page)))
 
         # ---- 3) 点一下切换:再报一次,值翻转
         page.click("#btnTheme")
         page.wait_for_timeout(260)
         check(page.evaluate("window.__CHROME__") == [True, False],
-              f"③ 点「☀️ 浅色」又报了一次且翻了:{page.evaluate('window.__CHROME__')}")
+              f"③ 点「浅色」又报了一次且翻了:{page.evaluate('window.__CHROME__')}")
         check(dark(page) is False, "③ 界面真的切回浅色了")
-        check(theme_text(page) == "🌙 深色", "③ 按钮文案跟着翻")
+        check(theme_text(page) == "深色", "③ 按钮文案跟着翻")
 
         # ---- 4) 本机桥说"这次没改成":界面不受牵连
         page.evaluate("() => { window.__REJECT__ = true; window.__CHROME__ = []; }")
@@ -170,7 +167,7 @@ def main() -> int:
         check(page.evaluate("window.__CHROME__") == [True],
               "④ 桥被拒的那一次仍然报到了(不报=以后没人能重试)")
         check(dark(page) is True, "④ 标题栏没改成,主题照样切完了")
-        check(theme_text(page) == "☀️ 浅色", "④ 界面没因为桥失败而停在半路")
+        check(theme_text(page) == "浅色", "④ 界面没因为桥失败而停在半路")
         page.close()
 
         # ---- 5) 桥没有这个方法(网页版):一句错都不许有

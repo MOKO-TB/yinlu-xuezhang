@@ -1649,7 +1649,7 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     "act-failhead", "act-find", "locateFinding", "act-flash",
     "usage-cards", "usage-card", "uc-head", "uc-line", "uc-sub",
     "fmtCost", "fmtDur",
-    "act-reason", "act-reason-cap", "act-reason-body", "💭 思考",
+    "act-reason", "act-reason-cap", "act-reason-body", "th-time",
     '×${item.group_n} 同款调用', "same-batch",
     "累计耗时", "有账的会话",
     # v0.9.114 的旧针「缓存命中(端点不回报)」在 v0.9.117 随改版退役 —— 那句话
@@ -1689,8 +1689,8 @@ FRONTEND_TARGETS: tuple[str, ...] = (
     # `\boxed{...}` 源码;漏 `function queueDraft` = Enter 在忙时还是立刻插话,
     # 打错一个字没有反悔的余地;漏 `function openSessMenu` = 侧栏还是只有一颗 ✕,
     # 图形侧改不了名;漏 `.shrc` = 分享图那颗复制按钮不见了。
-    "function thinkTick", "function thinkStop", "function isWideCp",
-    "function renderMathBlocks", "function ensureKatex", "function estTokens",
+    "function thinkTick", "function thinkStop", "function traceSummaryEl",
+    "function renderMathBlocks", "function ensureKatex", "function finalizeThinkEl",
     "vendor/katex/katex.min.js", "math-d",
     "function queueDraft", "function renderDrafts", "draftBar",
     "function openSessMenu", "function startSessRename", "sess-rename",

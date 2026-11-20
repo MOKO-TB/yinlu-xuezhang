@@ -232,7 +232,7 @@ def test_appraisal_note_flags_down_rated_hit(ctx, tmp_path, monkeypatch):
     _seed_down_feedback("N001")                      # 国家励志奖学金那条
     out = kbmod.search_knowledge(ctx, "国家励志奖学金")
     assert "差评提示" in out
-    assert "N001" in out and "👎" in out
+    assert "N001" in out and "次差评" in out
     assert "不是对知识本身的判决" in out              # 口径必须教对
     assert out.index("差评提示") > out.index("国家励志奖学金申请通知")
 

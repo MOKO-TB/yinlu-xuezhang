@@ -187,7 +187,9 @@ def run_checker(workspace: Path, rel: str, checker: Checker) -> dict:
     argv = [*prefix, *checker.argv, *( [str(target)] if checker.path_arg else [] )]
     try:
         proc = subprocess.run(argv, cwd=str(cwd), capture_output=True,
-                              timeout=CHECK_TIMEOUT, shell=False)
+                              timeout=CHECK_TIMEOUT, shell=False,
+                              creationflags=(subprocess.CREATE_NO_WINDOW
+                                             if sys.platform == "win32" else 0))
     except subprocess.TimeoutExpired:
         # 超时**不是通过**:没跑完就说没跑完。
         return {"ok": False, "ran": False, "items": [],
@@ -243,7 +245,7 @@ class DiagnosisCache:
 def feedback(workspace: Path, rel: str, checker: Checker, result: dict,
              cache: DiagnosisCache | None = None) -> str:
     """把一次检查的结论拼成**回灌给模型的一段话**。没跑成时如实说没跑成。"""
-    head = f"\n\n⚠ 诊断({checker.label} · {checker.scope_note}):"
+    head = f"\n\n注意:诊断({checker.label} · {checker.scope_note}):"
     if not result["ran"]:
         return head + f"**这次没做检查** —— {result['note']}。"
     if result["ok"]:

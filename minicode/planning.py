@@ -582,7 +582,7 @@ def _plan_write(ctx: ToolContext, goal: str, steps: list) -> str:
             + scheduling_view({"steps": clean})
             + "\n请把计划展示给用户并等待确认;确认后逐步执行,"
               "每完成一步用 action=update 标记 done。"
-            + "\n⚠ 规划锁已开:这张单子被用户批准之前,写文件/改文件/跑命令那一路"
+            + "\n注意:规划锁已开:这张单子被用户批准之前,写文件/改文件/跑命令那一路"
               "都会被拒(读与查仍然随便)。不要试着绕过它,请用户点头是唯一的路。"
             # 整单核对单:桌面版当场弹一张卡(批准/改一条/重排),别处照旧走对话
             + review_plan(ctx, goal, clean))

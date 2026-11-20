@@ -223,6 +223,8 @@ def run_tests(workspace: Path, target: str | None = None, timeout: int = DEFAULT
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            creationflags=(subprocess.CREATE_NO_WINDOW
+                           if sys.platform == "win32" else 0),
         )
         raw_out = (proc.stdout or "") + "\n" + (proc.stderr or "")
         exit_code = proc.returncode

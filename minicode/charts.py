@@ -422,5 +422,5 @@ def chart_file(ctx, chart_type: str, data, title: str = "", source: str = "",
             f"{width}×{height}，自包含 SVG，浏览器直接打开）\n"
             f"图上数字口径：{stat}\n"
             + (f"数据来源（已印在图脚注）：{source}\n" if source else
-               "⚠ 没写 source：图上没有任何来源信息，请补数据来源或说明数据是用户给的\n")
+               "注意:没写 source：图上没有任何来源信息，请补数据来源或说明数据是用户给的\n")
             + "注意：图里的每个数值都来自本次传入的 data，程序没有取数、补数或修正。")

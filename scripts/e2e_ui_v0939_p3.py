@@ -155,9 +155,9 @@ def _stub_health() -> dict:
     return {"ok": True, "deep": False, "repo": False, "checked_at": "10:00:00",
             "total": len(rows), "summary": summary, "attention": ["模型配置"],
             "verdict": H._verdict(summary, rows, len(rows)),
-            "groups": [{"key": k, "label": lb, "icon": ic,
+            "groups": [{"key": k, "label": lb,
                         "rows": [r for r in rows if r["group"] == k]}
-                       for k, lb, ic in H.GROUPS]}
+                       for k, lb in H.GROUPS]}
 
 
 def _serve(directory: Path):

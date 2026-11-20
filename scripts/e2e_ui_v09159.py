@@ -233,6 +233,15 @@ def main() -> int:
         check(any(c[0] == "file_write" and c[2] is False for c in calls),
               "保存带着打开时的底账 sha 过桥(不是空 sha 的新建)")
 
+        # ⑥.5 右栏标签是文字导航:点过一圈后命令面板不该被带出来
+        labels = [t.inner_text().strip() for t in page.locator("#spTabs .sp-tab").all()]
+        check(all(labels) and all(
+            not any(0x1F300 <= ord(c) <= 0x1FAFF or 0x2600 <= ord(c) <= 0x27BF
+                    for c in x) for x in labels),
+            f"右栏标签是文字不是 emoji({labels})")
+        check(page.locator("#cmdPaletteOverlay.show").count() == 0,
+              "点右栏标签不会把顶栏的命令面板带出来")
+
         # ⑦ openPanel 的 side: 路由
         page.evaluate('openPanel("side:git")')
         page.wait_for_timeout(200)

@@ -65,11 +65,11 @@ def _weather_bits(today: date, detail: list[str]) -> str | None:
     card = _weather.weather_card(today)
     if not card:
         return None
-    short = f"{card['icon']} {card['text']}"
+    short = card["text"]
     if card.get("umbrella"):
         short += ",记得带伞"
     tip = f" {card['tip']}" if card.get("tip") else ""
-    detail.append(f"【天气】{card['icon']} {card['text']}{tip}")
+    detail.append(f"【天气】{card['text']}{tip}")
     return short
 
 

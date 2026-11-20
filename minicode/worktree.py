@@ -458,7 +458,7 @@ def suggest(repo: Path, branch: str, exists: bool | None = None) -> dict:
                 "msg": f"落点已存在:{target}(换个别名分支,或删掉旧副本后重试 —— 删的事我不替你做)"}
     return {"ok": True, "path": str(target), "command": cmd, "note": note,
             "next": ("这条命令要走 bash 执行(会弹确认框,不会偷偷建目录);"
-                     "建好后说一声,我把它登记进工作区清单,你点 📁 工作区就能切过去。")}
+                     "建好后说一声,我把它登记进工作区清单,你点「工作区」就能切过去。")}
 
 
 def worktree_tool(ctx, action: str = "list", branch: str = "",

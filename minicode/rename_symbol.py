@@ -311,7 +311,7 @@ def rename_symbol_tool(
     )
 
     if not res.get("ok"):
-        return f"❌ 符号重命名失败: {res.get('error', '未知错误')}"
+        return f"符号重命名失败: {res.get('error', '未知错误')}"
 
     files_count = res.get("files_count", 0)
     refs_count = res.get("references_count", 0)
@@ -320,10 +320,10 @@ def rename_symbol_tool(
     risk_level = risk.get("level", "LOW")
     changes = res.get("changes", [])
 
-    mode_str = "🔍 预演模式 (未修改磁盘文件)" if is_dry else "✍️ 执行模式 (已写入修改)"
+    mode_str = "预演模式 (未修改磁盘文件)" if is_dry else "执行模式 (已写入修改)"
 
     lines = [
-        f"### 符号重构报告: `{symbol}` ➜ `{new_name}`",
+        f"### 符号重构报告: `{symbol}` → `{new_name}`",
         f"- **运行模式**: {mode_str}",
         f"- **涉及文件**: {files_count} 个",
         f"- **替换引用**: {refs_count} 处",
@@ -344,11 +344,11 @@ def rename_symbol_tool(
 
     if is_dry:
         lines.append(
-            "\n> 💡 **提示**: 以上为预演变更。如需真正写入磁盘，请传入参数 `dry_run=False` 重新执行。"
+            "\n> **提示**: 以上为预演变更。如需真正写入磁盘，请传入参数 `dry_run=False` 重新执行。"
         )
     else:
         lines.append(
-            f"\n✅ 成功将 {res.get('written_files', 0)} 个文件写入磁盘。请运行测试验证重构正确性。"
+            f"\n成功将 {res.get('written_files', 0)} 个文件写入磁盘。请运行测试验证重构正确性。"
         )
 
     return "\n".join(lines)

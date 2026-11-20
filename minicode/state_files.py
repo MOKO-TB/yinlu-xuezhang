@@ -65,7 +65,7 @@ SHIP_NEVER: tuple[StateFile, ...] = (
     StateFile("workspaces.json.tmp", FILE, "原子写的半截文件"),
     StateFile("kb-gaps.jsonl", FILE, "知识库成长日志:本机问过却没答上的问题"),
     StateFile("kb-candidates.jsonl", FILE, "候选知识:从本机问答里长出来的"),
-    StateFile("message-feedback.jsonl", FILE, "回答的 👍/👎 反馈:含对话摘要"),
+    StateFile("message-feedback.jsonl", FILE, "回答的赞/踩反馈:含对话摘要"),
     StateFile("kb-hits.jsonl", FILE,
               "知识库检索命中账(问句 + 条目 id):评价绑条目用,含本机提问记录"),
     StateFile("perms-trust.json", FILE,

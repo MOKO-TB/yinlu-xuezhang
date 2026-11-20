@@ -1848,7 +1848,8 @@ class Bridge:
                            "回滚后旧版本照样能启动。"}
         try:
             if str(st.get("name") or "").endswith(".exe"):
-                subprocess.Popen([str(p)], cwd=str(p.parent))
+                subprocess.Popen([str(p)], cwd=str(p.parent),
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 return {"ok": True, "mode": "installer",
                         "why": "安装程序已打开。若它提示文件被占用,先退出学长再继续 —— "
                                "我没有替你关,因为可能还有会话在跑。"}
@@ -2108,13 +2109,13 @@ class Bridge:
         """返回当前工作区支持的全部智能上下文实体提及(@mentions, v0.9.168, 清偿 HANDOFF §48(c))。"""
         q = str(query or "").strip().lower()
         entities = [
-            {"id": "plan", "label": "@plan", "name": "任务计划", "desc": "当前任务执行计划与步骤状态", "icon": "🗂️", "category": "系统实体"},
-            {"id": "todo", "label": "@todo", "name": "待办提醒", "desc": "今日待办清单与临期催办事项", "icon": "⏰", "category": "系统实体"},
-            {"id": "schedule", "label": "@schedule", "name": "课表作息", "desc": "今日课程节次与空闲时段安排", "icon": "📅", "category": "系统实体"},
-            {"id": "git", "label": "@git", "name": "Git 状态", "desc": "工作区未提交改动与分支概况", "icon": "🌿", "category": "系统实体"},
-            {"id": "wiki", "label": "@wiki", "name": "项目百科", "desc": "代码库全景架构与技术栈摘要", "icon": "📖", "category": "系统实体"},
-            {"id": "test", "label": "@test", "name": "测试报告", "desc": "最近一次测试套件执行通过/失败结论", "icon": "🧪", "category": "系统实体"},
-            {"id": "problems", "label": "@problems", "name": "代码诊断", "desc": "工作区语法检查与类型报错诊断", "icon": "🩺", "category": "系统实体"},
+            {"id": "plan", "label": "@plan", "name": "任务计划", "desc": "当前任务执行计划与步骤状态", "category": "系统实体"},
+            {"id": "todo", "label": "@todo", "name": "待办提醒", "desc": "今日待办清单与临期催办事项", "category": "系统实体"},
+            {"id": "schedule", "label": "@schedule", "name": "课表作息", "desc": "今日课程节次与空闲时段安排", "category": "系统实体"},
+            {"id": "git", "label": "@git", "name": "Git 状态", "desc": "工作区未提交改动与分支概况", "category": "系统实体"},
+            {"id": "wiki", "label": "@wiki", "name": "项目百科", "desc": "代码库全景架构与技术栈摘要", "category": "系统实体"},
+            {"id": "test", "label": "@test", "name": "测试报告", "desc": "最近一次测试套件执行通过/失败结论", "category": "系统实体"},
+            {"id": "problems", "label": "@problems", "name": "代码诊断", "desc": "工作区语法检查与类型报错诊断", "category": "系统实体"},
         ]
         if q:
             entities = [
@@ -3062,7 +3063,7 @@ class Bridge:
             return True
         except OSError as e:
             self.ui.push("info", text=(
-                f"⚠ 配置没能写入 {self.config_path}(目录不可写?{type(e).__name__})。"
+                f"注意:配置没能写入 {self.config_path}(目录不可写?{type(e).__name__})。"
                 "本次改动只在当前窗口有效,重启会丢失。"
                 "建议改用绿色便携版(整个目录放 D 盘),或重装到用户目录。"))
             return False
@@ -3628,7 +3629,7 @@ class Bridge:
         from minicode import clipboard
         path = self._last_card
         if not path:
-            return {"ok": False, "msg": "还没有生成过分享图，先点一下 🖼"}
+            return {"ok": False, "msg": "还没有生成过分享图，先点一下「分享图」"}
         try:
             data = Path(path).read_bytes()
         except OSError:

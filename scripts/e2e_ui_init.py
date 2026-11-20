@@ -281,9 +281,9 @@ def main() -> int:
             page.click("#btnMap")
             page.wait_for_timeout(400)
             check(page.locator("#mapPanel.open").count() == 1,
-                  "点顶栏「🗺 地图」面板滑出来了")
+                  "点入口栏「地图」面板滑出来了")
             check(page.locator("#mapTitle").inner_text().strip()
-                  == "🗺 " + INFO["campus_map"]["title"],
+                  == INFO["campus_map"]["title"],
                   "面板标题用的是后端给的校区名(换数据集时面板不会继续挂旧校区)")
             img = page.locator("#mapStage image.cm-map-img")
             check(img.count() == 1
@@ -304,7 +304,7 @@ def main() -> int:
             page.click("#btnMood")
             page.wait_for_timeout(350)
             check(page.locator("#moodOverlay.show").count() == 1,
-                  "点顶栏「🌱 心情」面板打开了")
+                  "点入口栏「心情」面板打开了")
             chips = page.locator("#moScores .mo-sc")
             check(chips.count() == 6,
                   f"分数格子 {chips.count()} 个(五档 + 「只写一句话」)")

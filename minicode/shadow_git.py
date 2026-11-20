@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -56,7 +57,9 @@ def git_bin() -> str:
 def available() -> bool:
     """这台机器上有没有 git。没有就整个功能不生效(而报表要说得出来)。"""
     try:
-        r = subprocess.run([git_bin(), "--version"], capture_output=True, timeout=5)
+        r = subprocess.run([git_bin(), "--version"], capture_output=True, timeout=5,
+                          creationflags=(subprocess.CREATE_NO_WINDOW
+                                         if sys.platform == "win32" else 0))
     except (OSError, subprocess.SubprocessError):
         return False
     return r.returncode == 0
@@ -80,7 +83,11 @@ def shadow_dir(workspace) -> Path | None:
 
 def _run(args: list[str], cwd=None, timeout: float = COMMIT_TIMEOUT):
     return subprocess.run([git_bin(), *args], cwd=cwd, capture_output=True,
-                          timeout=timeout, check=False)
+                          timeout=timeout, check=False,
+                          # 影子快照会在每次改动后跑;GUI 子系统里没这个标志
+                          # 就是每改一次文件闪一下命令行窗口。
+                          creationflags=(subprocess.CREATE_NO_WINDOW
+                                         if sys.platform == "win32" else 0))
 
 
 def _git(git_dir: Path, args: list[str], cwd=None, timeout: float = COMMIT_TIMEOUT):
