@@ -1016,10 +1016,8 @@ class TrayController:
             pystray.MenuItem("桌面提醒(课前/简报/待办/通知)",
                              self._tray_toggle_notify,
                              checked=lambda item: notify_enabled()),
-            pystray.MenuItem("测试一条桌面通知", self._tray_test_notify),
-            pystray.MenuItem("开机自动启动", self._tray_toggle_startup,
-                             checked=lambda item: startup_present()),
-            pystray.MenuItem("点 X 时先问我", self._tray_reset_ask),
+            # 托盘只留日常动作:测试通知/开机自启/关窗偏好属于"设置一次就不动"的项,
+            # 从菜单撤下(仍可由对话工具/配置文件改),菜单从 9 行收到 6 行。
             pystray.MenuItem("退出引路学长", self._tray_quit),
         ]
         return pystray.Menu(*items)

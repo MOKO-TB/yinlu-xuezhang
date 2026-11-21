@@ -101,6 +101,251 @@ def _serve(directory: Path):
     return f"http://127.0.0.1:{httpd.server_address[1]}/index.html", httpd.shutdown
 
 
+def check_session_switches(page):
+    report = page.evaluate(r"""() => {
+      window.__historyFixture = Array.from({length: 150}, (_, i) => [
+        {role:'user', text:'question '+i},
+        {role:'assistant', text:'', tools:'read_file'},
+        {role:'tool', name:'read_file', text:'result'},
+        {role:'assistant', text:'## Answer '+i+'\n- first\n- second'}]).flat();
+      const t = performance.now();
+      for (let i = 0; i < 5; i++) renderHistory(__historyFixture);
+      return {fiveSwitchesMs: performance.now()-t,
+        historicalTimers: [...document.querySelectorAll('#chat .trace')]
+          .filter(x => x._workTimer).length,
+        enabledRegenerate: document.querySelectorAll('#chat .rt-re:not(:disabled)').length,
+        users: document.querySelectorAll('#chat .msg.user').length,
+        tools: document.querySelectorAll('#chat .toolcard').length,
+        runningTraces: document.querySelectorAll('#chat .trace:not([data-done]):not([hidden])').length};
+    }""")
+    assert report["historicalTimers"] == report["runningTraces"] == 0, report
+    assert report["enabledRegenerate"] == 1, report
+    assert report["users"] == report["tools"] == 150, report
+    page.locator('#chat .trace:not([hidden]) .tr-head').last.click()
+    assert page.locator('#chat .trace.open').count() == 1
+
+    assert page.evaluate("""() => {
+      __ev({type:'cleared', session:'old'});
+      __ev({type:'reasoning_delta', session:'old', text:'thinking'});
+      __ev({type:'text_delta', session:'old', text:'draft'});
+      __ev({type:'text_delta', session:'old', text:' more'});
+      const old = cur;
+      __ev({type:'cleared', session:'new', restoring:true});
+      __ev({type:'resumed', session:'new', messages:[], busy:false});
+      return !old.timer && !old.trace._workTimer && !old.think._thTimer;
+    }"""), "old stream timers survived navigation"
+    assert page.locator('#chat .msg').count() == 0
+    page.evaluate("""() => {
+      __ev({type:'text_delta', session:'old', text:'must stay in background'});
+      __ev({type:'user', session:'new', text:'new question'});
+      __ev({type:'text_delta', session:'new', text:'new answer'});
+      __ev({type:'finish_stream', session:'new'});
+    }""")
+    assert page.locator('#chat .msg.assistant .body').inner_text() == 'new answer'
+
+    page.evaluate("""() => {
+      window.__switchCalls = [];
+      window.__switchReplies = new Map();
+      window.__switchConcurrent = 0;
+      window.__switchMaxConcurrent = 0;
+      window.__switchItems = selected => ['a','b','c','d'].map((id, i) => ({
+        file:id, index:i+1, title:'Session '+id, time:'2026-11-20', n_messages:2,
+        current:id===selected, ws_current:true, workspace:''}));
+      window.__showSession = id => {
+        __ev({type:'cleared', session:id, restoring:true});
+        __ev({type:'resumed', session:id, busy:id==='b', messages:[
+          {role:'user',text:'Question '+id}, {role:'assistant',text:'Answer '+id}]});
+        __ev({type:'sessions', items:__switchItems(id)});
+      };
+      pywebview.api.resume_session = id => {
+        __switchCalls.push(id);
+        __switchConcurrent++;
+        __switchMaxConcurrent = Math.max(__switchMaxConcurrent, __switchConcurrent);
+        return new Promise((resolve, reject) => __switchReplies.set(id, (mode='ok') => {
+          __switchReplies.delete(id);
+          __switchConcurrent--;
+          if (mode === 'reject') { reject(new Error('offline')); return; }
+          if (mode === 'error') { resolve({ok:false,msg:'not available'}); return; }
+          if (id === 'new-session') {
+            __ev({type:'cleared', session:id});
+            __ev({type:'sessions', items:__switchItems(id)});
+          } else __showSession(id);
+          resolve({ok:true,session:id});
+        }));
+      };
+      pywebview.api.new_task = () => pywebview.api.resume_session('new-session');
+      __showSession('a');
+    }""")
+
+    def ready(n):
+        page.wait_for_function('(n) => __switchCalls.length === n', arg=n)
+
+    def reply(id_, mode="ok"):
+        page.evaluate('([id, mode]) => __switchReplies.get(id)(mode)', [id_, mode])
+
+    def idle():
+        page.wait_for_function('sessSwitchActive === null && sessSwitchPending === null')
+
+    def click(id_):
+        page.get_by_text('Session ' + id_, exact=True).click()
+
+    page.evaluate("""() => {
+      const rows = document.querySelectorAll('#sessions .sess');
+      rows[1].click(); rows[2].click(); rows[3].click();
+    }""")
+    ready(1)
+    assert page.evaluate('__switchCalls') == ['d']
+    reply('d')
+    idle()
+    assert page.locator('#chat .body').inner_text() == 'Answer d'
+
+    click('b')
+    ready(2)
+    click('c')
+    page.wait_for_function('sessSwitchTimer === 0')
+    click('d')
+    page.wait_for_function('sessSwitchTimer === 0')
+    assert page.evaluate('__switchCalls') == ['d', 'b']
+    reply('b')
+    ready(3)
+    assert page.locator('#btnStop').is_visible()
+    assert page.evaluate('__switchCalls') == ['d', 'b', 'd']
+    reply('d')
+    idle()
+    assert not page.locator('#btnStop').is_visible()
+
+    click('b')
+    ready(4)
+    click('d')
+    reply('b')
+    ready(5)
+    reply('d')
+    idle()
+    assert page.evaluate('currentSessionKey') == 'd'
+
+    for mode in ('error', 'reject'):
+        page.evaluate("__showSession('d')")
+        click('b')
+        page.wait_for_function("__switchReplies.has('b')")
+        reply('b', mode)
+        idle()
+        click('c')
+        page.wait_for_function("__switchReplies.has('c')")
+        reply('c')
+        idle()
+        assert page.evaluate('currentSessionKey') == 'c'
+
+    before = page.evaluate('__switchCalls.length')
+    page.evaluate("() => { __showSession('a'); stepSession(1); stepSession(1); stepSession(1); }")
+    ready(before + 1)
+    assert page.evaluate('__switchCalls.at(-1)') == 'd'
+    reply('d')
+    idle()
+
+    before = page.evaluate('__switchCalls.length')
+    page.evaluate("""() => {
+      __showSession('a');
+      sessQuery = 'question';
+      $('sessSearch').value = sessQuery;
+      renderSessionHits({query:sessQuery, results:['b','c','d'].map(file => ({file,hits:1}))});
+      document.querySelectorAll('#sessions .sess').forEach(el => el.click());
+    }""")
+    ready(before + 1)
+    assert page.evaluate('__switchCalls.at(-1)') == 'd'
+    reply('d')
+    idle()
+    assert page.locator('#sessSearch').input_value() == ''
+    assert page.evaluate('__switchMaxConcurrent') == 1
+
+    before = page.evaluate('__switchCalls.length')
+    page.evaluate("() => { __showSession('a'); switchSessionSoon('b'); switchSessionSoon('a'); }")
+    idle()
+    assert page.evaluate('sessSwitchTimer') == 0
+    assert page.evaluate('__switchCalls.length') == before
+
+    page.evaluate("() => { switchSessionSoon('b'); newTaskInProject(); }")
+    ready(before + 1)
+    assert page.evaluate('__switchCalls.at(-1)') == 'new-session'
+    reply('new-session')
+    idle()
+    assert page.evaluate('currentSessionKey') == 'new-session'
+    assert page.evaluate('__switchCalls.length') == before + 1
+
+    click('b')
+    page.wait_for_function("__switchReplies.has('b')")
+    page.evaluate("() => { switchSessionSoon('c'); newTaskInProject(); }")
+    reply('b')
+    page.wait_for_function("__switchReplies.has('new-session')")
+    click('d')
+    reply('new-session')
+    page.wait_for_function("__switchReplies.has('d')")
+    reply('d')
+    idle()
+    assert page.evaluate('__switchCalls.slice(-3)') == ['b', 'new-session', 'd']
+    assert page.evaluate('__switchMaxConcurrent') == 1
+
+    page.evaluate("""() => {
+      __showSession('a');
+      sessQuery = 'question';
+      $('sessSearch').value = sessQuery;
+      renderSessionHits({query:sessQuery, results:[{file:'a',hits:1}]});
+      __ev({type:'cleared', session:'external-new'});
+      __ev({type:'sessions', items:__switchItems('external-new')});
+    }""")
+    assert page.locator('#sessions .sess').count() == 1
+    page.locator('#sessions .sess').click()
+    page.wait_for_function("__switchReplies.has('a')")
+    reply('a')
+    idle()
+    assert page.evaluate('currentSessionKey') == 'a'
+    assert page.locator('#sessSearch').input_value() == ''
+
+    metrics = page.evaluate("""async () => {
+      const api = pywebview.api;
+      const saved = api.get_session_metrics;
+      const render = renderTaskMetrics;
+      let calls = 0, renders = 0;
+      const pending = [];
+      api.get_session_metrics = () => { calls++; return new Promise(r => pending.push(r)); };
+      renderTaskMetrics = () => { renders++; };
+      try {
+        __showSession('a');
+        __showSession('d');
+        pending[0]({ok:true});
+        await Promise.resolve();
+        const staleRenders = renders;
+        pending[1]({ok:true});
+        await Promise.resolve();
+        return {calls, renders, staleRenders};
+      } finally { api.get_session_metrics = saved; renderTaskMetrics = render; }
+    }""")
+    assert metrics == {"calls": 2, "renders": 1, "staleRenders": 0}, metrics
+
+    detached = page.evaluate(r"""async () => {
+      const oldMermaid = ensureMermaid, oldKatex = ensureKatex;
+      const mermaidValue = window.mermaid, katexValue = window.katex;
+      let release, work = 0;
+      const gate = new Promise(r => release = r);
+      ensureMermaid = ensureKatex = () => gate;
+      window.mermaid = {run: async () => { work++; }};
+      window.katex = {renderToString: () => { work++; return ''; }};
+      try {
+        chat.innerHTML = '<pre><code class="language-mermaid">graph TD; A-->B</code></pre>'
+          + '<span class="math">x^2</span>';
+        const jobs = [renderMermaidBlocks(chat), renderMathBlocks(chat)];
+        renderHistory([]);
+        release(true);
+        await Promise.all(jobs);
+        return work;
+      } finally {
+        ensureMermaid = oldMermaid; ensureKatex = oldKatex;
+        window.mermaid = mermaidValue; window.katex = katexValue;
+      }
+    }""")
+    assert detached == 0, "detached formula/diagram still rendered"
+    print("F 会话切换回归:", report, "并发请求上限 = 1; 连点/搜索/失败重试/后台恢复通过")
+
+
 def main() -> int:
     from playwright.sync_api import sync_playwright
 
@@ -184,10 +429,11 @@ def main() -> int:
         base = curve[0]["one"] or 0.001
         for row in curve:
             print(f"    {row['n']:5d} 字:{row['one']:.3f} ms   ({row['one']/base:.1f}×)")
+        check_session_switches(page)
         print("页面错误:" + ("无" if not errors else " / ".join(errors[:3])))
         browser.close()
     shutdown()
-    return 0
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":

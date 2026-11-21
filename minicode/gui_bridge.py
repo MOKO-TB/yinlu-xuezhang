@@ -4641,13 +4641,14 @@ class Bridge:
                     switched = True
             runner = self.open_session(load_path=chosen.path)
             key, n = runner.key, max(0, len(runner.session.messages) - 1)
-        self.ui.push("cleared", session=key)
+        self.ui.push("cleared", session=key, restoring=True)
         if switched:
             self.ui.push("workspace", session=key,
                          **ws.entry(self.workspace, self.app_dir))
             self._apply_chrome()
             self.invalidate_env_info()
-        self.ui.push("resumed", session=key, messages=self._history_for_frontend())
+        self.ui.push("resumed", session=key, messages=self._history_for_frontend(),
+                     busy=self._busy)
         where = f";已切回原工作区 {self.workspace}" if switched else ""
         self.ui.push("info", session=key,
                      text=f"已恢复 {n} 条消息(来自 {chosen.path.name}){where}")

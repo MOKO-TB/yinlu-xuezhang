@@ -161,12 +161,12 @@ def main() -> int:
             ]})
             rail = page.locator("#chatRail")
             check(rail.is_visible(), "3 问时轮次导航条出现")
-            check(rail.locator(".tick").count() == 3, "刻度数 = 问数")
-            rail.locator(".tick").nth(0).hover()
+            check(rail.locator(".tick:not(.tick-head)").count() == 3, "刻度数 = 问数")
+            rail.locator(".tick:not(.tick-head)").nth(0).hover()
             pop = page.locator("#railPop")
             check(pop.is_visible() and "第 1 问" in pop.inner_text(),
                   "hover 刻度出预览浮窗")
-            rail.locator(".tick").nth(0).click()
+            rail.locator(".tick:not(.tick-head)").nth(0).click()
             page.wait_for_timeout(200)
             page.evaluate("e => window.__gcodeEvent(e)", {"type": "resumed",
                           "session": "s1", "messages": [
@@ -174,7 +174,7 @@ def main() -> int:
                 {"role": "user", "text": "第 2 问:帮我看看地图"},
                 {"role": "user", "text": "第 3 问:奖学金怎么申请"},
                 {"role": "user", "text": "第四问"}]})
-            check(rail.locator(".tick").count() == 4, "新问进来自动加刻度")
+            check(rail.locator(".tick:not(.tick-head)").count() == 4, "新问进来自动加刻度")
 
             # ---- 3. 图片灯箱(p7/p8) ----
             page.evaluate("""e => {

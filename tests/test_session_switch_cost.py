@@ -17,10 +17,13 @@ import os
 import re
 import sqlite3
 import time
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from minicode import attachments, library
+from minicode import attachments, library, session as session_mod
 from minicode.gui_bridge import SESSION_LIST_LIMIT, create_app
 from minicode.session import list_sessions
 
@@ -29,9 +32,11 @@ from minicode.session import list_sessions
 def _clean_caches():
     library._STATS_CACHE.clear()
     attachments._PREVIEW_CACHE.clear()
+    session_mod._read_session_summary.cache_clear()
     yield
     library._STATS_CACHE.clear()
     attachments._PREVIEW_CACHE.clear()
+    session_mod._read_session_summary.cache_clear()
 
 
 def _make_db(tmp_path):
@@ -202,3 +207,253 @@ def test_a_session_beyond_the_tenth_still_opens(tmp_path):
     assert got["ok"] is True, f"第 1 条会话点不开:{got}"
     got2 = bridge.resume_session(names[-1])
     assert got2["ok"] is True
+
+
+def _write_session(path, content="first", **meta):
+    rows = [
+        {"type": "session_start", "time": "2026-10-03 12:00", **meta},
+        {"role": "user", "content": content},
+        {"role": "assistant", "content": "answer"},
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n",
+                    encoding="utf-8", newline="\n")
+    return path
+
+
+@pytest.fixture
+def session_reads(monkeypatch):
+    calls = []
+    real_open = Path.open
+
+    def spy(path, mode="r", *args, **kwargs):
+        if mode == "r" and path.name.startswith("session_") and path.suffix == ".jsonl":
+            calls.append(path)
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", spy)
+    return calls
+
+
+def test_session_summaries_do_not_reopen_or_reparse_unchanged_files(
+        tmp_path, monkeypatch, session_reads):
+    paths = [_write_session(tmp_path / f"session_{i}.jsonl") for i in range(2)]
+    first = list_sessions(tmp_path)
+    assert set(session_reads) == set(paths)
+    assert len(session_reads) == 2
+
+    def unexpected_parse(*args, **kwargs):
+        pytest.fail("unchanged session was parsed again")
+
+    monkeypatch.setattr(session_mod.json, "loads", unexpected_parse)
+    assert list_sessions(tmp_path) == first
+    assert len(session_reads) == 2
+
+
+def test_session_summaries_reread_only_the_appended_file(tmp_path, session_reads):
+    paths = [_write_session(tmp_path / f"session_{i}.jsonl") for i in range(2)]
+    list_sessions(tmp_path)
+    path = paths[0]
+    old = path.stat()
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"role": "user", "content": "new question"}) + "\n")
+    os.utime(path, ns=(old.st_atime_ns, old.st_mtime_ns + 1_000_000_000))
+    session_reads.clear()
+    changed = {row.path: row for row in list_sessions(tmp_path)}
+    assert session_reads == [path]
+    assert changed[path].n_messages == 3
+    assert changed[path].last_user_text == "new question"
+    assert changed[path].first_user_text == "first"
+    assert list_sessions(tmp_path) == list(changed.values())
+    assert session_reads == [path]
+
+
+def test_session_summary_same_size_title_replacement_invalidates_cache(
+        tmp_path, session_reads):
+    path = _write_session(tmp_path / "session_title.jsonl", title="old")
+    old = path.stat()
+    assert list_sessions(tmp_path)[0].title == "old"
+    assert session_mod.set_title(path, "new").startswith("已改名为")
+    os.utime(path, ns=(old.st_atime_ns, old.st_mtime_ns))
+    assert path.stat().st_size == old.st_size
+    assert path.stat().st_mtime_ns == old.st_mtime_ns
+    session_reads.clear()
+    assert list_sessions(tmp_path)[0].title == "new"
+    assert session_reads == [path]
+
+
+@pytest.mark.parametrize("field", ["st_mtime_ns", "st_ctime_ns", "st_ino"])
+def test_session_summary_fingerprint_detects_single_metadata_change(
+        tmp_path, monkeypatch, session_reads, field):
+    path = _write_session(tmp_path / "session_meta.jsonl", title="old")
+    old = path.stat()
+    assert list_sessions(tmp_path)[0].title == "old"
+    _write_session(path, title="new")
+    assert path.stat().st_size == old.st_size
+    fields = ("st_mtime", "st_mtime_ns", "st_ctime_ns", "st_size", "st_ino")
+    state = {name: getattr(old, name) for name in fields}
+    state[field] += 1
+    real_stat = Path.stat
+
+    def changed_stat(p, *args, **kwargs):
+        return SimpleNamespace(**state) if p == path else real_stat(p, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", changed_stat)
+    session_reads.clear()
+    assert list_sessions(tmp_path)[0].title == "new"
+    assert session_reads == [path]
+
+
+def test_session_summary_archive_changes_are_visible_immediately(tmp_path):
+    path = _write_session(tmp_path / "session_archive.jsonl", title="keep")
+    assert list_sessions(tmp_path)[0].archived is False
+    for flag in (True, False):
+        session_mod.set_archived(path, flag)
+        row = list_sessions(tmp_path)[0]
+        assert row.archived is flag
+        assert row.title == "keep" and row.n_messages == 2
+
+
+def test_session_summary_file_rename_delete_and_add(tmp_path, session_reads):
+    path = _write_session(tmp_path / "session_before.jsonl")
+    assert list_sessions(tmp_path)[0].path == path
+    renamed = path.rename(tmp_path / "session_after.jsonl")
+    session_reads.clear()
+    assert list_sessions(tmp_path)[0].path == renamed
+    assert session_reads == [renamed]
+    renamed.unlink()
+    assert list_sessions(tmp_path) == []
+    _write_session(path, content="fresh")
+    row = list_sessions(tmp_path)[0]
+    assert row.path == path and row.last_user_text == "fresh"
+
+
+def test_session_summary_cache_isolated_by_absolute_directory(
+        tmp_path, monkeypatch, session_reads):
+    paths = []
+    for name, content in (("a", "first"), ("b", "other")):
+        directory = tmp_path / name
+        directory.mkdir()
+        path = _write_session(directory / "session_same.jsonl", content=content)
+        os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+        paths.append(path)
+    real_stat = Path.stat
+    reference = real_stat(paths[0])
+
+    def identical_stat(path, *args, **kwargs):
+        if path.name == "session_same.jsonl":
+            return reference
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", identical_stat)
+    for path, content in ((paths[0], "first"), (paths[1], "other"), (paths[0], "first")):
+        monkeypatch.chdir(path.parent)
+        row = list_sessions(Path("."))[0]
+        assert row.path == Path("session_same.jsonl")
+        assert row.last_user_text == content
+    assert session_reads == paths
+
+
+def test_session_summary_returns_independent_copies(tmp_path):
+    _write_session(tmp_path / "session_copy.jsonl", title="keep")
+    first = list_sessions(tmp_path)[0]
+    expected = replace(first)
+    first.path = tmp_path / "wrong.jsonl"
+    first.time = first.workspace = first.first_user_text = first.last_user_text = "wrong"
+    first.title = first.origin = "wrong"
+    first.archived = True
+    first.n_messages = 999
+    second = list_sessions(tmp_path)[0]
+    assert second == expected and second is not first
+    second.title = "also wrong"
+    assert list_sessions(tmp_path)[0] == expected
+
+
+def test_session_summary_cache_is_bounded_and_evicts(tmp_path, session_reads):
+    for i in range(130):
+        path = _write_session(tmp_path / f"session_{i:03}.jsonl")
+        os.utime(path, ns=(1_700_000_000_000_000_000 + i * 1_000_000_000,) * 2)
+    assert len(list_sessions(tmp_path, limit=130)) == 130
+    info = session_mod._read_session_summary.cache_info()
+    assert info.maxsize == info.currsize == 128
+    assert len(session_reads) == 130
+    session_reads.clear()
+    assert list_sessions(tmp_path, limit=1)[0].path.name == "session_129.jsonl"
+    assert session_reads == [tmp_path / "session_129.jsonl"]
+    assert session_mod._read_session_summary.cache_info().currsize == 128
+
+
+@pytest.mark.parametrize("limit, indices", [
+    (0, []), (1, [4]), (3, [2, 4, 1]), (10, [2, 3, 0, 4, 1]), (-1, [2, 3, 4, 1]),
+])
+def test_session_summary_preserves_mtime_limit_and_stable_archive_order(
+        tmp_path, monkeypatch, session_reads, limit, indices):
+    paths = []
+    for i, stamp in enumerate((100, 300, 300, 200, 400)):
+        path = _write_session(tmp_path / f"session_{i}.jsonl", archived=i in (1, 4))
+        os.utime(path, (stamp, stamp))
+        paths.append(path)
+    monkeypatch.setattr(Path, "glob", lambda self, pattern: iter(paths))
+    first = list_sessions(tmp_path, limit=limit)
+    assert [row.path for row in first] == [paths[i] for i in indices]
+    assert len(session_reads) == len(indices)
+    assert list_sessions(tmp_path, limit=limit) == first
+    assert len(session_reads) == len(indices)
+
+
+@pytest.mark.parametrize("phase", ["stat", "open"])
+def test_session_summary_skips_files_deleted_after_directory_scan(
+        tmp_path, monkeypatch, phase):
+    gone = _write_session(tmp_path / "session_gone.jsonl")
+    kept = _write_session(tmp_path / "session_kept.jsonl")
+    if phase == "stat":
+        assert len(list_sessions(tmp_path)) == 2
+    real_method = getattr(Path, phase)
+
+    def disappear(path, *args, **kwargs):
+        if path == gone:
+            path.unlink(missing_ok=True)
+        return real_method(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, phase, disappear)
+    assert [row.path for row in list_sessions(tmp_path)] == [kept]
+
+
+def test_session_summary_streams_lines_and_skips_malformed_records(tmp_path, monkeypatch):
+    path = tmp_path / "session_broken.jsonl"
+    rows = [
+        {"type": "session_start", "time": "2026-10-03 12:00", "workspace": "workspace",
+         "title": "manual", "archived": True, "origin": "sidechat"},
+        {"role": "user", "content": "opening\nline"},
+        {"role": "assistant", "content": "answer"},
+        {"role": "tool", "content": "result"},
+        {"type": "cleared"},
+        {"role": "user", "content": ["not text"]},
+        {"role": "user", "content": "last\n" + "x" * 80},
+    ]
+    path.write_bytes(b'\nnull\n[]\n"text"\n42\ntrue\n{broken\n\xff\n' +
+                     "\n".join(json.dumps(row) for row in rows).encode("utf-8"))
+    real_open = Path.open
+
+    class LinesOnly:
+        def __enter__(self):
+            self.stream = real_open(path, "r", encoding="utf-8", errors="replace")
+            return iter(self.stream)
+
+        def __exit__(self, *args):
+            self.stream.close()
+
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: LinesOnly())
+    assert list_sessions(tmp_path) == [session_mod.SessionSummary(
+        path=path, time="2026-10-03 12:00", n_messages=5,
+        last_user_text="last " + "x" * 55, workspace="workspace",
+        first_user_text="opening\nline", title="manual", archived=True, origin="sidechat",
+    )]
+
+
+def test_session_summary_without_metadata_uses_mtime(tmp_path):
+    path = tmp_path / "session_legacy.jsonl"
+    path.write_text('{"role": "user", "content": "old"}\n', encoding="utf-8")
+    os.utime(path, (1_700_000_000, 1_700_000_000))
+    expected = time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime))
+    assert list_sessions(tmp_path)[0].time == expected
+    assert list_sessions(tmp_path / "missing") == []

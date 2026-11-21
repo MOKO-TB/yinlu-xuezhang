@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 
 from minicode.llm import AssistantTurn
@@ -781,29 +782,27 @@ def search_history(ctx, query: str, limit: int = 3) -> str:
     return "\n".join(lines)
 
 
-def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
-    """扫描 sessions 目录,按修改时间倒序返回最近的历史会话摘要。"""
-    if not log_dir.exists():
-        return []
-    summaries: list[SessionSummary] = []
-    files = sorted(log_dir.glob("session_*.jsonl"),
-                   key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
-    for p in files:
-        n_messages = 0
-        last_user_text = ""
-        first_user_text = ""
-        workspace = ""
-        title = ""
-        archived = False
-        origin = ""
-        started = time.strftime("%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime))
-        for line in p.read_text(encoding="utf-8").splitlines():
+@lru_cache(maxsize=128)
+def _read_session_summary(path: Path, mtime_ns: int, ctime_ns: int,
+                          size: int, inode: int) -> SessionSummary:
+    n_messages = 0
+    last_user_text = ""
+    first_user_text = ""
+    workspace = ""
+    title = ""
+    archived = False
+    origin = ""
+    started = time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime_ns / 1_000_000_000))
+    with path.open("r", encoding="utf-8", errors="replace") as lines:
+        for line in lines:
             line = line.strip()
             if not line:
                 continue
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
                 continue
             if obj.get("type") == "session_start":
                 if obj.get("time"):
@@ -818,12 +817,35 @@ def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
                 if not first_user_text:
                     first_user_text = obj["content"]   # 只有第一条入账(标题用)
                 last_user_text = obj["content"]
-        summaries.append(SessionSummary(
-            path=p, time=started, n_messages=n_messages,
-            last_user_text=last_user_text.replace("\n", " ")[:60],
-            workspace=workspace, first_user_text=first_user_text,
-            title=title, archived=archived, origin=origin,
-        ))
+    return SessionSummary(
+        path=path, time=started, n_messages=n_messages,
+        last_user_text=last_user_text.replace("\n", " ")[:60],
+        workspace=workspace, first_user_text=first_user_text,
+        title=title, archived=archived, origin=origin,
+    )
+
+
+def list_sessions(log_dir: Path, limit: int = 10) -> list[SessionSummary]:
+    """扫描 sessions 目录,按修改时间倒序返回最近的历史会话摘要。"""
+    if not log_dir.exists():
+        return []
+    summaries: list[SessionSummary] = []
+    files = []
+    for path in log_dir.glob("session_*.jsonl"):
+        try:
+            files.append((path, path.stat()))
+        except OSError:
+            continue
+    files.sort(key=lambda item: item[1].st_mtime, reverse=True)
+    for path, stat in files[:limit]:
+        try:
+            summary = _read_session_summary(
+                path.absolute(), stat.st_mtime_ns, stat.st_ctime_ns,
+                stat.st_size, stat.st_ino,
+            )
+        except OSError:
+            continue
+        summaries.append(replace(summary, path=path))
     # 归档的沉到末尾,但**不从这里消失**:侧栏 /resume / 分支 / 搜索用的是同一份序号,
     # 一隐藏就把别人的坐标弄破(要"删除"得是另一件明说过的动作,这里不代做)。
     summaries.sort(key=lambda s: s.archived)   # 稳定排序:未归档的相对次序不变

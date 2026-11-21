@@ -2014,10 +2014,18 @@ try {
            border:1px solid var(--line-soft); overflow:hidden; margin:9px 0 0; }
   .pl-bar i{ display:block; height:100%; width:0; background:var(--primary);
              transition:width .25s ease; }
-  .pl-cols{ display:flex; gap:10px; margin:11px 0 2px; }
-  .pl-col{ flex:1; border:1px dashed var(--line-soft); border-radius:var(--r-m);
-           padding:7px 10px; font-size:11px; color:var(--text-3); line-height:1.65; }
+  .pl-cols{ display:flex; gap:10px; margin:11px 0 2px; align-items:flex-start; }
+  .pl-col{ flex:1 1 0; min-width:0; border:1px dashed var(--line-soft);
+           border-radius:var(--r-m); padding:7px 10px; font-size:11px;
+           color:var(--text-3); line-height:1.65; }
   .pl-col b{ display:block; font-size:11.5px; color:var(--text-2); margin-bottom:2px; }
+  /* 依赖 chip:以前是 inline span,长标题换行时行盒高度不算 padding/边框,
+     两行 chip 会互相压住(用户图 p2)。改成 inline-block + 单行省略:
+     每枚 chip 占真实高度,标题放不下的部分给省略号,完整标题在下面步骤里。 */
+  .pl-col .pl-badge{ display:inline-block; max-width:100%; white-space:nowrap;
+                     overflow:hidden; text-overflow:ellipsis; vertical-align:top;
+                     margin:2px 4px 0 0; line-height:1.5; }
+  @media (max-width: 760px){ .pl-cols{ flex-direction:column; } }
   .pl-body{ max-height:48vh; overflow-y:auto; margin:10px 0 0; display:flex;
             flex-direction:column; gap:8px; }
   .pl-step{ border:1px solid var(--line-soft); border-left:3px solid var(--line-soft);
@@ -3285,7 +3293,18 @@ try {
     max-width:none; padding:0; margin-bottom:12px; }
   #chat .placeholder .chips>span{ flex:0 0 100%; text-align:center;
     font-size:11px; font-weight:500; color:var(--text-3);
-    letter-spacing:.03em; text-shadow:none; margin-bottom:1px; }
+    letter-spacing:.03em; text-shadow:none; margin-bottom:1px; }  /* 建议 chips 用三列网格:比一行行长短不齐的胶囊更像一块可扫的入口;
+     10 枚刚好三行,不再把首页撑成四五行。 */
+  #chat .placeholder .chips.sug-chips{ display:grid;
+    grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px; }
+  #chat .placeholder .chips.sug-chips > span{ grid-column:1 / -1; }
+  #chat .placeholder .sug-chips .chip{ width:100%; justify-content:center; }
+  @media (max-width: 1180px){
+    #chat .placeholder .chips.sug-chips{ grid-template-columns:repeat(2, minmax(0,1fr)); }
+  }
+  @media (max-width: 760px){
+    #chat .placeholder .chips.sug-chips{ grid-template-columns:1fr; }
+  }
   html.dark #chat .placeholder .chips>span{ text-shadow:none; color:var(--text-3); }
   #chat .placeholder .chip{ background:transparent; border:1px solid var(--line);
     border-radius:999px; padding:6px 14px; font-size:12.5px; font-weight:500;
@@ -3535,10 +3554,85 @@ try {
   .msg .trace .toolcard.run, html.dark .msg .trace .toolcard.run,
   .msg .trace .toolcard.bad, html.dark .msg .trace .toolcard.bad{
     background:transparent; }
+
+  /* ---- 13. 导航栏收窄(向 ZCode 靠拢):入口栏只留图标,侧栏压到 232px ----
+     16 个面板入口仍在,但不再占「图标 + 字」两行;每格有 title 悬停说明。
+     会话列表改成单行(标题 + 短日期/条数),项目行收紧,聊天区多出 36px。 */
+  .app{ grid-template-columns:48px 232px 1fr; }
+  .app.side-closed{ grid-template-columns:48px 0 minmax(0,1fr); }
+  .app.act-open{ grid-template-columns:48px 232px 1fr var(--sp-w,300px); }
+  .app.side-closed.act-open{ grid-template-columns:48px 0 minmax(0,1fr) var(--sp-w,300px); }
+  .rail button{ width:40px; min-height:40px; padding:4px 0 3px; }
+  .rail button .cap{ display:none; }
+  .rail svg.ri{ width:17px; height:17px; }
+  .sidebar .logo{ padding:12px 12px 4px; }
+  .sidebar .logo .m{ width:26px; height:26px; }
+  .sidebar .school{ padding:0 12px 8px 47px; opacity:.55; }
+  .sidebar .school img{ height:22px; }
+  .side-title{ padding:13px 12px 4px; }
+  .side-newtask{ width:calc(100% - 8px); padding:6px 8px; }
+  .projects{ padding:0 6px 4px; }
+  .proj{ padding:6px 30px 6px 6px; }
+  .proj .n{ font-size:12px; }
+  .sess-search{ padding:0 6px 6px; }
+  .sessions{ padding:0 6px 6px; }
+  .sess{ display:flex; align-items:center; gap:6px;
+         padding:6px 32px 6px 8px; }
+  .sess .t{ flex:1; min-width:0; font-size:12px; }
+  .sess .m{ flex:none; margin:0; font-size:9.5px; white-space:nowrap; }
+  .ws-group-head{ padding:5px 6px 2px; }
   /* 只有过程、没有正文的那条消息:不再占一条隐藏的操作栏,并把行与下面的回答贴紧 */
   .msg.assistant.trace-only .acts{ display:none; }
   .msg.assistant.trace-only{ margin-bottom:8px; }
   .msg.assistant.trace-only .trace{ margin-bottom:0; }
+
+  /* ---- 14. 侧聊输入行:终端坞退役后这段 .tp-input 一直没有样式 ----
+     表现是输入框/发送键被挤到面板底部外面(用户图 p3)。现在它是页面底部
+     固定的一行,正文区自己滚,输入行永远完整可见。 */
+  .tp-input{ flex:none; display:flex; align-items:flex-end; gap:6px;
+             padding:8px 10px; border-top:1px solid var(--line-soft); }
+  .tp-input textarea{ flex:1; min-width:0; height:44px; max-height:120px;
+    resize:none; box-sizing:border-box; background:var(--glass-lite);
+    border:1px solid var(--line); border-radius:8px; padding:7px 9px;
+    font:inherit; font-size:12px; line-height:1.5; color:var(--text-1);
+    outline:none; }
+  .tp-input textarea:focus{ border-color:var(--text-3); }
+  .tp-input textarea::placeholder{ color:var(--text-3); }
+  .tp-input .b-yes{ flex:none; height:32px; padding:0 12px; border-radius:8px;
+                    font-size:12px; }
+
+  /* ---- 15. 终端坞:固定深色终端,不再随主题变成一块灰 ----
+     旧规则 `.td-body{background:var(--glass-soft)}` 在深色下是半透明白,
+     叠在深色底上就是一片看不清字的灰(用户图 p6)。 */
+  .term-dock{ background:#111413; border-top:1px solid rgba(255,255,255,.10);
+              color:#D7E1DC; }
+  .term-dock .td-head{ border-bottom-color:rgba(255,255,255,.08); }
+  .term-dock .td-head b{ color:#E8EAE7; }
+  .term-dock .td-note{ color:#8B948F; }
+  .term-dock .td-body{ background:transparent; color:#D7E1DC; }
+  .term-dock .td-body .t-prompt{ color:#E8EAE7; }
+  .term-dock .td-body .t-cmd{ color:#7FD5C9; }
+  .term-dock .td-body .t-dim,
+  .term-dock .td-body .t-banner{ color:#7C8781; }
+  .term-dock .td-body .t-err{ color:#E57066; }
+  .term-dock .td-body input#tpCmd{ color:#E8EAE7; caret-color:#7FD5C9; }
+  .term-dock .td-tab{ background:rgba(255,255,255,.06);
+    border-color:rgba(255,255,255,.12); color:#D7E1DC; }
+  .term-dock .act-ib{ color:#8B948F; }
+  .term-dock .act-ib:hover{ color:#E8EAE7; background:rgba(255,255,255,.08);
+                            border-color:transparent; }
+
+  /* ---- 16. 聊天轮次刻度:从"彩色滚动条"收成一条很轻的细线 ----
+     之前 5px tick + 9px 当前 + 青光,远看像一根坏掉的滚动条(用户图 p4)。 */
+  .chat-rail{ width:6px; right:8px; opacity:.85; }
+  .chat-rail .tick{ width:3px; min-height:6px; margin:1px 0; border-radius:2px; }
+  .chat-rail .tick:hover, .chat-rail .tick.on{ width:5px;
+    box-shadow:0 0 0 2px var(--primary-light); background:var(--primary); }
+  .chat-rail .tick-head{ width:12px; height:12px; flex:none; margin:0 0 3px;
+    border:none; background:var(--glass-lite); color:var(--text-3); }
+  .chat-rail .tick-head:hover{ width:12px; background:var(--surface);
+                               color:var(--text-1); box-shadow:none; }
+  .chat-rail .tick-head svg{ width:9px; height:9px; }
 </style>
 </head>
 <body>
@@ -4257,7 +4351,7 @@ try {
       <textarea class="mcf-tpl" id="mcfParam" spellcheck="false"
         placeholder='{ "reasoning_effort": reasoningLevel }'></textarea></div>
     <div class="mcf-hint">映射里的 <code>reasoningLevel</code> 会被换成实际档位;
-      写错(解不出 JSON)时**一个参数都不发**,不会送去半截猜测。</div>
+      写错(解不出 JSON)时一个参数都不发,不会送去半截猜测。</div>
     <div class="btns">
       <button class="b-no" id="mcfReset" title="清空这个模型的声明">重置</button>
       <button class="b-no" id="mcfCancel">取消</button>
@@ -4459,6 +4553,9 @@ let busy = false;
 const INPUT_HINT = $("input").placeholder;
 let currentSessionKey = null;   // 当前视图对应的会话(后台任务的事件不带这个键就不渲染)
 let cur = null;          // 当前助手消息块 {wrap, body, reasoning, text, reasoningText, timer}
+let chatBatch = null;    // 恢复会话时消息先挂到 DocumentFragment,最后一次替换(避免逐条布局抖动)
+let chatRenderEpoch = 0;
+let lastRegenerateButton = null;
 let activeAsk = null;    // 流内提问卡的当前状态(一次只让一张可操作)
 let activePlanReview = null;   // 流内计划核对卡的当前状态(批单与提问分家)
 const widgetCards = new Map();   // widget_id -> 卡片节点,实时事件去重
@@ -4508,7 +4605,7 @@ function scrollPin() {
   if (btn) btn.style.display = nearBottom ? "none" : "block";
 }
 chat.addEventListener("scroll", scrollPin);
-function toBottom() { if (nearBottom) chat.scrollTop = chat.scrollHeight; }
+function toBottom() { if (nearBottom && !chatBatch) chat.scrollTop = chat.scrollHeight; }
 $("scrollBtn").addEventListener("click", () => {
   nearBottom = true;
   chat.scrollTo({ top: chat.scrollHeight, behavior: "smooth" });
@@ -4523,6 +4620,7 @@ chat.addEventListener("click", (e) => {
 });
 
 function removePlaceholder() {
+  if (chatBatch) return;
   const p = chat.querySelector(".placeholder");
   if (p) p.remove();
 }
@@ -4613,7 +4711,7 @@ function renderHome() {
     <div class="home-tray">
       ${goRow}
       ${cdRow}
-      <div class="chips"><span>试试这些：</span>${mapChip}${libChip}${chips}</div>
+      <div class="chips sug-chips"><span>试试这些：</span>${mapChip}${libChip}${chips}</div>
       ${tipHtml}
     </div>
   </div>`;
@@ -4779,7 +4877,7 @@ function updRender() {
     line.className = "upd-line " + (okv ? "good" : "bad");
     line.textContent = okv
       ? ("下好了 · sha256 已核对(" + fmtMB(s.size) + ")")
-      : ("下好了 · **没做 sha256 校验**" + (s.why ? " —— " + s.why : "")
+      : ("下好了 · 没做 sha256 校验" + (s.why ? " —— " + s.why : "")
          + ";没核对的包不替你装");
     go.textContent = okv ? ((s.name || "").endsWith(".exe") ? "运行安装程序" : "打开所在文件夹")
                          : "不能装(校验没过)";
@@ -5334,17 +5432,66 @@ $("findClose").addEventListener("click", closeFind);
 
 /* 会话切换的快捷键要用侧栏最近一次渲染的清单,所以把它留一份 */
 let sessionItems = [];
+const NEW_SESSION_TARGET = Symbol("new-session");
+let sessSwitchTimer = 0;
+let sessSwitchPending = null;
+let sessSwitchActive = null;
+let sessSwitchTarget = null;
+
+function switchSessionSoon(id) {
+  if (id === undefined || id === null || id === "") return;
+  clearTimeout(sessSwitchTimer);
+  sessSwitchTimer = 0;
+  const selected = sessionItems.find(s => (s.file || s.index) === id);
+  if (sessSwitchActive === null && selected && selected.current) {
+    sessSwitchPending = null;
+    sessSwitchTarget = null;
+    if (sessQuery) clearSessionSearch();
+    return;
+  }
+  sessSwitchTarget = id;
+  sessSwitchPending = id === sessSwitchActive ? null : id;
+  if (sessSwitchPending === null) return;
+  sessSwitchTimer = setTimeout(() => {
+    sessSwitchTimer = 0;
+    flushSessionSwitch();
+  }, id === NEW_SESSION_TARGET ? 0 : 90);
+}
+
+async function flushSessionSwitch() {
+  // 桥会修改当前会话:同一时刻只允许一份请求,等待期间只保留最后一个目标。
+  if (sessSwitchActive !== null || sessSwitchPending === null) return;
+  const id = sessSwitchPending;
+  sessSwitchPending = null;
+  sessSwitchActive = id;
+  try {
+    const r = await (id === NEW_SESSION_TARGET
+      ? pywebview.api.new_task() : pywebview.api.resume_session(id));
+    if (sessSwitchTarget === id) {
+      if (r && r.ok === false) toast(r.msg, true);
+      else {
+        if (r && r.session) currentSessionKey = r.session;
+        if (sessQuery) clearSessionSearch();
+      }
+    }
+  } catch (e) {
+    if (sessSwitchTarget === id) toast((id === NEW_SESSION_TARGET ? "新建" : "切换")
+      + "会话失败:" + String(e).slice(0, 60), true);
+  } finally {
+    sessSwitchActive = null;
+    if (sessSwitchPending === null) sessSwitchTarget = null;
+    else if (!sessSwitchTimer) flushSessionSwitch();
+  }
+}
 
 function stepSession(delta) {
   const list = (sessionItems || []).filter(s => s && (s.file || s.index));
   if (list.length < 2) { toast("侧栏只有一条会话,没什么可切的"); return; }
-  let at = list.findIndex(s => s.current);
+  let at = sessSwitchTarget === null ? list.findIndex(s => s.current)
+    : list.findIndex(s => (s.file || s.index) === sessSwitchTarget);
   at = (at < 0 ? 0 : at) + delta;
   const next = list[(at + list.length) % list.length];
-  if (next.current) return;
-  pywebview.api.resume_session(next.file || next.index).then(r => {
-    if (r && r.ok === false) toast(r.msg, true);
-  });
+  switchSessionSoon(next.file || next.index);
 }
 
 document.addEventListener("dblclick", () => scheduleSelBar(0));       // 双击选词
@@ -5863,6 +6010,10 @@ function truncateDomFrom(ord) {
 }
 
 /* ---------------- 消息块 ---------------- */
+function chatMount(el) {
+  (chatBatch || $("chat")).appendChild(el);
+  return el;
+}
 function addUserMsg(text, atts) {
   removePlaceholder();
   lastUserQ = text;
@@ -5908,9 +6059,11 @@ function addUserMsg(text, atts) {
         // 成功走 resumed 事件:后端已切到新会话并推送整份历史
       }));
   });
-  chat.appendChild(wrap);
-  nearBottom = true; toBottom();
-  rebuildChatRail();      // 每来一问,导航条加一枚刻度(p6)
+  chatMount(wrap);
+  if (!chatBatch) {
+    nearBottom = true; toBottom();
+    rebuildChatRail();      // 每来一问,导航条加一枚刻度(p6)
+  }
 }
 
 function ensureAssistant() {
@@ -5934,7 +6087,7 @@ function ensureAssistant() {
       <button class="shr" title="把这段回答排成一张能发群的图片（带来源出处）" aria-label="生成分享图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-5 4 4 2-2 5 5"/></svg></button>
       <button class="shrc" title="把刚生成的那张分享图复制到剪贴板（不用再去找文件，Ctrl+V 直接粘）" aria-label="复制分享图"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5.5" y="5" width="13" height="16" rx="2"/><path d="M9 5V3.8h6V5M9 10h6M9 14h6"/></svg></button>
       <span class="rate"><button class="rt-up" title="这个回答有帮助" aria-label="有帮助"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 10.5v9M7.5 19.5H5.2a1.2 1.2 0 0 1-1.2-1.2v-6.6a1.2 1.2 0 0 1 1.2-1.2h2.3M7.5 10.5l3.3-6.2a1.5 1.5 0 0 1 2.6 1.4l-1 4.8h5.3a1.7 1.7 0 0 1 1.7 2l-1.2 5.8a2 2 0 0 1-2 1.6H7.5"/></svg></button><button class="rt-dn" title="这个回答不对/没帮助" aria-label="没帮助"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 13.5v-9M16.5 4.5h2.3A1.2 1.2 0 0 1 20 5.7v6.6a1.2 1.2 0 0 1-1.2 1.2h-2.3M16.5 13.5l-3.3 6.2a1.5 1.5 0 0 1-2.6-1.4l1-4.8H6.3a1.7 1.7 0 0 1-1.7-2l1.2-5.8a2 2 0 0 1 2-1.6h8.7"/></svg></button><button class="rt-re" title="撤掉这段回答,照原样再答一次" aria-label="重新生成"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v4.5h-4.5"/></svg></button></span></div>`;
-  chat.appendChild(wrap);
+  chatMount(wrap);
   bindCopy(wrap.querySelector(".cp"), () => wrap.dataset.raw);
   // 消息级反馈:👍/👎 只在带正文的助手消息上出现(纯工具调用消息的 .acts 会被整条移除)
   wrap.dataset.lastQ = lastUserQ || "";
@@ -5989,8 +6142,8 @@ function ensureAssistant() {
   // 「重新生成」:把这段回答撤下来,让后端照原样重跑那句提问(带上当时的附件消息体)。
   // 只给最后一条回答开着 —— 更早的那条点重答会把后面整段一起丢掉,所以直接关掉。
   const rtRe = wrap.querySelector(".rt-re");
-  chat.querySelectorAll(".msg.assistant .rt-re")
-    .forEach(b => { if (b !== rtRe) b.disabled = true; });
+  if (lastRegenerateButton) lastRegenerateButton.disabled = true;
+  lastRegenerateButton = rtRe;
   rtRe.addEventListener("click", () => {
     const api = window.pywebview && pywebview.api;
     if (!api || !api.regenerate || rtRe.classList.contains("pending")) return;
@@ -6107,6 +6260,11 @@ function startWorkTick(c) {
 function showTrace(c) {
   if (!c || !c.trace) return;
   c.trace.hidden = false;
+  if (chatBatch) {
+    c.trace.dataset.done = "1";
+    if (c.trSum) c.trSum.textContent = traceSummary(c, true);
+    return;
+  }
   if (!c.trace.dataset.workStart) c.trace.dataset.workStart = String(Date.now());
   if (c.trSum && !c.trace.dataset.done) c.trSum.textContent = traceSummary(c, false);
   startWorkTick(c);
@@ -6188,7 +6346,8 @@ function bumpTools(c, n) {
   if (!c) return;
   c.toolCount += n;
   c.trace.dataset.tools = String(c.toolCount);
-  if (!c.trace.dataset.done) c.trSum.textContent = traceSummary(c, false);
+  if (chatBatch) c.trSum.textContent = traceSummary(c, true);
+  else if (!c.trace.dataset.done) c.trSum.textContent = traceSummary(c, false);
 }
 
 function fixImages(root) {
@@ -6199,6 +6358,7 @@ function fixImages(root) {
     if (!src || src.startsWith("data:") || /^https?:/i.test(src) || img.dataset.fixing) return;
     img.dataset.fixing = "1";
     pywebview.api.get_asset(src).then(r => {
+      if (!img.isConnected) return;
       if (r && r.ok && r.data_url) { img.src = r.data_url; return; }
       const tip = document.createElement("span");
       tip.className = "img-miss";
@@ -6236,6 +6396,7 @@ async function renderMermaidBlocks(root) {
   if (!blocks.length) return;
   if (!(await ensureMermaid())) return;
   for (const code of blocks) {
+    if (!code.isConnected) continue;
     const pre = code.parentElement;
     if (pre.dataset.mmd === "1") continue;
     pre.dataset.mmd = "1";
@@ -6285,7 +6446,7 @@ async function renderMathBlocks(root) {
   if (!spans.length) return;
   if (!(await ensureKatex())) return;
   for (const el of spans) {
-    if (el.dataset.kx === "1") continue;
+    if (!el.isConnected || el.dataset.kx === "1") continue;
     el.dataset.kx = "1";                      // 一条只画一次,流式重画不重复排队
     try {
       el.innerHTML = katex.renderToString(el.textContent, {
@@ -6300,9 +6461,13 @@ function renderAssistant(force, final) {
   if (!c) return;
   const now = performance.now();
   if (!force && now - c.lastRender < 90) {
-    if (!c.timer) c.timer = setTimeout(() => { c.timer = null; renderAssistant(true); }, 95);
+    if (!c.timer) c.timer = setTimeout(() => {
+      c.timer = null;
+      if (cur === c) renderAssistant(true);
+    }, 95);
     return;
   }
+  if (c.timer) { clearTimeout(c.timer); c.timer = null; }
   c.lastRender = now;
   const hasText = !!c.text.trim();
   c.wrap.dataset.raw = c.text;
@@ -6904,7 +7069,7 @@ function addToolCard(name, summary, trust) {
   }
 
   const turn = cur || lastTraceTurn;          // 优先落进当前轮的 trace
-  const host = (turn && turn.tools) ? turn.tools : chat;
+  const host = (turn && turn.tools) ? turn.tools : (chatBatch || chat);
   host.appendChild(el);
   if (turn && turn.tools) {
     if (turn.think && !turn.think.dataset.stopped) thinkStop(turn);
@@ -7207,27 +7372,35 @@ window.__gcodeEvent = function (e) {
       cancelEdit(true);
       clearAttachments();
       drafts.length = 0; renderDrafts();   // 换了会话,上一轮攒的待插话不该还挂在输入框上
+      resetChatRendering();
       setBusy(false);
-      renderHome();
-      refreshHomeSuggestions();
-      loadTaskMetrics();            // 新会话的模型/消耗/占用从头算
-      cur = null; lastTool = null; lastTraceTurn = null;
+      if (!e.restoring) {
+        sessionItems = sessionItems.map(s => ({ ...s, current: false }));
+        renderHome();
+        refreshHomeSuggestions();
+        loadTaskMetrics();
+      }
       resetMap();
       closeFind();          // 聊天区整个重建:手上那些 Range 指向已摘掉的节点,计数会留着但跳不动
       break;
-    case "resumed":
+    case "resumed": {
       if (e.session) currentSessionKey = e.session;
       clearAttachments();
       renderHistory(e.messages || []);
+      if (typeof e.busy === "boolean") setBusy(e.busy);
       closeFind();          // 同上:换会话 = 旧 Range 全部失效,关条比留一个跳不动的计数诚实
       loadTaskMetrics();            // 恢复的会话按历史消息重新估算占用
       resetMap();
-      requestAnimationFrame(() => toBottom());
-      setTimeout(() => toBottom(), 80);      // 异步布局后再补一次,确保看到最新回答
+      const epoch = chatRenderEpoch;
+      const scroll = () => { if (epoch === chatRenderEpoch) toBottom(); };
+      requestAnimationFrame(scroll);
+      setTimeout(scroll, 80);
       break;
+    }
     case "sessions":
-      // 搜索态下不覆盖结果列表:否则后台推一次会话清单,用户搜到的东西就没了
-      if (!sessQuery) renderSessions(e.items || []);
+      // 搜索态下只更新会话状态,不覆盖搜索结果。
+      sessionItems = e.items || [];
+      if (!sessQuery) renderSessions(sessionItems);
       break;
     case "mcp_summary":           // MCP 状态在「模型管理」与对话内 mcp 工具可查(侧栏行已删)
       break;
@@ -7407,9 +7580,27 @@ function openChangesSection() {
   requestAnimationFrame(seek);
 }
 
+function resetChatRendering() {
+  chatRenderEpoch++;
+  for (const c of [cur, lastTraceTurn]) {
+    if (c && c.timer) { clearTimeout(c.timer); c.timer = null; }
+  }
+  chat.querySelectorAll(".trace").forEach(el => {
+    if (el._workTimer) { clearInterval(el._workTimer); el._workTimer = null; }
+    const think = el.querySelector(".think");
+    if (think && think._thTimer) { clearInterval(think._thTimer); think._thTimer = null; }
+  });
+  cur = null;
+  lastTraceTurn = null;
+  lastTool = null;
+  lastRegenerateButton = null;
+}
+
 function renderHistory(messages) {
   if (fullscreenArt) closeArtifactFullscreen();
-  chat.innerHTML = "";
+  resetChatRendering();
+  const frag = document.createDocumentFragment();
+  chatBatch = frag;
   hintTurn = 0;          // 换会话 = 那一问说过没有的账要重记(回合号是**会话内**的坐标)
   livePlanCard = null;   // 整段对话被换掉:旧卡片节点已经不在 DOM 里了
   livePlanKey = "";
@@ -7423,6 +7614,7 @@ function renderHistory(messages) {
   const openPlans = new Set();
   widgetCards.clear();
   annState = null;      // 整段对话被换掉:批注 iframe 已不在 DOM 里,别再收它的消息
+  try {
   for (const m of messages) {
     if (m.role === "user") addUserMsg(m.text, m.atts);
     else if (m.role === "assistant") {
@@ -7482,10 +7674,16 @@ function renderHistory(messages) {
   });
   // 正在等你的卡不属于历史:重建完把它重新挂到末尾,切会话/恢复都不会把它弄丢。
   if (activeAsk && !activeAsk.done) {
-    chat.appendChild(activeAsk.el);
+    chatMount(activeAsk.el);
   }
   if (activePlanReview && !activePlanReview.done) {
-    chat.appendChild(activePlanReview.el);
+    chatMount(activePlanReview.el);
+  }
+  } finally {
+    // 哪怕上面某条历史消息解析抛了,也不能把全局 chatBatch 留在 fragment 上;
+    // 一次失败之后所有新消息都会挂进一个已经不要的 fragment。
+    chat.replaceChildren(frag);
+    chatBatch = null;
   }
   refreshAskBar();
   nearBottom = true; toBottom();
@@ -7545,16 +7743,15 @@ function renderSessions(items) {
       // v0.9.98:标题(第一条提问派生)优先 —— 最后一句会漂,题目不该漂;
       // 老留档没有 title 字段时退回原样,兼容不破
       el.querySelector(".tt").textContent = s.title || s.last_user_text || "(无用户消息)";
+      const shortTime = String(s.time || "").slice(5, 10);
       el.querySelector(".m").textContent =
-        `${s.time} · ${s.n_messages} 条` + (s.running ? " · 运行中" : "");
+        (shortTime ? shortTime + " · " : "") + `${s.n_messages} 条`
+        + (s.running ? " · 运行中" : "");
       if (!g.here && s.workspace) el.title = `属于工作区:${s.workspace}`;
       el.addEventListener("click", () => {
-        if (s.current) return;
         // 切换会话不会打断任何任务:后台会话继续跑,切回去就能看到最新进度
         // 回传文件名(不是序号):渲染到点击之间若有新会话落盘,序号会错位
-        pywebview.api.resume_session(s.file || s.index).then(r => {
-          if (r && r.ok === false) toast(r.msg, true);
-        });
+        switchSessionSoon(s.file || s.index);
       });
       el.querySelector(".sx").addEventListener("click", (ev) => {
         ev.stopPropagation();
@@ -7589,7 +7786,7 @@ function openSessMenu(ev, s, row) {
   const id = s.file || s.index;              // 认文件名:渲染到点击之间序号会错位
   const items = [
     { label: "打开这条会话",
-      on: () => pywebview.api.resume_session(id).then(r => { if (r && r.ok === false) toast(r.msg, true); }) },
+      on: () => switchSessionSoon(id) },
     { label: "分叉此会话 (Fork)",
       on: () => {
         if (busy) { toast("当前有任务正在进行中,分叉要等它停", true); return; }
@@ -7692,12 +7889,7 @@ function renderSessionHits(r) {
     el.querySelector(".m").textContent = `命中 ${h.hits} 处`;
     el.querySelector(".sess-hit").textContent = "…" + (h.snippet || "") + "…";
     el.title = "点一下切到这个会话";
-    el.addEventListener("click", () => {
-      pywebview.api.resume_session(h.file || h.index).then(r2 => {
-        if (r2 && r2.ok === false) { toast(r2.msg, true); return; }
-        clearSessionSearch();
-      });
-    });
+    el.addEventListener("click", () => switchSessionSoon(h.file || h.index));
     box.appendChild(el);
   }
 }
@@ -8121,7 +8313,7 @@ function mcfShowUnknown(name) {
   if (mcfProbeMsg) {
     note.textContent += " 刚才那次探测:" + mcfProbeMsg
       + "。已连通但窗口/图片输入没探出来 = 服务端不肯回探测请求;"
-      + "开着智能配置只能交给服务端默认,**关掉自己填**最稳"
+      + "开着智能配置只能交给服务端默认,关掉自己填最稳"
       + "(推理档位探测给不了,那是目录/声明的事)。";
     mcfProbeMsg = "";
   }
@@ -8572,8 +8764,10 @@ function doCompactContext(ev) {
 }
 
 function loadTaskMetrics() {
+  const session = currentSessionKey;
+  const epoch = chatRenderEpoch;
   pywebview.api.get_session_metrics().then(r => {
-    if (r.ok) renderTaskMetrics(r);
+    if (r.ok && session === currentSessionKey && epoch === chatRenderEpoch) renderTaskMetrics(r);
   }).catch(() => {});
 }
 $("taskModelBtn").addEventListener("click", (ev) => {
@@ -8732,11 +8926,8 @@ function renderProjects(d) {
 }
 
 function newTaskInProject() {
-  if (busy) toast("正在停止当前任务并新建…");
-  pywebview.api.new_task().then(r => {
-    if (r && r.ok === false) { toast(r.msg, true); return; }
-    if (r && r.session) currentSessionKey = r.session;
-  });
+  if (busy) toast("当前任务继续在后台运行,正在新建…");
+  switchSessionSoon(NEW_SESSION_TARGET);
 }
 
 function openProjMenu(r, anchor, isCur) {
@@ -9177,7 +9368,7 @@ function renderUsage(s) {
   if (unpriced.length) foot.push(`未标价(没算进总数,不是 $0):${unpriced.map(esc).join("、")}`);
   foot.push("缓存命中是端点回报了才记的,没回报显示「未记录」;价目是各家官方页挂牌价的本地快照,"
     + "滞后于官方页、不含折扣与峰谷档 —— 估算,非账单。人民币报价的按 ¥ 列、美元报价的按 $ 列,"
-    + "**不折成一个币种**(那需要一个我自己编的汇率);每一行的来源与核对日期在悬停那句里。"
+    + "不折成一个币种(那需要一个我自己编的汇率);每一行的来源与核对日期在悬停那句里。"
     + "要改价:「我的数据 → 设置与偏好」里的 pricing-override.json");
   const tile = (v, cap) => `<div class="cell"><b>${v}</b><span>${cap}</span></div>`;
   $("usageBody").innerHTML = `<div class="udash">
@@ -10342,7 +10533,7 @@ function showAskCard(e) {
   };
   qs.forEach(q => { st.picks[q.id] = []; st.free[q.id] = ""; });
   st.el = buildAskCard(st);
-  $("chat").appendChild(st.el);
+  chatMount(st.el);
   activeAsk = st;
   refreshAskBar();
   updateComposerPlaceholder();
@@ -10403,7 +10594,7 @@ function addHistoryAsk(call) {
   }
   const st = makeAskState(call);
   st.el = buildAskCard(st);
-  $("chat").appendChild(st.el);
+  chatMount(st.el);
   st.done = true;
   st.trace = "这一轮没有留下回答记录。";
   renderAskCard(st);
@@ -10473,7 +10664,7 @@ function showPlanReview(e) {
     _ui: null
   };
   st.el = buildPlanReview(st);
-  $("chat").appendChild(st.el);
+  chatMount(st.el);
   activePlanReview = st;
   refreshAskBar();
   updateComposerPlaceholder();
@@ -10783,7 +10974,7 @@ function addHistoryPlanReview(call) {
     _ui: null
   };
   st.el = buildPlanReview(st);
-  $("chat").appendChild(st.el);
+  chatMount(st.el);
   renderPlanReviewCard(st);
   return st;
 }
@@ -10886,12 +11077,12 @@ function addWidgetCard(spec, widgetId, session, opts) {
   if (spec.kind === "chart") renderChartCard(host, spec, el);
   else if (spec.kind === "table") renderTableCard(host, spec);
   else renderChecklistCard(host, spec, id);
-  $("chat").appendChild(el);
+  chatMount(el);
   widgetCards.set(id, el);
-  nearBottom = true;
-  // 新卡刚插进 DOM 时 scrollHeight 还是旧的;等一帧再滚到底,
-  // 否则最后一行会被输入区压住(与提问卡同一个坑)。
-  requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
+  if (!chatBatch) {
+    nearBottom = true;
+    requestAnimationFrame(() => { if (el.isConnected) toBottom(); });
+  }
   return el;
 }
 
@@ -12068,7 +12259,8 @@ function plList(nums, steps) {
   (steps || []).forEach(s => { by[s.n] = s; });
   return nums.map(n => {
     const s = by[n] || {};
-    return `<span class="pl-badge ${plLook(s).badge}">${n}. ${esc(s.title || "")}</span>`;
+    return `<span class="pl-badge ${plLook(s).badge}"`
+      + ` title="${esc(n + ". " + (s.title || ""))}">${n}. ${esc(s.title || "")}</span>`;
   }).join(" ");
 }
 
@@ -12920,7 +13112,7 @@ function buildUnledger(parent, ch) {
   const outside = e.files.filter(f => f && f.path && !sameFile(f.path, ch.items));
   if (!outside.length) return 0;
   parent.appendChild(actEl("act-s", "下面这些 git 看见、但不在我的撤销账里 —— "
-    + "多半是命令改的或你在别处改的,**退不掉**（与 HEAD 比,随环境栏刷新）"));
+    + "多半是命令改的或你在别处改的,退不掉（与 HEAD 比,随环境栏刷新）"));
   const rows = outside.slice(0, 8);
   for (const f of rows) {
     const row = actEl({ cls: "act-row plain" });
@@ -14698,7 +14890,7 @@ function openPanel(name) {
   if (typeof name === "string" && name.indexOf("session:") === 0) {
     const key = name.slice(8);
     if (window.pywebview && pywebview.api && pywebview.api.resume_session) {
-      pywebview.api.resume_session(key);
+      switchSessionSoon(key);
     }
     return;
   }
@@ -14750,7 +14942,7 @@ function boardAct(a) {
   const api = window.pywebview && window.pywebview.api;
   const overlay = $("boardOverlay");
   if (a.type === "session") {
-    if (api && api.resume_session) api.resume_session(a.index);
+    if (api && api.resume_session) switchSessionSoon(a.index);
     overlay.classList.remove("show");
     return;
   }
@@ -15706,8 +15898,7 @@ SidePages.register({
         <button class="act-ib" id="scNew" title="开一条新线程">＋</button></div>
       <div class="sp-body chatflow" id="scBody"></div>
       <div class="tp-input">
-        <textarea id="scText" rows="1" placeholder="问点别的,不打断主任务(Enter 发送)"
-          style="resize:none;height:52px"></textarea>
+        <textarea id="scText" rows="1" placeholder="问点别的,不打断主任务(Enter 发送)"></textarea>
         <button class="b-yes" id="scSend">发</button>
       </div>`;
     $("scNew").addEventListener("click", () => scNewThread());
@@ -15741,7 +15932,7 @@ async function scRefresh(keep) {
 
 function scShowEmpty() {
   SC.activeKey = ""; SC.activeFile = ""; SC.busy = false; SC.bubble = null;
-  $("scBody").innerHTML = '<div class="sp-empty">侧聊是**不打断主任务**的小会话:'
+  $("scBody").innerHTML = '<div class="sp-empty">侧聊是「不打断主任务」的小会话:'
     + "问个概念、改段文案、随手一算 —— 它有自己的上下文,主任务在跑也照常回话。"
     + "点右上角 ＋ 开第一条。</div>";
 }

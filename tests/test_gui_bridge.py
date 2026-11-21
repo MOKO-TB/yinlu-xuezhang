@@ -991,6 +991,8 @@ def test_resume_running_session_attaches_without_interrupt(config, tmp_path):
     assert bridge.resume_session(target)["ok"]
     assert bridge._current is running       # 接上的就是后台那个运行器
     assert bridge._busy                     # 仍在跑,没被打断
+    assert window.of_type("cleared")[-1]["restoring"] is True
+    assert window.of_type("resumed")[-1]["busy"] is True
     assert not any(e["type"] == "info" and "已中断" in (e.get("text") or "")
                    for e in window.events)
 

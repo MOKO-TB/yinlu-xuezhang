@@ -128,8 +128,9 @@ def test_archived_milestones_are_not_silently_dropped():
     section2 = (ROOT / "HANDOFF.md").read_text(encoding="utf-8") \
         .split("## 2.", 1)[1].split("\n## 3.", 1)[0]
     heads = {ln.split()[1] for ln in section2.splitlines() if ln.startswith("| v")}
-    newest_archived = rows[0].split()[1]                    # 如 v0.9.22
-    assert newest_archived not in heads, f"{newest_archived} 两处都有行首 = 没搬干净"
+    # 同一个版本号可能有多行里程碑:按**整行**比对,不能只比版本号
+    newest_archived_row = rows[0].strip()
+    assert newest_archived_row not in section2, "归档里最新那条仍在主文档 §2 = 没搬干净"
     assert "v" + check_docs.version_from_source() in heads, "最近一轮被归档掉了"
 
 

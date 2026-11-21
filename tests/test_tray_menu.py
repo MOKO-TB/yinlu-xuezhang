@@ -90,9 +90,10 @@ def test_the_menu_has_the_qoder_shape(fake_pystray):
     c.recent_fn = lambda: [("a.md", "本项目")]        # 有会话才摆那一叠(见另一条针)
     labels = _labels(c._build_menu())
     for want in ("显示主窗口", "新建任务", "最近会话", "设置(模型与密钥)",
-                 "桌面提醒(课前/简报/待办/通知)", "开机自动启动",
-                 "点 X 时先问我", "退出引路学长"):
+                 "桌面提醒(课前/简报/待办/通知)", "退出引路学长"):
         assert want in labels, labels
+    for gone in ("测试一条桌面通知", "开机自动启动", "点 X 时先问我"):
+        assert gone not in labels, f"托盘菜单应已收掉 {gone}:{labels}"
     assert labels.index("显示主窗口") < labels.index("新建任务"), "窗口动作在最上"
     assert labels[-1] == "退出引路学长", "退出必须压底(误点代价最大的一颗不该在手边)"
 
