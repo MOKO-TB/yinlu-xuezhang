@@ -154,6 +154,180 @@ def _spawn(ctx: ToolContext, args, *, cwd, env, stdout, stderr, stdin,
         creationflags=creationflags)
 
 
+def argv_context(workspace: Path, ctx: ToolContext | None = None) -> ToolContext:
+    """直接调用也有默认沙箱;已有会话的状态、授权与策略原样保留。"""
+    from dataclasses import replace
+    from minicode.config import Config
+    from minicode.sandbox import SandboxState, policy_from_raw
+
+    if ctx is None:
+        ctx = ToolContext(workspace=Path(workspace).resolve(), config=Config())
+    if ctx.sandbox is None:
+        ctx = replace(ctx, sandbox=SandboxState(
+            policy_from_raw(ctx.config.sandbox), Path(ctx.workspace).resolve()))
+    return ctx
+
+
+def argv_request(argv, *, cwd: Path, workspace: Path):
+    """只供权限门/确认框查看的等价命令,绝不交给 shell 执行。"""
+    import shlex
+    from minicode.tools.base import Tool
+
+    command = shlex.join([os.fspath(a).replace("\\", "/") for a in argv])
+    if Path(cwd).resolve() != Path(workspace).resolve():
+        command = f"cd {shlex.quote(Path(cwd).as_posix())} && {command}"
+    return (Tool("bash", "运行测试或诊断", {"type": "object"}, bash),
+            {"command": command})
+
+
+def _argv_redlines(ctx: ToolContext, command: str) -> None:
+    from minicode.permission import check_disaster_command
+
+    why = check_disaster_command(command)
+    level, note = check_command(ctx.sandbox.policy, command)
+    if why or level == sandbox_REJECT:
+        raise PermissionError(why or note)
+
+
+def authorize_argv(ctx: ToolContext, argv, *, cwd: Path, gate=None,
+                   ui=None, automatic: bool = False) -> None:
+    """复用真实 bash 门与脚本内容扫描;自动检查绝不弹确认。"""
+    from minicode.permission import ALLOW, ASK, REJECT, PermissionGate
+
+    supplied_gate = gate is not None
+    gate = gate if supplied_gate else PermissionGate(
+        ctx.config, sandbox=ctx.sandbox, workspace=ctx.workspace)
+    tool, args = argv_request(argv, cwd=cwd, workspace=ctx.workspace)
+    _argv_redlines(ctx, args["command"])
+    decision = gate.check(tool, args)
+    note, kind = gate.ask_note, gate.ask_kind
+    # 门的文本分词不理解带空格的路径。用准确 argv 补扫 Python 文件,
+    # 而不是把路径换成 basename、或把工具谎称只读来绕开原来的扫描。
+    if (decision != REJECT and ctx.sandbox.policy.enabled
+            and Path(argv[0]).name.lower() in gate.PY_HEADS):
+        for arg in argv[1:]:
+            if not str(arg).lower().endswith(".py") or str(arg).startswith("-"):
+                continue
+            path = Path(cwd) / arg
+            script_decision = gate._script_gate("py_script", {"path": str(path)})
+            if script_decision != ALLOW:
+                decision, note, kind = script_decision, gate.ask_note, gate.ask_kind
+                if decision == REJECT:
+                    break
+    if automatic and decision != ALLOW:
+        raise PermissionError("本次未检查，请显式请求运行诊断")
+    if decision == REJECT:
+        raise PermissionError(gate.reject_reason or note or "实际执行命令被权限门拒绝")
+    # 显式工具已有外层授权。解释器/检查器本身通常装在工作区外,但不能
+    # 因而豁免参数里另外引用的外部路径,更不能豁免脚本内容升级门。
+    approved = not supplied_gate and kind == "mode"
+    if not supplied_gate and kind == "outside_command":
+        from minicode.sandbox import command_touches_outside_path
+        _, operands = argv_request([Path(argv[0]).name, *argv[1:]],
+                                   cwd=cwd, workspace=ctx.workspace)
+        approved = command_touches_outside_path(
+            ctx.sandbox.policy, ctx.workspace, operands["command"]) is None
+    if decision == ASK and not approved:
+        ui = ui if ui is not None else ctx.ui
+        if ui is None:
+            raise PermissionError(note or "实际执行命令需要确认,本次未执行")
+        choice = ui.confirm_tool(tool, args, "运行测试或诊断", note)
+        if choice not in ("yes", "always"):
+            raise PermissionError("用户未允许实际执行命令,本次未执行")
+        if choice == "always":
+            gate.approve_for_turn(tool.name)
+        gate.approve_outside(tool, args, session=(choice == "always"))
+
+
+ARGV_OUTPUT_LIMIT = 1024 * 1024       # 每条管道最多保留 1 MiB 尾部,仍持续排空
+
+
+def run_argv(ctx: ToolContext, argv, *, cwd=None,
+             timeout: int = DEFAULT_TIMEOUT) -> subprocess.CompletedProcess:
+    """受策略约束的同步 argv 入口。输出及 TimeoutExpired.output 均为 bytes。"""
+    if isinstance(argv, (str, bytes)) or not argv:
+        raise ValueError("run_argv 需要非空 argv,不接受 shell 字符串")
+    ctx = argv_context(ctx.workspace, ctx)
+    cwd = Path(cwd if cwd is not None else ctx.workspace).resolve()
+    from minicode.tools.base import resolve_path
+    resolve_path(ctx, str(cwd))
+    argv = [os.fspath(a) for a in argv]
+    _, request = argv_request(argv, cwd=cwd, workspace=ctx.workspace)
+    _argv_redlines(ctx, request["command"])
+    spawn_args = argv
+    # 批处理必须有 cmd 宿主;仍走同一 _spawn 隔离层,不退回普通 Popen。
+    # call 保留带空格的批处理路径。cmd 并非 argv 解析器,只接受不会被二次
+    # 展开/解释的字面参数,其余明确失败,绝不尝试转义后赌一次执行。
+    if sys.platform == "win32" and Path(argv[0]).suffix.lower() in (".cmd", ".bat"):
+        if any(any(c in arg for c in '&|<>^()%!"\r\n') for arg in argv):
+            raise ValueError("批处理 argv 含 cmd 元字符,本次未执行")
+        cmd = str(Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32" / "cmd.exe")
+        spawn_args = [cmd, "/d", "/v:off", "/c", "call", *argv]
+        _, host_request = argv_request(spawn_args, cwd=cwd, workspace=ctx.workspace)
+        _argv_redlines(ctx, host_request["command"])
+    timeout = ctx.sandbox.policy.command_timeout(timeout)
+    env, _ = _child_env(ctx)
+    proc = _spawn(ctx, spawn_args, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                  creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0))
+    tree = _BgJob("argv", proc, request["command"])
+    buffers = [bytearray(), bytearray()]
+    truncated = [False, False]
+    readers = []
+
+    def drain(stream, index):
+        try:
+            while stream is not None:
+                chunk = stream.read1(8192) if hasattr(stream, "read1") else stream.read(8192)
+                if not chunk:
+                    break
+                buffers[index].extend(chunk)
+                if len(buffers[index]) > ARGV_OUTPUT_LIMIT:
+                    del buffers[index][:-ARGV_OUTPUT_LIMIT]
+                    truncated[index] = True
+        except (OSError, ValueError):     # 强杀/关管道时的预期异常
+            pass
+
+    timed_out = False
+    try:
+        tree.job = _new_job(proc)
+        for index, stream in enumerate((proc.stdout, proc.stderr)):
+            reader = threading.Thread(target=drain, args=(stream, index), daemon=True)
+            reader.start()
+            readers.append(reader)
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+    finally:
+        try:
+            if timed_out or proc.poll() is None:
+                _bg_kill_tree(tree)
+        finally:
+            if tree.job is not None:
+                with contextlib.suppress(Exception):
+                    tree.job.close()
+                tree.job = None
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=JOIN_AFTER_EXIT)
+            for reader in readers:
+                reader.join(JOIN_AFTER_EXIT)
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream is not None:
+                    with contextlib.suppress(Exception):
+                        stream.close()
+            # 隔离进程另外持有 token/CreateProcess 句柄,不等 GC 回收。
+            close = getattr(proc, "close", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    close()
+    output = [((b"[output truncated]\n" if cut else b"") + bytes(buf))
+              for buf, cut in zip(buffers, truncated)]
+    if timed_out:
+        raise subprocess.TimeoutExpired(argv, timeout, output=output[0], stderr=output[1])
+    return subprocess.CompletedProcess(argv, proc.returncode, output[0], output[1])
+
+
 def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
          background: bool = False) -> str:
     """在工作区目录执行一条 shell 命令,返回退出码与输出。
@@ -189,6 +363,8 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
     # 各一个读线程 —— 只读一条、或先 wait 再读,都会在另一条写满时把子进程卡死。
     # stdin 给 DEVNULL:以前它继承控制台,GUI 那边等于"永远没人输入",命令会干等;
     # 交互式命令仍然不该走这里(那是 PTY 那条没做的路),但现在不会吊住。
+    from minicode import planning
+    verification = planning.begin_verification(ctx, command)
     try:
         proc = _spawn(
             ctx, ([*argv, command] if argv is not None else command),
@@ -254,8 +430,7 @@ def bash(ctx: ToolContext, command: str, timeout: int = DEFAULT_TIMEOUT,
     # 跑完了的这条命令进「验收执行账」(V1):计划里带 `verify:` 的那一步靠这本账
     # 判断"到底跑过没有"。后台任务与超时的上面已经 return 掉了,不进这本账 ——
     # 它们没有"退出码是几"这个结论,记进去等于给"跑过了"开门。
-    from minicode import planning
-    planning.note_verify_run(ctx, command, proc.returncode, out or err)
+    planning.note_verify_run(ctx, command, proc.returncode, out or err, started=verification)
     return "\n".join(sections) + lost + env_note + isolation_note
 
 
@@ -390,6 +565,8 @@ class _BgJob:
         # —— 计划里写的判据不会被截,拿截过的去比就永远对不上。
         self.raw = " ".join(str(command).split())
         self.recorded = False       # 跑完那一刻有没有已经补进验收账(只补一次)
+        self.verification_ctx = None
+        self.verification_started = None
         self.env_note = env_note
         self.started = time.monotonic()
         self.chunks: list[str] = []
@@ -437,6 +614,7 @@ class _BgJob:
             with contextlib.suppress(Exception):
                 self.job.close()
             self.job = None
+        _bg_note_verify(self.verification_ctx, self)
         _bg_notify_done(self)
 
     def _append(self, text: str) -> None:
@@ -494,6 +672,8 @@ def _bg_start(ctx: ToolContext, command: str, argv: list[str] | None,
             return (f"错误: 已经有 {len(alive)} 个后台任务在跑(上限 {MAX_BG_JOBS}),"
                     "先 `bash_kill` 掉不要的,或者等它们结束。")
         job_id = _bg_new_id()
+    from minicode import planning
+    verification = planning.begin_verification(ctx, command)
     try:
         proc = _spawn(
             ctx, ([*argv, command] if argv is not None else command),
@@ -507,6 +687,8 @@ def _bg_start(ctx: ToolContext, command: str, argv: list[str] | None,
     except Exception as e:
         return f"错误: 后台启动失败({type(e).__name__}: {e})"
     job = _BgJob(job_id, proc, command, env_note, job=_new_job(proc))
+    job.verification_ctx = ctx
+    job.verification_started = verification
     with _bg_lock:
         _bg_jobs[job_id] = job
         _bg_prune_locked()        # 在跑的不受这条影响:只清已结束且播过的历史
@@ -786,12 +968,17 @@ def _bg_note_verify(ctx, job) -> None:
     没结束(拿不到退出码)的一律不记,与前台"超时不进账"同一句理由;`recorded`
     让它只记一次;补账失败绝不把状态播报带崩。
     """
-    if ctx is None or job.running or job.recorded or job.exit_code is None:
+    owner = getattr(job, "verification_ctx", None) or ctx
+    if owner is None or job.running or job.exit_code is None:
         return
-    job.recorded = True
+    with job.lock:
+        if job.recorded:
+            return
+        job.recorded = True
     try:
         from minicode import planning
-        planning.note_verify_run(ctx, job.raw, job.exit_code, job.tail(400))
+        planning.note_verify_run(owner, job.raw, job.exit_code, job.tail(400),
+                                 started=getattr(job, "verification_started", None))
     except Exception:
         pass
 

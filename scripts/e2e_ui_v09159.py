@@ -71,6 +71,15 @@ const base = {
   get_session_metrics: () => Promise.resolve({ok: false}),
   read_clipboard: () => Promise.resolve({text: "", image: false, source: "empty"}),
   get_activity: () => Promise.resolve(window.__ACT__),
+  continue_task_run: (id) => {
+    window.__CALLS__.push(["continue_task_run", id]);
+    window.__gcodeEvent({type: "cleared", session: "restored-parent", restoring: true});
+    window.__gcodeEvent({type: "resumed", session: "restored-parent", busy: false,
+      messages: [{role: "user", text: "原父会话"}]});
+    window.__gcodeEvent({type: "user", session: "restored-parent",
+      text: "人工继续任务 source_run_id=" + id + "，先核查状态，不重放已完成命令"});
+    return Promise.resolve({ok: true, session: "restored-parent", source_run_id: id});
+  },
   get_env_info: () => Promise.resolve({ok: true}),
   // ---- Git 页 ----
   git_overview: () => Promise.resolve({
@@ -215,6 +224,42 @@ def main() -> int:
               "两个子代理整列显示(来自 get_activity 的 groups)")
         check("explore 子代理" in page.locator("#spSubBody").text_content(),
               "子代理标题来自桥,不是前端编的")
+
+        page.evaluate("""() => {
+          window.__ACT__.task_runs = ["completed", "interrupted", "failed", "running", "unknown"]
+            .map((status, i) => ({id: "00000000-0000-4000-8000-00000000000" + i,
+              role: "implement", goal: "历史目标 <img src=x onerror=alert(1)>", status,
+              root_parent_log: "session_parent.jsonl", report: "已留下报告，仍需验收",
+              started_at: 1700000000, ended_at: i < 3 ? 1700000010 : null,
+              can_continue: i < 3}));
+        }""")
+        page.click("#spSubRefresh")
+        page.wait_for_selector("#spSubBody [data-task-run]")
+        check(page.locator("#spSubBody [data-task-run]").count() == 5,
+              "历史任务来自 task_runs，现有 groups 仍保留")
+        check(page.locator("#spSubBody [data-continue-run]").count() == 3,
+              "只有确认可恢复的三种终态提供继续按钮")
+        check(page.locator("#spSubBody img").count() == 0,
+              "历史目标与报告按文本渲染，不执行内容")
+        check(not any(c[0] == "continue_task_run" for c in page.evaluate("window.__CALLS__")),
+              "刷新和展示记录不会自动继续")
+        page.locator("#spSubBody [data-continue-run]").first.click()
+        page.wait_for_selector("#appConfirmOverlay.show")
+        confirm = page.locator("#appConfirmMsg").text_content()
+        check(all(t in confirm for t in ("新回合", "先核查", "不会自动撤销旧副作用")),
+              "人工确认说明新回合、核查与旧副作用边界")
+        page.click("#btnAppCancel")
+        check(not any(c[0] == "continue_task_run" for c in page.evaluate("window.__CALLS__")),
+              "取消不调用继续入口")
+        page.locator("#spSubBody [data-continue-run]").first.click()
+        page.click("#btnAppOk")
+        page.wait_for_function("window.__CALLS__.some(c => c[0] === 'continue_task_run')")
+        continued = [c for c in page.evaluate("window.__CALLS__") if c[0] == "continue_task_run"]
+        check(continued == [["continue_task_run", "00000000-0000-4000-8000-000000000000"]],
+              "确认后只传任务 UUID，调用一次继续入口")
+        check("原父会话" in page.locator("#chat").text_content()
+              and "source_run_id=" in page.locator("#chat").text_content(),
+              "cleared/resumed/user 事件恢复原父会话并展示新回合")
 
         # ⑥ 文件页:树来自 list_project_files,打开文件内容来自 file_read
         page.locator('#spTabs .sp-tab[title="文件"]').click()

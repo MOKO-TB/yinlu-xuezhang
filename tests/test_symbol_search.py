@@ -2,8 +2,12 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from minicode import symbol_search
+from minicode.agent import Agent
 from minicode.tools.base import ToolContext
+from minicode.tools.registry import build_default_registry
 
 
 def test_python_ast_symbols(tmp_path: Path):
@@ -187,8 +191,103 @@ def test_ignore_directories(tmp_path: Path):
     assert res["symbols"][0]["name"] == "main"
 
 
+def test_unchanged_files_are_parsed_once_and_copies_are_independent(tmp_path, monkeypatch):
+    from minicode import symbol_search as ss
+    calls = []
+    real = ss.extract_python_symbols
+
+    def spy(code, rel):
+        calls.append(rel)
+        return real(code, rel)
+
+    monkeypatch.setattr(ss, "extract_python_symbols", spy)
+    ss._extract_cached.cache_clear()
+    (tmp_path / "mod.py").write_text("def target_action():\n    pass\n", encoding="utf-8")
+    first = ss.search_symbols(tmp_path, query="target")
+    first["symbols"][0]["name"] = "mutated"
+    second = ss.search_symbols(tmp_path, query="target")
+    assert second["symbols"][0]["name"] == "target_action"
+    assert calls == ["mod.py"], "同一份没变的文件不该被重复解析"
+
+    old = (tmp_path / "mod.py").stat()
+    (tmp_path / "mod.py").write_text("def target_action():\n    pass\ndef target_new():\n    pass\n",
+                                     encoding="utf-8")
+    import os
+    os.utime(tmp_path / "mod.py", ns=(old.st_atime_ns, old.st_mtime_ns + 1_000_000_000))
+    third = ss.search_symbols(tmp_path, query="target")
+    assert calls == ["mod.py", "mod.py"] and third["total_found"] == 2
+
+
+def test_symbol_index_survives_restart_and_invalidates_changed_files(tmp_path, monkeypatch):
+    import os
+    from minicode import symbol_index
+    from minicode import symbol_search as ss
+    calls = []
+    real = ss.extract_python_symbols
+
+    def spy(code, rel):
+        calls.append(rel)
+        return real(code, rel)
+
+    monkeypatch.setattr(ss, "extract_python_symbols", spy)
+    ss._extract_cached.cache_clear()
+    symbol_index._CACHE.clear()
+    source = tmp_path / "mod.py"
+    source.write_text("def alpha():\n    pass\n", encoding="utf-8")
+    assert ss.search_symbols(tmp_path)["total_found"] == 1
+    assert calls == ["mod.py"]
+
+    # 模拟换一个进程：内存缓存全清，磁盘索引还在。
+    ss._extract_cached.cache_clear()
+    symbol_index._CACHE.clear()
+    assert ss.search_symbols(tmp_path, query="alpha")["total_found"] == 1
+    assert calls == ["mod.py"], "重启后不应重新解析未变化的文件"
+
+    old = source.stat()
+    source.write_text("def beta():\n    pass\n", encoding="utf-8")
+    os.utime(source, ns=(old.st_atime_ns, old.st_mtime_ns + 1_000_000_000))
+    ss._extract_cached.cache_clear()
+    symbol_index._CACHE.clear()
+    assert ss.search_symbols(tmp_path, query="beta")["total_found"] == 1
+    assert calls == ["mod.py", "mod.py"], "变化的文件必须重新解析"
+
+    source.unlink()
+    ss._extract_cached.cache_clear()
+    symbol_index._CACHE.clear()
+    assert ss.search_symbols(tmp_path)["total_found"] == 0
+    assert symbol_index._target(tmp_path).is_file()
+
+
+def test_corrupt_symbol_index_is_ignored(tmp_path, monkeypatch):
+    from minicode import symbol_index
+    from minicode import symbol_search as ss
+    ss._extract_cached.cache_clear()
+    symbol_index._CACHE.clear()
+    (tmp_path / "mod.py").write_text("def alpha():\n    pass\n", encoding="utf-8")
+    target = symbol_index._target(tmp_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("{broken", encoding="utf-8")
+    symbol_index._CACHE.clear()
+    assert ss.search_symbols(tmp_path, query="alpha")["total_found"] == 1
+
+
+def test_symbol_index_isolated_between_workspaces(tmp_path):
+    from minicode import symbol_index
+    from minicode import symbol_search as ss
+    first, second = tmp_path / "a", tmp_path / "b"
+    first.mkdir()
+    second.mkdir()
+    (first / "one.py").write_text("def only_here():\n    pass\n", encoding="utf-8")
+    (second / "two.py").write_text("def somewhere_else():\n    pass\n", encoding="utf-8")
+    ss._extract_cached.cache_clear()
+    symbol_index._CACHE.clear()
+    assert ss.search_symbols(first, query="only_here")["total_found"] == 1
+    assert ss.search_symbols(second, query="only_here")["total_found"] == 0
+    assert symbol_index._target(first) != symbol_index._target(second)
+
+
 def test_tool_no_ctx():
-    got = symbol_search.symbol_search_tool(query="test", ctx=None)
+    got = symbol_search.symbol_search_tool(None, query="test")
     assert "无法获取当前工作区路径" in got
 
 
@@ -197,10 +296,42 @@ def test_tool_format(tmp_path: Path):
     ctx = MagicMock(spec=ToolContext)
     ctx.workspace = tmp_path
 
-    got = symbol_search.symbol_search_tool(query="action", ctx=ctx)
+    got = symbol_search.symbol_search_tool(ctx, query="action")
     assert "匹配 1 项" in got
     assert "mod.py:1" in got
     assert "do_action" in got
 
-    got_none = symbol_search.symbol_search_tool(query="nonexistent", ctx=ctx)
+    got_none = symbol_search.symbol_search_tool(ctx, query="nonexistent")
     assert "未在工作区找到匹配的符号" in got_none
+
+
+@pytest.mark.parametrize("args,summary,names", [
+    ({}, "匹配 4 项", ("target_action", "target_extra", "TargetService", "target_outside")),
+    ({"query": "action"}, "匹配 1 项", ("target_action",)),
+    ({"query": "target", "kind": "function", "path": "src", "max_results": 1},
+     "匹配 2 项, 显示前 1 项", ("target_action",)),
+    ({"query": "nonexistent"}, "未在工作区找到匹配的符号", ()),
+], ids=["defaults", "query", "all-parameters", "no-match"])
+def test_registered_tool_runs_through_agent(tmp_path: Path, ctx: ToolContext, args, summary, names):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "mod.py").write_text(
+        "def target_action(): pass\ndef target_extra(): pass\nclass TargetService: pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "outside.py").write_text("def target_outside(): pass\n", encoding="utf-8")
+    tool = next(t for t in build_default_registry() if t.name == "symbol_search")
+    assert tool.handler is symbol_search.symbol_search_tool
+    # 只初始化执行入口所需的 ctx,不启动 Agent 会话或读取真实配置。
+    agent = Agent.__new__(Agent)
+    agent.ctx = ctx
+
+    result, elapsed_ms = agent._run_handler(tool, args)
+
+    assert summary in result
+    for name in ("target_action", "target_extra", "TargetService", "target_outside"):
+        assert (name in result) == (name in names)
+    if "target_action" in names:
+        assert "src/mod.py:1" in result
+    assert isinstance(elapsed_ms, int)
+    assert elapsed_ms >= 0

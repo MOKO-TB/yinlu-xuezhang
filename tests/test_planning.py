@@ -1,5 +1,7 @@
 """计划模式测试:写入/读取/更新/解析/校验 + 面板状态与「一键派发」指令。"""
 
+import pytest
+
 from minicode import planning as pl
 
 from minicode.planning import (blocked_steps, dispatch_end, dispatch_start,
@@ -556,7 +558,8 @@ def test_done_accepted_after_real_run(tmp_path):
     plan(ctx, "write", goal="修登录",
          steps=[{"title": "A"}, {"title": "修跳转", "verify": "pytest -q t.py"}])
     from minicode.planning import note_verify_run
-    note_verify_run(ctx, "pytest -q t.py", 0, "1 passed")
+    note_verify_run(ctx, "pytest -q t.py", 0, "1 passed",
+                    started=pl.begin_verification(ctx, "pytest -q t.py"))
     r = plan(ctx, "update", step=2, status="done")
     assert "已标记第 2 步为 done" in r
     note = plan_state(tmp_path)["steps"][1]["note"]
@@ -589,7 +592,8 @@ def test_verify_ledger_is_memory_only(tmp_path):
     """这本账只在内存:落盘就要交四处登记税,还会造出第二份真相(设计稿 §五)。"""
     ctx = _vctx(tmp_path)
     from minicode.planning import note_verify_run
-    note_verify_run(ctx, "pytest -q t.py", 0, "1 passed")
+    note_verify_run(ctx, "pytest -q t.py", 0, "1 passed",
+                    started=pl.begin_verification(ctx, "pytest -q t.py"))
     assert ctx.verify_runs[-1]["code"] == 0
     assert not (tmp_path / "plans").exists() or [
         p.name for p in (tmp_path / "plans").glob("*")] == []
@@ -643,7 +647,8 @@ def test_verify_run_marks_note_green(tmp_path):
     import re as _re
     verify = "python -m pytest tests/x.py"
     ctx = _plan_with_verify(tmp_path, verify)
-    pl.note_verify_run(ctx, verify, code=0, output="1 passed")
+    pl.note_verify_run(ctx, verify, code=0, output="1 passed",
+                       started=pl.begin_verification(ctx, verify))
     text = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
     assert "verify ✓" in text
     assert _re.search(r"verify ✓ \d{2}:\d{2}:\d{2}", text)
@@ -670,6 +675,98 @@ def test_second_run_replaces_old_mark_not_piles(tmp_path):
     verify = "python -m pytest tests/x.py"
     ctx = _plan_with_verify(tmp_path, verify)
     pl.note_verify_run(ctx, verify, code=1, output="fail")
-    pl.note_verify_run(ctx, verify, code=0, output="pass")
+    pl.note_verify_run(ctx, verify, code=0, output="pass",
+                       started=pl.begin_verification(ctx, verify))
     text = (tmp_path / "plans" / "plan.md").read_text(encoding="utf-8")
     assert text.count("verify ✓") == 1 and "verify ✗" not in text
+
+
+@pytest.mark.parametrize("change", ["edit", "add", "delete", "rename"])
+def test_verification_expires_after_workspace_changes(tmp_path, change):
+    ctx = _plan_with_verify(tmp_path, "check")
+    source = tmp_path / "source.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    started = pl.begin_verification(ctx, "check")
+    pl.note_verify_run(ctx, "check", 0, started=started)
+    assert pl.verification_status(ctx, "check") == "passed"
+    if change == "edit":
+        source.write_text("value = 222\n", encoding="utf-8")
+    elif change == "add":
+        (tmp_path / "new.py").write_text("value = 1\n", encoding="utf-8")
+    elif change == "delete":
+        source.unlink()
+    else:
+        source.rename(tmp_path / "renamed.py")
+    assert pl.verification_status(ctx, "check") == "stale"
+    assert "已过期" in pl.plan(ctx, "update", step=1, status="done")
+    assert pl.plan_state(tmp_path)["steps"][0]["status"] == "pending"
+    pl.note_verify_run(ctx, "check", 0, started=pl.begin_verification(ctx, "check"))
+    assert "已标记第 1 步为 done" in pl.plan(ctx, "update", step=1, status="done")
+
+
+def test_change_during_verification_cannot_be_certified(tmp_path):
+    ctx = _plan_with_verify(tmp_path, "check")
+    started = pl.begin_verification(ctx, "check")
+    (tmp_path / "new.py").write_text("value = 1\n", encoding="utf-8")
+    pl.note_verify_run(ctx, "check", 0, started=started)
+    assert pl.verification_status(ctx, "check") == "stale"
+    assert "verify ✓" not in pl.plan_path(ctx).read_text(encoding="utf-8")
+    assert "过期" in pl.plan(ctx, "update", step=1, status="done")
+
+
+def test_verification_requires_start_snapshot_and_readable_workspace(tmp_path, monkeypatch):
+    ctx = _plan_with_verify(tmp_path, "check")
+    pl.note_verify_run(ctx, "check", 0)
+    assert pl.verification_status(ctx, "check") == "stale"
+    monkeypatch.setattr(pl, "workspace_fingerprint", lambda workspace: None)
+    pl.note_verify_run(ctx, "check", 0, started=pl.begin_verification(ctx, "check"))
+    assert pl.verification_status(ctx, "check") == "stale"
+
+
+def test_plan_changes_expire_verification_but_status_and_caches_do_not(tmp_path):
+    ctx = _plan_with_verify(tmp_path, "check")
+    pl.note_verify_run(ctx, "check", 0, started=pl.begin_verification(ctx, "check"))
+    (tmp_path / ".pytest_cache").mkdir()
+    (tmp_path / ".pytest_cache" / "cache.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "app.log").write_text("runtime output", encoding="utf-8")
+    (tmp_path / "usage.db").write_bytes(b"sqlite")
+    pl.plan(ctx, "update", step=2, status="done")
+    assert pl.verification_status(ctx, "check") == "passed"
+    assert "为 done" in pl.plan(ctx, "update", step=1, status="done")
+    assert pl.verification_report(ctx)["status"] == "passed"
+    text = pl.plan_path(ctx).read_text(encoding="utf-8").replace("写模块", "另一项需求")
+    pl.plan_path(ctx).write_text(text, encoding="utf-8")
+    assert pl.verification_report(ctx)["status"] == "incomplete"
+    assert pl.verification_status(ctx, "check") == "stale"
+
+
+def test_verification_report_distinguishes_failure_missing_and_expiry(tmp_path):
+    ctx = _plan_with_verify(tmp_path, "check")
+    assert pl.verification_report(ctx)["steps"][0]["status"] == "unverified"
+    pl.note_verify_run(ctx, "check", 1, "failure", started=pl.begin_verification(ctx, "check"))
+    assert pl.verification_report(ctx)["steps"][0]["status"] == "failed"
+    pl.note_verify_run(ctx, "check", 0, started=pl.begin_verification(ctx, "check"))
+    assert pl.verification_report(ctx)["steps"][0]["status"] == "passed"
+    assert pl.verification_report(ctx)["status"] == "incomplete"
+
+
+def test_background_verification_belongs_to_starting_context(tmp_path):
+    from types import SimpleNamespace
+    from minicode.tools import shell
+    owner_dir = tmp_path / "owner"
+    owner_dir.mkdir()
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    owner = _plan_with_verify(owner_dir, "check")
+    other = _plan_with_verify(other_dir, "check")
+    job = shell._BgJob("test", SimpleNamespace(poll=lambda: 0), "check")
+    job.verification_ctx = owner
+    job.verification_started = pl.begin_verification(owner, "check")
+    shell._bg_note_verify(other, job)
+    shell._bg_note_verify(owner, job)
+    assert len(owner.verify_runs) == 1
+    assert not getattr(other, "verify_runs", [])
+    assert pl.verification_status(owner, "check") == "passed"
+    (owner_dir / "changed.py").write_text("x = 1", encoding="utf-8")
+    shell._bg_note_verify(other, job)
+    assert pl.verification_status(owner, "check") == "stale"

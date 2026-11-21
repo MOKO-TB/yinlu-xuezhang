@@ -251,6 +251,25 @@ class _Session:
     log_path = Path("sessions/a.jsonl")
 
 
+def test_unfinished_verification_is_not_a_successful_exit():
+    ui = HeadlessUI(_Inner())
+    cfg = Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",
+                                     api_key="k", model="m")], active_provider_id="t")
+    agent = Agent.__new__(Agent)
+    agent.verification_report = {"status": "incomplete", "steps": [],
+                                 "summary": "第 1 步未验证"}
+    result = headless.build_result(ui, agent, _Session(), cfg, task="改代码",
+                                   elapsed_ms=3, fmt="json")
+    assert result["ok"] is False
+    assert result["exit_code"] == headless.EXIT_VERIFICATION_INCOMPLETE
+    assert result["status"] == "verification_incomplete"
+    assert result["verification"]["summary"] == "第 1 步未验证"
+
+    agent.verification_report = {"status": "passed", "steps": [], "summary": "已通过"}
+    assert headless.build_result(ui, agent, _Session(), cfg, task="改代码",
+                                 elapsed_ms=3, fmt="json")["exit_code"] == 0
+
+
 def test_response_is_the_last_assistant_message():
     ui = HeadlessUI(_Inner())
     cfg = Config(providers=[Provider(id="t", name="T", base_url="https://x/v1",

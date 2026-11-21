@@ -106,6 +106,19 @@ def make(config, tmp_path, llm):
     return bridge, window, session
 
 
+def make_project_bridge(config, tmp_path, llm):
+    old_ws, new_ws = tmp_path / "old-project", tmp_path / "new-project"
+    old_ws.mkdir()
+    new_ws.mkdir()
+    bridge, ui, _agent, _session = create_app(
+        config, old_ws, llm=llm, sessions_dir=tmp_path / "sessions",
+        config_path=tmp_path / "config.json",
+        workspace_file=tmp_path / "workspaces.json", app_dir=tmp_path)
+    window = FakeWindow()
+    ui.attach(window)
+    return bridge, window, old_ws, new_ws
+
+
 def _write_call(call_id="c1"):
     import json as _json
     return ToolCall(id=call_id, name="write_file",
@@ -682,7 +695,8 @@ def test_edit_resend_guard_mismatches(config, tmp_path):
 def test_get_suggestions_reflects_history(config, tmp_path):
     bridge, _, session = make(config, tmp_path, FakeLLM([AssistantTurn(text="x")]))
     fresh = bridge.get_suggestions()["suggestions"]
-    assert fresh[0] == "最近学校有什么活动"        # 无历史 → 默认顺序
+    assert len(fresh) == 9
+    assert "宿舍水电维修流程是什么" not in fresh  # 无历史 → 只出主题 ask,不出追问话术
 
     session.add_user("宿舍空调坏了")
     after = bridge.get_suggestions()["suggestions"]
@@ -999,6 +1013,215 @@ def test_resume_running_session_attaches_without_interrupt(config, tmp_path):
     gate.set()                              # 收尾:别让后台线程卡到超时
     assert wait_until(lambda: not running.busy)
     assert wait_until(lambda: not bridge._busy)
+
+
+@pytest.mark.parametrize("navigation", ["workspace", "cold_session"])
+def test_cross_workspace_task_finishes_in_original_context(config, tmp_path, monkeypatch,
+                                                           navigation):
+    from minicode.session import Session
+
+    entered, release = threading.Event(), threading.Event()
+
+    class GatedWriteLLM(FakeLLM):
+        def stream_chat(self, *args, **kwargs):
+            entered.set()
+            assert release.wait(10), "模型闸门未释放"
+            return super().stream_chat(*args, **kwargs)
+
+    llm = GatedWriteLLM([AssistantTurn(tool_calls=[_write_call()]),
+                        AssistantTurn(text="原工作区写完了")])
+    bridge, window, old_ws, new_ws = make_project_bridge(config, tmp_path, llm)
+    old = bridge._current
+    ctx, gate, sandbox, session, mcp = (old.agent.ctx, old.agent.gate,
+                                      old.agent.ctx.sandbox, old.session, old.agent.mcp)
+    (old_ws / "gui.txt").write_text("old-project-content", encoding="utf-8")
+    (new_ws / "gui.txt").write_text("foreground-content", encoding="utf-8")
+    source = tmp_path / "attachment.txt"
+    source.write_text("attachment-from-old", encoding="utf-8")
+    att = save_attachment(old_ws, source)
+    chrome = []
+    monkeypatch.setattr(bridge, "_apply_chrome", lambda: chrome.append(bridge.workspace))
+    try:
+        assert bridge.send_task("在原目录写文件", json.dumps([att.to_dict()]))["ok"]
+        assert entered.wait(5)
+        assert old.busy and session.log_path is not None
+        log_path = session.log_path
+        before = log_path.read_bytes()
+        bridge._dock_cwd = old_ws
+        bridge._env_cache = {"stale": True}
+        if navigation == "workspace":
+            got = bridge.switch_workspace(str(new_ws))
+        else:
+            cold = Session(system_prompt="p", log_dir=bridge.sessions_dir, workspace=new_ws)
+            cold.add_user("另一个项目的旧会话")
+            got = bridge.resume_session(cold.log_path.name)
+            assert got["switched"] is True
+        assert got["ok"] and bridge.workspace == new_ws
+        assert bridge._env_cache is None and chrome[-1] == new_ws
+        assert bridge._dock_cwd is None
+        foreground = bridge._current
+        assert not foreground.busy and old.busy
+        assert bridge._runners[old.key] is old
+        assert old.agent.ctx is ctx and old.agent.gate is gate
+        assert old.session is session and ctx.sandbox is sandbox
+        assert ctx.workspace == old_ws and sandbox.workspace == old_ws
+        assert old.agent.mcp is mcp and old.agent.llm is llm
+        assert not old.ui.stop_requested
+        release.set()
+        assert wait_until(lambda: window.of_type("confirm_request"))
+        request = window.of_type("confirm_request")[-1]
+        assert request["session"] == old.key
+        assert "-old-project-content" in request["detail"]
+        assert "foreground-content" not in request["detail"]
+
+        window.events.clear()
+        bridge._env_cache = {"stale": True}
+        bridge._dock_cwd = new_ws
+        got = bridge.resume_session(log_path.name)
+        assert got["ok"] and got["switched"] and got["workspace"] == str(old_ws)
+        assert bridge._current is old and bridge._busy
+        assert bridge.workspace is ctx.workspace and bridge._sandbox is sandbox
+        assert bridge._env_cache is None and chrome[-1] == old_ws
+        assert bridge._dock_cwd is None
+        assert json.loads(bridge.workspace_file.read_text(encoding="utf-8"))["current"] == str(old_ws)
+        nav = [e["type"] for e in window.events if e["type"] in ("cleared", "workspace", "resumed")]
+        assert nav == ["cleared", "workspace", "resumed"]
+        resumed = window.of_type("resumed")[-1]
+        assert resumed["busy"] is True
+        restored = next(m for m in resumed["messages"] if m["role"] == "user")["atts"][0]
+        assert restored["name"] == source.name and not restored.get("missing")
+        assert restored["size"] == source.stat().st_size
+        assert bridge.resume_session(log_path.name)["switched"] is False
+
+        assert bridge.switch_workspace(str(new_ws))["ok"]
+        bridge.confirm_reply("yes")
+        old.thread.join(10)
+        assert not old.thread.is_alive() and not old.busy
+        assert (old_ws / "gui.txt").read_text(encoding="utf-8") == "from gui"
+        assert (new_ws / "gui.txt").read_text(encoding="utf-8") == "foreground-content"
+        assert session.log_path == log_path and log_path.read_bytes().startswith(before)
+        assert "原工作区写完了" in log_path.read_text(encoding="utf-8")
+        assert any(e["session"] == old.key and not e["value"] for e in window.of_type("busy"))
+        assert not window.of_type("error")
+        assert bridge.resume_session(log_path.name)["switched"]
+        assert bridge._current is old and bridge.session is session
+        assert window.of_type("resumed")[-1]["busy"] is False
+    finally:
+        release.set()
+        bridge.confirm_reply("no")
+        if old.thread:
+            old.thread.join(10)
+        bridge.close()
+
+
+@pytest.mark.parametrize("same_workspace", [False, True])
+def test_resume_refuses_missing_live_workspace(config, tmp_path, same_workspace):
+    bridge, window, old_ws, new_ws = make_project_bridge(config, tmp_path, FakeLLM([]))
+    old = bridge._current
+    old.session.add_user("目录随后移走")
+    old.busy = True
+    if not same_workspace:
+        assert bridge.switch_workspace(str(new_ws))["ok"]
+    current, sandbox = bridge._current, bridge._sandbox
+    old_ws.rename(tmp_path / "moved-project")
+    window.events.clear()
+
+    got = bridge.resume_session(old.log_path.name)
+
+    assert not got["ok"] and "原来的工作区不可用" in got["msg"]
+    assert bridge._current is current and bridge._sandbox is sandbox
+    assert old.busy and not old.ui.stop_requested
+    assert not window.of_type("cleared") and not window.of_type("resumed")
+
+
+@pytest.mark.parametrize("tool_name", ["write_file", "edit_file", "实现·write_file", "实现·edit_file"])
+def test_background_confirmation_diff_uses_owner_workspace(config, tmp_path, tool_name):
+    bridge, window, old_ws, new_ws = make_project_bridge(config, tmp_path, FakeLLM([]))
+    owner = bridge._current
+    (old_ws / "same.txt").write_text("owner-before\n", encoding="utf-8")
+    (new_ws / "same.txt").write_text("foreground-private\n", encoding="utf-8")
+    assert bridge.switch_workspace(str(new_ws))["ok"]
+    result = []
+    thread = threading.Thread(target=lambda: result.append(bridge.confirm_tool(
+        _tool(tool_name), {"path": "same.txt", "content": "after\n",
+                           "old_string": "owner-before", "new_string": "after"},
+        source_ui=owner.ui)))
+    thread.start()
+    try:
+        assert wait_until(lambda: window.of_type("confirm_request"))
+        event = window.of_type("confirm_request")[-1]
+        assert event["session"] == owner.key
+        assert "-owner-before" in event["detail"] and "+after" in event["detail"]
+        assert "foreground-private" not in event["detail"]
+        assert bridge.new_task()["ok"]
+        bridge.confirm_reply("no")
+        thread.join(5)
+        assert not thread.is_alive() and result == ["no"]
+    finally:
+        bridge.confirm_reply("no")
+        thread.join(5)
+
+
+def test_prefixed_bash_confirmation_is_readable(config, tmp_path):
+    bridge, _window, _ = make(config, tmp_path, FakeLLM([]))
+    assert bridge._permission_detail_text(_tool("实现·bash"), {"command": "ls"}) == "$ ls"
+
+
+@pytest.mark.parametrize("second_action", ["switch", "resume", "new"])
+def test_concurrent_workspace_navigation_is_serial(config, tmp_path, monkeypatch, second_action):
+    from concurrent.futures import ThreadPoolExecutor
+    from minicode import workspace as ws
+
+    bridge, window, old_ws, new_ws = make_project_bridge(config, tmp_path, FakeLLM([]))
+    old = bridge._current
+    old.session.add_user("旧会话")
+    entered, release, requested = threading.Event(), threading.Event(), threading.Event()
+    remember = ws.remember
+
+    def paused_remember(path, **kwargs):
+        if path == new_ws:
+            entered.set()
+            assert release.wait(5), "导航闸门未释放"
+        return remember(path, **kwargs)
+
+    monkeypatch.setattr(ws, "remember", paused_remember)
+
+    def second():
+        requested.set()
+        if second_action == "switch":
+            return bridge.switch_workspace(str(old_ws))
+        if second_action == "resume":
+            return bridge.resume_session(old.log_path.name)
+        return bridge.new_task()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(bridge.switch_workspace, str(new_ws))
+        try:
+            assert entered.wait(5)
+            next_request = pool.submit(second)
+            assert requested.wait(5)
+            assert not next_request.done()
+            assert not window.of_type("cleared")
+        finally:
+            release.set()
+        first_result, second_result = first.result(10), next_request.result(10)
+    assert first_result["ok"] and second_result["ok"]
+    expected_ws = new_ws if second_action == "new" else old_ws
+    assert bridge.workspace == expected_ws
+    assert bridge._current.key == second_result["session"]
+    assert bridge.agent.ctx.workspace == bridge.session.workspace == expected_ws
+    assert bridge._sandbox is bridge.agent.ctx.sandbox
+    assert bridge._sandbox.workspace == expected_ws
+    if second_action == "resume":
+        assert bridge._current is old and second_result["switched"]
+    assert json.loads(bridge.workspace_file.read_text(encoding="utf-8"))["current"] == str(expected_ws)
+    events = [e for e in window.events if e["type"] in ("cleared", "workspace", "resumed")]
+    assert [(e["type"], e["session"]) for e in events[:2]] == [
+        ("cleared", first_result["session"]), ("workspace", first_result["session"])]
+    assert all(e["session"] == second_result["session"] for e in events[2:])
+    assert events[2]["type"] == "cleared"
+    if second_action == "resume":
+        assert [e["type"] for e in events[2:]] == ["cleared", "workspace", "resumed"]
 
 
 def test_get_asset_serves_skill_images(config, tmp_path):

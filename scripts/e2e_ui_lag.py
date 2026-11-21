@@ -174,6 +174,8 @@ def check_session_switches(page):
         }));
       };
       pywebview.api.new_task = () => pywebview.api.resume_session('new-session');
+      pywebview.api.switch_workspace = path => pywebview.api.resume_session('workspace:'+path);
+      pywebview.api.reset_workspace = () => pywebview.api.resume_session('default-workspace');
       __showSession('a');
     }""")
 
@@ -299,6 +301,50 @@ def check_session_switches(page):
     idle()
     assert page.evaluate('currentSessionKey') == 'a'
     assert page.locator('#sessSearch').input_value() == ''
+
+    before = page.evaluate('__switchCalls.length')
+    page.evaluate("() => { switchSessionSoon('b'); doSwitchWorkspace('other-project'); }")
+    ready(before + 1)
+    assert page.evaluate('__switchCalls.at(-1)') == 'workspace:other-project'
+    reply('workspace:other-project')
+    idle()
+    assert page.evaluate('currentSessionKey') == 'workspace:other-project'
+    assert page.evaluate('__switchCalls.length') == before + 1
+
+    page.evaluate("doSwitchWorkspace('third-project')")
+    page.wait_for_function("__switchReplies.has('workspace:third-project')")
+    page.evaluate("() => { switchSessionSoon('b'); doSwitchWorkspace('', true); }")
+    reply('workspace:third-project')
+    page.wait_for_function("__switchReplies.has('default-workspace')")
+    reply('default-workspace')
+    idle()
+    assert page.evaluate('currentSessionKey') == 'default-workspace'
+    assert page.evaluate('__switchMaxConcurrent') == 1
+
+    lazy = page.evaluate(r"""async () => {
+      const messages = Array.from({length:1500}, (_,i) => [
+        {role:'user', text:'第 '+(i+1)+' 问：检查功能'},
+        {role:'assistant', text:'## 回答 '+i+'\n- 第一点\n- 第二点'}]).flat();
+      const t = performance.now();
+      renderHistory(messages);
+      const ms = performance.now() - t;
+      const pendingAtInsert = document.querySelectorAll('#chat [data-md-pending]').length;
+      await new Promise(r => setTimeout(r, 250));
+      const pendingAfterIdle = document.querySelectorAll('#chat [data-md-pending]').length;
+      const renderedNearBottom = document.querySelectorAll('#chat .msg.assistant .body:not([data-md-pending]) h2').length;
+      ensureAllHistoryBodies();
+      return {ms, pendingAtInsert, pendingAfterIdle, renderedNearBottom,
+        users: document.querySelectorAll('#chat .msg.user').length,
+        lastOrd: [...document.querySelectorAll('#chat .msg.user')].pop()?.dataset.uord,
+        pendingAfterAll: document.querySelectorAll('#chat [data-md-pending]').length,
+        headings: document.querySelectorAll('#chat .msg.assistant .body h2').length};
+    }""")
+    assert lazy["users"] == 1500 and lazy["lastOrd"] == "1500", lazy
+    assert 0 < lazy["pendingAfterIdle"] < 3000, lazy
+    assert lazy["renderedNearBottom"] > 0, lazy
+    assert lazy["pendingAfterAll"] == 0 and lazy["headings"] == 1500, lazy
+    print(f"G 长历史惰性渲染:1500 轮插入 {lazy['ms']:.0f} ms,"
+          f"离屏待渲染 {lazy['pendingAfterIdle']} 条,全部展开后 {lazy['headings']} 个标题")
 
     metrics = page.evaluate("""async () => {
       const api = pywebview.api;

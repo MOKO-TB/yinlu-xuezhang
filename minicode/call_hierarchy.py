@@ -397,27 +397,24 @@ def build_call_hierarchy(
 
 
 def call_hierarchy_tool(
+    ctx: Any,
     symbol: str,
     direction: str = "incoming",
     depth: int = 2,
     path_pattern: str = "",
     format: str = "tree",
-    **kwargs: Any,
 ) -> str:
     """内置工具入口函数: call_hierarchy。"""
     if not symbol or not symbol.strip():
         return "错误: 必须指定要分析的符号名称 symbol。"
 
     symbol = symbol.strip()
-    ctx = kwargs.get("ctx")
-    workspace = getattr(ctx, "workspace", None) if ctx else None
+    workspace = getattr(ctx, "workspace", None)
     if not workspace:
-        workspace = Path.cwd()
-    else:
-        workspace = Path(workspace)
+        return "错误: 无法获取当前工作区路径(ctx.workspace)。"
 
     data = build_call_hierarchy(
-        workspace=workspace,
+        workspace=Path(workspace),
         symbol=symbol,
         direction=direction,
         depth=depth,

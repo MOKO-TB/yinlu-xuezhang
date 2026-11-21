@@ -8,7 +8,10 @@
 """
 from __future__ import annotations
 
+import hashlib
+import os
 import re
+import stat
 import time
 from pathlib import Path
 
@@ -51,8 +54,123 @@ def verify_of(text: str) -> str:
     return " ".join((m.group(1) or "").split()) if m else ""
 
 
+WORKSPACE_SKIP_DIRS = {
+    ".mypy_cache", ".ruff_cache", ".cache", "htmlcov", "coverage",
+    "tool-outputs", "web-sessions", "checkpoints", "kb-vectors",
+    ".automation", "browser-profile", "crawled", "uploads", "images",
+    "figure_project_scale", ".qoder", ".pytest_tmp",
+}
+_FINGERPRINT_FILE_LIMIT = 30_000
+
+
+def workspace_fingerprint(workspace: Path) -> str | None:
+    """当前工作区（代码与配置）的轻量状态指纹；读不到就返回 None。
+
+    跳过依赖、缓存与运行产物目录；每个文件只做一次 lstat，不解析真实路径，
+    不做排序（同一次执行前后两次扫描的顺序天然一致）。
+    """
+    from minicode.tools.search import SKIP_DIRS
+    skipped = SKIP_DIRS | WORKSPACE_SKIP_DIRS
+    root = os.path.abspath(os.fspath(workspace))
+    if not os.path.isdir(root):
+        return None
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    digest = hashlib.sha256(root.encode("utf-8"))
+    count = 0
+    try:
+        for directory, dirs, files in os.walk(root, followlinks=False):
+            kept = []
+            for name in dirs:
+                if name in skipped or name.startswith(("_tmp", "_pwtest")):
+                    continue
+                try:
+                    st = os.stat(os.path.join(directory, name), follow_symlinks=False)
+                except OSError:
+                    continue
+                if getattr(st, "st_file_attributes", 0) & reparse:
+                    continue
+                kept.append(name)
+            dirs[:] = kept
+            for name in files:
+                path = os.path.join(directory, name)
+                rel = os.path.relpath(path, root).replace(os.sep, "/")
+                suffix = os.path.splitext(name)[1].lower()
+                if (rel == PLAN_REL.as_posix() or name.startswith(".coverage")
+                        or suffix in {".pyc", ".pyo", ".log", ".tmp",
+                                      ".db", ".db-wal", ".db-shm",
+                                      ".sqlite", ".sqlite3"}):
+                    continue
+                try:
+                    st = os.lstat(path)
+                except OSError:
+                    continue
+                if stat.S_ISLNK(st.st_mode):
+                    continue
+                digest.update(f"{rel}\0{st.st_size}\0{st.st_mtime_ns}\0{st.st_ino}\n".encode("utf-8"))
+                count += 1
+                if count > _FINGERPRINT_FILE_LIMIT:
+                    return None
+    except (OSError, ValueError, RuntimeError):
+        return None
+    return digest.hexdigest()
+
+
+def begin_verification(ctx: ToolContext, command: str) -> dict | None:
+    try:
+        plan = _load_plan(ctx)
+    except (OSError, UnicodeError):
+        return None
+    want = " ".join(str(command or "").split())
+    if plan is None or not any(s.get("verify") == want for s in plan["steps"]):
+        return None
+    definition = (plan["goal"], [(s["title"], s.get("detail"), s.get("depends_on"))
+                                 for s in plan["steps"]])
+    return {"workspace": str(Path(ctx.workspace).resolve()),
+            "files": workspace_fingerprint(ctx.workspace),
+            "plan": hashlib.sha256(repr(definition).encode("utf-8")).hexdigest()}
+
+
+def _evidence_status(record: dict | None, current: dict | None) -> str:
+    if record is None or record["code"] is None:
+        return "unverified"
+    if record["code"] != 0:
+        return "failed"
+    evidence = record.get("evidence")
+    if not evidence or not evidence.get("files") or not record.get("stable"):
+        return "stale"
+    return "passed" if current == evidence else "stale"
+
+
+def verification_status(ctx: ToolContext, command: str) -> str:
+    return _evidence_status(find_verify_run(ctx, command), begin_verification(ctx, command))
+
+
+def verification_report(ctx: ToolContext) -> dict:
+    try:
+        plan = _load_plan(ctx)
+    except (OSError, UnicodeError):
+        return {"status": "incomplete", "steps": [], "summary": "无法读取计划，未完成验收"}
+    required = [s for s in (plan or {}).get("steps", []) if s.get("verify")]
+    if not required:
+        return {"status": "not_required", "steps": [], "summary": "未声明命令验收判据"}
+    records = [find_verify_run(ctx, s["verify"]) for s in required]
+    current = (begin_verification(ctx, required[0]["verify"])
+               if any(r and r.get("stable") and r["code"] == 0 for r in records) else None)
+    steps = [{"n": s["n"], "command": s["verify"],
+              "status": _evidence_status(record, current)}
+             for s, record in zip(required, records)]
+    labels = {"passed": "已通过", "failed": "失败", "stale": "已过期", "unverified": "未验证"}
+    passed = all(s["status"] == "passed" for s in steps)
+    complete = passed and all(s["status"] == "done" for s in plan["steps"])
+    summary = "；".join(f"第 {s['n']} 步{labels[s['status']]}" for s in steps)
+    if passed and not complete:
+        summary += "；计划仍有未完成步骤"
+    return {"status": "passed" if complete else "incomplete", "steps": steps,
+            "summary": summary}
+
+
 def note_verify_run(ctx: ToolContext, command: str, code: int | None,
-                    output: str = "") -> None:
+                    output: str = "", *, started: dict | None = None) -> None:
     """把一次**跑完了的** bash 命令记进这本内存账 —— 它是"这一步真被验证过"的唯一凭据。
 
     为什么放在 bash 而不是 plan 里:验收命令跑的就是用户自己也能敲的那条路,
@@ -67,15 +185,17 @@ def note_verify_run(ctx: ToolContext, command: str, code: int | None,
     runs = getattr(ctx, "verify_runs", None)
     if runs is None:
         runs = ctx.verify_runs = []      # ToolContext 是普通 dataclass,子代理那份是派生物
-    runs.append({"command": cmd, "code": code,
+    ended = begin_verification(ctx, cmd)
+    stable = bool(started and started.get("files") and started == ended)
+    runs.append({"command": cmd, "code": code, "evidence": started, "stable": stable,
                  "at": time.strftime("%H:%M:%S"),
                  "tail": " ".join(str(output or "").split())[-300:]})
     del runs[:-VERIFY_RUNS_LIMIT]
     if code is not None:
-        _mark_plan_verify(ctx, cmd, code)      # V2(v0.9.102):结论写进计划文件
+        _mark_plan_verify(ctx, cmd, code, stable=stable)
 
 
-def _mark_plan_verify(ctx: ToolContext, command: str, code: int) -> None:
+def _mark_plan_verify(ctx: ToolContext, command: str, code: int, *, stable: bool) -> None:
     """V2:这次 bash 命中某步的验收判据 → 把 ✓/✗ + 时刻写进该步的**备注**。
 
     计划文件是唯一落盘处,对话里的计划卡与右侧监控段读的都是它 ——
@@ -91,9 +211,10 @@ def _mark_plan_verify(ctx: ToolContext, command: str, code: int) -> None:
                    None)
         if hit is None:
             return                   # 普通命令,不碰任何一步
-        mark = ("verify ✓ " + time.strftime("%H:%M:%S") if code == 0
-                else f"verify ✗ {time.strftime('%H:%M:%S')}(退出码 {code})")
-        old_note = re.sub(r"verify [✓✗][^|;]*[|;]?\s*", "",
+        mark = (f"verify ✗ {time.strftime('%H:%M:%S')}(退出码 {code})" if code != 0
+                else "verify ✓ " + time.strftime("%H:%M:%S") if stable
+                else "verify 过期(缺少执行前快照或执行期间文件/计划发生变化)")
+        old_note = re.sub(r"verify (?:[✓✗]|过期)[^|;]*[|;]?\s*", "",
                           str(hit.get("note") or "")).strip()
         hit["note"] = (mark + (" | " + old_note if old_note else ""))[:300]
         _write_plan(ctx, plan)
@@ -364,7 +485,8 @@ def notify_plan(ctx: ToolContext) -> None:
     try:
         state = plan_state(ctx.workspace)
         # 与 Bridge.get_plan 同构:面板刚收到推送时也要有派发文案,否则按钮会误灰
-        push("plan_changed", dispatch_text=dispatch_text(state), **state)
+        push("plan_changed", dispatch_text=dispatch_text(state),
+             verification=verification_report(ctx), **state)
     except Exception:                          # 面板刷新绝不能把工具执行带崩
         pass
 
@@ -617,6 +739,9 @@ def _verify_gate(ctx: ToolContext, target: dict) -> str:
         return (f"错误:第 {n} 步的验收没通过(退出码 {run['code']},跑于 {run['at']});"
                 f"输出尾部:{run['tail'] or '(无输出)'}。我没有把它标成完成。"
                 "修好再原样跑一次,或标 failed 说清原因 —— 悄悄改回 pending 也算没做。")
+    if verification_status(ctx, verify) != "passed":
+        return (f"错误:第 {n} 步的验收记录已过期或缺少有效的文件状态快照。"
+                f"请在当前代码和计划上重新运行 `{verify}`;之前的退出码不能证明现在仍然通过。")
     # 备注不在这里写:V2 的 note_verify_run 在跑完那一刻就把 `verify ✓ 时刻` 落进了
     # plan.md(那是这份结论唯一的落盘处)。这里再写一遍就是两处各写一句真相 ——
     # 实测过一次覆盖:闸门那句"验收已过"把 V2 那句"verify ✓"顶掉了。

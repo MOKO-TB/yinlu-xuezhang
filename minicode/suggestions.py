@@ -1,12 +1,13 @@
 """首页建议 chips:根据用户近期聊天记录动态生成,不是固定列表。
 
 思路:维护一个校园主题池(关键词 + 代表问题),对用户最近的消息做关键词
-打分;命中过的主题排前面(用户大概率想继续追问同方向),未命中的按默认
-热度补齐到 9 条。没有任何历史时,输出即默认主题顺序。
+打分;命中过的主题排前面(用户大概率想继续追问同方向),未命中的主题和
+"没有任何历史"的情况都从池里随机抽取 —— 同一台机器每次打开不该总是同一组。
 """
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,9 +60,7 @@ TOPICS: list[Topic] = [
           "肇庆校区地址和交通怎么走", "校区之间的交通怎么安排"),
 ]
 
-# 默认顺序(无历史时展示):高频校园问题优先
-_DEFAULT_ORDER = ["活动", "四级", "考研", "奖学金", "社团",
-                  "竞赛", "图书馆", "宿舍", "选课"]
+# 主题池的书写顺序只用于代码可读性;展示顺序由 build_suggestions 随机化
 
 
 def collect_user_texts(sessions_dir: Path | None,
@@ -94,9 +93,12 @@ def collect_user_texts(sessions_dir: Path | None,
 
 
 def build_suggestions(texts: list[str]) -> list[str]:
-    """按关键词命中给主题打分,命中的主题用 followup 问法排前,默认主题补位。"""
+    """按关键词命中给主题打分,命中的主题用 followup 问法排前,其余主题随机补位。
+
+    没有历史时也从整个主题池里随机抽 —— 首页不该每天都是同一组问题。
+    """
     if not texts:
-        return _default_suggestions()
+        return _random_suggestions()
     scored: list[tuple[int, Topic]] = []
     for topic in TOPICS:
         score = 0
@@ -107,20 +109,23 @@ def build_suggestions(texts: list[str]) -> list[str]:
                 score += hits * (RECENT_BOOST if i < RECENT_BOOST_N else 1)
         if score > 0:
             scored.append((score, topic))
+    # 先洗牌再按分数稳定排序:同分主题的顺序每次都不一样,高分主题仍在前。
+    random.shuffle(scored)
     scored.sort(key=lambda x: -x[0])
     out = [(t.followup or t.ask) for _, t in scored][:MAX_SUGGESTIONS]
     hit_ids = {t.tid for _, t in scored}
-    for tid in _DEFAULT_ORDER:
-        if len(out) >= MAX_SUGGESTIONS:
-            break
-        if tid not in hit_ids:
-            topic = next(t for t in TOPICS if t.tid == tid)
-            out.append(topic.ask)
+    rest = [t for t in TOPICS if t.tid not in hit_ids]
+    random.shuffle(rest)
+    need = MAX_SUGGESTIONS - len(out)
+    if need > 0:
+        out.extend(t.ask for t in rest[:need])
     return out
 
 
-def _default_suggestions() -> list[str]:
-    return [next(t for t in TOPICS if t.tid == tid).ask for tid in _DEFAULT_ORDER]
+def _random_suggestions() -> list[str]:
+    pool = list(TOPICS)
+    random.shuffle(pool)
+    return [t.ask for t in pool[:MAX_SUGGESTIONS]]
 
 
 # ---------------------------------------------------------------- 接着做 chips

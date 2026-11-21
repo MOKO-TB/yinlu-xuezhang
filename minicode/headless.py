@@ -40,6 +40,7 @@ EXIT_ASK_REFUSED = 3    # 需要确认,但这条路上没有人能点头
 EXIT_LIMITED = 4        # 被上限收尾(步数 / 时限 / 预算 / 同一工具连挂)
 EXIT_INTERRUPTED = 5    # Ctrl+C 或管道关闭
 EXIT_SCHEMA_VIOLATION = 6    # 这一轮答完了,但回答不合 `--output-schema` 那份 schema
+EXIT_VERIFICATION_INCOMPLETE = 7
 
 # `--output-schema` 给的 schema(内联 JSON 或文件路径)。空 = 不按 schema 要东西。
 SCHEMA_FLAG = "--output-schema"
@@ -429,10 +430,16 @@ def build_result(ui: HeadlessUI, agent, session, config, *, task: str,
             violations = schema_mod.validate(structured, schema)
             if violations:
                 structured = None      # 不合 schema 就不给半对的值:给了,调用方会拿它当真数据
+    verification = getattr(agent, "verification_report", None)
+    code = exit_code_for(ui, violations)
+    status = status_for(ui, violations)
+    if code == EXIT_OK and verification and verification.get("status") == "incomplete":
+        code, status = EXIT_VERIFICATION_INCOMPLETE, "verification_incomplete"
     return {
-        "ok": exit_code_for(ui, violations) == EXIT_OK,
-        "status": status_for(ui, violations),
-        "exit_code": exit_code_for(ui, violations),
+        "ok": code == EXIT_OK,
+        "status": status,
+        "exit_code": code,
+        "verification": verification,
         "format": fmt,
         "task": task,
         "response": answer,

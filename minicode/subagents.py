@@ -55,7 +55,6 @@ from minicode import agent_profiles, planning, router, toolsum
 from minicode.agent import Agent
 from minicode.config import Config
 from minicode.permission import PermissionGate
-from minicode.session import Session
 from minicode.tools.base import Tool, ToolContext
 
 if TYPE_CHECKING:  # 避免循环导入,运行时才用到这些类型
@@ -84,7 +83,8 @@ _SUB_REPORT_NOTE = ("\n\n(注:子代理报告中引用的网页/检索内容仍�
 def _timeout_note(seconds: int) -> str:
     return (f"子代理超时未返回:主代理已停止等待(上限 {seconds} 秒)。"
             "它自己当前那一步可能仍在后台跑完,只是报告不再回填 —— "
-            "这不算它失败。要等更久把 config.json 的 "
+            "迟到结果会尝试写入任务留档，请刷新子代理页核查。"
+            "这不算它失败，也不代表已停止或成功。要等更久把 config.json 的 "
             "subagent_time_limit_seconds 调大(0=不限)。")
 
 
@@ -539,6 +539,22 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
                  notify: dict | None = None,
                  isolation: str = "",
                  isolation_box: dict | None = None) -> str:
+    from minicode.task_records import TaskRun
+    record = TaskRun(ctx, spec.type, task_text)
+    try:
+        report, has_report = _execute_subagent(
+            ctx, spec, task_text, llm, ui, config, registry, record,
+            undo_stack, file_locks, batch_locks, route_label, notify,
+            isolation, isolation_box)
+    except Exception as exc:
+        report, has_report = f"子代理执行出错: {type(exc).__name__}: {exc}", False
+    return record.finish(report, has_report)
+
+
+def _execute_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
+                      llm, ui, config: Config, registry: list[Tool], record,
+                      undo_stack=None, file_locks=None, batch_locks=None,
+                      route_label="", notify=None, isolation="", isolation_box=None):
     """跑一个子代理,返回它的最终文字报告(不含前缀)。异常收敛成报告文本。
 
     `undo_stack` 是**主代理的回滚栈**(v0.9.53):implement 子代理写坏文件时,
@@ -570,9 +586,12 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
             text = f"隔离副本创建失败：{type(e).__name__}: {e}"
             if isolation_box is not None:
                 isolation_box["error"] = text
-            return f"[worktree|{spec.type}] {text}"
+            return f"[worktree|{spec.type}] {text}", False
         if isolation_box is not None:
             isolation_box["info"] = worktree_info
+        record.save(worktree_path=str(worktree_info.root),
+                    worktree_base=worktree_info.base,
+                    execution_workspace=str(worktree_info.workspace))
         worktree_head = subagent_worktree.header(worktree_info, spec.type)
         run_ctx = dc_replace(
             ctx,
@@ -585,10 +604,9 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
     # 子代理不参与跨天重建:`_refresh_clock` 只在 `run_turn` 开头查一次,而子代理
     # 生命周期以分钟计、建会话当天就跑完了。将来要"统一"到别处请先想清楚这点。
     try:
-        sub_session = Session(
-            system_prompt=build_system_prompt(run_ctx.workspace, for_subagent=True)
-            + spec.extra_prompt,
-            log_dir=None)
+        sub_session = record.make_session(
+            build_system_prompt(run_ctx.workspace, for_subagent=True) + spec.extra_prompt,
+            run_ctx.workspace)
         # 权限门必须带沙箱(v0.9.51):主代理在 app_setup 里就是
         # PermissionGate(config, sandbox=…)。不带的那条后果实测推得出来 ——
         # check() 的沙箱块(凭据文件一律确认/脚本内容扫描/工作区外路径)整段
@@ -608,7 +626,7 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
         depth = int(getattr(run_ctx, "subagent_depth", 0) or 0) + 1
         # 文件占用表跨层带下去:子代理自己再派一批时,那一批用的是**同一张**表 ——
         # 不然父批与子批各一张,同一个文件可以跨层同时被写而两边都不报错(§6 63 ①)。
-        sub_ctx = dc_replace(run_ctx, ui=ui, subagent_depth=depth,
+        sub_ctx = dc_replace(run_ctx, ui=ui, session=sub_session, subagent_depth=depth,
                              batch_locks=batch_locks,
                              notify_parent=enqueue if callable(enqueue) else None)
         # 嵌套开关(L,v0.9.155)**默认关**。开着时 `task` 才留给子代理,而且深度到
@@ -673,11 +691,11 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
             diff = subagent_worktree.summarize(worktree_info, spec.type)
         return (worktree_head + text
                 + (f"\n〔subagent_stop 钩子〕{stop_note}" if stop_note else "")
-                + diff)
+                + diff), False
 
-    report = next((m.get("content") for m in reversed(sub_session.messages)
-                   if m.get("role") == "assistant" and m.get("content")),
-                  None)
+    last = sub_session.messages[-1] if sub_session.messages else {}
+    report = (last.get("content") if last.get("role") == "assistant"
+              and not last.get("tool_calls") else None)
     # `ok` 要在**替身文案之前**取:下面那句"(子代理已结束…)"本身是非空字符串,
     # 拿它去判 `bool()` 永远是 True —— 那就是一条"跑完了但没话说"被报成成功。
     has_report = bool(report)
@@ -693,7 +711,7 @@ def run_subagent(ctx: ToolContext, spec: SubAgentSpec, task_text: str,
         from minicode import subagent_worktree
         diff = subagent_worktree.summarize(worktree_info, spec.type)
     return (worktree_head + _files_note(spec, sub_session)
-            + _web_note(spec, sub_session) + report + tail + diff)
+            + _web_note(spec, sub_session) + report + tail + diff), has_report
 
 
 def _files_note(spec: SubAgentSpec, sub_session) -> str:
@@ -902,7 +920,7 @@ def model_choice(spec_type: str, config: Config) -> tuple[str, str]:
 
 
 def _merge_reports(pairs: list[tuple[SubAgentSpec, str, str]],
-                   models: list[str] | None = None) -> str:
+                   models: list[str] | None = None, *, waiting: bool = False) -> str:
     """按请求顺序合并多份报告:序号 + 类型 + 任务摘要 + 正文。
 
     `models` 与 `pairs` 同序,只有真覆盖了模型的档位才有值 —— 写在小标题里,
@@ -917,7 +935,8 @@ def _merge_reports(pairs: list[tuple[SubAgentSpec, str, str]],
     body = "\n\n".join(chunks)
     if len(body) > BATCH_REPORT_LIMIT:
         body = body[:BATCH_REPORT_LIMIT] + f"\n…(合并报告超过 {BATCH_REPORT_LIMIT} 字符,已截断)"
-    return f"[并行子代理完成 · {len(pairs)} 个]\n\n{body}"
+    status = "等待结束，含超时未回" if waiting else "完成"
+    return f"[并行子代理{status} · {len(pairs)} 个]\n\n{body}"
 
 
 def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
@@ -1033,7 +1052,8 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
             if timed_out:
                 report = (_timeout_note(limit)
                           + _timeout_worktree_note(isolation_boxes[0], spec.type))
-            head = (f"[{spec.label}子代理完成]" + (f" · {mnote}" if mnote else "")
+            status = "超时未回" if timed_out else "完成"
+            head = (f"[{spec.label}子代理{status}]" + (f" · {mnote}" if mnote else "")
                     + (f"\n{note}" if note else ""))
             body = head + "\n" + report
             # 单发也要有截断标注(批量合并一直有):硬切掉的报告末尾不说明,
@@ -1107,7 +1127,7 @@ def build_task_tool(ctx: ToolContext, llm, ui, config: Config,
         warns = [f"第{i + 1}路[{spec.type}]仍用当前模型:{r[2]}"
                  for i, ((spec, _t, _n), r) in enumerate(zip(specs, routes))
                  if r[2] and not r[1]]
-        merged = _merge_reports(pairs, models)
+        merged = _merge_reports(pairs, models, waiting=any(r is None for r in reports))
         head = "\n".join(notes + warns)
         out = (head + "\n\n" + merged) if head else merged
         # 备注里只写跑出来的事实:每路档名 + 报告字数,超时那路单独标出来

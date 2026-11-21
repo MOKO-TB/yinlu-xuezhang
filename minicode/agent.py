@@ -210,6 +210,9 @@ class Agent:
         # 就有**:`_messages_for_request` 每一步都读它,而直接调调度器的路径(测试、
         # 子代理复用同一段)不经过 `run_turn`,没有这行就是 AttributeError。
         self._output_directive = ""
+        self.verification_report = None
+        self._plan_work_this_turn = False
+        self._verification_reminded = False
         # 失败连击的两个格子**在建对象时就要有**:`run_turn` 每回合开头会重置,但
         # 落账那条路(`_account` → `_fail_streak_hit`)不该依赖"回合已经开过"——
         # 直接调调度器(测试、子代理复用同一段)时,表现是 AttributeError 而不是判错。
@@ -394,6 +397,9 @@ class Agent:
             self._run_turn_body(user_input, content, add_user=add_user,
                                 output_directive=output_directive)
         finally:
+            if self._plan_work_this_turn:
+                from minicode import planning
+                self.verification_report = planning.verification_report(self.ctx)
             # `stop` 钩子(H4 的最后一点,v0.9.151)。**只在这里发一次**,不做成
             # "八个 return 前面各加一句" —— 那八个出口里漏一个,表现是"有时候不发",
             # 而"有时候不发"比"从不发"难查得多(这一格之前的两点也是同一个理由收在
@@ -407,6 +413,9 @@ class Agent:
         # 一轮一次(H,v0.9.157):`_shadow_snapshot_once` 靠这个标志只做第一次。
         self._shadow_turn_done = False
         self._output_directive = output_directive or ""
+        self.verification_report = None
+        self._plan_work_this_turn = False
+        self._verification_reminded = False
         # 先问项目指令采不采纳(它可能改提示词内容),再按指纹决定要不要重建 ——
         # 顺序反了就会"跨天/换规矩"这一句抢在一次点头之前说,而说的还是旧的那份。
         self._refresh_clock(self._ask_project_agents())
@@ -531,6 +540,19 @@ class Agent:
                 # 继续照样吃 `max_steps` 一格,插话因此变不出无限回合。
                 if self._take_inbox():
                     continue
+                if self._plan_work_this_turn:
+                    from minicode import planning
+                    self.verification_report = planning.verification_report(self.ctx)
+                    if (self.verification_report["status"] == "incomplete"
+                            and not self._verification_reminded):
+                        summary = self.verification_report["summary"]
+                        self._verification_reminded = True
+                        self.ui.info("任务验收未完成：" + summary)
+                        self._pending_prior = ((self._pending_prior or "") + "\n"
+                            + "程序验收检查：" + summary
+                            + "。请核查并完成已授权的验收，再更新计划；无法验证、失败或需要额外授权时，"
+                              "明确报告未完成及原因，不得宣称全部完成、移除验收判据或扩大权限。")
+                        continue
                 return
 
             # 一步走完再走下一步是**默认**;只有连续、名单内、没钩子认领、门也不会问
@@ -1687,6 +1709,9 @@ class Agent:
         # 附加的那几行(尤其"钩子失败"那句)不该反过来影响判定。判定问
         # `toolsum.is_failure`(唯一口径,与失败连击同一条)。
         failed = toolsum.is_failure(result)
+        if (not failed and tool.name.rsplit("·", 1)[-1] == "plan"
+                and args.get("action") in ("write", "update")):
+            self._plan_work_this_turn = True
         post = self._run_config_hook("post_tool", tool, args, result=result)
         post_ctx = ""
         if post is not None:
@@ -2588,9 +2613,12 @@ class Agent:
         except (PathOutsideWorkspace, PathBlocked, OSError, ValueError):
             return result
         try:
-            outcome = diagnostics.run_checker(self.ctx.workspace, rel, checker)
+            outcome = diagnostics.run_checker(
+                self.ctx.workspace, rel, checker, ctx=self.ctx, gate=self.gate)
         except Exception:
-            return result
+            # 权限判定异常也不能启动,并且不能静默装作已经检查。
+            outcome = {"ran": False, "ok": False, "items": [],
+                       "note": "本次未检查，请显式请求运行诊断"}
         if not outcome["ran"]:
             # 检查器不在(打包版没有 ruff / 工作区没装 tsc)或超时:每个进程说一次。
             if checker.id in self._diag_missing:
@@ -2606,37 +2634,31 @@ class Agent:
             self.ctx.workspace, rel, checker, outcome, self._diag_cache)
 
     def _py_syntax_feedback(self, tool: Tool, args: dict, result: str) -> str:
-        """Python 写后自检(借鉴 aider 的 lint-after-edit):write_file/edit_file
-        落盘 .py 成功后立刻 ast.parse 一遍,解析不过就把行号与报错原文回填进
-        工具结果 —— 模型当场修,而不是留着"文件已写好"的假象,等到运行或下一
-        轮才发现。这条闸对着 HANDOFF §4 反复出现的坑(Edit 锚点吞掉 except、
-        生成的脚本被写坏),ast 是标准库,零新依赖。
-
-        只检"真的写成功了"的落盘(失败结果没有新内容可检);路径解析不了/
-        文件不在/超过大小上限一律静默跳过 —— 自检是反馈,不能变成第二个故障源。
-        """
-        if tool.name.rsplit("·", 1)[-1] not in SYNTAX_CHECK_TOOLS:
+        name = tool.name.rsplit("·", 1)[-1]
+        if name not in SYNTAX_CHECK_TOOLS and name != PATCH_TOOL:
             return result
         from minicode.toolsum import is_failure
-        if is_failure(result):
+        if is_failure(result) or (name == PATCH_TOOL and args.get("dry_run")):
             return result
-        raw = str(args.get("path") or "")
-        if not raw.rstrip().lower().endswith(".py"):
-            return result
-        try:
-            p = resolve_path(self.ctx, raw, for_write=True)
-        except (PathOutsideWorkspace, PathBlocked, OSError):
-            return result
-        try:
-            if not p.is_file() or p.stat().st_size > SYNTAX_SCAN_LIMIT:
-                return result
-            source = p.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return result
-        try:
-            ast.parse(source, filename=str(p))
-        except SyntaxError as e:
-            return (result + f"\n\n注意:语法自检:这个 Python 文件现在解析不过 —— "
-                    f"第 {e.lineno} 行:{e.msg}。请立刻修好它再继续做别的,"
-                    "不要留着一个解析不过的文件。")
+        if name == PATCH_TOOL:
+            from minicode.patch import patch_paths
+            paths = patch_paths(str(args.get("patch") or ""))
+        else:
+            paths = [str(args.get("path") or "")]
+        for raw in dict.fromkeys(paths):
+            if not raw.rstrip().lower().endswith(".py"):
+                continue
+            try:
+                p = resolve_path(self.ctx, raw, for_write=True)
+                if not p.is_file() or p.stat().st_size > SYNTAX_SCAN_LIMIT:
+                    continue
+                source = p.read_text(encoding="utf-8", errors="replace")
+            except (PathOutsideWorkspace, PathBlocked, OSError):
+                continue
+            try:
+                ast.parse(source, filename=str(p))
+            except SyntaxError as e:
+                result += (f"\n\n注意:语法自检:{raw} 现在解析不过 —— "
+                           f"第 {e.lineno} 行:{e.msg}。请立刻修好它再继续做别的,"
+                           "不要留着一个解析不过的文件。")
         return result

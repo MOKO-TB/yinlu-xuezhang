@@ -190,11 +190,22 @@ def main() -> int:
               "打开就是 PowerShell 的横幅(不是卡片列表)")
         check(page.locator("#tpPrompt").text_content().startswith("PS "),
               "提示符内联在流尾(PS <目录>>),不是底部对话框")
-        # 主题化(用户图 p1):浅色模式下坞不再是钉死的黑块 —— 背景走主题变量
-        bg = page.evaluate(
-            "() => getComputedStyle(document.querySelector('.td-body')).backgroundColor")
-        check(bg not in ("rgb(20, 20, 24)", "rgb(20,20,24)"),
-              f"浅色模式下坞底不再是硬编码黑(实际 {bg})")
+        if page.locator('html').evaluate("el => el.classList.contains('dark')"):
+            page.click('#btnTheme')
+        colors = """() => ({
+          background:getComputedStyle(document.getElementById('termDock')).backgroundColor,
+          text:getComputedStyle(document.getElementById('tpCmd')).color,
+          command:getComputedStyle(document.querySelector('.td-body .t-cmd')).color
+        })"""
+        light = page.evaluate(colors)
+        page.click('#btnTheme')
+        page.wait_for_function("document.documentElement.classList.contains('dark')")
+        dark = page.evaluate(colors)
+        check(light['background'] != dark['background'] and light['text'] != dark['text']
+              and light['command'] != dark['command'],
+              f"终端底色、正文、命令随主题变化({light['background']} → {dark['background']})")
+        page.click('#btnTheme')
+        check(page.evaluate(colors) == light, "切回浅色恢复终端颜色,内容不丢失")
         check(page.locator('.td-tab .td-shellname').count() == 1,
               "头部有 ZCode 式的工作区标签")
         check(page.evaluate("() => document.getElementById('btnTermToggle')"

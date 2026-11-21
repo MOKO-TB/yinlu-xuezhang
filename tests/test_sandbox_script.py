@@ -333,3 +333,198 @@ def test_describe_names_what_it_actually_does(ws):
     assert "禁网" in d and "不是防火墙" in d
     assert "摘密钥环境变量" in d
     assert "不是防火墙" not in SandboxState(SandboxPolicy(), ws).describe()
+
+
+# ---------------------------------------------------------- 共享同步 argv 入口
+
+
+def _argv_process(monkeypatch, *, timeout=False, output=b"out", error=b"err"):
+    from unittest.mock import MagicMock
+
+    proc = MagicMock()
+    proc.stdout, proc.stderr, proc.stdin = BytesIO(output), BytesIO(error), None
+    proc.returncode = None
+    proc.poll.side_effect = lambda: proc.returncode
+    waits = []
+
+    def wait(timeout=None):
+        waits.append(timeout)
+        if len(waits) == 1 and timed:
+            raise subprocess.TimeoutExpired(["checker"], timeout)
+        proc.returncode = 0 if proc.returncode is None else proc.returncode
+        return proc.returncode
+
+    timed = timeout
+    proc.wait.side_effect = wait
+    spawn = MagicMock(return_value=proc)
+    monkeypatch.setattr(shell, "_spawn", spawn)
+    job = MagicMock()
+    monkeypatch.setattr(shell, "_new_job", lambda p: job)
+    return proc, spawn, job, waits
+
+
+def test_run_argv_scrubs_env_clamps_policy_and_closes_resources(ws, monkeypatch):
+    proc, spawn, job, waits = _argv_process(monkeypatch)
+    monkeypatch.setenv("MY_PROBE_API_KEY", "secret")
+    monkeypatch.setenv("HARMLESS_FLAG", "safe")
+    ctx = ToolContext(ws, Config(), SandboxState(SandboxPolicy(timeout_seconds=2), ws))
+    result = shell.run_argv(ctx, ["checker", "literal arg"], timeout=200)
+    assert result.stdout == b"out" and result.stderr == b"err"
+    assert result.returncode == 0 and waits[0] == 2
+    assert spawn.call_args.args == (ctx, ["checker", "literal arg"])
+    env = spawn.call_args.kwargs["env"]
+    assert "MY_PROBE_API_KEY" not in env and env["HARMLESS_FLAG"] == "safe"
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert proc.stdout.closed and proc.stderr.closed
+    job.close.assert_called_once()
+    proc.close.assert_called_once()
+
+
+def test_run_argv_missing_context_sandbox_uses_default_policy(ws, monkeypatch):
+    _, spawn, _, waits = _argv_process(monkeypatch)
+    ctx = ToolContext(ws, Config())
+    shell.run_argv(ctx, ["checker"], timeout=200)
+    used = spawn.call_args.args[0]
+    assert used.sandbox.policy.enabled and used.sandbox.policy.strip_env_secrets
+    assert waits[0] == SandboxPolicy().timeout_seconds
+    assert ctx.sandbox is None  # 不改调用者的状态
+
+
+def test_run_argv_timeout_keeps_bytes_and_kills_tree(ws, monkeypatch):
+    from unittest.mock import MagicMock
+
+    proc, _, job, _ = _argv_process(monkeypatch, timeout=True, output=b"partial\xff")
+
+    def kill(tree):
+        assert tree.proc is proc and tree.job is job
+        tree.job.close()
+        tree.job = None
+        proc.returncode = -9
+
+    kill_tree = MagicMock(side_effect=kill)
+    monkeypatch.setattr(shell, "_bg_kill_tree", kill_tree)
+    with pytest.raises(subprocess.TimeoutExpired) as exc:
+        shell.run_argv(ToolContext(ws, Config()), ["checker"], timeout=1)
+    assert exc.value.output == b"partial\xff" and exc.value.stderr == b"err"
+    assert exc.value.timeout == 1
+    kill_tree.assert_called_once()
+    job.close.assert_called_once()
+    assert proc.stdout.closed and proc.stderr.closed
+    proc.close.assert_called_once()
+
+
+def test_run_argv_real_timeout_reaps_process_and_keeps_bytes(ws, monkeypatch):
+    import sys
+    from unittest.mock import MagicMock
+
+    spawned = []
+    real_spawn = shell._spawn
+
+    def spawn(*args, **kw):
+        proc = real_spawn(*args, **kw)
+        spawned.append(proc)
+        return proc
+
+    monkeypatch.setattr(shell, "_spawn", spawn)
+    kill_tree = MagicMock(wraps=shell._bg_kill_tree)
+    monkeypatch.setattr(shell, "_bg_kill_tree", kill_tree)
+    ctx = ToolContext(ws, Config(), SandboxState(SandboxPolicy(timeout_seconds=1), ws))
+    with pytest.raises(subprocess.TimeoutExpired) as exc:
+        shell.run_argv(ctx, [sys.executable, "-u", "-c",
+                            "import time; print('partial-output', flush=True); time.sleep(20)"],
+                       timeout=20)
+    assert exc.value.timeout == 1 and b"partial-output" in exc.value.output
+    assert isinstance(exc.value.stderr, bytes)
+    assert spawned[0].poll() is not None
+    assert spawned[0].stdout.closed and spawned[0].stderr.closed
+    kill_tree.assert_called_once()
+
+
+def test_run_argv_job_setup_error_still_cleans_process(ws, monkeypatch):
+    from unittest.mock import MagicMock
+
+    proc, _, _, _ = _argv_process(monkeypatch)
+    monkeypatch.setattr(shell, "_new_job", MagicMock(side_effect=OSError("job failed")))
+
+    def kill(tree):
+        proc.returncode = -9
+
+    kill_tree = MagicMock(side_effect=kill)
+    monkeypatch.setattr(shell, "_bg_kill_tree", kill_tree)
+    with pytest.raises(OSError, match="job failed"):
+        shell.run_argv(ToolContext(ws, Config()), ["checker"])
+    kill_tree.assert_called_once()
+    assert proc.stdout.closed and proc.stderr.closed
+    proc.close.assert_called_once()
+
+
+def test_run_argv_output_is_bounded_even_without_newlines(ws, monkeypatch):
+    monkeypatch.setattr(shell, "ARGV_OUTPUT_LIMIT", 32)
+    _argv_process(monkeypatch, output=b"x" * 100_000 + b"END")
+    result = shell.run_argv(ToolContext(ws, Config()), ["checker"])
+    assert result.stdout.startswith(b"[output truncated]")
+    assert result.stdout.endswith(b"END") and len(result.stdout) < 64
+
+
+@pytest.mark.parametrize("mode", ["app_container", "restricted_token"])
+def test_run_argv_isolation_failure_never_uses_plain_popen(ws, monkeypatch, mode):
+    from unittest.mock import MagicMock
+    from minicode import appcontainer
+
+    monkeypatch.setattr(shell.sys, "platform", "win32")
+    policy = SandboxPolicy(**{mode: True})
+    ctx = ToolContext(ws, Config(), SandboxState(policy, ws))
+    plain = MagicMock(side_effect=AssertionError("不可降级"))
+    monkeypatch.setattr(shell.subprocess, "Popen", plain)
+    monkeypatch.setattr(appcontainer, "available", lambda: False)
+    with pytest.raises(OSError, match="API 不可用"):
+        shell.run_argv(ctx, ["checker.exe"])
+    monkeypatch.setattr(appcontainer, "available", lambda: True)
+    isolated = MagicMock(side_effect=OSError("token failed"))
+    monkeypatch.setattr(appcontainer, "Popen", isolated)
+    with pytest.raises(OSError, match="token failed"):
+        shell.run_argv(ctx, ["checker.exe"])
+    assert isolated.call_args.kwargs["mode"] == (
+        "appcontainer" if mode == "app_container" else "restricted")
+    plain.assert_not_called()
+
+
+@pytest.mark.skipif(shell.sys.platform != "win32", reason="Windows 批处理 argv")
+def test_run_argv_cmd_paths_with_spaces_and_literal_arguments(ws):
+    script = _write(ws, "local bin/checker.cmd", '@echo off\n@echo [%~1]\n@exit /b 7\n')
+    result = shell.run_argv(ToolContext(ws, Config()), [str(script), "hello world"])
+    assert result.returncode == 7 and b"[hello world]" in result.stdout
+
+
+@pytest.mark.parametrize("arg", ["a&whoami", "%PATH%", "a!b", 'a"b', "a\nb"])
+def test_run_argv_cmd_rejects_interpreted_arguments(ws, monkeypatch, arg):
+    _, spawn, _, _ = _argv_process(monkeypatch)
+    monkeypatch.setattr(shell.sys, "platform", "win32")
+    with pytest.raises(ValueError, match="元字符"):
+        shell.run_argv(ToolContext(ws, Config()), [str(ws / "tsc.cmd"), arg])
+    spawn.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["app_container", "restricted_token"])
+def test_run_argv_cmd_keeps_requested_isolation(ws, monkeypatch, mode):
+    from unittest.mock import MagicMock
+    from minicode import appcontainer
+
+    real_spawn = shell._spawn
+    proc, _, _, _ = _argv_process(monkeypatch)
+    # 恢复真实路由,只替掉系统 API 的最末层。
+    monkeypatch.setattr(shell, "_spawn", real_spawn)
+    monkeypatch.setattr(shell.sys, "platform", "win32")
+    monkeypatch.setattr(shell, "_new_job", lambda p: None)
+    monkeypatch.setattr(appcontainer, "available", lambda: True)
+    isolated = MagicMock(return_value=proc)
+    monkeypatch.setattr(appcontainer, "Popen", isolated)
+    plain = MagicMock(side_effect=AssertionError("不可降级"))
+    monkeypatch.setattr(shell.subprocess, "Popen", plain)
+    ctx = ToolContext(ws, Config(), SandboxState(SandboxPolicy(**{mode: True}), ws))
+    shell.run_argv(ctx, [str(ws / "tsc.cmd"), "--noEmit"])
+    assert isolated.call_args.kwargs["mode"] == (
+        "appcontainer" if mode == "app_container" else "restricted")
+    argv = isolated.call_args.args[0]
+    assert Path(argv[0]).name == "cmd.exe" and argv[1:5] == ["/d", "/v:off", "/c", "call"]
+    plain.assert_not_called()

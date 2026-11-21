@@ -387,17 +387,17 @@ def format_references_view(data: dict[str, Any]) -> str:
 
 
 def find_references_tool(
+    ctx: Any,
     symbol: str,
     path_pattern: str = "",
     kind: str = "",
     include_tests: bool = True,
     max_results: int = DEFAULT_MAX_RESULTS,
-    ctx: Any = None,
 ) -> str:
     """第 66 个内置工具入口:查找符号引用与分析影响面。"""
-    ws = getattr(ctx, "workspace", None) if ctx else None
+    ws = getattr(ctx, "workspace", None)
     if not ws:
-        ws = Path.cwd()
+        return "引用查找失败: 无法获取当前工作区路径(ctx.workspace)。"
     data = find_symbol_references(
         workspace=Path(ws),
         symbol=symbol,

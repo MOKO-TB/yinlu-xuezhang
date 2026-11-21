@@ -1,29 +1,39 @@
-"""动态首页建议:主题打分、历史采集、默认回退。"""
+"""动态首页建议:主题打分、历史采集、随机回退。"""
 import json
+import random
 import time
 
+from minicode import suggestions
 from minicode.suggestions import (
     MAX_SUGGESTIONS, TOPICS, build_suggestions, collect_user_texts,
 )
 
 
-def test_no_history_returns_defaults():
-    out = build_suggestions([])
-    assert len(out) == MAX_SUGGESTIONS
-    assert out[0] == "最近学校有什么活动"   # 默认热度顺序
+def test_no_history_returns_a_random_sample(monkeypatch):
+    rng = random.Random(20261121)
+    monkeypatch.setattr(suggestions.random, "shuffle", rng.shuffle)
+    first = build_suggestions([])
+    second = build_suggestions([])
+    asks = {t.ask for t in TOPICS}
+    assert len(first) == MAX_SUGGESTIONS == len(set(first))
+    assert len(second) == MAX_SUGGESTIONS == len(set(second))
+    assert set(first) <= asks and set(second) <= asks
+    assert first != second                  # 两次抽到的顺序/组合不应固定
 
 
 def test_asked_topic_rises_with_followup():
     out = build_suggestions(["宿舍空调坏了"])
     # 聊过宿舍 → 该主题换成追问话术并排第一
     assert out[0] == "宿舍水电维修流程是什么"
-    # 未聊过的默认主题仍会补位,且总数不变
-    assert "考研择校与复习规划" in out
+    # 其余主题从池里随机补位,总数与去重仍要对
     assert len(out) == MAX_SUGGESTIONS
+    assert len(set(out)) == MAX_SUGGESTIONS
 
 
 def test_recent_messages_weighted_higher():
-    texts = ["考研", "考研", "宿舍空调坏了"]   # 考研更新且更密集
+    # 前两条是最近的考研,宿舍在 5 条之外(不享最近加权);考研应排第一
+    texts = ["考研", "考研", "随便聊聊", "随便聊聊",
+             "随便聊聊", "随便聊聊", "宿舍空调坏了"]
     out = build_suggestions(texts)
     assert out[0].startswith("考研")
 

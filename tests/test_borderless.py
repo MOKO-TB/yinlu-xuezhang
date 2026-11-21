@@ -200,25 +200,26 @@ def test_double_click_the_bar_zooms():
 
 # ---------------------------------------------------------------- ④ 右缘导航(p8/p9)
 
-def test_the_rail_is_off_the_edge_and_legible_in_light_mode():
-    m = re.search(r"\.chat-rail\{([^}]*)\}", HTML)
-    body = m.group(1)
-    assert "right:12px" in body, "贴死在窗口边上就不像可点的东西(图 p9 是留了距离的)"
-    assert "opacity:.9" in body, "浅色下 0.5 的刻度看不见(图 p8 点的就是这条)"
-    assert "background:var(--rail-tick)" in re.search(
-        r"\.chat-rail \.tick\{([^}]*)\}", HTML).group(1)
-    assert "--rail-tick:rgba(28,43,40,.40)" in HTML, "浅色那一档没有真的加深"
-    assert "--rail-tick:rgba(190,230,225,.32)" in HTML, "深色那一档漏了"
+def test_the_rail_is_compact_and_centered():
+    body = re.findall(r"\.chat-rail\{([^}]*)\}", HTML)[-1]
+    assert "right:8px" in body
+    assert "top:50%" in body and "bottom:auto" in body
+    assert "translateY(-50%)" in body
+    tick = re.findall(r"\.chat-rail \.tick\{([^}]*)\}", HTML)[-1]
+    assert "height:12px" in tick and "flex:0 0 12px" in tick
+    assert "Math.min(users.length, 12)" in HTML
 
 
-def test_a_hovered_or_marked_tick_is_wider_and_ringed():
-    assert ".chat-rail .tick:hover,.chat-rail .tick.on" in HTML
-    assert "box-shadow:0 0 0 3px var(--primary-light)" in HTML
+def test_a_hovered_or_marked_tick_highlights_the_horizontal_mark():
+    assert ".chat-rail .tick:hover::after, .chat-rail .tick.on::after" in HTML
+    assert "width:14px; background:var(--primary)" in HTML
+    assert ".chat-rail .tick:focus-visible" in HTML
 
 
 def test_the_tick_you_jumped_to_stays_lit():
     assert "function scTickMark(i)" in HTML
-    assert "scTickMark(i);              // 刻度上留下" in HTML
+    jump = HTML.split("function jumpToTurn(bubble, i)", 1)[1].split("function placeRailPop", 1)[0]
+    assert "scTickMark(i);" in jump
     assert 't.classList.toggle("on", Number(t.dataset.i) === i)' in HTML
     assert "tick.dataset.i = String(i)" in HTML
 

@@ -12,9 +12,8 @@ Cursor / Cline / Roo 有 LSP 诊断回灌,Aider 的 `--auto-lint` 默认开,而�
 
 1. **argv 全部由扩展名查表得出,模型碰不到一个字符。** 不接受模型给的命令、参数、
    环境变量或 shell 字符串;没有 shell 层;cwd 固定(工作区,或该文件所在目录)。
-   代价是必须把可执行面收死 —— 换来的是"每次编辑后自动跑"这件事**不必弹确认框**
-   (`hooks.py` 的先例:用户配置过的、argv 固定的自动命令不经确认框,风险写进 preview)。
-   走 `bash` 就意味着一轮改十个文件要点十次头,那等于把闭环做成没有。
+   自动诊断仍按等价 bash 命令过当前权限门,只有 ALLOW 才运行;ASK/REJECT
+   不弹自动确认,改为提示用户显式请求诊断。固定 argv 不等于工作区代码可信。
 2. **检查器不存在就跳过并说明,绝不假装跑过。** `ruff` 是 dev 依赖,**打包版里一定
    没有**;`tsc` 要工作区自己装;`go`/`cargo` 多数学生机器上没有。缺了就说"没做检查",
    **不许出现"通过 / 干净 / OK"这类字样** —— 那是本项目列在禁忌里的最贵坏法。
@@ -49,14 +48,13 @@ from pathlib import Path
 
 from minicode.tools.base import (PathBlocked, PathOutsideWorkspace, ToolContext,
                                  resolve_path)
+from minicode.tools.shell import _decode, argv_context, authorize_argv, run_argv
 
 # 绝对路径(盘符式 `D:\a\b` 或 UNC 式 `\\srv\share\a`)。**不匹配**后面的 `:行:列`
 # —— 那两段是"问题本身",剥掉就等于让"同一批错换了行"看起来一样。
 _ABS_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\)[^\s:]*")
 
-# 与 `agent._py_syntax_feedback` 共用的两个边界(v0.9.147 归到一处,不再两处各写一份)。
-# 注意 `apply_patch` **不在**里面 —— 这是 v0.9.134 留下的既有口径,本轮不动它,
-# 改它要单独一轮并说清为什么。
+# 补丁只做进程内 Python 语法检查,不逐文件重复启动项目级检查器。
 SYNTAX_CHECK_TOOLS = ("write_file", "edit_file")
 SYNTAX_SCAN_LIMIT = 512 * 1024          # 只自检 512 KB 以内:再大不是"手写代码"的场景
 
@@ -126,7 +124,8 @@ def _local_bin(workspace: Path, rel: str) -> Path | None:
     为什么往上找:monorepo 里 `tsc` 常常装在仓库根,而被改的文件在子包里。
     只找一层会把"项目其实装了"误判成"没装"。
     """
-    names = (rel, f"{rel}.cmd", f"{rel}.exe")
+    names = ((f"{rel}.exe", f"{rel}.cmd", rel) if sys.platform == "win32"
+             else (rel, f"{rel}.cmd", f"{rel}.exe"))
     for base in (workspace, *workspace.parents):
         for name in names:
             p = base / name
@@ -172,35 +171,42 @@ def _norm_line(line: str, workspace: Path) -> str:
     return " ".join(text.split())[:CHECK_ITEM_CHARS]
 
 
-def run_checker(workspace: Path, rel: str, checker: Checker) -> dict:
+def run_checker(workspace: Path, rel: str, checker: Checker, *,
+                ctx: ToolContext | None = None, gate=None) -> dict:
     """跑一次检查器。返回 `{ok, ran, items, note, scope}`。
 
     `ran=False` 表示**没跑成**(检查器不存在 / 超时 / 起不动)—— 那时 `ok` 一定是
     False 且 `note` 必须说清为什么,调用方**不许**把它说成"通过"。
+    `gate` 只供自动回灌传当前 agent 的门:非 ALLOW 一律不运行、不弹确认。
     """
+    workspace = Path(workspace).resolve()
     prefix, why = _resolve_prefix(checker, workspace)
     if prefix is None:
         return {"ok": False, "ran": False, "items": [], "note": why,
                 "scope": checker.scope_note}
-    target = workspace / rel
-    cwd = workspace if checker.cwd == "workspace" else target.parent
-    argv = [*prefix, *checker.argv, *( [str(target)] if checker.path_arg else [] )]
+    ctx = argv_context(workspace, ctx)
     try:
-        proc = subprocess.run(argv, cwd=str(cwd), capture_output=True,
-                              timeout=CHECK_TIMEOUT, shell=False,
-                              creationflags=(subprocess.CREATE_NO_WINDOW
-                                             if sys.platform == "win32" else 0))
-    except subprocess.TimeoutExpired:
+        if workspace != Path(ctx.workspace).resolve():
+            raise PermissionError("诊断工作区与执行上下文不一致")
+        target = resolve_path(ctx, str(workspace / rel))
+        target.relative_to(workspace)
+        cwd = workspace if checker.cwd == "workspace" else target.parent
+        argv = [*prefix, *checker.argv, *([str(target)] if checker.path_arg else [])]
+        authorize_argv(ctx, argv, cwd=cwd, gate=gate, automatic=gate is not None)
+        proc = run_argv(ctx, argv, cwd=cwd, timeout=CHECK_TIMEOUT)
+    except subprocess.TimeoutExpired as e:
         # 超时**不是通过**:没跑完就说没跑完。
         return {"ok": False, "ran": False, "items": [],
-                "note": f"{checker.label} 在 {CHECK_TIMEOUT} 秒内没跑完,"
+                "note": f"{checker.label} 在 {e.timeout} 秒内没跑完,"
                         "这一次不算检查过", "scope": checker.scope_note}
-    except OSError as e:
+    except (OSError, PathBlocked, PathOutsideWorkspace, ValueError) as e:
+        note = f"{checker.label} 起不动({type(e).__name__}: {e})"
+        if gate is not None and "本次未检查" not in note:
+            note += ";本次未检查，请显式请求运行诊断"
         return {"ok": False, "ran": False, "items": [],
-                "note": f"{checker.label} 起不动({type(e).__name__})",
-                "scope": checker.scope_note}
+                "note": note, "scope": checker.scope_note}
     raw = (proc.stdout or b"") + (proc.stderr or b"")
-    text = raw.decode("utf-8", errors="replace")
+    text = _decode(raw)
     items = [_norm_line(l, workspace) for l in text.splitlines() if l.strip()]
     return {"ok": proc.returncode == 0, "ran": True, "items": items[:CHECK_ITEMS_LIMIT],
             "total": len(items), "note": "", "scope": checker.scope_note}
@@ -318,7 +324,7 @@ def diagnostics(ctx: ToolContext, action: str = "check", path: str = "",
     except ValueError:
         # 工作区外的文件没有"工作区相对路径"可给检查器当 cwd 锚点,如实拒绝。
         return f"错误: {raw} 在工作区外,诊断只对工作区内的文件跑。"
-    result = run_checker(workspace, rel, checker)
+    result = run_checker(workspace, rel, checker, ctx=ctx)
     head = f"{checker.label} · {checker.scope_note}\n"
     if not result["ran"]:
         return head + f"**这次没做检查** —— {result['note']}。"

@@ -666,6 +666,90 @@ def test_write_good_python_has_no_syntax_noise(config, ctx, tmp_path):
     assert "语法自检" not in agent2.session.messages[-2]["content"]
 
 
+def test_patch_reports_syntax_errors_for_each_written_python_file(config, ctx, tmp_path):
+    change = """--- /dev/null
++++ b/first.py
+@@ -0,0 +1 @@
++def broken(:
+--- /dev/null
++++ b/second.py
+@@ -0,0 +1 @@
++if True
+--- /dev/null
++++ b/good.py
+@@ -0,0 +1 @@
++x = 1
+--- /dev/null
++++ b/note.txt
+@@ -0,0 +1 @@
++def broken(:
+"""
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(id="patch", name="apply_patch",
+            arguments=json.dumps({"patch": change}))]),
+        AssistantTurn(text="检查结果"),
+    ])
+    agent = make_agent(config, ctx, llm, FakeUI())
+    agent.run_turn("添加示例")
+    feedback = agent.session.messages[-2]["content"]
+    assert "语法自检:first.py" in feedback
+    assert "语法自检:second.py" in feedback
+    assert feedback.count("语法自检") == 2
+    assert (tmp_path / "good.py").read_text(encoding="utf-8") == "x = 1\n"
+
+
+def test_patch_preview_and_failure_do_not_check_unmodified_files(config, ctx, tmp_path, monkeypatch):
+    (tmp_path / "broken.py").write_text("def old(:\n", encoding="utf-8")
+    change = "--- a/broken.py\n+++ b/broken.py\n@@ -1 +1 @@\n-missing\n+def new(:\n"
+    agent = make_agent(config, ctx, FakeLLM([]), FakeUI())
+    tool = next(t for t in build_default_registry() if t.name == "apply_patch")
+
+    def unexpected_parse(*args, **kwargs):
+        raise AssertionError("No mutation was applied")
+
+    monkeypatch.setattr("minicode.agent.ast.parse", unexpected_parse)
+    for args, result in (({"patch": change, "dry_run": True}, "预演,未修改"),
+                         ({"patch": change}, "错误:未找到原内容")):
+        assert agent._py_syntax_feedback(tool, args, result) == result
+
+
+def test_patch_deletion_is_not_a_syntax_error(config, ctx, tmp_path):
+    (tmp_path / "removed.py").write_text("def old(:\n", encoding="utf-8")
+    change = "--- a/removed.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-def old(:\n"
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(id="patch", name="apply_patch",
+            arguments=json.dumps({"patch": change}))]),
+        AssistantTurn(text="检查结果"),
+    ])
+    agent = make_agent(config, ctx, llm, FakeUI())
+    agent.run_turn("删除示例")
+    assert not (tmp_path / "removed.py").exists()
+    assert "语法自检" not in agent.session.messages[-2]["content"]
+
+
+def test_unverified_plan_gets_one_completion_reminder(config, ctx, tmp_path):
+    import json as _json
+    from minicode.llm import ToolCall
+    plan_args = _json.dumps({"action": "write", "goal": "完成功能", "steps": [
+        {"title": "写代码", "verify": "python -c \"pass\""}, {"title": "收尾"}]})
+    llm = FakeLLM([
+        AssistantTurn(tool_calls=[ToolCall(id="p1", name="plan", arguments=plan_args)]),
+        AssistantTurn(text="全部完成"),
+        AssistantTurn(text="验收尚未完成，我如实说明"),
+    ])
+    ui = FakeUI()
+    agent = make_agent(config, ctx, llm, ui)
+    agent.run_turn("做这件事")
+
+    assert len(llm.calls) == 3, "验收未完成只提醒一次，不能无限循环"
+    assert any("验收未完成" in text for text in getattr(ui, "infos", []))
+    assert agent.verification_report["status"] == "incomplete"
+    last_request = "\n".join(str(m.get("content")) for m in llm.calls[-1])
+    assert "程序验收检查" in last_request
+    assert all("程序验收检查" not in str(m.get("content"))
+               for m in agent.session.messages), "提醒只活一次请求，不写进留档"
+
+
 # ---------------------------------------------------------------- 失败连击止损(v0.9.77)
 
 def _fail_calls(name, args, n, start=0):

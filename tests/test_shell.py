@@ -412,20 +412,26 @@ def _runs_of(ctx, command):
 
 
 def test_finished_background_run_enters_the_verify_ledger(ctx):
-    """`MAX_TIMEOUT` 是 300 秒,跑全量测试这类验收只能走后台;不补这一笔就等于
-    「凡是跑得慢的验收都不许标 done」—— 那道闸拦的是没验过,不该把验过的也拦掉。"""
+    """`MAX_TIMEOUT` 是 300 秒,跑全量测试这类验收只能走后台;跑完那一刻由
+    读输出线程自己补账(退出码已确定),不再依赖模型下一次 poll 才记账。"""
+    import time as _t
     long_cmd = "echo " + "x" * 140 + " 收尾"     # 比 _BgJob.command 的 120 字盖还长
     out = shell.bash(ctx, long_cmd, background=True)
     assert "后台" in out
     job = shell._bg_jobs[shell._bg_list_snapshot()[-1]]
     assert _wait_bg(job), "后台命令没在时限内跑完,这条测试的环境有问题"
-    assert not _runs_of(ctx, long_cmd), "还在跑的时候不能进账"
-    shell.bg_brief_for_model(ctx)               # 模型下一步请求前的那一次播报
+    deadline = _t.monotonic() + 5
+    while not _runs_of(ctx, long_cmd) and _t.monotonic() < deadline:
+        _t.sleep(0.05)
     runs = _runs_of(ctx, long_cmd)
     assert len(runs) == 1, "跑完的那一刻该有一条账"
     assert runs[0]["code"] == 0
     # 用的是**原条命令**:拿截成 120 字那份去比,判据永远对不上
     assert runs[0]["command"] == " ".join(long_cmd.split())
+    # 启动时不带退出码,那一刻不许进账(用一条必然还在跑的命令验)。
+    slow = "python -c \"import time; time.sleep(2)\""
+    shell.bash(ctx, slow, background=True)
+    assert not _runs_of(ctx, slow), "还在跑的时候不能进账"
 
 
 def test_background_run_is_recorded_only_once(ctx):
@@ -439,13 +445,17 @@ def test_background_run_is_recorded_only_once(ctx):
     assert len(_runs_of(ctx, "echo once-only")) == 1
 
 
-def test_no_ctx_means_no_ledger_write(ctx):
-    """老调用形状(不传 ctx)照旧能播报,只是不碰账 —— 五处既有测试就是那样调的。"""
-    shell.bash(ctx, "echo no-ctx", background=True)
+def test_background_ledger_belongs_to_the_starting_ctx(ctx):
+    """记账归属是**启动它的那个 ctx**,不是后来随手拿谁来 poll 的那个 ——
+    多会话/多访客并行时,不能让一次播报把账记到别人头上。"""
+    from minicode.tools.base import ToolContext
+    other = ToolContext(workspace=ctx.workspace, config=ctx.config)
+    shell.bash(ctx, "echo owner-ctx", background=True)
     job = shell._bg_jobs[shell._bg_list_snapshot()[-1]]
     assert _wait_bg(job)
-    assert shell.bg_brief_for_model() != ""
-    assert not _runs_of(ctx, "echo no-ctx")
+    shell._bg_note_verify(other, job)            # 别人来 poll:只播报,不记别人的账
+    assert not _runs_of(other, "echo owner-ctx")
+    assert len(_runs_of(ctx, "echo owner-ctx")) == 1
 
 
 def test_background_verify_unblocks_the_plan_gate(ctx, tmp_path):

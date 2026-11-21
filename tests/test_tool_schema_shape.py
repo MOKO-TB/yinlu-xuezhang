@@ -9,7 +9,10 @@ OpenAI 协议允许,按 pydantic 校验请求体的网关不允许,而它一坏�
 所以这里两头都钉:①我们自己的目录里不许有并集(闸);②对端 schema 不归我们管的 MCP 工具,
 出口处收平(防线)。
 """
+import inspect
 import json
+
+import pytest
 
 from minicode.tools.base import Tool, _flatten_schema_types
 from minicode.tools.registry import build_default_registry
@@ -53,6 +56,25 @@ def test_builtin_registry_has_no_union_types():
         props = (schema.get("properties") or {})
         seen_props += len(props)
     assert seen_props >= 100, "走到的参数比预期少得多,检查这条闸是不是没真走进去"
+
+
+@pytest.mark.parametrize("tool", build_default_registry(), ids=lambda tool: tool.name)
+@pytest.mark.parametrize("arguments", ["required", "all"])
+def test_registered_handlers_bind_ctx_before_schema_arguments(tool, arguments):
+    """逐只绑定真实 schema 的必需/全部参数,不调用 handler,不执行副作用。"""
+    schema = tool.to_openai_schema()["function"]["parameters"]
+    properties = schema.get("properties", {})
+    required = schema.get("required", [])
+    assert set(required) <= properties.keys()
+    names = required if arguments == "required" else properties
+    args = {name: None for name in names}
+    # Agent._prepare 消费 reason 用于授权说明,不会将其传给 handler。
+    if "reason" in (tool.parameters.get("properties") or {}):
+        args.pop("reason", None)
+    ctx = object()
+    signature = inspect.signature(tool.handler)
+    bound = signature.bind(ctx, **args)
+    assert bound.args[0] is ctx
 
 
 def test_render_chart_data_stays_an_array():

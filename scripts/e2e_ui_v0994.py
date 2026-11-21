@@ -162,12 +162,25 @@ def main() -> int:
             rail = page.locator("#chatRail")
             check(rail.is_visible(), "3 问时轮次导航条出现")
             check(rail.locator(".tick:not(.tick-head)").count() == 3, "刻度数 = 问数")
+            size = rail.bounding_box()
+            check(size["height"] < 80 and size["width"] <= 24,
+                  f"少量轮次只占居中的短刻度({size['width']}×{size['height']})")
+            tick_style = rail.locator(".tick:not(.tick-head)").first.evaluate("""el => {
+              const s = getComputedStyle(el, '::after');
+              return {width:parseFloat(s.width), height:parseFloat(s.height)};
+            }""")
+            check(tick_style["width"] > tick_style["height"] and tick_style["height"] == 2,
+                  "导航刻度为短横线,不是贯穿窗口的竖线")
             rail.locator(".tick:not(.tick-head)").nth(0).hover()
             pop = page.locator("#railPop")
             check(pop.is_visible() and "第 1 问" in pop.inner_text(),
                   "hover 刻度出预览浮窗")
             rail.locator(".tick:not(.tick-head)").nth(0).click()
             page.wait_for_timeout(200)
+            check(rail.locator('.tick.on').get_attribute('data-i') == '0',
+                  "点击短刻度直接跳转并标记对应轮次")
+            rail.locator('.tick-head').click()
+            check(pop.locator('.turn-card').count() == 3, "菜单保留全部轮次")
             page.evaluate("e => window.__gcodeEvent(e)", {"type": "resumed",
                           "session": "s1", "messages": [
                 {"role": "user", "text": "第 1 问:帮我看看课表"},
@@ -205,6 +218,18 @@ def main() -> int:
             check(not lb.evaluate("el => el.classList.contains('show')"),
                   "Esc 关灯箱")
 
+            page.evaluate("""() => window.__gcodeEvent({type:'resumed', session:'long',
+              messages:Array.from({length:300}, (_,i) => ({role:'user',text:'Question '+i}))})""")
+            check(rail.locator('.tick:not(.tick-head)').count() == 12
+                  and rail.bounding_box()['height'] <= 200, "长会话最多12个刻度,不撑满侧边")
+            check(rail.locator('.tick:not(.tick-head)').last.get_attribute('data-i') == '299',
+                  "长会话末轮可直接跳转")
+            rail.locator('.tick-head').click()
+            check(pop.locator('.turn-card').count() == 300, "完整菜单不丢中间轮次")
+            pop.locator('.turn-card').nth(156).click()
+            check(page.locator('#chat .msg.user.flash').inner_text().find('Question 156') >= 0,
+                  "菜单仍能跳到未抽样的任意轮次")
+
             # ---- 4. <3 问时导航条隐藏 ----
             page.evaluate("e => window.__gcodeEvent(e)", {
                 "type": "resumed", "session": "s1",
@@ -221,7 +246,7 @@ def main() -> int:
         for f in FAILS:
             print("  - " + f)
         return 1
-    print("全绿 17 项。")
+    print("轮次导航、权限菜单和图片灯箱回归全部通过。")
     return 0
 
 

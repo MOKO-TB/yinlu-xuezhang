@@ -3,7 +3,7 @@
 对应功能(v0.9.08):以前工作区是写死的(GUI=exe 目录,CLI=当前目录),现在
 用户可以自己选一个文件夹当工作台;这里守住三件事 ——
 ① 只有**合法的已存在文件夹**能被选(敏感目录永久拒绝);
-② 切换工作区时沙箱围栏、system prompt、会话运行器一起换,不留旧工作区的会话;
+② 切换前台工作区时保留后台运行器,沙箱状态不跨区;
 ③ 状态落盘后 GUI 与 CLI 读到的是同一份「上次在哪干活」。
 """
 import json
@@ -307,6 +307,8 @@ def test_get_info_exposes_workspace_labels(tmp_path):
 def test_switch_workspace_moves_fence_state_and_session(tmp_path):
     bridge, _ui, window = make_bridge(tmp_path)
     old_workspace = bridge.workspace
+    old_runner = bridge._current
+    old_sandbox = bridge._sandbox
     target = tmp_path / "我的资料"
     target.mkdir()
 
@@ -317,8 +319,14 @@ def test_switch_workspace_moves_fence_state_and_session(tmp_path):
     assert bridge._sandbox.workspace == target.resolve()      # 围栏跟着走
     assert bridge.agent.ctx.workspace == target.resolve()     # 新会话的工具上下文
     assert str(target.resolve()) in bridge.session.messages[0]["content"]
-    assert len(bridge._runners) == 1                          # 旧工作区的会话被丢掉
-    assert old_workspace not in [r.session.workspace for r in bridge._runners.values()]
+    assert len(bridge._runners) == 2
+    assert bridge._runners[old_runner.key] is old_runner
+    assert old_runner.session.workspace == old_workspace
+    assert old_runner.agent.ctx.workspace == old_workspace
+    assert old_runner.agent.ctx.sandbox is old_sandbox
+    assert old_sandbox.workspace == old_workspace
+    assert old_sandbox is not bridge._sandbox
+    assert not old_runner.ui.stop_requested
     # 状态落盘:下次启动还在这个工作区
     assert state_of(tmp_path / "appdir")["current"] == str(target.resolve())
     # 事件顺序:先 cleared(前端认下新会话),再 workspace(改顶栏)
@@ -330,18 +338,115 @@ def test_switch_workspace_moves_fence_state_and_session(tmp_path):
     assert pushed["name"] == "我的资料"
 
 
-def test_switch_workspace_refuses_while_task_running(tmp_path):
-    """有任务在跑时不动工作区:静默换掉围栏会让正在跑的那轮写到错地方。"""
+def test_switch_workspace_keeps_running_task(tmp_path):
     bridge, _ui, _window = make_bridge(tmp_path)
-    bridge._current.busy = True
+    running = bridge._current
+    running.busy = True
     target = tmp_path / "别的"
     target.mkdir()
 
     result = bridge.switch_workspace(str(target))
 
-    assert result["ok"] is False and "任务" in result["msg"]
-    assert bridge.workspace == (tmp_path / "ws").resolve()
-    assert (tmp_path / "appdir" / "workspaces.json").exists() is False
+    assert result["ok"] is True
+    assert bridge.workspace == target.resolve()
+    assert bridge.running_sessions() == [running]
+    assert running.agent.ctx.workspace == (tmp_path / "ws").resolve()
+    assert not running.ui.stop_requested and not bridge._busy
+    assert state_of(bridge.app_dir)["current"] == str(target.resolve())
+
+
+@pytest.mark.parametrize("initial_sandbox", [True, False])
+def test_workspace_sandboxes_isolate_state_and_share_policy(tmp_path, initial_sandbox):
+    if initial_sandbox:
+        bridge, _ui, _window = make_bridge(tmp_path)
+    else:
+        from minicode.gui_bridge import Bridge, GuiUI
+        root = tmp_path / "ws"
+        root.mkdir()
+        bridge = Bridge(Config(), root, GuiUI(), llm=NoLLM(),
+                        sessions_dir=tmp_path / "sessions",
+                        config_path=tmp_path / "config.json",
+                        workspace_file=tmp_path / "workspaces.json", app_dir=tmp_path)
+    old = bridge._current
+    first = bridge._sandbox
+    assert first is old.agent.ctx.sandbox is old.agent.gate.sandbox
+    old.session.add_user("保留原工作区状态")
+    once, always = tmp_path / "once.txt", tmp_path / "always.txt"
+    first.approve_path(once)
+    first.approve_path(always, session=True)
+    first.lock_plan("只锁原工作区")
+    other_ws = tmp_path / "other"
+    other_ws.mkdir()
+
+    assert bridge.switch_workspace(str(other_ws))["ok"]
+    second = bridge._sandbox
+    assert second is not first and second.policy is first.policy
+    assert second.workspace == other_ws and first.workspace == old.agent.ctx.workspace
+    assert not second.approved_paths and not second.session_approved
+    assert not second.path_allowed(once) and not second.path_allowed(always)
+    assert not second.plan_lock and not second.plan_lock_goal
+    assert first.approved_paths == {str(once)}
+    assert first.session_approved == {str(always)}
+    assert first.plan_lock and first.plan_lock_goal == "只锁原工作区"
+    write = next(t for t in old.agent.registry if t.name == "write_file")
+    read = next(t for t in old.agent.registry if t.name == "read_file")
+    assert old.agent.gate.check(write, {"path": "local.txt", "content": "x"}) == "reject"
+    assert bridge.agent.gate.check(write, {"path": "local.txt", "content": "x"}) != "reject"
+    assert old.agent.gate.check(read, {"path": str(always)}) == "allow"
+    assert bridge.agent.gate.check(read, {"path": str(always)}) == "ask"
+    assert bridge.agent.gate.check(read, {"path": str(old.agent.ctx.workspace / 'a.txt')}) == "ask"
+    assert old.agent.gate.check(read, {"path": str(other_ws / 'a.txt')}) == "ask"
+    second.approve_path(tmp_path / "second.txt", session=True)
+    assert bridge.set_sandbox(False)["ok"]
+    assert not first.policy.enabled and not second.policy.enabled
+    assert bridge.set_sandbox(True)["ok"]
+    assert first.policy.enabled
+
+    assert bridge.switch_workspace(str(old.agent.ctx.workspace))["ok"]
+    assert bridge._sandbox is first
+    assert bridge.agent.ctx.sandbox is first and bridge.agent is not old.agent
+    assert bridge.resume_session(old.log_path.name)["switched"] is False
+    assert bridge._current is old and bridge._sandbox is first
+    assert first.plan_lock and first.path_allowed(always)
+    assert bridge.switch_workspace(str(other_ws))["ok"]
+    assert bridge._sandbox is second and second.path_allowed(tmp_path / "second.txt")
+    assert not second.plan_lock
+
+
+def test_switch_to_uses_live_context_objects(tmp_path):
+    bridge, _ui, _window = make_bridge(tmp_path)
+    old = bridge._current
+    other = tmp_path / "other"
+    other.mkdir()
+    bridge.switch_workspace(str(other))
+    bridge._dock_cwd = other
+
+    bridge.switch_to(old)
+
+    assert bridge._current is old
+    assert bridge.workspace is old.agent.ctx.workspace
+    assert bridge._sandbox is old.agent.ctx.sandbox
+    assert bridge._dock_cwd is None
+    assert state_of(bridge.app_dir)["current"] == str(old.agent.ctx.workspace)
+
+
+def test_runner_lookup_snapshots_before_new_runner_is_added(tmp_path, monkeypatch):
+    from minicode.gui_bridge import SessionRunner
+    bridge, _ui, _window = make_bridge(tmp_path)
+    original = bridge._current
+    original.session.add_user("留档")
+    path = original.log_path
+    added = []
+
+    def log_path(runner):
+        if not added:
+            added.append(bridge.open_session(current=False))
+        return runner.session.log_path
+
+    monkeypatch.setattr(SessionRunner, "log_path", property(log_path))
+    assert bridge._runner_for_log(path.with_name("missing.jsonl")) is None
+    assert len(bridge._runners) == 2
+    assert bridge._current is original
 
 
 def test_switch_workspace_to_same_path_is_noop(tmp_path):

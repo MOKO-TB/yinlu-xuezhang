@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from minicode.sandbox import classify_path
 from minicode.find_references import (
     analyze_impact,
     find_symbol_references,
@@ -42,6 +43,15 @@ def _is_ignored_path(rel_path: str) -> bool:
     """检查相对路径是否在忽略目录中。"""
     parts = Path(rel_path).parts
     return any(p in IGNORED_DIRS for p in parts)
+
+
+def _source_path(workspace: Path, path: Path) -> Path | None:
+    kind, resolved = classify_path(workspace, str(path))
+    if kind != "inside":
+        return None
+    if _is_ignored_path(resolved.relative_to(workspace).as_posix()):
+        return None
+    return resolved
 
 
 def rename_symbol_in_code(
@@ -171,7 +181,8 @@ def rename_symbol(
         return fnmatch.fnmatch(rel.replace("\\", "/"), path_pattern.replace("\\", "/"))
 
     for p in ws.rglob("*"):
-        if not p.is_file() or p.suffix.lower() not in TEXT_EXTS:
+        p = _source_path(ws, p)
+        if p is None or not p.is_file() or p.suffix.lower() not in TEXT_EXTS:
             continue
         try:
             rel = p.relative_to(ws).as_posix()
@@ -214,8 +225,8 @@ def rename_symbol(
         if len(planned_writes) >= max_files:
             break
 
-        fpath = ws / rel_path
-        if not fpath.is_file():
+        fpath = _source_path(ws, ws / rel_path)
+        if fpath is None or not fpath.is_file():
             continue
 
         try:
@@ -264,6 +275,10 @@ def rename_symbol(
     # 5. 若非 dry_run, 执行真实写入
     written_files = 0
     if not dry_run:
+        for fpath, rel_path, _, _, _ in planned_writes:
+            if _source_path(ws, fpath) != fpath:
+                return {"ok": False, "error": f"文件路径已变化或超出工作区: {rel_path}",
+                        "written_files": 0}
         for fpath, rel_path, _, new_code, _ in planned_writes:
             try:
                 fpath.write_text(new_code, encoding="utf-8")
@@ -294,16 +309,18 @@ def rename_symbol(
 
 
 def rename_symbol_tool(
+    ctx: Any,
     symbol: str,
     new_name: str,
     dry_run: bool = True,
     path_pattern: str | None = None,
-    workspace: str | None = None,
 ) -> str:
     """内置工具入口函数: 跨文件代码符号重命名与重构预演。"""
-    ws = workspace or str(Path.cwd().resolve())
+    ws = getattr(ctx, "workspace", None)
+    if not ws:
+        return "符号重命名失败: 无法获取当前工作区路径(ctx.workspace)。"
     res = rename_symbol(
-        workspace=ws,
+        workspace=str(ws),
         symbol=symbol,
         new_name=new_name,
         dry_run=dry_run,

@@ -1,8 +1,10 @@
 """tests/test_find_references.py: 跨文件代码引用查找与影响面分析测试 (v0.9.166)。"""
 from pathlib import Path
-from unittest.mock import MagicMock
+from types import SimpleNamespace
 
+import pytest
 
+from minicode.agent import Agent
 from minicode.find_references import (
     analyze_impact,
     extract_python_references,
@@ -10,6 +12,7 @@ from minicode.find_references import (
     find_references_tool,
     find_symbol_references,
 )
+from minicode.tools.registry import build_default_registry
 
 
 def test_extract_python_references_calls():
@@ -177,18 +180,82 @@ def test_find_symbol_references_workspace_filtering(tmp_path: Path):
     assert all(r["kind"] == "call" for r in res_calls["references"])
 
 
-def test_find_references_tool_e2e(tmp_path: Path):
+def test_find_references_tool_e2e(tmp_path: Path, ctx):
     file_a = tmp_path / "demo.py"
     file_a.write_text("target_function()\n", encoding="utf-8")
 
-    ctx = MagicMock()
-    ctx.workspace = tmp_path
-
-    out = find_references_tool("target_function", ctx=ctx)
+    out = find_references_tool(ctx, "target_function")
     assert "符号引用检索: `target_function`" in out
     assert "demo.py" in out
     assert "调用" in out
 
     # 空结果测试
-    out_empty = find_references_tool("nonexistent_xyz", ctx=ctx)
+    out_empty = find_references_tool(ctx, "nonexistent_xyz")
     assert "未找到符号 `nonexistent_xyz`" in out_empty
+
+
+@pytest.mark.parametrize("args,files,total", [
+    ({"symbol": "target_action"}, ("src/mod.py", "tests/test_mod.py", "other.py"), 5),
+    ({"symbol": "target_action", "include_tests": False}, ("src/mod.py", "other.py"), 3),
+    ({"symbol": "target_action", "path_pattern": "src/*.py", "kind": "call",
+      "include_tests": False, "max_results": 1}, ("src/mod.py",), 1),
+    ({"symbol": "missing_symbol"}, (), 0),
+    ({"symbol": "target_action", "path_pattern": "../*"}, (), 0),
+], ids=["required", "exclude-tests", "all-properties", "no-match", "parent-pattern"])
+def test_registered_tool_runs_through_agent(tmp_path, ctx, monkeypatch, args, files, total):
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "tests").mkdir()
+    sources = {
+        "src/mod.py": "def target_action():\n    pass\ndef caller():\n    target_action()\n    target_action()\n",
+        "tests/test_mod.py": "from src.mod import target_action\ndef test_action():\n    target_action()\n",
+        "other.py": "target_action()\n",
+    }
+    for name, code in sources.items():
+        (workspace / name).write_text(code, encoding="utf-8")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    decoy = cwd / "cwd_only.py"
+    decoy.write_text("target_action()\n", encoding="utf-8")
+    monkeypatch.chdir(cwd)
+    ctx.workspace = workspace
+    tool = next(t for t in build_default_registry() if t.name == "find_references")
+    assert tool.handler is find_references_tool
+    agent = Agent.__new__(Agent)
+    agent.ctx = ctx
+
+    result, elapsed_ms = agent._run_handler(tool, args)
+
+    if total:
+        assert f"共命中 {total} 处引用" in result
+    else:
+        assert "未找到符号" in result
+    for name in sources:
+        assert (name in result) == (name in files)
+        assert (workspace / name).read_text(encoding="utf-8") == sources[name]
+    assert "cwd_only.py" not in result
+    assert decoy.read_text(encoding="utf-8") == "target_action()\n"
+    assert isinstance(elapsed_ms, int) and elapsed_ms >= 0
+
+    # path_pattern 仍是相对路径的过滤器,绝对路径不能把扫描根切到工作区外。
+    outside, _ = agent._run_handler(tool, {
+        "symbol": "target_action", "path_pattern": decoy.as_posix(),
+    })
+    assert "未找到符号" in outside
+
+
+@pytest.mark.parametrize("bad_ctx", [None, object(), SimpleNamespace(workspace=None), SimpleNamespace(workspace="")],
+                         ids=["none", "missing-attribute", "none-workspace", "empty-workspace"])
+def test_registered_tool_requires_workspace(monkeypatch, bad_ctx):
+    def unexpected_scan(*args, **kwargs):
+        pytest.fail("缺失工作区时不得扫描进程 cwd")
+
+    monkeypatch.setattr("minicode.find_references.find_symbol_references", unexpected_scan)
+    tool = next(t for t in build_default_registry() if t.name == "find_references")
+    agent = Agent.__new__(Agent)
+    agent.ctx = bad_ctx
+
+    result, _ = agent._run_handler(tool, {"symbol": "target_action"})
+
+    assert "引用查找失败" in result
+    assert "无法获取当前工作区路径(ctx.workspace)" in result

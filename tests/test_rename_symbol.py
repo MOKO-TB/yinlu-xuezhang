@@ -16,15 +16,19 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 
 from minicode import slash_commands as sc
+from minicode.agent import Agent
 from minicode.rename_symbol import (
     is_valid_identifier,
     rename_symbol,
     rename_symbol_in_code,
     rename_symbol_tool,
 )
+from minicode.tools.registry import build_default_registry
 
 
 def test_is_valid_identifier():
@@ -209,10 +213,10 @@ def test_rename_symbol_tool_and_slash_command():
 
         # 1. rename_symbol_tool
         view = rename_symbol_tool(
+            SimpleNamespace(workspace=root),
             symbol="data_source",
             new_name="db_source",
             dry_run=True,
-            workspace=str(root),
         )
         assert "符号重构报告" in view
         assert "data_source" in view and "db_source" in view
@@ -247,3 +251,128 @@ def test_bridge_commands_catalog_and_rename():
         res = bridge.rename_symbol("old_val", "new_val", dry_run=True)
         assert res["ok"] is True
         assert res["dry_run"] is True
+
+
+@pytest.mark.parametrize("path_pattern", [None, "src/*.py"], ids=["whole-workspace", "path-filter"])
+def test_registered_tool_previews_then_writes_only_ctx_workspace(tmp_path, ctx, monkeypatch, path_pattern):
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "node_modules").mkdir()
+    sources = {
+        "src/model.py": "def old_value():\n    return 42\n",
+        "src/client.py": "from model import old_value\nresult = old_value()\n",
+        "other.py": "old_value = 10\n",
+        "node_modules/ignored.py": "old_value = 20\n",
+    }
+    for name, code in sources.items():
+        (workspace / name).write_text(code, encoding="utf-8")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    outside_sources = {
+        cwd / "model.py": sources["src/model.py"],
+        tmp_path / "parent.py": "old_value = 99\n",
+    }
+    for path, code in outside_sources.items():
+        path.write_text(code, encoding="utf-8")
+    monkeypatch.chdir(cwd)
+    ctx.workspace = workspace
+    tool = next(t for t in build_default_registry() if t.name == "rename_symbol")
+    assert tool.handler is rename_symbol_tool
+    agent = Agent.__new__(Agent)
+    agent.ctx = ctx
+    args = {"symbol": "old_value", "new_name": "new_value"}
+    if path_pattern is not None:
+        args["path_pattern"] = path_pattern
+    changed = {"src/model.py", "src/client.py"}
+    if path_pattern is None:
+        changed.add("other.py")
+
+    # 不在 schema 的 workspace 不再作为模型参数接受。
+    rejected, _ = agent._run_handler(tool, {
+        **args, "workspace": str(cwd), "dry_run": False,
+    })
+    assert "工具参数与 schema 不匹配" in rejected
+    assert "workspace" in rejected
+
+    # 父目录/外部绝对路径模式只能过滤候选,不能扩大工作区根。
+    for pattern in ("../*", (cwd / "model.py").as_posix()):
+        outside, _ = agent._run_handler(tool, {
+            **args, "path_pattern": pattern, "dry_run": False,
+        })
+        assert "涉及文件**: 0 个" in outside
+
+    # 默认及显式 dry_run=True 都要生成预览,且所有源码字节保持不变。
+    before = {path: path.read_bytes() for path in (
+        *(workspace / name for name in sources), *outside_sources,
+    )}
+    for preview_args in (args, {**args, "dry_run": True}):
+        preview, elapsed_ms = agent._run_handler(tool, preview_args)
+        assert "预演模式 (未修改磁盘文件)" in preview
+        assert f"涉及文件**: {len(changed)} 个" in preview
+        assert "```diff" in preview
+        assert "-def old_value():" in preview
+        assert "+def new_value():" in preview
+        for name in sources:
+            assert (f"**`{name}`**" in preview) == (name in changed)
+        assert all(path.read_bytes() == content for path, content in before.items())
+        assert isinstance(elapsed_ms, int) and elapsed_ms >= 0
+
+    written, elapsed_ms = agent._run_handler(tool, {**args, "dry_run": False})
+
+    assert "执行模式 (已写入修改)" in written
+    assert f"成功将 {len(changed)} 个文件写入磁盘" in written
+    for name, code in sources.items():
+        expected = code.replace("old_value", "new_value") if name in changed else code
+        assert (workspace / name).read_text(encoding="utf-8") == expected
+    for path, code in outside_sources.items():
+        assert path.read_text(encoding="utf-8") == code
+        assert path.read_bytes() == before[path]
+    assert isinstance(elapsed_ms, int) and elapsed_ms >= 0
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_rename_excludes_resolved_outside_paths_and_credentials(tmp_path, monkeypatch, dry_run):
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text("old_value = 1\n", encoding="utf-8")
+    linked = workspace / "linked.py"
+    linked.write_text("old_value = 2\n", encoding="utf-8")
+    credential = workspace / "credentials.json"
+    credential.write_text('{"old_value": "private"}', encoding="utf-8")
+    source = workspace / "source.py"
+    source.write_text("old_value = 3\n", encoding="utf-8")
+    resolve = Path.resolve
+
+    def resolved_path(path, *args, **kwargs):
+        if path == linked:
+            return outside
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolved_path)
+    result = rename_symbol(str(workspace), "old_value", "new_value", dry_run=dry_run)
+    assert result["ok"]
+    assert result["modified_files"] == ["source.py"]
+    assert "private" not in result["diff"]
+    assert outside.read_text(encoding="utf-8") == "old_value = 1\n"
+    assert credential.read_text(encoding="utf-8") == '{"old_value": "private"}'
+    assert source.read_text(encoding="utf-8") == ("old_value = 3\n" if dry_run else "new_value = 3\n")
+
+
+@pytest.mark.parametrize("bad_ctx", [None, object(), SimpleNamespace(workspace=None), SimpleNamespace(workspace="")],
+                         ids=["none", "missing-attribute", "none-workspace", "empty-workspace"])
+def test_registered_tool_requires_workspace(monkeypatch, bad_ctx):
+    def unexpected_rename(*args, **kwargs):
+        pytest.fail("缺失工作区时不得扫描或修改进程 cwd")
+
+    monkeypatch.setattr("minicode.rename_symbol.rename_symbol", unexpected_rename)
+    tool = next(t for t in build_default_registry() if t.name == "rename_symbol")
+    agent = Agent.__new__(Agent)
+    agent.ctx = bad_ctx
+
+    result, _ = agent._run_handler(tool, {
+        "symbol": "old_value", "new_name": "new_value", "dry_run": False,
+    })
+
+    assert "符号重命名失败" in result
+    assert "无法获取当前工作区路径(ctx.workspace)" in result

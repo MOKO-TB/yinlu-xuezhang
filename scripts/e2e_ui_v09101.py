@@ -154,6 +154,8 @@ const base = {
                                    path: "plans/plan.md", total: 4, done: 1,
                                    verify: [], ready: [], blocked: [4], failed: [3],
                                    running: [2], dispatch_text: "按计划继续",
+                                   verification: {status: "incomplete",
+                                                  summary: "第 1 步已通过", steps: []},
                                    steps: [{n: 1, title: "一件", detail: "",
                                             status: "done", depends_on: [],
                                             note: "", verify: "", ready: false,
@@ -301,8 +303,8 @@ def main() -> int:
         page.wait_for_function(
             "() => !document.getElementById('instrLine').hidden", timeout=8000)
         instr = page.inner_text("#instrLine").strip()
-        check(instr == "📐 指令:内置 + 用户级(2 行) + 项目级(3 行)",
-              f"侧栏「📐 指令」逐字是桥给的那句(实测「{instr}」)")
+        check(instr == "指令:内置 + 用户级(2 行) + 项目级(3 行)",
+              f"侧栏「指令」逐字是桥给的那句(实测「{instr}」)")
         check("被截过" in (page.get_attribute("#instrLine", "title") or ""),
               "悬停说明里带出「项目级那一份注入时被截过」(不只在后端知道)")
         page.evaluate("() => renderInstrLine({ok: true, line: '', layers: []})")
@@ -515,6 +517,9 @@ def main() -> int:
                       ".find(e => /计划第 2 步/.test(e.textContent)).click()")
         page.wait_for_selector("#planOverlay.show", timeout=5000)
         check(True, "计划那一行点开的是真计划弹窗(#planOverlay.show)")
+        page.wait_for_function("document.getElementById('plProg').textContent.includes('验收')")
+        check("第 1 步已通过" in page.locator("#plProg").text_content(),
+              "计划进度行展示后端验收结论")
         page.click("#btnPlanClose")
         page.click("#btnBoard")
         page.wait_for_selector("#boardOverlay.show", timeout=5000)

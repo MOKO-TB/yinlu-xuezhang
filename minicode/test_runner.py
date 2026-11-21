@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from minicode.tools.base import ToolContext
+from minicode.tools.shell import _decode, argv_context, authorize_argv, run_argv
 
 # 内存快照:工作区绝对路径(规范化) -> 最近一次测试执行报告
 _LAST_RUN_SNAPSHOT: dict[str, dict[str, Any]] = {}
@@ -196,8 +197,10 @@ def parse_generic_output(output: str, exit_code: int) -> dict[str, Any]:
     }
 
 
-def run_tests(workspace: Path, target: str | None = None, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
+def run_tests(workspace: Path, target: str | None = None, timeout: int = DEFAULT_TIMEOUT, *,
+              ctx: ToolContext | None = None, gate=None, ui=None) -> dict[str, Any]:
     """在工作区受控执行测试并返回结构化报告。"""
+    workspace = Path(workspace).resolve()
     meta = detect_framework(workspace)
     if not meta:
         return {
@@ -214,22 +217,24 @@ def run_tests(workspace: Path, target: str | None = None, timeout: int = DEFAULT
         argv.append(clean_target)
 
     cmd_str = " ".join(argv)
+    ctx = argv_context(workspace, ctx)
     try:
-        proc = subprocess.run(
-            argv,
-            cwd=str(workspace),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=(subprocess.CREATE_NO_WINDOW
-                           if sys.platform == "win32" else 0),
-        )
-        raw_out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        if Path(workspace).resolve() != Path(ctx.workspace).resolve():
+            raise PermissionError("测试工作区与执行上下文不一致")
+        if target and target.strip():
+            # target 是单个用例/相对路径,不是注入 runner 选项的入口。
+            from minicode.tools.base import resolve_path
+            clean_target = target.strip()
+            if clean_target.startswith("-"):
+                raise ValueError("测试目标不能是命令选项")
+            resolve_path(ctx, clean_target.split("::", 1)[0]).relative_to(workspace)
+        authorize_argv(ctx, argv, cwd=workspace, gate=gate, ui=ui)
+        proc = run_argv(ctx, argv, cwd=workspace, timeout=timeout)
+        raw_out = _decode(proc.stdout or b"") + "\n" + _decode(proc.stderr or b"")
         exit_code = proc.returncode
     except subprocess.TimeoutExpired as e:
-        raw_out = (e.stdout or "") + "\n" + (e.stderr or "")
+        raw_out = _decode(e.stdout or b"") + "\n" + _decode(e.stderr or b"")
+        timeout = e.timeout
         res = {
             "ok": False,
             "status": "timeout",
@@ -354,7 +359,7 @@ def test_runner_tool(ctx: ToolContext, action: str = "run", target: str = "", re
         return "【最近一次测试运行快照】\n" + format_test_report(last)
 
     if action == "run":
-        res = run_tests(ws, target=target if target.strip() else None)
+        res = run_tests(ws, target=target if target.strip() else None, ctx=ctx)
         return format_test_report(res)
 
     return f"未知的 action={action}。有效选项为 run, detect, last_result。"

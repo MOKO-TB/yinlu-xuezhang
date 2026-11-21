@@ -3266,12 +3266,12 @@ try {
   /* ---- 6. 首页:没有卡片,只有一句话和几行字 ---- */
   #chat{ background:var(--bg); padding:24px 28px 32px; }
   html.dark #chat{ background:var(--bg); }
-  #chat .placeholder{ max-width:780px; margin:0 auto;
-                      padding:12vh 0 24px; color:var(--text-2);
+  #chat .placeholder{ max-width:780px; margin:0;
+                      padding:5vh 0 24px; color:var(--text-2);
                       line-height:1.65; }
   #chat .placeholder .hero{ background:none; border:none; border-radius:0;
     box-shadow:none; backdrop-filter:none; -webkit-backdrop-filter:none;
-    padding:0; margin:0 0 28px; text-align:center; overflow:visible; }
+    padding:0; margin:0 0 28px; text-align:left; overflow:visible; }
   #chat .placeholder .hero::before{ display:none; }
   #chat .placeholder .hero .greet{ font-size:30px; font-weight:600;
     letter-spacing:-.02em; line-height:1.35; color:var(--text-1);
@@ -3279,7 +3279,7 @@ try {
   #chat .placeholder .hero .greet b{ color:var(--text-1); font-weight:600; }
   html.dark #chat .placeholder .hero .greet{ text-shadow:none; }
   #chat .placeholder .hero .sub{ color:var(--text-3); font-size:13.5px;
-    margin:8px auto 0; max-width:560px; line-height:1.7; }
+    margin:8px 0 0; max-width:640px; line-height:1.7; }
   #chat .placeholder .wx-line{ display:inline-flex; align-items:center;
     margin-top:8px; padding:0; border:none; background:none; cursor:pointer;
     color:var(--text-3); font:inherit; font-size:11.5px; }
@@ -3289,22 +3289,17 @@ try {
   html.dark #chat .placeholder .home-tray{ background:none;
     border-color:transparent; }
   #chat .placeholder .chips{ display:flex; flex-wrap:wrap;
-    justify-content:center; align-items:center; gap:8px;
+    justify-content:flex-start; align-items:center; gap:8px;
     max-width:none; padding:0; margin-bottom:12px; }
-  #chat .placeholder .chips>span{ flex:0 0 100%; text-align:center;
+  #chat .placeholder .chips>span{ flex:0 0 100%; text-align:left;
     font-size:11px; font-weight:500; color:var(--text-3);
     letter-spacing:.03em; text-shadow:none; margin-bottom:1px; }  /* 建议 chips 用三列网格:比一行行长短不齐的胶囊更像一块可扫的入口;
      10 枚刚好三行,不再把首页撑成四五行。 */
-  #chat .placeholder .chips.sug-chips{ display:grid;
-    grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px; }
-  #chat .placeholder .chips.sug-chips > span{ grid-column:1 / -1; }
-  #chat .placeholder .sug-chips .chip{ width:100%; justify-content:center; }
-  @media (max-width: 1180px){
-    #chat .placeholder .chips.sug-chips{ grid-template-columns:repeat(2, minmax(0,1fr)); }
-  }
-  @media (max-width: 760px){
-    #chat .placeholder .chips.sug-chips{ grid-template-columns:1fr; }
-  }
+  #chat .placeholder .chips.sug-chips{ display:flex; flex-wrap:wrap;
+    max-width:700px; gap:8px; }
+  #chat .placeholder .chips.sug-chips > span{ flex:0 0 100%; }
+  #chat .placeholder .sug-chips .chip{ width:auto; justify-content:flex-start;
+    text-align:left; }
   html.dark #chat .placeholder .chips>span{ text-shadow:none; color:var(--text-3); }
   #chat .placeholder .chip{ background:transparent; border:1px solid var(--line);
     border-radius:999px; padding:6px 14px; font-size:12.5px; font-weight:500;
@@ -3331,8 +3326,8 @@ try {
     background:transparent; border-color:var(--line); box-shadow:none; }
   .go-chips .chip-go{ border-color:var(--line); }
   .go-chips .chip-go.urgent{ border-color:var(--text-3); color:var(--text-1); }
-  #chat .placeholder .tip{ max-width:620px; margin:10px auto 0; padding:0;
-    color:var(--text-3); font-size:11.5px; line-height:1.7; text-align:center; }
+  #chat .placeholder .tip{ max-width:640px; margin:10px 0 0; padding:0;
+    color:var(--text-3); font-size:11.5px; line-height:1.7; text-align:left; }
   .tip .tip-x{ background:transparent; border:none; padding:0 4px;
     color:var(--text-3); font:inherit; text-decoration:underline;
     cursor:pointer; }
@@ -3466,7 +3461,7 @@ try {
 
   /* ---- 10. 右侧底座与终端坞:同一套纸面 ---- */
   .activity{ background:var(--surface); border-left:1px solid var(--line); }
-  .term-dock{ background:#141716; border-top:1px solid var(--line); }
+  .term-dock{ background:var(--surface); border-top:1px solid var(--line); }
   .sp-tabs{ padding:6px 8px; gap:2px; border-bottom:1px solid var(--line);
             overflow-x:auto; scrollbar-width:none; }
   .sp-tabs::-webkit-scrollbar{ display:none; }
@@ -3601,38 +3596,46 @@ try {
   .tp-input .b-yes{ flex:none; height:32px; padding:0 12px; border-radius:8px;
                     font-size:12px; }
 
-  /* ---- 15. 终端坞:固定深色终端,不再随主题变成一块灰 ----
-     旧规则 `.td-body{background:var(--glass-soft)}` 在深色下是半透明白,
-     叠在深色底上就是一片看不清字的灰(用户图 p6)。 */
-  .term-dock{ background:#111413; border-top:1px solid rgba(255,255,255,.10);
-              color:#D7E1DC; }
-  .term-dock .td-head{ border-bottom-color:rgba(255,255,255,.08); }
-  .term-dock .td-head b{ color:#E8EAE7; }
-  .term-dock .td-note{ color:#8B948F; }
-  .term-dock .td-body{ background:transparent; color:#D7E1DC; }
-  .term-dock .td-body .t-prompt{ color:#E8EAE7; }
-  .term-dock .td-body .t-cmd{ color:#7FD5C9; }
-  .term-dock .td-body .t-dim,
-  .term-dock .td-body .t-banner{ color:#7C8781; }
-  .term-dock .td-body .t-err{ color:#E57066; }
-  .term-dock .td-body input#tpCmd{ color:#E8EAE7; caret-color:#7FD5C9; }
-  .term-dock .td-tab{ background:rgba(255,255,255,.06);
-    border-color:rgba(255,255,255,.12); color:#D7E1DC; }
-  .term-dock .act-ib{ color:#8B948F; }
-  .term-dock .act-ib:hover{ color:#E8EAE7; background:rgba(255,255,255,.08);
+  .term-dock{ background:var(--surface); color:var(--text-1);
+              border-top-color:var(--line); }
+  .term-dock .td-head{ border-bottom-color:var(--line-soft); }
+  .term-dock .td-head b, .term-dock .td-body .t-prompt{ color:var(--text-1); }
+  .term-dock .td-note, .term-dock .td-body .t-dim,
+  .term-dock .td-body .t-banner{ color:var(--text-3); }
+  .term-dock .td-body{ background:transparent; color:var(--text-1); }
+  .term-dock .td-body .t-cmd{ color:var(--primary-text); }
+  .term-dock .td-body .t-err{ color:var(--danger); }
+  .term-dock .td-body input#tpCmd{ color:var(--text-1); caret-color:var(--primary); }
+  .term-dock .td-tab{ background:var(--glass-lite);
+    border-color:var(--line); color:var(--text-2); }
+  .term-dock .act-ib{ color:var(--text-3); }
+  .term-dock .act-ib:hover{ color:var(--text-1); background:var(--glass-lite);
                             border-color:transparent; }
 
-  /* ---- 16. 聊天轮次刻度:从"彩色滚动条"收成一条很轻的细线 ----
-     之前 5px tick + 9px 当前 + 青光,远看像一根坏掉的滚动条(用户图 p4)。 */
-  .chat-rail{ width:6px; right:8px; opacity:.85; }
-  .chat-rail .tick{ width:3px; min-height:6px; margin:1px 0; border-radius:2px; }
-  .chat-rail .tick:hover, .chat-rail .tick.on{ width:5px;
-    box-shadow:0 0 0 2px var(--primary-light); background:var(--primary); }
-  .chat-rail .tick-head{ width:12px; height:12px; flex:none; margin:0 0 3px;
-    border:none; background:var(--glass-lite); color:var(--text-3); }
-  .chat-rail .tick-head:hover{ width:12px; background:var(--surface);
-                               color:var(--text-1); box-shadow:none; }
-  .chat-rail .tick-head svg{ width:9px; height:9px; }
+  .chat-rail{ width:20px; right:8px; top:50%; bottom:auto;
+    transform:translateY(-50%); max-height:calc(100% - 24px); gap:2px;
+    justify-content:flex-start; overflow-y:auto; scrollbar-width:none; opacity:.5; }
+  .chat-rail::-webkit-scrollbar{ display:none; }
+  .chat-rail:focus-within{ opacity:1; }
+  .chat-rail .tick{ display:flex; align-items:center; justify-content:center;
+    width:20px; height:12px; min-height:12px; flex:0 0 12px; margin:0; padding:0;
+    border:0; border-radius:3px; background:transparent; box-shadow:none; }
+  .chat-rail .tick::after{ content:""; width:8px; height:2px;
+    border-radius:2px; background:var(--text-3); transition:width .15s, background .15s; }
+  .chat-rail .tick:hover, .chat-rail .tick.on{ width:20px;
+    background:transparent; box-shadow:none; }
+  .chat-rail .tick:hover::after, .chat-rail .tick.on::after{
+    width:14px; background:var(--primary); }
+  .chat-rail .tick:focus-visible{ outline:1px solid var(--primary); outline-offset:-1px; }
+  .chat-rail .tick-head{ height:16px; min-height:16px; flex-basis:16px;
+    margin-bottom:2px; color:var(--text-3); }
+  .chat-rail .tick-head::after{ display:none; }
+  .chat-rail .tick-head:hover{ color:var(--text-1); }
+  .chat-rail .tick-head svg{ width:10px; height:10px; }
+
+  /* 长会话：离屏消息跳过布局，正文 Markdown 滚到附近再渲染。 */
+  #chat.history-long .msg{ content-visibility:auto; contain-intrinsic-size:auto 180px; }
+  #chat.history-long .msg .body[data-md-pending]{ white-space:pre-wrap; }
 </style>
 </head>
 <body>
@@ -4556,6 +4559,8 @@ let cur = null;          // 当前助手消息块 {wrap, body, reasoning, text, 
 let chatBatch = null;    // 恢复会话时消息先挂到 DocumentFragment,最后一次替换(避免逐条布局抖动)
 let chatRenderEpoch = 0;
 let lastRegenerateButton = null;
+let chatBodyObserver = null;
+const HISTORY_LAZY_LIMIT = 400;   // 超过这么多条消息才启用离屏延迟渲染
 let activeAsk = null;    // 流内提问卡的当前状态(一次只让一张可操作)
 let activePlanReview = null;   // 流内计划核对卡的当前状态(批单与提问分家)
 const widgetCards = new Map();   // widget_id -> 卡片节点,实时事件去重
@@ -5394,6 +5399,7 @@ function runFind(raw, keepView) {
     if (find.supported) { CSS.highlights.delete("chat-find"); CSS.highlights.delete("chat-find-cur"); }
     return;
   }
+  ensureAllHistoryBodies();       // 搜索要读到整段正文，先把没排的 Markdown 全部排出来
   find.ranges = collectFindRanges(find.q.toLowerCase());
   find.at = find.ranges.length ? 0 : -1;
   showFindCount();
@@ -5452,10 +5458,14 @@ function switchSessionSoon(id) {
   sessSwitchTarget = id;
   sessSwitchPending = id === sessSwitchActive ? null : id;
   if (sessSwitchPending === null) return;
+  if (id === NEW_SESSION_TARGET || typeof id === "object") {
+    flushSessionSwitch();
+    return;
+  }
   sessSwitchTimer = setTimeout(() => {
     sessSwitchTimer = 0;
     flushSessionSwitch();
-  }, id === NEW_SESSION_TARGET ? 0 : 90);
+  }, 90);
 }
 
 async function flushSessionSwitch() {
@@ -5465,13 +5475,23 @@ async function flushSessionSwitch() {
   sessSwitchPending = null;
   sessSwitchActive = id;
   try {
-    const r = await (id === NEW_SESSION_TARGET
-      ? pywebview.api.new_task() : pywebview.api.resume_session(id));
+    const workspace = typeof id === "object";
+    const r = await (workspace
+      ? (id.reset ? pywebview.api.reset_workspace() : pywebview.api.switch_workspace(id.path))
+      : (id === NEW_SESSION_TARGET ? pywebview.api.new_task() : pywebview.api.resume_session(id)));
     if (sessSwitchTarget === id) {
       if (r && r.ok === false) toast(r.msg, true);
       else {
         if (r && r.session) currentSessionKey = r.session;
         if (sessQuery) clearSessionSearch();
+        if (workspace) {
+          toast((r && r.msg) || "工作区已切换");
+          const session = currentSessionKey;
+          pywebview.api.get_info().then(info => {
+            if (session === currentSessionKey) renderWorkspacePill(info);
+          }).catch(() => {});
+          loadProjects();
+        }
       }
     }
   } catch (e) {
@@ -7145,6 +7165,9 @@ window.__gcodeEvent = function (e) {
     activitySchedule(e.type === "tool_start" ? 900 : 300);
   }
   switch (e.type) {
+    case "user":
+      addUserMsg(e.text || "", e.atts);
+      break;
     case "text_delta": {
       const c = ensureAssistant();
       thinkStop(c);          // 正文开始输出 = 思考结束:实时那一行定稿,计时器收掉
@@ -7582,6 +7605,8 @@ function openChangesSection() {
 
 function resetChatRendering() {
   chatRenderEpoch++;
+  if (chatBodyObserver) { chatBodyObserver.disconnect(); chatBodyObserver = null; }
+  chat.classList.remove("history-long");
   for (const c of [cur, lastTraceTurn]) {
     if (c && c.timer) { clearTimeout(c.timer); c.timer = null; }
   }
@@ -7594,11 +7619,51 @@ function resetChatRendering() {
   lastTraceTurn = null;
   lastTool = null;
   lastRegenerateButton = null;
+  railTickMarked = -1;
+  $("chatRail").hidden = true;
+  $("railPop").hidden = true;
+  $("railPop").classList.remove("turns");
+}
+
+function renderLazyBody(el) {
+  if (!el || !el.isConnected || el.dataset.mdPending !== "1") return;
+  const wrap = el.closest(".msg");
+  const tools = el.dataset.tools || "";
+  el.innerHTML = renderMd(wrap ? (wrap.dataset.raw || "") : "")
+    + (tools ? `<p class="toolline">&gt; 调用工具: ${esc(tools)}</p>` : "");
+  delete el.dataset.mdPending;
+  fixImages(el);
+  renderMermaidBlocks(el);
+  renderMathBlocks(el);
+}
+
+function observeLazyBodies() {
+  if (chatBodyObserver) chatBodyObserver.disconnect();
+  chatBodyObserver = null;
+  const pending = Array.from(chat.querySelectorAll('[data-md-pending="1"]'));
+  if (!pending.length) return;
+  chatBodyObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      chatBodyObserver.unobserve(entry.target);
+      renderLazyBody(entry.target.querySelector('[data-md-pending="1"]'));
+    }
+  }, { root: chat, rootMargin: "900px 0px" });
+  // 观察 .msg 外壳：content-visibility 跳过的是子树，外壳本身才有布局。
+  pending.forEach(el => chatBodyObserver.observe(el.closest(".msg") || el));
+}
+
+function ensureAllHistoryBodies() {
+  if (chatBodyObserver) { chatBodyObserver.disconnect(); chatBodyObserver = null; }
+  chat.querySelectorAll('[data-md-pending="1"]').forEach(renderLazyBody);
+  chat.classList.remove("history-long");
 }
 
 function renderHistory(messages) {
   if (fullscreenArt) closeArtifactFullscreen();
   resetChatRendering();
+  const lazyHistory = messages.length > HISTORY_LAZY_LIMIT && !!window.IntersectionObserver;
+  chat.classList.toggle("history-long", lazyHistory);
   const frag = document.createDocumentFragment();
   chatBatch = frag;
   hintTurn = 0;          // 换会话 = 那一问说过没有的账要重记(回合号是**会话内**的坐标)
@@ -7621,8 +7686,15 @@ function renderHistory(messages) {
       const c = ensureAssistant();
       c.text = m.text;
       c.wrap.dataset.raw = m.text;       // 复制只复制正文,不含"调用工具"行
-      c.body.innerHTML = renderMd(m.text) +
-        (m.tools ? `<p class="toolline">&gt; 调用工具: ${esc(m.tools)}</p>` : "");
+      const eagerBody = !lazyHistory || !m.text.trim();
+      if (eagerBody) {
+        c.body.innerHTML = renderMd(m.text) +
+          (m.tools ? `<p class="toolline">&gt; 调用工具: ${esc(m.tools)}</p>` : "");
+      } else {
+        c.body.textContent = m.text;     // 先用原文占位，滚到附近再排 Markdown
+        c.body.dataset.mdPending = "1";
+        c.body.dataset.tools = m.tools || "";
+      }
       c.body.hidden = !m.text.trim();    // 历史里也要按有无正文显示/隐藏
       c.wrap.classList.toggle("trace-only", !m.text.trim());
       if (!m.text.trim()) {              // 系统/工具类消息不提供复制
@@ -7685,6 +7757,7 @@ function renderHistory(messages) {
     chat.replaceChildren(frag);
     chatBatch = null;
   }
+  if (lazyHistory) observeLazyBodies();
   refreshAskBar();
   nearBottom = true; toBottom();
   fixImages(chat);
@@ -12298,6 +12371,9 @@ function renderPlan(r) {
   const pct = r.total ? Math.round(r.done * 100 / r.total) : 0;
   if (bar) bar.style.width = pct + "%";
   prog.textContent = `${r.done}/${r.total} 已完成 · ${pct}%` + (r.goal ? ` · ${r.goal}` : "");
+  if (r.verification && r.verification.status !== "not_required") {
+    prog.textContent += " · 验收：" + r.verification.summary;
+  }
   cols.innerHTML = `
     <div class="pl-col"><b>依赖已满足,现在可做</b>
       ${r.ready.length ? plList(r.ready, r.steps) : `<span style="opacity:.7">无`
@@ -14102,19 +14178,27 @@ function rebuildChatRail() {
   const head = document.createElement("button");
   head.className = "tick tick-head";
   head.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
+  head.type = "button";
   head.title = `跳到某一问(这一条对话共 ${users.length} 问)`;
+  head.setAttribute("aria-label", head.title);
   head.addEventListener("click", (ev) => { ev.stopPropagation(); turnPopToggle(); });
   rail.appendChild(head);
-  users.forEach((b, i) => {
-    const tick = document.createElement("div");
+  const count = Math.min(users.length, 12);
+  for (let n = 0; n < count; n++) {
+    const i = Math.round(n * (users.length - 1) / (count - 1));
+    const b = users[i];
+    const tick = document.createElement("button");
+    tick.type = "button";
     tick.className = "tick";
     tick.dataset.i = String(i);
-    tick.title = `第 ${i + 1} 问 · 点开看全部`;
-    tick.addEventListener("click", turnPopToggle);
-    tick.addEventListener("mouseenter", () => showRailPop(b, i));
+    tick.setAttribute("aria-label", `跳到第 ${i + 1} 问`);
+    tick.addEventListener("click", () => jumpToTurn(b, i));
+    tick.addEventListener("mouseenter", () => showRailPop(b, i, tick));
+    tick.addEventListener("focus", () => showRailPop(b, i, tick));
     tick.addEventListener("mouseleave", hideRailPop);
+    tick.addEventListener("blur", hideRailPop);
     rail.appendChild(tick);
-  });
+  }
   scTickMark(railTickMarked);      // 重建刻度后把"刚跳过去的那一问"重新点亮
 }
 // 跳过去的那一问在刻度上一直亮着(不只是 hover 才看得见):一长条对话里
@@ -14126,14 +14210,28 @@ function scTickMark(i) {
   rail.querySelectorAll(".tick").forEach(t =>
     t.classList.toggle("on", Number(t.dataset.i) === i));
 }
-function showRailPop(bubble, i) {
+function jumpToTurn(bubble, i) {
+  nearBottom = false;
+  bubble.scrollIntoView({ block: "start", behavior: "smooth" });
+  const wrap = bubble.closest(".msg.user");
+  wrap.classList.add("flash");
+  setTimeout(() => wrap.classList.remove("flash"), 1900);
+  scTickMark(i);
+  $("railPop").classList.remove("turns");
+  $("railPop").hidden = true;
+}
+function placeRailPop(anchor) {
+  const pop = $("railPop"), r = anchor.getBoundingClientRect();
+  pop.style.left = Math.max(8, r.left - pop.offsetWidth - 8) + "px";
+  pop.style.right = "auto";
+  pop.style.top = Math.max(8, Math.min(window.innerHeight - pop.offsetHeight - 8, r.top)) + "px";
+}
+function showRailPop(bubble, i, tick) {
   const pop = $("railPop");
   if (pop.classList.contains("turns")) return;   // 摊开着一叠卡的时候不被 hover 预览顶掉
   pop.innerHTML = `<b>第 ${i + 1} 问</b>${esc((bubble.textContent || "").slice(0, 120))}`;
   pop.hidden = false;
-  const r = bubble.getBoundingClientRect();
-  pop.style.top = Math.max(60, Math.min(window.innerHeight - 130, r.top)) + "px";
-  pop.style.right = "26px";
+  placeRailPop(tick);
 }
 function hideRailPop() {
   const pop = $("railPop");
@@ -14164,21 +14262,12 @@ function turnPopToggle() {
     // 留档里,没落到 DOM 上),为了好看编一个时间出来是这条项目一贯不许的事。
     card.innerHTML = `<span class="tc-n">${i + 1}</span>`
       + `<span class="tc-t">${esc((bubble ? bubble.textContent : "").trim().slice(0, 60))}</span>`;
-    card.addEventListener("click", () => {
-      if (bubble) {
-        bubble.scrollIntoView({ block: "start", behavior: "smooth" });
-        wrap.classList.add("flash");
-        setTimeout(() => wrap.classList.remove("flash"), 1900);
-        scTickMark(i);              // 刻度上留下"跳到这儿了"的那一枚
-      }
-      pop.classList.remove("turns"); pop.hidden = true;
-    });
+    card.addEventListener("click", () => { if (bubble) jumpToTurn(bubble, i); });
     pop.appendChild(card);
   });
   pop.classList.add("turns");
   pop.hidden = false;
-  pop.style.top = "64px";
-  pop.style.right = "26px";
+  placeRailPop($("chatRail"));
 }
 document.addEventListener("click", (ev) => {
   const pop = $("railPop");
@@ -14204,6 +14293,7 @@ function collectLightboxImages() {
 }
 
 function openLightbox(src) {
+  ensureAllHistoryBodies();       // 灯箱要在本会话全部图片之间切换
   lightboxImgs = collectLightboxImages();
   lightboxIdx = Math.max(0, lightboxImgs.findIndex(e => e.src === src));
   lightboxZoom = 1;
@@ -14712,14 +14802,7 @@ function renderWorkspacePill(info) {
 
 function doSwitchWorkspace(path, viaReset) {
   $("wsOverlay").classList.remove("show");
-  const call = viaReset ? pywebview.api.reset_workspace()
-                        : pywebview.api.switch_workspace(path);
-  call.then(r => {
-    if (!r || !r.ok) { toast((r && r.msg) || "切换失败", true); return; }
-    toast(r.msg || ("工作区已切换:" + (r.path || path)));
-    pywebview.api.get_info().then(renderWorkspacePill);
-    loadProjects();               // 切完刷新侧栏项目面板
-  }).catch(e => toast("切换失败:" + String(e).slice(0, 60), true));
+  switchSessionSoon({ path, reset: !!viaReset });
 }
 
 function renderWsDlg(d) {
@@ -15653,24 +15736,70 @@ SidePages.register({
     $("spSubRefresh").addEventListener("click", () => activityRefresh());
     $("spSubBody").addEventListener("click", actPanelClick);
   },
-  onShow() { spRenderSubs(); },
+  onShow() { spRenderSubs(); activityRefresh(); },
 });
+
+const spContinuing = new Set();
+function spContinueTask(run) {
+  const api = activityApi();
+  if (!api || !api.continue_task_run || spContinuing.has(run.id)) return;
+  appConfirm("将恢复原父会话并提交一个新回合：先核查已有结果、产物与留档，再继续未完成部分。"
+    + "不会自动重放已完成命令，也不会自动撤销旧副作用。\n\n任务：" + (run.goal || ""),
+    async () => {
+      spContinuing.add(run.id); spRenderSubs();
+      try {
+        const r = await api.continue_task_run(run.id);
+        if (!r || !r.ok) toast((r && r.msg) || "没有继续任务", true);
+      } catch (e) { toast("继续任务失败，请刷新核对状态后再试", true); }
+      finally { spContinuing.delete(run.id); activityRefresh(); }
+    }, "继续处理", {okLabel: "核查并继续"});
+}
 
 function spRenderSubs() {
   const body = $("spSubBody");
   if (!body) return;
   const sa = actData ? subagentRows(actData) : null;
-  $("spSubSum").textContent = sa ? `${sa.count} 个` : "";
+  const runs = actData && Array.isArray(actData.task_runs) ? actData.task_runs : [];
+  $("spSubSum").textContent = runs.length ? `${runs.length} 条留档` : sa ? `${sa.count} 个` : "";
   body.textContent = "";
-  if (!sa || !sa.items || !sa.items.length) {
+  if (runs.length) {
+    body.appendChild(actEl("act-empty", "历史任务 · 执行结束不代表验收通过；继续处理会发起新回合。"));
+    const labels = {running: "运行中", interrupted: "进程已退出 · 执行中断",
+      failed: "执行失败 / 无报告", completed: "执行结束 · 有报告（未验收）", unknown: "状态未确认"};
+    for (const run of runs) {
+      const box = actEl("act-sect");
+      box.dataset.taskRun = run.id;
+      box.appendChild(actEl("act-cap", `${run.role || "子代理"} · ${labels[run.status] || "状态未确认"}`));
+      const detail = actEl("act-sectbody");
+      detail.appendChild(actEl("act-sub", run.goal || "(未记录目标)"));
+      detail.appendChild(actEl("act-sub", `ID: ${run.id} · 父会话: ${run.root_parent_log || "未留档"}`));
+      const when = t => t ? new Date(Number(t) * 1000).toLocaleString() : "未记录";
+      detail.appendChild(actEl("act-sub", `开始: ${when(run.started_at)} · 结束: ${when(run.ended_at)}`));
+      if (run.worktree_path) detail.appendChild(actEl("act-sub",
+        `副本: ${run.worktree_path} · base: ${run.worktree_base || "未记录"}`));
+      const report = actEl({tag: "pre", cls: "act-sub"}, run.report || "尚无文本报告，请先核查留档与产物。");
+      report.style.cssText = "white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto";
+      detail.appendChild(report);
+      if (run.archive_error) detail.appendChild(actEl("act-sub", run.archive_error));
+      if (run.can_continue) {
+        const button = actEl({tag: "button", cls: "b-yes"}, "继续处理");
+        button.dataset.continueRun = run.id;
+        button.disabled = spContinuing.has(run.id);
+        button.addEventListener("click", ev => { ev.stopPropagation(); spContinueTask(run); });
+        detail.appendChild(button);
+      }
+      box.appendChild(detail); body.appendChild(box);
+    }
+  }
+  if (sa && sa.items && sa.items.length) {
+    body.appendChild(actSect("subagents", "子智能体", `${sa.count} 个`
+      + (sa.items.some(x => x.status === "running") ? " · 有在跑" : ""),
+      b => buildSubagents(b, sa)));
+  } else if (!runs.length) {
     body.appendChild(actEl("act-empty",
       "这一程还没有派过子代理。学长派帮手(探索/审查/写作…)之后,谁在跑、每一步做了什么、"
       + "报告写了什么,都会整列出现在这里。"));
-    return;
   }
-  body.appendChild(actSect("subagents", "子智能体", `${sa.count} 个`
-    + (sa.items.some(x => x.status === "running") ? " · 有在跑" : ""),
-    b => buildSubagents(b, sa)));
 }
 
 /* ---------------- 文件页 ----------------

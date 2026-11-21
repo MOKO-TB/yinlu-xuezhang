@@ -8,6 +8,8 @@ from __future__ import annotations
 import ast
 import os
 import re
+import stat
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -61,10 +63,12 @@ _RE_JAVA_METHOD = re.compile(r"^(?:public|protected|private)\s+(?:static\s+)?[A-
 
 
 def _safe_rel(ws_dir: Path, p: Path) -> str | None:
+    """词法相对路径（不解析真实路径）：Windows 上 resolve 逐文件要几百毫秒。"""
     try:
-        return p.resolve().relative_to(ws_dir.resolve()).as_posix()
+        rel = os.path.relpath(os.fspath(p), os.fspath(ws_dir)).replace(os.sep, "/")
     except (ValueError, OSError):
         return None
+    return None if rel == ".." or rel.startswith("../") else rel
 
 
 def extract_python_symbols(code: str, rel_path: str) -> list[dict[str, Any]]:
@@ -292,6 +296,28 @@ def extract_file_symbols(file_path: Path, rel_path: str) -> list[dict[str, Any]]
     return extract_multilang_symbols(code, rel_path, lang)
 
 
+@lru_cache(maxsize=4096)
+def _extract_cached(path: str, mtime_ns: int, ctime_ns: int, size: int,
+                    rel_path: str) -> tuple[tuple, ...]:
+    rows = extract_file_symbols(Path(path), rel_path)
+    return tuple(tuple(sorted(row.items())) for row in rows)
+
+
+def extract_file_symbols_cached(file_path: Path, rel_path: str) -> list[dict[str, Any]]:
+    """同一份文件没变就不再解析；返回独立副本，调用方改不坏缓存。"""
+    try:
+        st = os.lstat(file_path)
+    except OSError:
+        return []
+    if stat.S_ISLNK(st.st_mode):
+        return []
+    if st.st_size > MAX_FILE_BYTES or st.st_size == 0:
+        return []
+    rows = _extract_cached(str(file_path), st.st_mtime_ns, st.st_ctime_ns,
+                           st.st_size, rel_path)
+    return [dict(row) for row in rows]
+
+
 def search_symbols(
     workspace_dir: Path | str,
     query: str = "",
@@ -323,16 +349,35 @@ def search_symbols(
 
     query_str = (query or "").strip().lower()
     kind_filter = (kind or "all").strip().lower()
+    full_scan = search_root == ws
+    store = {}
+    if full_scan:
+        from minicode import symbol_index
+        store = symbol_index.load(ws)
+    dirty = False
+    seen: set[str] = set()
 
     all_symbols: list[dict[str, Any]] = []
 
     if search_root.is_file():
         rel = _safe_rel(ws, search_root)
         if rel:
-            all_symbols.extend(extract_file_symbols(search_root, rel))
+            all_symbols.extend(extract_file_symbols_cached(search_root, rel))
     else:
+        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
         for root, dirs, files in os.walk(str(search_root)):
-            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")]
+            kept = []
+            for d in dirs:
+                if d in IGNORED_DIRS or d.startswith("."):
+                    continue
+                try:
+                    st = os.stat(os.path.join(root, d), follow_symlinks=False)
+                except OSError:
+                    continue
+                if getattr(st, "st_file_attributes", 0) & reparse:
+                    continue
+                kept.append(d)
+            dirs[:] = kept
             for f in files:
                 p = Path(root) / f
                 if p.suffix.lower() not in SUPPORTED_EXTS:
@@ -340,7 +385,33 @@ def search_symbols(
                 rel = _safe_rel(ws, p)
                 if not rel:
                     continue
-                all_symbols.extend(extract_file_symbols(p, rel))
+                try:
+                    st = os.lstat(p)
+                except OSError:
+                    continue
+                if stat.S_ISLNK(st.st_mode) or st.st_size > MAX_FILE_BYTES or st.st_size == 0:
+                    continue
+                entry = store.get(rel) if full_scan else None
+                if (entry and entry.get("mtime") == st.st_mtime_ns
+                        and entry.get("ctime") == st.st_ctime_ns
+                        and entry.get("size") == st.st_size):
+                    symbols = [dict(row) for row in entry.get("symbols") or []]
+                else:
+                    symbols = extract_file_symbols_cached(p, rel)
+                    if full_scan:
+                        store[rel] = {"mtime": st.st_mtime_ns, "ctime": st.st_ctime_ns,
+                                      "size": st.st_size,
+                                      "symbols": [dict(row) for row in symbols]}
+                        dirty = True
+                seen.add(rel)
+                all_symbols.extend(symbols)
+        if full_scan:
+            for rel in [rel for rel in store if rel not in seen]:
+                store.pop(rel, None)
+                dirty = True
+            if dirty:
+                from minicode import symbol_index
+                symbol_index.save(ws, store)
 
     # 过滤符号
     filtered: list[dict[str, Any]] = []
@@ -410,11 +481,11 @@ def format_symbols_view(result: dict[str, Any]) -> str:
 
 
 def symbol_search_tool(
+    ctx: Any,
     query: str = "",
     kind: str = "all",
     path: str = "",
     max_results: int = DEFAULT_MAX_RESULTS,
-    ctx: Any = None,
 ) -> str:
     """内置工具 symbol_search 的入口实现。"""
     ws = getattr(ctx, "workspace", None) if ctx else None
